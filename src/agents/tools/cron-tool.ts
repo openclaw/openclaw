@@ -314,7 +314,10 @@ export function createCronToolSchema(): TSchema {
       patch: createCronPatchObjectSchema(),
       text: Type.Optional(Type.String()),
       mode: optionalStringEnum(CRON_WAKE_MODES),
-      runMode: optionalStringEnum(CRON_RUN_MODES),
+      runMode: optionalStringEnum(CRON_RUN_MODES, {
+        description:
+          'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',
+      }),
       contextMessages: Type.Optional(
         Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
       ),
@@ -334,8 +337,6 @@ export function createCronToolSchema(): TSchema {
     { additionalProperties: true },
   );
 }
-
-export const CronToolSchema = createCronToolSchema();
 
 type CronToolOptions = {
   agentSessionKey?: string;
@@ -774,7 +775,7 @@ ACTIONS:
 - add: create job; needs job object
 - update: patch job; needs jobId + patch
 - remove: delete job; needs jobId
-- run: trigger now; needs jobId
+- run: run only if due by default; needs jobId; pass runMode="force" to trigger now
 - runs: run history; needs jobId
 - wake: send wake event; needs text, optional mode; defaults the target to the calling session/agent. Pass top-level sessionKey/agentId to wake a different lane.
 
@@ -1086,7 +1087,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             throw new Error("jobId required (id accepted for backward compatibility)");
           }
           const runMode =
-            params.runMode === "due" || params.runMode === "force" ? params.runMode : "force";
+            params.runMode === "due" || params.runMode === "force" ? params.runMode : "due";
           return jsonResult(await callGateway("cron.run", gatewayOpts, { id, mode: runMode }));
         }
         case "runs": {

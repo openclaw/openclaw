@@ -3,19 +3,17 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
-import { parseModelRef } from "../../../agents/model-selection-normalize.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import {
   isToolAllowedByPolicies,
   isToolAllowedByPolicyName,
 } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
-import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
@@ -148,7 +146,7 @@ function resolveMessageToolAvailability(params: {
   runtimeAlsoAllow?: string[];
 }): boolean {
   const agentConfig = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
-  const modelRef = resolvePrimaryModelRef(params.cfg, agentConfig?.model);
+  const modelRef = resolveDoctorPrimaryModelRef(params.cfg, agentConfig?.model);
   const providerPolicy = resolveProviderToolPolicy({
     byProvider: params.globalTools?.byProvider,
     modelProvider: modelRef.provider,
@@ -188,22 +186,6 @@ function resolveMessageToolAvailability(params: {
 }
 
 const SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW = ["message"];
-
-function resolvePrimaryModelRef(
-  cfg: OpenClawConfig,
-  agentModel?: NonNullable<ReturnType<typeof resolveAgentConfig>>["model"],
-): { provider: string; model: string } {
-  const raw =
-    resolveAgentModelPrimaryValue(agentModel) ??
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
-    DEFAULT_MODEL;
-  return (
-    parseModelRef(raw, DEFAULT_PROVIDER, { allowPluginNormalization: false }) ?? {
-      provider: DEFAULT_PROVIDER,
-      model: DEFAULT_MODEL,
-    }
-  );
-}
 
 function resolveSourceReplyMessageToolAvailability(params: {
   cfg: OpenClawConfig;
@@ -705,7 +687,7 @@ export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig)
     const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-    const modelRef = resolvePrimaryModelRef(cfg, agentConfig?.model);
+    const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
     const agentPath = `agents.list[${index}].tools`;
     const includeInheritedSections =
       agentTools !== undefined && typeof agentTools.profile !== "string";
@@ -982,14 +964,4 @@ export async function collectDoctorPreviewNotes(params: {
   }
 
   return { infoNotes, warningNotes: warnings };
-}
-
-/** Collect warning notes only for callers that do not display info notes. */
-export async function collectDoctorPreviewWarnings(params: {
-  cfg: OpenClawConfig;
-  doctorFixCommand: string;
-  env?: NodeJS.ProcessEnv;
-  allowExec?: boolean;
-}): Promise<string[]> {
-  return (await collectDoctorPreviewNotes(params)).warningNotes;
 }

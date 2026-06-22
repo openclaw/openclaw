@@ -37,6 +37,7 @@ const FAILURE_OUTPUT_TAIL_LINES = 40;
 const STEP_OUTPUT_MAX_CHARS = 256 * 1024;
 const STEP_PROCESS_GROUP_EXIT_POLL_MS = 25;
 const STEP_POST_FORCE_KILL_WAIT_MS = 1_000;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const SLOW_COMPILE_SUMMARY_LIMIT = 10;
 const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".json"]);
 const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
@@ -337,13 +338,22 @@ function writeStampFile(filePath) {
   writeFileSync(filePath, `${new Date().toISOString()}\n`, "utf8");
 }
 
+function resolveStepTimerTimeoutMs(valueMs) {
+  const value = Number(valueMs);
+  if (!Number.isFinite(value)) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
 function runNodeStep(label, args, timeoutMs) {
+  const resolvedTimeoutMs = resolveStepTimerTimeoutMs(timeoutMs);
   const startedAt = Date.now();
   const result = spawnSync(process.execPath, args, {
     cwd: repoRoot,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
-    timeout: timeoutMs,
+    timeout: resolvedTimeoutMs,
   });
 
   if (result.status === 0 && !result.error) {
@@ -352,7 +362,7 @@ function runNodeStep(label, args, timeoutMs) {
 
   const timeoutSuffix =
     result.error?.name === "Error" && result.error.message.includes("ETIMEDOUT")
-      ? `${label} timed out after ${timeoutMs}ms`
+      ? `${label} timed out after ${resolvedTimeoutMs}ms`
       : "";
   const errorSuffix = result.error ? result.error.message : "";
   const note = [timeoutSuffix, errorSuffix].filter(Boolean).join("\n");
@@ -391,6 +401,7 @@ function abortSiblingSteps(abortController) {
  * Runs one node-based boundary check step with timeout and output capture.
  */
 export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
+  const resolvedTimeoutMs = resolveStepTimerTimeoutMs(timeoutMs);
   const abortController = params.abortController;
   const killProcess = params.killProcess ?? process.kill.bind(process);
   const onFailure = params.onFailure;
@@ -450,6 +461,20 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
         await waitForProcessGroupExit(STEP_POST_FORCE_KILL_WAIT_MS);
       }
     };
+    const rejectCanceledStep = async () => {
+      signalChild("SIGKILL");
+      await waitAfterForceKill();
+      rejectPromise(
+        toLintErrorObject(
+          attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
+            kind: "canceled",
+            elapsedMs: Date.now() - startedAt,
+            note: "canceled after sibling failure",
+          }),
+          "Step canceled after sibling failure",
+        ),
+      );
+    };
     const abortSignal = abortController?.signal;
     const abortListener = () => {
       signalChild("SIGTERM");
@@ -457,6 +482,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
     abortSignal?.addEventListener("abort", abortListener, { once: true });
     const teardownProcessCleanup = installVitestProcessGroupCleanup({
       child,
+      forceSignal: "SIGKILL",
       onSignal: (signal) => {
         forwardedSignal ??= signal;
       },
@@ -484,7 +510,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
               stderr: stderrText,
               kind: "timeout",
               elapsedMs: Date.now() - startedAt,
-              note: `${label} timed out after ${timeoutMs}ms`,
+              note: `${label} timed out after ${resolvedTimeoutMs}ms`,
             }),
           ),
           label,
@@ -493,14 +519,14 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
             stderr: stderrText,
             kind: "timeout",
             elapsedMs: Date.now() - startedAt,
-            note: `${label} timed out after ${timeoutMs}ms`,
+            note: `${label} timed out after ${resolvedTimeoutMs}ms`,
           },
         );
         onFailure?.(error);
         abortSiblingSteps(abortController);
         rejectPromise(toLintErrorObject(error, "Step timed out"));
       })();
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -517,16 +543,7 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       cleanup();
       settled = true;
       if (error.name === "AbortError" && abortController?.signal.aborted) {
-        rejectPromise(
-          toLintErrorObject(
-            attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
-              kind: "canceled",
-              elapsedMs: Date.now() - startedAt,
-              note: "canceled after sibling failure",
-            }),
-            "Step canceled after sibling failure",
-          ),
-        );
+        void rejectCanceledStep();
         return;
       }
       const stdoutText = formatCapturedStepOutput(stdout);
@@ -561,7 +578,14 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       cleanup();
       settled = true;
       if (forwardedSignal) {
-        process.kill(process.pid, forwardedSignal);
+        signalChild("SIGKILL");
+        void waitAfterForceKill().finally(() => {
+          process.kill(process.pid, forwardedSignal);
+        });
+        return;
+      }
+      if (abortController?.signal.aborted) {
+        void rejectCanceledStep();
         return;
       }
       if (code === 0) {

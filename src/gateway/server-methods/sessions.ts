@@ -61,6 +61,7 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import {
   applySessionPatchProjection,
   createSessionEntryWithTranscript,
+  preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -186,7 +187,7 @@ function inheritSessionRuntimeSelection(
       ? { contextTokens: parentEntry.contextTokens }
       : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
-    ...(typeof parentEntry.fastMode === "boolean" ? { fastMode: parentEntry.fastMode } : {}),
+    ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
     ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
     ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
@@ -833,8 +834,9 @@ async function handleSessionSend(params: {
   const messageSeq =
     (await readSessionMessageCountAsync({
       agentId: requestedAgentId,
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
       storePath,
     })) + 1;
   let sendAcked = false;
@@ -1176,8 +1178,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         const items = readSessionPreviewItemsFromTranscript(
           {
             agentId: target.agentId,
-            sessionFile: entry.sessionFile,
+            sessionEntry: entry,
             sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
             storePath: target.storePath,
           },
           limit,
@@ -1535,8 +1538,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const messageSeq = initialMessage
       ? (await readSessionMessageCountAsync({
           agentId: target.agentId,
-          sessionFile: createdEntry.sessionFile,
+          sessionEntry: createdEntry,
           sessionId: createdEntry.sessionId,
+          sessionKey: target.canonicalKey,
           storePath: target.storePath,
         })) + 1
       : undefined;
@@ -2401,8 +2405,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
       {
         agentId: requestedAgent.agentId,
-        sessionFile: entry.sessionFile,
+        sessionEntry: entry,
         sessionId: entry.sessionId,
+        sessionKey: key,
         storePath,
       },
       {
@@ -2616,6 +2621,63 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           compacted: result.compacted,
         });
       }
+      return;
+    }
+
+    const trimPreflight = await preflightSessionTranscriptForManualCompact(
+      {
+        sessionId,
+        storePath,
+        sessionKey: compactTarget.primaryKey,
+        agentId: target.agentId,
+      },
+      {
+        maxLines,
+        sessionFile: entry?.sessionFile,
+      },
+    );
+    if (!trimPreflight.compacted) {
+      if ("kept" in trimPreflight) {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            kept: trimPreflight.kept,
+          },
+          undefined,
+        );
+      } else {
+        respond(
+          true,
+          {
+            ok: true,
+            key: target.canonicalKey,
+            compacted: false,
+            reason: "no transcript",
+          },
+          undefined,
+        );
+      }
+      return;
+    }
+
+    // Active-run safety parity with the LLM-summarize branch above. The maxLines
+    // truncate path archives and overwrites the transcript, so once preflight
+    // proves a destructive trim is needed, interrupt before rereading and writing.
+    const truncateInterrupt = await interruptSessionRunIfActive({
+      req,
+      context,
+      client,
+      isWebchatConnect,
+      requestedKey: key,
+      canonicalKey: target.canonicalKey,
+      agentId: requestedAgentId,
+      sessionId,
+    });
+    if (truncateInterrupt.error) {
+      respond(false, undefined, truncateInterrupt.error);
       return;
     }
 

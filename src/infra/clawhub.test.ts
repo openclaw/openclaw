@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
@@ -14,8 +16,6 @@ import {
   fetchClawHubSkillCard,
   fetchClawHubSkillSecurityVerdicts,
   fetchClawHubPackageArtifact,
-  fetchClawHubPackageReadiness,
-  fetchClawHubPackageSecurity,
   fetchClawHubSkillVerification,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
@@ -63,7 +63,7 @@ function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: U
 }
 
 describe("clawhub helpers", () => {
-  const originalHome = process.env.HOME;
+  const originalEnv = captureEnv(["HOME", "XDG_CONFIG_HOME"]);
 
   afterEach(() => {
     delete process.env.OPENCLAW_CLAWHUB_URL;
@@ -73,12 +73,7 @@ describe("clawhub helpers", () => {
     delete process.env.OPENCLAW_CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWHUB_CONFIG_PATH;
     delete process.env.CLAWDHUB_CONFIG_PATH;
-    delete process.env.XDG_CONFIG_HOME;
-    if (originalHome == null) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = originalHome;
-    }
+    originalEnv.restore();
   });
 
   it("parses explicit ClawHub package specs", () => {
@@ -266,7 +261,7 @@ describe("clawhub helpers", () => {
         await withTempDir({ prefix: "openclaw-clawhub-xdg-" }, async (xdgRoot) => {
           const configPath = path.join(xdgRoot, "clawhub", "config.json");
           const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
-          process.env.XDG_CONFIG_HOME = xdgRoot;
+          setTestEnvValue("XDG_CONFIG_HOME", xdgRoot);
           try {
             await fs.mkdir(path.dirname(configPath), { recursive: true });
             await fs.writeFile(configPath, JSON.stringify({ token: "xdg-token-123" }), "utf8");
@@ -576,6 +571,27 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.has("version")).toBe(false);
   });
 
+  it("clamps oversized ClawHub request timeouts before scheduling", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await expect(
+        fetchClawHubSkillCard({
+          slug: "agentreceipt",
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+          fetchImpl: async () =>
+            new Response("# Agent Receipt\n", {
+              status: 200,
+              headers: { "content-type": "text/markdown; charset=utf-8" },
+            }),
+        }),
+      ).resolves.toBe("# Agent Receipt\n");
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
     let requestedUrl = "";
 
@@ -625,33 +641,6 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow("ClawHub /api/v1/skills/agentreceipt/verify failed (404): not found");
   });
 
-  it("fetches typed package readiness reports", async () => {
-    let requestedUrl = "";
-    await expect(
-      fetchClawHubPackageReadiness({
-        name: "@openclaw/diagnostics-otel",
-        fetchImpl: async (input) => {
-          requestedUrl = input instanceof Request ? input.url : String(input);
-          return new Response(
-            JSON.stringify({
-              package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
-              phase: "legacy-zip-only",
-              blockers: [],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        },
-      }),
-    ).resolves.toEqual({
-      package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
-      phase: "legacy-zip-only",
-      blockers: [],
-    });
-    expect(new URL(requestedUrl).pathname).toBe(
-      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/readiness",
-    );
-  });
-
   it("fetches typed package artifact resolver reports", async () => {
     let requestedUrl = "";
     await expect(
@@ -689,40 +678,6 @@ describe("clawhub helpers", () => {
     });
     expect(new URL(requestedUrl).pathname).toBe(
       "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/artifact",
-    );
-  });
-
-  it("fetches typed package security reports", async () => {
-    let requestedUrl = "";
-    await expect(
-      fetchClawHubPackageSecurity({
-        name: "@openclaw/diagnostics-otel",
-        version: "2026.3.22",
-        fetchImpl: async (input) => {
-          requestedUrl = input instanceof Request ? input.url : String(input);
-          return new Response(
-            JSON.stringify({
-              releaseId: "rel_demo",
-              state: "approved",
-              reasonCode: "clean",
-              createdAt: 1774256733107,
-              scanState: "clean",
-              moderationState: "approved",
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          );
-        },
-      }),
-    ).resolves.toEqual({
-      releaseId: "rel_demo",
-      state: "approved",
-      reasonCode: "clean",
-      createdAt: 1774256733107,
-      scanState: "clean",
-      moderationState: "approved",
-    });
-    expect(new URL(requestedUrl).pathname).toBe(
-      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",
     );
   });
 

@@ -961,6 +961,26 @@ describe("Codex app-server dynamic tool build", () => {
     });
   });
 
+  it("passes the approval reviewer device into Codex dynamic tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.approvalReviewerDeviceId = "device-ios-reviewer";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+    expect(factoryOptions[0]).toMatchObject({
+      approvalReviewerDeviceId: "device-ios-reviewer",
+    });
+  });
+
   it("forwards tool outcome ordering into Codex dynamic tools", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1389,26 +1409,22 @@ describe("Codex app-server dynamic tool build", () => {
     expect(shouldForceMessageTool(params)).toBe(false);
   });
 
-  it("can retain message in the registered schema when disabled for the current turn", async () => {
+  it("retains forced message policy for the registered schema override", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
     params.disableMessageTool = true;
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.toolsAllow = [];
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    setOpenClawCodingToolsFactoryForTests((options) =>
-      options?.disableMessageTool ? [] : [createRuntimeDynamicTool("message")],
-    );
 
-    const availableTools = await buildDynamicToolsForTest(params, workspaceDir);
-    const registeredTools = await buildDynamicToolsForTest(params, workspaceDir, {
-      ignoreDisableMessageTool: true,
-      ignoreRuntimePlan: true,
-    });
+    expect(shouldForceMessageTool(params)).toBe(false);
+    expect(includeForcedCodexDynamicToolAllow(params.toolsAllow, params)).toEqual([]);
 
-    expect(availableTools.map((tool) => tool.name)).not.toContain("message");
-    expect(registeredTools.map((tool) => tool.name)).toContain("message");
+    const registeredPolicyParams = { ...params, disableMessageTool: false };
+    expect(shouldForceMessageTool(registeredPolicyParams)).toBe(true);
+    expect(includeForcedCodexDynamicToolAllow(params.toolsAllow, registeredPolicyParams)).toEqual([
+      "message",
+    ]);
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {

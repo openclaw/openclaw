@@ -2,12 +2,15 @@
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   validateUpdateRunParams,
   validateUpdateStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
@@ -21,6 +24,11 @@ import {
   formatManagedServiceUpdateCommand,
   startManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
+import type { PreUpdateConfigRestoreInput } from "../../infra/update-post-core-context.js";
+import {
+  foldPostCoreFinalizeIntoResult,
+  runPostCoreFinalizeAfterGatewayUpdate,
+} from "../../infra/update-post-core-finalize.js";
 import {
   buildUpdateRestartSentinelPayload,
   type UpdateRestartSentinelMeta,
@@ -51,6 +59,21 @@ function tryResolveProcessCwd(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function readPreUpdateConfigForPostCoreFinalize(): Promise<
+  PreUpdateConfigRestoreInput | undefined
+> {
+  const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+  if (!snapshot.valid) {
+    return undefined;
+  }
+  return {
+    sourceConfig: snapshot.sourceConfig,
+    authoredConfig: isRecord(snapshot.parsed)
+      ? (snapshot.parsed as OpenClawConfig)
+      : snapshot.sourceConfig,
+  };
 }
 
 function resolveManagedServiceHandoffRestartDelayMs(
@@ -271,12 +294,36 @@ export const updateHandlers: GatewayRequestHandlers = {
           };
         }
       } else {
+        const preUpdateConfig =
+          installSurface.kind === "git"
+            ? await readPreUpdateConfigForPostCoreFinalize().catch((err: unknown) => {
+                context?.logGateway?.warn(
+                  `update.run could not capture pre-update config ${formatControlPlaneActor(actor)} error=${formatUpdateRunErrorMessage(err)}`,
+                );
+                return undefined;
+              })
+            : undefined;
         result = await runGatewayUpdate({
           timeoutMs,
           cwd: root,
           argv1: process.argv[1],
           channel: configChannel ?? undefined,
         });
+        // The CLI `openclaw update` resumes post-core plugin convergence after a
+        // git/source core update; the RPC path did not, leaving official managed
+        // plugins stale on the new core. Run the finalizer here to match.
+        const finalizeOutcome = await runPostCoreFinalizeAfterGatewayUpdate({
+          result,
+          channel: configChannel ?? undefined,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
+          ...(preUpdateConfig ? { preUpdateConfig } : {}),
+        });
+        if (finalizeOutcome.status === "error") {
+          context?.logGateway?.warn(
+            `update.run post-core plugin finalize failed ${formatControlPlaneActor(actor)} reason=${finalizeOutcome.reason}`,
+          );
+        }
+        result = foldPostCoreFinalizeIntoResult(result, finalizeOutcome);
       }
     } catch {
       result = {
@@ -293,12 +340,13 @@ export const updateHandlers: GatewayRequestHandlers = {
       meta: sentinelMeta,
     });
 
-    let sentinelPath: string | null;
+    let sentinelPersisted: boolean;
     try {
-      sentinelPath = await writeRestartSentinel(payload);
+      await writeRestartSentinel(payload);
+      sentinelPersisted = true;
       recordLatestUpdateRestartSentinel(payload);
     } catch {
-      sentinelPath = null;
+      sentinelPersisted = false;
     }
 
     // Only restart the gateway when the update actually succeeded.
@@ -344,7 +392,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         ...(handoff ? { handoff } : {}),
         restart,
         sentinel: {
-          path: sentinelPath,
+          persisted: sentinelPersisted,
           payload,
         },
       },

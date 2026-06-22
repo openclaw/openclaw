@@ -33,23 +33,6 @@ type AttemptWorkspaceBootstrapRoutingInput = Omit<
   bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
 
-/**
- * Maps a resolved bootstrap mode to concrete prompt destinations. Today only
- * full bootstrap enters system context; limited/none intentionally avoid
- * runtime-context injection until that path has a separate contract.
- */
-export function resolveBootstrapContextTargets(params: {
-  bootstrapMode: BootstrapMode;
-}): Pick<
-  AttemptBootstrapRouting,
-  "includeBootstrapInSystemContext" | "includeBootstrapInRuntimeContext"
-> {
-  return {
-    includeBootstrapInSystemContext: params.bootstrapMode === "full",
-    includeBootstrapInRuntimeContext: false,
-  };
-}
-
 function resolveAttemptBootstrapRouting(
   params: AttemptBootstrapRoutingInput,
 ): AttemptBootstrapRouting {
@@ -66,20 +49,9 @@ function resolveAttemptBootstrapRouting(
 
   return {
     bootstrapMode,
-    ...resolveBootstrapContextTargets({ bootstrapMode }),
+    includeBootstrapInSystemContext: bootstrapMode === "full",
+    includeBootstrapInRuntimeContext: false,
   };
-}
-
-export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[]): boolean {
-  return (
-    files?.some(
-      (file) =>
-        file.name === DEFAULT_BOOTSTRAP_FILENAME &&
-        !file.missing &&
-        typeof file.content === "string" &&
-        file.content.trim().length > 0,
-    ) ?? false
-  );
 }
 
 /**
@@ -94,7 +66,14 @@ export async function resolveAttemptWorkspaceBootstrapRouting(
   const workspaceBootstrapPending = await params.isWorkspaceBootstrapPending(
     params.resolvedWorkspace,
   );
-  const hasHookBootstrapContent = hasBootstrapFileContent(params.bootstrapFiles);
+  const hasHookBootstrapContent =
+    params.bootstrapFiles?.some(
+      (file) =>
+        file.name === DEFAULT_BOOTSTRAP_FILENAME &&
+        !file.missing &&
+        typeof file.content === "string" &&
+        file.content.trim().length > 0,
+    ) ?? false;
   return resolveAttemptBootstrapRouting({
     ...params,
     workspaceBootstrapPending: workspaceBootstrapPending || hasHookBootstrapContent,

@@ -54,15 +54,6 @@ export type AgentItemEventData = {
   approvalSlug?: string;
 };
 
-/** Plan update payload emitted when an agent publishes or revises its task list. */
-export type AgentPlanEventData = {
-  phase: "update";
-  title: string;
-  explanation?: string;
-  steps?: string[];
-  source?: string;
-};
-
 /** Approval event phase for request/resolution transitions. */
 export type AgentApprovalEventPhase = "requested" | "resolved";
 /** Approval status after routing, user action, or delivery failure. */

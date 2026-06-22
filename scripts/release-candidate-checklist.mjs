@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_PROVIDER = "openai";
@@ -14,6 +15,7 @@ const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
 const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+const DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const WINDOWS_NODE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u;
 const WINDOWS_NODE_REPO = "openclaw/openclaw-windows-node";
 const WINDOWS_NODE_REQUIRED_ASSETS = [
@@ -239,26 +241,44 @@ function githubApiTimedOut(error) {
 export async function githubApi(path, options = {}) {
   const token = options.token ?? run("gh", ["auth", "token"], { capture: true }).trim();
   const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
-  let response;
+  const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES;
+  const controller = new AbortController();
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(new DOMException("request timed out", "TimeoutError"));
+      reject(new DOMException("request timed out", "TimeoutError"));
+    }, timeoutMs);
+    timeout.unref?.();
+  });
   try {
-    response = await (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
-      signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        Accept: "application/vnd.github+json",
-        Authorization: `Bearer ${token}`,
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
+    const response = await Promise.race([
+      (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
+        signal: controller.signal,
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${token}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+      }),
+      timeoutPromise,
+    ]);
+    const text = await readBoundedResponseText(response, `GitHub API ${path}`, maxBodyBytes, {
+      signal: controller.signal,
+      timeoutPromise,
     });
+    if (!response.ok) {
+      throw new Error(`GitHub API ${path} failed with ${response.status}: ${text}`);
+    }
+    return JSON.parse(text);
   } catch (error) {
     if (githubApiTimedOut(error)) {
       throw new Error(`GitHub API ${path} timed out after ${timeoutMs}ms`, { cause: error });
     }
     throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  if (!response.ok) {
-    throw new Error(`GitHub API ${path} failed with ${response.status}: ${await response.text()}`);
-  }
-  return response.json();
 }
 
 /**
@@ -309,18 +329,6 @@ function gitRevParse(ref) {
   return run("git", ["rev-parse", ref], { capture: true }).trim();
 }
 
-async function workflowRuns(repo, workflowFile) {
-  const data = await githubApi(
-    `repos/${repo}/actions/workflows/${workflowFile}/runs?event=workflow_dispatch&per_page=100`,
-  );
-  return (data.workflow_runs ?? []).map((runEntry) => ({
-    databaseId: runEntry.id,
-    workflowName: runEntry.name,
-    event: runEntry.event,
-    createdAt: runEntry.created_at,
-  }));
-}
-
 async function runArtifacts(repo, runId) {
   const data = await githubApi(`repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`);
   return (data.artifacts ?? []).map((artifact) => ({
@@ -353,12 +361,6 @@ export function resolveArtifactName(artifacts, preferredName, prefix) {
 
 async function resolveRunArtifactName(repo, runId, preferredName, prefix) {
   return resolveArtifactName(await runArtifacts(repo, runId), preferredName, prefix);
-}
-
-async function beforeRunIds(repo, workflowFile) {
-  return new Set(
-    (await workflowRuns(repo, workflowFile)).map((runResult) => String(runResult.databaseId)),
-  );
 }
 
 function runAndEcho(command, args) {
@@ -397,28 +399,20 @@ export function parseRunIdFromDispatchOutput(output) {
   return output.match(/actions\/runs\/([0-9]+)/u)?.[1] ?? "";
 }
 
+export function requireRunIdFromDispatchOutput(output, workflowFile) {
+  const runId = parseRunIdFromDispatchOutput(output);
+  if (!runId) {
+    throw new Error(
+      `gh workflow run ${workflowFile} did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs`,
+    );
+  }
+  return runId;
+}
+
 async function wait(ms) {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-async function findNewRunId(repo, workflowFile, workflowName, beforeIds) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    const match = (await workflowRuns(repo, workflowFile))
-      .filter(
-        (runValue) =>
-          runValue.workflowName === workflowName &&
-          runValue.event === "workflow_dispatch" &&
-          !beforeIds.has(String(runValue.databaseId)),
-      )
-      .toSorted((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")))[0];
-    if (match?.databaseId) {
-      return String(match.databaseId);
-    }
-    await wait(5_000);
-  }
-  throw new Error(`could not find dispatched ${workflowName} run`);
 }
 
 function dispatchWorkflow(repo, workflowFile, workflowRef, fields) {
@@ -426,7 +420,7 @@ function dispatchWorkflow(repo, workflowFile, workflowRef, fields) {
   for (const [key, value] of Object.entries(fields)) {
     args.push("-f", `${key}=${String(value)}`);
   }
-  return parseRunIdFromDispatchOutput(runAndEcho("gh", args));
+  return requireRunIdFromDispatchOutput(runAndEcho("gh", args), workflowFile);
 }
 
 async function runInfo(repo, runId) {
@@ -707,8 +701,7 @@ async function runTelegramIfNeeded(options, artifactName) {
     return { status: "skipped" };
   }
   const workflowFile = "npm-telegram-beta-e2e.yml";
-  const before = await beforeRunIds(options.repo, workflowFile);
-  const dispatchedRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
+  const runId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
     package_spec: `openclaw@${options.tag.replace(/^v/u, "")}`,
     package_label: options.tag,
     package_artifact_name: artifactName,
@@ -716,9 +709,6 @@ async function runTelegramIfNeeded(options, artifactName) {
     harness_ref: options.workflowRef,
     provider_mode: options.telegramProviderMode,
   });
-  const runId =
-    dispatchedRunId ||
-    (await findNewRunId(options.repo, workflowFile, "NPM Telegram Beta E2E", before));
   const runLocal = await waitForSuccessfulRun(options.repo, runId, {
     workflowName: "NPM Telegram Beta E2E",
     workflowRef: options.workflowRef,
@@ -751,8 +741,7 @@ async function main() {
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
-    const before = await beforeRunIds(options.repo, workflowFile);
-    const dispatchedRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
+    options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
       ref: options.tag,
       provider: options.provider,
       mode: options.mode,
@@ -761,22 +750,15 @@ async function main() {
         options.releaseProfile === "stable" || options.releaseProfile === "full" ? "true" : "false",
       rerun_group: "all",
     });
-    options.fullReleaseRunId =
-      dispatchedRunId ||
-      (await findNewRunId(options.repo, workflowFile, "Full Release Validation", before));
   }
 
   if (!options.npmPreflightRunId && !options.skipDispatch) {
     const workflowFile = "openclaw-npm-release.yml";
-    const before = await beforeRunIds(options.repo, workflowFile);
-    const dispatchedRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
+    options.npmPreflightRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
       tag: options.tag,
       preflight_only: "true",
       npm_dist_tag: options.npmDistTag,
     });
-    options.npmPreflightRunId =
-      dispatchedRunId ||
-      (await findNewRunId(options.repo, workflowFile, "OpenClaw NPM Release", before));
   }
 
   const fullRun = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {

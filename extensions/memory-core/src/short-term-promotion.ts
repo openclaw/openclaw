@@ -63,11 +63,6 @@ export const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join(
   ".dreams",
   "phase-signals.json",
 );
-export const SHORT_TERM_LOCK_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "short-term-promotion.lock",
-);
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
@@ -837,17 +832,6 @@ function isProcessLikelyAlive(pid: number): boolean {
     // EPERM and unknown errors are treated as alive to avoid stealing active locks.
     return true;
   }
-}
-
-async function canStealStaleLock(lockPath: string): Promise<boolean> {
-  const ownerPid = await fs
-    .readFile(lockPath, "utf-8")
-    .then((raw) => parseLockOwnerPid(raw))
-    .catch(() => null);
-  if (ownerPid === null) {
-    return true;
-  }
-  return !isProcessLikelyAlive(ownerPid);
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -2526,10 +2510,6 @@ export function resolveShortTermRecallStorePath(workspaceDir: string): string {
   return resolveStorePath(workspaceDir);
 }
 
-export function resolveShortTermPhaseSignalStorePath(workspaceDir: string): string {
-  return resolvePhaseSignalPath(workspaceDir);
-}
-
 export function resolveShortTermRecallLockPath(workspaceDir: string): string {
   return resolveLockPath(workspaceDir);
 }
@@ -2822,7 +2802,6 @@ export async function removeGroundedShortTermCandidates(params: {
 
 export const testing = {
   parseLockOwnerPid,
-  canStealStaleLock,
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,

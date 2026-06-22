@@ -1,5 +1,5 @@
 ---
-summary: "Adds Cohere model provider support to OpenClaw."
+summary: "OpenClaw Cohere provider plugin."
 read_when:
   - You are installing, configuring, or auditing the cohere plugin
 title: "Cohere plugin"
@@ -7,12 +7,12 @@ title: "Cohere plugin"
 
 # Cohere plugin
 
-Adds Cohere model provider support to OpenClaw.
+OpenClaw Cohere provider plugin.
 
 ## Distribution
 
 - Package: `@openclaw/cohere-provider`
-- Install route: included in OpenClaw
+- Install route: included in OpenClaw; npm; ClawHub: `clawhub:@openclaw/cohere-provider`
 
 ## Surface
 

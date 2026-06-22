@@ -1,7 +1,7 @@
 // Implements TUI session actions such as switching, forking, and resuming.
 import type { TUI } from "@earendil-works/pi-tui";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import {
@@ -253,6 +253,13 @@ export function createSessionActions(context: SessionActionContext) {
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
+      next.totalTokensFresh = entry.totalTokensFresh === true;
+    } else if (entry?.totalTokensFresh === true) {
+      // Fresh session: the total is known to be 0. The gateway strips the 0 via
+      // resolvePositiveNumber but still flags it fresh, so render 0 (not "?"),
+      // mirroring the /status fix in #93798. See followup to #93771.
+      next.totalTokens = 0;
+      next.totalTokensFresh = true;
     }
     if (params.clearMissingUsage) {
       if (entry?.inputTokens === undefined) {
@@ -261,8 +268,9 @@ export function createSessionActions(context: SessionActionContext) {
       if (entry?.outputTokens === undefined) {
         next.outputTokens = null;
       }
-      if (entry?.totalTokens === undefined) {
+      if (entry?.totalTokens === undefined && entry?.totalTokensFresh !== true) {
         next.totalTokens = null;
+        next.totalTokensFresh = undefined;
       }
     }
     if (hasEntryUpdate) {
@@ -419,7 +427,7 @@ export function createSessionActions(context: SessionActionContext) {
         sessionInfo?: SessionInfoEntry;
         defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
-        fastMode?: boolean;
+        fastMode?: FastMode;
         verboseLevel?: string;
         traceLevel?: string;
         inFlightRun?: { runId?: unknown; text?: unknown };

@@ -23,12 +23,7 @@ import {
 import { buildBaseOptions } from "./simple-options.js";
 
 const DEFAULT_AZURE_API_VERSION = "v1";
-const AZURE_TOOL_CALL_PROVIDERS = new Set([
-  "openai",
-  "openai",
-  "opencode",
-  "azure-openai-responses",
-]);
+const AZURE_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode", "azure-openai-responses"]);
 
 function resolveDeploymentName(
   model: Model<"azure-openai-responses">,
