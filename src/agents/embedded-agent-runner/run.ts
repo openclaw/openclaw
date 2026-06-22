@@ -112,7 +112,7 @@ import {
   applyLocalNoAuthHeaderOverride,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
-  isInlineProviderApiKeyAuth,
+  isConfigBackedInlineProviderApiKey,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
@@ -1760,7 +1760,15 @@ async function runEmbeddedAgentInternal(
           });
           return;
         }
-        if (!isInlineProviderApiKeyAuth(apiKeyInfo)) {
+        if (
+          apiKeyInfo?.mode !== "api-key" ||
+          !isConfigBackedInlineProviderApiKey({
+            cfg: params.config,
+            provider,
+            source: apiKeyInfo.source,
+            store: authStore,
+          })
+        ) {
           return;
         }
         await markInlineProviderApiKeyFailure({
