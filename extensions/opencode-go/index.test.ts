@@ -152,7 +152,7 @@ describe("opencode-go provider plugin", () => {
     const kimiCode = requireMapEntry(models, "kimi-k2.7-code");
     expect(kimiCode.api).toBe("openai-completions");
     expect(kimiCode.baseUrl).toBe("https://opencode.ai/zen/go/v1");
-    expect(kimiCode.input).toEqual(["text", "image", "video"]);
+    expect(kimiCode.input).toEqual(["text", "image"]);
     expect(kimiCode.contextWindow).toBe(262_144);
     expect(kimiCode.maxTokens).toBe(262_144);
     expect(kimiCode.cost).toEqual({
@@ -478,7 +478,7 @@ describe("opencode-go provider plugin", () => {
           api: "openai-completions",
           baseUrl: "https://opencode.ai/zen/go/v1",
           reasoning: true,
-          input: ["text", "image", "video"],
+          input: ["text", "image"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           contextWindow: 262_144,
           maxTokens: 262_144,

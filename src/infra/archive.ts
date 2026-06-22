@@ -15,7 +15,6 @@ export {
   loadZipArchiveWithPreflight,
   mergeExtractedTreeIntoDestination,
   prepareArchiveDestinationDir,
-  readZipCentralDirectoryEntryCount,
   resolveArchiveKind,
   resolvePackedRootDir,
   withStagedArchiveDestination,

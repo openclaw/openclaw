@@ -103,6 +103,11 @@ export async function runQaDockerUp(
     params.gatewayPort != null,
   );
   const qaLabPort = await resolveHostPortImpl(params.qaLabPort ?? 43124, params.qaLabPort != null);
+  if (gatewayPort === qaLabPort) {
+    throw new Error(
+      `QA Lab gateway and UI host ports must be different. Both resolved to ${gatewayPort}.`,
+    );
+  }
   const runCommand = deps?.runCommand ?? execCommand;
   const fetchImpl = deps?.fetchImpl ?? fetchHealthUrl;
   const sleepImpl = deps?.sleepImpl ?? sleep;

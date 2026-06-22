@@ -158,6 +158,60 @@ describe("install-cli.sh", () => {
     expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
   });
 
+  it("uses the repo Corepack pnpm when a global pnpm version is already present", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-pnpm-version-"));
+    const bin = join(tmp, "bin");
+    const outer = join(tmp, "outer");
+    const repo = join(tmp, "repo");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(outer, { recursive: true });
+    mkdirSync(repo, { recursive: true });
+    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
+    writeFileSync(
+      join(repo, "package.json"),
+      '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
+    );
+    writeFileSync(
+      join(bin, "pnpm"),
+      ["#!/bin/bash", '[[ "${1:-}" == "--version" ]] && echo "11.8.0"', ""].join("\n"),
+    );
+    writeFileSync(
+      join(bin, "corepack"),
+      [
+        "#!/bin/bash",
+        'if [[ "${1:-}" == "prepare" ]]; then exit 0; fi',
+        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+        '  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else exit 1; fi',
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(join(bin, "pnpm"), 0o755);
+    chmodSync(join(bin, "corepack"), 0o755);
+
+    try {
+      const result = runInstallCliShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `cd ${JSON.stringify(outer)}`,
+          `activate_repo_pnpm_version ${JSON.stringify(repo)}`,
+          'printf "cmd=%s\\n" "${PNPM_CMD[*]}"',
+          `printf "run=%s\\n" "$(run_pnpm -C ${JSON.stringify(repo)} --version)"`,
+        ].join("\n"),
+        { PATH: `${bin}:${process.env.PATH ?? ""}` },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`cmd=${join(bin, "corepack")} pnpm`);
+      expect(result.stdout).toContain("run=11.2.2");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("links an existing usable Alpine/musl Node runtime without sudo", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-alpine-"));
     const bin = join(tmp, "bin");

@@ -440,20 +440,6 @@ export function readPairingConnectErrorDetails(
   });
 }
 
-/** Reads the compact pairing-required subset from untrusted connect details. */
-export function readConnectPairingRequiredDetails(
-  details: unknown,
-): ConnectPairingRequiredDetails | null {
-  const pairing = readPairingConnectErrorDetails(details);
-  if (!pairing) {
-    return null;
-  }
-  return {
-    ...(pairing.requestId ? { requestId: pairing.requestId } : {}),
-    ...(pairing.reason ? { reason: pairing.reason } : {}),
-  };
-}
-
 /** Parses legacy/string-only pairing-required messages into structured details. */
 export function readConnectPairingRequiredMessage(
   message: string | null | undefined,

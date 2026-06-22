@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -568,6 +569,27 @@ describe("clawhub helpers", () => {
     expect(url.pathname).toBe("/api/v1/skills/agentreceipt/card");
     expect(url.searchParams.get("tag")).toBe("latest");
     expect(url.searchParams.has("version")).toBe(false);
+  });
+
+  it("clamps oversized ClawHub request timeouts before scheduling", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await expect(
+        fetchClawHubSkillCard({
+          slug: "agentreceipt",
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+          fetchImpl: async () =>
+            new Response("# Agent Receipt\n", {
+              status: 200,
+              headers: { "content-type": "text/markdown; charset=utf-8" },
+            }),
+        }),
+      ).resolves.toBe("# Agent Receipt\n");
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("fetches generated Skill Card markdown from an exact verified card URL", async () => {
