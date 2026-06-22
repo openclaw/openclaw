@@ -5890,7 +5890,7 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
-  it("stays silent (NO_REPLY) when fallback exhaustion wraps a drain error, keeping fail bookkeeping", async () => {
+  it("surfaces restart text when fallback exhaustion wraps a drain error, keeping fail bookkeeping", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(new Error("fallback exhausted"), {
@@ -5930,19 +5930,20 @@ describe("runAgentTurnWithFallback", () => {
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
-      isRestartRecoveryArmed: () => true,
     });
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+      expect(result.payload.text).toBe(
+        "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      );
     }
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("gateway_draining");
     expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
   });
 
-  it("stays silent (NO_REPLY) when fallback exhaustion wraps a cleared lane error, keeping fail bookkeeping", async () => {
+  it("surfaces restart text when fallback exhaustion wraps a cleared lane error, keeping fail bookkeeping", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(new Error("fallback exhausted"), {
@@ -5982,12 +5983,13 @@ describe("runAgentTurnWithFallback", () => {
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
-      isRestartRecoveryArmed: () => true,
     });
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+      expect(result.payload.text).toBe(
+        "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+      );
     }
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("command_lane_cleared");

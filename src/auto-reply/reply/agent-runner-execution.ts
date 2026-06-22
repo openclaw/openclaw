@@ -1594,7 +1594,6 @@ export async function runAgentTurnWithFallback(params: {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
-  isRestartRecoveryArmed?: () => boolean;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -3142,38 +3141,22 @@ export async function runAgentTurnWithFallback(params: {
       if (restartLifecycleError instanceof GatewayDrainingError) {
         takePendingLifecycleTerminal()?.emit("error", restartLifecycleError);
         params.replyOperation?.fail("gateway_draining", restartLifecycleError);
-        if (params.isRestartRecoveryArmed?.() !== true) {
-          return {
-            kind: "final",
-            payload: markAgentRunFailureReplyPayload({
-              text: buildRestartLifecycleReplyText(),
-            }),
-          };
-        }
         return {
           kind: "final",
-          payload: {
-            text: SILENT_REPLY_TOKEN,
-          },
+          payload: markAgentRunFailureReplyPayload({
+            text: buildRestartLifecycleReplyText(),
+          }),
         };
       }
 
       if (restartLifecycleError instanceof CommandLaneClearedError) {
         takePendingLifecycleTerminal()?.emit("error", restartLifecycleError);
         params.replyOperation?.fail("command_lane_cleared", restartLifecycleError);
-        if (params.isRestartRecoveryArmed?.() !== true) {
-          return {
-            kind: "final",
-            payload: markAgentRunFailureReplyPayload({
-              text: buildRestartLifecycleReplyText(),
-            }),
-          };
-        }
         return {
           kind: "final",
-          payload: {
-            text: SILENT_REPLY_TOKEN,
-          },
+          payload: markAgentRunFailureReplyPayload({
+            text: buildRestartLifecycleReplyText(),
+          }),
         };
       }
 

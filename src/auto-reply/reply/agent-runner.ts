@@ -1742,7 +1742,6 @@ export async function runReplyAgent(params: {
         resolvedVerboseLevel,
         toolProgressDetail,
         replyMediaContext,
-        isRestartRecoveryArmed: () => trackedRestartRecoveryDeliveryContext,
       }),
     );
 
@@ -2602,25 +2601,19 @@ export async function runReplyAgent(params: {
     }
     if (error instanceof GatewayDrainingError) {
       replyOperation.fail("gateway_draining", error);
-      if (!trackedRestartRecoveryDeliveryContext) {
-        return returnWithQueuedFollowupDrain(
-          markReplyPayloadForSourceSuppressionDelivery({
-            text: RESTART_LIFECYCLE_REPLY_TEXT,
-          }),
-        );
-      }
-      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+      return returnWithQueuedFollowupDrain(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: RESTART_LIFECYCLE_REPLY_TEXT,
+        }),
+      );
     }
     if (error instanceof CommandLaneClearedError) {
       replyOperation.fail("command_lane_cleared", error);
-      if (!trackedRestartRecoveryDeliveryContext) {
-        return returnWithQueuedFollowupDrain(
-          markReplyPayloadForSourceSuppressionDelivery({
-            text: RESTART_LIFECYCLE_REPLY_TEXT,
-          }),
-        );
-      }
-      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+      return returnWithQueuedFollowupDrain(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: RESTART_LIFECYCLE_REPLY_TEXT,
+        }),
+      );
     }
     const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
       err: error,
