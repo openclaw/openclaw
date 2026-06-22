@@ -7,11 +7,13 @@ import {
   VERCEL_AI_GATEWAY_BASE_URL,
   VERCEL_AI_GATEWAY_PROVIDER_ID,
 } from "./models.js";
+import { resolveVercelAiGatewayThinkingProfile } from "./thinking.js";
 
 export function resolveVercelAiGatewayModel(modelId: string) {
   const model = resolveVercelAiGatewayDynamicModel(modelId);
   return {
     ...model,
+    reasoning: model.reasoning || Boolean(resolveVercelAiGatewayThinkingProfile(modelId)),
     input: model.input.includes("image") ? (["text", "image"] as const) : (["text"] as const),
     api: "anthropic-messages" as const,
     provider: VERCEL_AI_GATEWAY_PROVIDER_ID,

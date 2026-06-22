@@ -111,6 +111,13 @@ describe("vercel ai gateway provider catalog", () => {
     });
   });
 
+  it("preserves provider thinking metadata for known live-only upstream models", () => {
+    expect(resolveVercelAiGatewayModel("openai/gpt-5.5")).toMatchObject({
+      reasoning: true,
+      input: ["text"],
+    });
+  });
+
   it("falls back to the static catalog for malformed successful model list payloads", async () => {
     for (const payload of [[], { data: {} }, { data: [null] }]) {
       clearLiveCatalogCacheForTests();
