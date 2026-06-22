@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
   describeInterpreterInlineEval,
+  detectInterpreterInlineEvalArgv,
   type InterpreterInlineEvalHit,
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
@@ -54,6 +55,7 @@ import {
 } from "./invoke-system-run-allowlist.js";
 import {
   hardenApprovedExecutionPaths,
+  isMaterializedInlineEvalApprovalPlan,
   revalidateApprovedCwdSnapshot,
   revalidateApprovedMutableFileOperand,
   resolveMutableFileOperandSnapshotSync,
@@ -110,6 +112,7 @@ type SystemRunParsePhase = {
   needsScreenRecording: boolean;
   approved: boolean;
   suppressNotifyOnExit: boolean;
+  materializedInlineEvalHit: InterpreterInlineEvalHit | null;
 };
 
 type SystemRunPolicyPhase = SystemRunParsePhase & {
@@ -181,6 +184,65 @@ function applyExecPolicyLayer(base: LayeredExecPolicy, layer?: ExecToolConfig): 
     };
   }
   return base;
+}
+
+function parseFormattedExecCommandPreview(commandPreview?: string | null): string[] | null {
+  const text = commandPreview?.trim();
+  if (!text) {
+    return null;
+  }
+  const argv: string[] = [];
+  let index = 0;
+  while (index < text.length) {
+    while (index < text.length && /\s/.test(text[index] ?? "")) {
+      index += 1;
+    }
+    if (index >= text.length) {
+      break;
+    }
+
+    let token = "";
+    if (text[index] === '"') {
+      index += 1;
+      let closed = false;
+      while (index < text.length) {
+        const char = text[index] ?? "";
+        if (char === '"') {
+          index += 1;
+          closed = true;
+          break;
+        }
+        if (char === "\\" && text[index + 1] === '"') {
+          token += '"';
+          index += 2;
+          continue;
+        }
+        token += char;
+        index += 1;
+      }
+      if (!closed || (index < text.length && !/\s/.test(text[index] ?? ""))) {
+        return null;
+      }
+    } else {
+      while (index < text.length && !/\s/.test(text[index] ?? "")) {
+        token += text[index] ?? "";
+        index += 1;
+      }
+    }
+    argv.push(token);
+  }
+  return argv.length > 0 ? argv : null;
+}
+
+function detectMaterializedInlineEvalApprovalHit(
+  approvalPlan: import("../infra/exec-approvals.js").SystemRunApprovalPlan | null,
+): InterpreterInlineEvalHit | null {
+  if (!approvalPlan || !isMaterializedInlineEvalApprovalPlan(approvalPlan)) {
+    return null;
+  }
+  return detectInterpreterInlineEvalArgv(
+    parseFormattedExecCommandPreview(approvalPlan.commandPreview),
+  );
 }
 
 function warnWritableTrustedDirOnce(message: string): void {
@@ -468,17 +530,31 @@ async function parseSystemRunPhase(
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellWrapperInvocation,
   });
+  const materializedInlineEvalHit = detectMaterializedInlineEvalApprovalHit(approvalPlan);
+  const planMatchesInlineEval =
+    opts.params.approved === true &&
+    approvalPlan !== null &&
+    isMaterializedInlineEvalApprovalPlan(approvalPlan) &&
+    materializedInlineEvalHit !== null &&
+    (approvalPlan.commandPreview === command.commandText ||
+      approvalPlan.commandText === command.commandText) &&
+    approvalPlan.argv.length > 0;
+  const argv = planMatchesInlineEval ? approvalPlan.argv : command.argv;
+  const effectiveCommandText = planMatchesInlineEval ? approvalPlan.commandText : commandText;
+  const effectiveCommandPreview = planMatchesInlineEval
+    ? (approvalPlan.commandPreview ?? null)
+    : command.previewText;
   return {
-    argv: command.argv,
+    argv,
     shellPayload,
     shellWrapperInvocation,
-    commandText,
-    commandPreview: command.previewText,
+    commandText: effectiveCommandText,
+    commandPreview: effectiveCommandPreview,
     approvalPlan,
     agentId,
     sessionKey,
     runId,
-    execution: { sessionKey, runId, commandText, suppressNotifyOnExit },
+    execution: { sessionKey, runId, commandText: effectiveCommandText, suppressNotifyOnExit },
     approvalDecision: resolveExecApprovalDecision(opts.params.approvalDecision),
     envOverrides,
     env: opts.sanitizeEnv(envOverrides),
@@ -487,6 +563,7 @@ async function parseSystemRunPhase(
     needsScreenRecording: opts.params.needsScreenRecording === true,
     approved: opts.params.approved === true,
     suppressNotifyOnExit,
+    materializedInlineEvalHit: planMatchesInlineEval ? materializedInlineEvalHit : null,
   };
 }
 
@@ -528,7 +605,9 @@ async function evaluateSystemRunPolicyPhase(
   let { analysisOk, allowlistSatisfied } = allowlistEvaluation;
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;
-  const inlineEvalHit = strictInlineEval ? detectPolicyInlineEval(segments) : null;
+  const inlineEvalHit = strictInlineEval
+    ? (parsed.materializedInlineEvalHit ?? detectPolicyInlineEval(segments))
+    : null;
   const isWindows = process.platform === "win32";
   // Detect Windows wrapper transport from the same shell-wrapper view used to
   // derive the inner payload. That keeps `cmd.exe /c` approval-gated even when
