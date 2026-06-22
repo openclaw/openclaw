@@ -15,7 +15,7 @@ committed `inventory/` report tree.
 This skill owns the operational workflow for:
 
 - `taxonomy.yaml`
-- `docs/maturity-scores.yaml`
+- `qa/maturity-scores.yaml`
 - `docs/concepts/qa-e2e-automation.md`
 - `qa/scenarios/index.yaml`
 
@@ -37,12 +37,11 @@ out of this repo. If a score needs private evidence, use the redacted
   coverage IDs. Do not promote generic IDs into standalone feature names.
 - Avoid duplicate coverage-ID bundles under different feature names in one
   category.
-- `docs/maturity-scores.yaml` is the committed aggregate source for Quality,
+- `qa/maturity-scores.yaml` is the committed aggregate source for Quality,
   Completeness, and LTS review state.
 - `extensions/qa-lab/src/scorecard-taxonomy.ts` exports
-  `qaMaturityScoresSchema` and `parseQaMaturityScores`; use that schema to
-  validate score output instead of duplicating score labels, bands, or object
-  shapes in prompts.
+  `qaMaturityScoresSchema` and `readValidatedQaMaturityScoreSources`; use those
+  QA Lab utilities to validate score output.
 - Generated public docs are `docs/maturity/scorecard.md` and
   `docs/maturity/taxonomy.md`; both come from `pnpm maturity:render`. Do not
   hand-edit generated Markdown to change score results.
@@ -61,12 +60,12 @@ edits:
 node --import tsx --input-type=module <<'NODE'
 import fs from "node:fs";
 import YAML from "yaml";
-import { parseQaMaturityScores } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
+import { readValidatedQaMaturityScoreSources } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
 
 for (const file of ["taxonomy.yaml", "qa/scenarios/index.yaml"]) {
   YAML.parse(fs.readFileSync(file, "utf8"));
 }
-parseQaMaturityScores(YAML.parse(fs.readFileSync("docs/maturity-scores.yaml", "utf8")));
+readValidatedQaMaturityScoreSources();
 NODE
 ```
 
@@ -92,8 +91,8 @@ When asked to score or refresh a surface:
 3. Gather public repo evidence from docs, source, tests, and QA scenario
    metadata.
 4. Prefer existing release profile `qa-evidence.json` artifacts for executed
-   proof. Do not use discrawl or unredacted private archives.
-5. Update `docs/maturity-scores.yaml` only for Quality, Completeness, and LTS
+   proof.
+5. Update `qa/maturity-scores.yaml` only for Quality, Completeness, and LTS
    review state backed by public or redacted artifact evidence.
 6. Run the schema validation command from this skill.
 7. Run `pnpm check:docs` if docs prose changed, and focused QA coverage checks
@@ -101,7 +100,7 @@ When asked to score or refresh a surface:
 
 For subjective score changes, make the smallest defensible edit and leave the
 evidence path in the PR or task summary. Keep manual prose in current docs and
-keep score data in `docs/maturity-scores.yaml`.
+keep score data in `qa/maturity-scores.yaml`.
 
 ## Default Completeness Process
 

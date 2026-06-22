@@ -2,7 +2,6 @@
 // Renders public maturity scorecard docs from the root taxonomy and score aggregate.
 import fs from "node:fs";
 import path from "node:path";
-import YAML from "yaml";
 import {
   validateQaEvidenceSummaryJson,
   type QaEvidenceScorecardJson,
@@ -16,9 +15,8 @@ import {
   qaMaturityCoverageCategoryKey,
   qaMaturityScoreObjectForScore,
   qaMaturityTaxonomyLevelMap,
-  parseQaMaturityTaxonomy,
-  parseQaMaturityScores,
-  validateQaMaturityScoresAgainstTaxonomy,
+  readQaMaturityTaxonomySource,
+  readValidatedQaMaturityScoreSources,
   type QaMaturityCoverageScores,
   type QaMaturityScoreObject,
   type QaMaturityScoreSurface,
@@ -30,7 +28,7 @@ import {
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
-const DEFAULT_SCORES_PATH = "docs/maturity-scores.yaml";
+const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
 const DEFAULT_OUTPUT_DIR = "docs";
 
 type Args = {
@@ -136,7 +134,7 @@ function parseArgs(argv: string[]): Args {
 
 Options:
   --taxonomy <path>     Taxonomy YAML path (default: taxonomy.yaml)
-  --scores <path>       Aggregate score YAML path (default: docs/maturity-scores.yaml)
+  --scores <path>       Aggregate score YAML path (default: qa/maturity-scores.yaml)
   --docs-root <path>    Public docs source root for route validation (default: docs)
   --output-dir <path>   Directory for maturity/scorecard.md and maturity/taxonomy.md
   --static-assets-dir <path>
@@ -152,10 +150,6 @@ Options:
     }
   }
   return args;
-}
-
-function readYaml(filePath: string): unknown {
-  return YAML.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 function familyTitle(value: string): string {
@@ -257,21 +251,6 @@ function docsLink(docPath: string, docsRouteIndex: DocsRouteIndex): string | und
   }
   const publicHref = anchor ? `${publicRoute}#${anchor}` : publicRoute;
   return `[${markdownEscape(title)}](/${markdownEscape(publicHref)})`;
-}
-
-function publicSurfaceName(name: string): string {
-  if (name === "Browser automation and exec/sandbox tools") {
-    return "Browser automation, exec, and sandbox tools";
-  }
-  const slashParts = name.split("/").map((part) => part.trim());
-  if (slashParts.length === 1) {
-    return name;
-  }
-  if (slashParts.length === 2) {
-    return slashParts.join(" and ");
-  }
-  const lastPart = slashParts.at(-1) ?? "";
-  return `${slashParts.slice(0, -1).join(", ")}, and ${lastPart}`;
 }
 
 function markdownTable(rows: RenderScalar[][]): string[] {
@@ -614,7 +593,7 @@ function copyStaticSourceAssets({
 }
 
 function surfaceNameMap(surfaces: QaMaturityTaxonomySurface[]): Map<string, string> {
-  return new Map(surfaces.map((surface) => [surface.id, publicSurfaceName(surface.name)]));
+  return new Map(surfaces.map((surface) => [surface.id, surface.name]));
 }
 
 function renderEvidenceSection(
@@ -732,7 +711,7 @@ function renderMaturityScorecard({
   ];
   for (const surface of surfaces) {
     const scoreSurface = scoreSurfaces.get(surface.id);
-    const surfaceName = publicSurfaceName(surface.name);
+    const surfaceName = surface.name;
     surfaceRows.push([
       `[${markdownEscape(surfaceName)}](/maturity/taxonomy#${markdownSlug(surfaceName)})`,
       markdownEscape(familyTitle(surface.family)),
@@ -794,7 +773,7 @@ function renderTaxonomy({
   for (const family of qaMaturityFamilyOrder(surfaces)) {
     lines.push(`### ${familyTitle(family)}`, "");
     for (const surface of surfaces.filter((candidate) => candidate.family === family)) {
-      const surfaceName = publicSurfaceName(surface.name);
+      const surfaceName = surface.name;
       lines.push(`- [${markdownEscape(surfaceName)}](#${markdownSlug(surfaceName)})`);
     }
     lines.push("");
@@ -804,7 +783,7 @@ function renderTaxonomy({
   for (const family of qaMaturityFamilyOrder(surfaces)) {
     lines.push(`### ${familyTitle(family)}`, "");
     for (const surface of surfaces.filter((candidate) => candidate.family === family)) {
-      const surfaceName = publicSurfaceName(surface.name);
+      const surfaceName = surface.name;
       const scoreSurface = scoreSurfaces.get(surface.id);
       const categoryScores = categoryScoreMap(scoreSurface);
       const categoryRows: RenderScalar[][] = [
@@ -873,15 +852,14 @@ function main(): void {
   const scoresPath = path.normalize(args.scores);
   const docsRoot = path.normalize(args.docsRoot);
   const outputDir = path.normalize(args.outputDir);
-  const taxonomy = parseQaMaturityTaxonomy(readYaml(taxonomyPath), taxonomyPath);
-  const scores = parseQaMaturityScores(readYaml(scoresPath), scoresPath);
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
+  const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
-  const scoreWarnings = validateQaMaturityScoresAgainstTaxonomy({
+  const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
-    scores,
-    taxonomy,
     scoresPath,
+    taxonomy,
+    taxonomyPath,
   });
   const evidenceWarnings = evidenceScorecardWarnings(evidenceSummaries, coverage);
   const inputWarnings = [...scoreWarnings, ...evidenceWarnings];

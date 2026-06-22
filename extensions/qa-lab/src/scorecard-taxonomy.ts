@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
-export const QA_MATURITY_SCORES_PATH = "docs/maturity-scores.yaml";
+export const QA_MATURITY_SCORES_PATH = "qa/maturity-scores.yaml";
 export const QA_MATURITY_SCORE_KEYS = ["quality", "completeness"] as const;
 export const QA_MATURITY_SCORE_LABELS = [
   "Lovable",
@@ -480,6 +480,29 @@ export function parseQaMaturityScores(value: unknown, label = QA_MATURITY_SCORES
   throw new Error(`${label}: ${issues}`);
 }
 
+export function readQaMaturityTaxonomySource(taxonomyPath = QA_MATURITY_TAXONOMY_PATH) {
+  return parseQaMaturityTaxonomy(YAML.parse(fs.readFileSync(taxonomyPath, "utf8")), taxonomyPath);
+}
+
+export function readValidatedQaMaturityScoreSources(params?: {
+  coverageScores?: QaMaturityCoverageScores;
+  scoresPath?: string;
+  taxonomy?: QaMaturityTaxonomy;
+  taxonomyPath?: string;
+}) {
+  const taxonomyPath = params?.taxonomyPath ?? QA_MATURITY_TAXONOMY_PATH;
+  const scoresPath = params?.scoresPath ?? QA_MATURITY_SCORES_PATH;
+  const taxonomy = params?.taxonomy ?? readQaMaturityTaxonomySource(taxonomyPath);
+  const scores = parseQaMaturityScores(YAML.parse(fs.readFileSync(scoresPath, "utf8")), scoresPath);
+  const warnings = validateQaMaturityScoresAgainstTaxonomy({
+    coverageScores: params?.coverageScores,
+    scores,
+    taxonomy,
+    scoresPath,
+  });
+  return { scores, taxonomy, warnings };
+}
+
 function readQaMaturityTaxonomy(repoRoot: string | undefined) {
   const taxonomyPath = repoRoot
     ? path.join(repoRoot, QA_MATURITY_TAXONOMY_PATH)
@@ -677,7 +700,7 @@ export function validateQaMaturityScoresAgainstTaxonomy(params: {
 
     const taxonomySurface = taxonomyIndex.surfaces.get(surfaceId);
     if (!taxonomySurface) {
-      warnings.push(`${scoresPath}: surface ${surfaceId} is not an active taxonomy surface`);
+      throw new Error(`${scoresPath}: surface ${surfaceId} is not an active taxonomy surface`);
     }
     const categories = scoreSurface.categories;
     if (taxonomySurface && categories.length !== taxonomySurface.categories.size) {
@@ -698,7 +721,7 @@ export function validateQaMaturityScoresAgainstTaxonomy(params: {
 
       const taxonomyCategory = taxonomySurface?.categories.get(categoryName);
       if (taxonomySurface && !taxonomyCategory) {
-        warnings.push(
+        throw new Error(
           `${scoresPath}.${surfaceId}: score category ${categoryName} is not in taxonomy`,
         );
       }
@@ -749,7 +772,7 @@ export function validateQaMaturityScoresAgainstTaxonomy(params: {
 
   for (const surfaceId of taxonomyIndex.surfaces.keys()) {
     if (!seenSurfaceIds.has(surfaceId)) {
-      warnings.push(`${scoresPath}: missing active taxonomy surface ${surfaceId}`);
+      throw new Error(`${scoresPath}: missing active taxonomy surface ${surfaceId}`);
     }
   }
   if (params.scores.counts.category_scores !== allScoreCategories.length) {
