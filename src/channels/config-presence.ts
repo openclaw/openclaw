@@ -15,6 +15,7 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
+import { listOfficialExternalChannelEnvVars } from "../plugins/official-external-plugin-catalog.js";
 import { isRecord } from "../utils.js";
 import { listBundledChannelIds } from "./plugins/bundled-ids.js";
 
@@ -146,6 +147,16 @@ export function listPotentialConfiguredChannelPresenceSignals(
   const configuredChannelIds = new Set<string>();
   const channelIds = options.channelIds ?? listBundledChannelIds(env, options.discovery);
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
+  const scopedChannelIds = options.channelIds
+    ? new Set(
+        options.channelIds
+          .map((channelId) => normalizeOptionalLowercaseString(channelId))
+          .filter((channelId): channelId is string => Boolean(channelId)),
+      )
+    : undefined;
+  const officialExternalChannelEnvVars = listOfficialExternalChannelEnvVars().filter(
+    ({ channelId }) => !scopedChannelIds || scopedChannelIds.has(channelId),
+  );
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
     for (const [key, value] of Object.entries(channels)) {
@@ -167,6 +178,12 @@ export function listPotentialConfiguredChannelPresenceSignals(
     }
     for (const [prefix, channelId] of channelEnvPrefixes) {
       if (key.startsWith(prefix)) {
+        configuredChannelIds.add(channelId);
+        addSignal(channelId, "env");
+      }
+    }
+    for (const { channelId, envVars } of officialExternalChannelEnvVars) {
+      if (envVars.includes(key)) {
         configuredChannelIds.add(channelId);
         addSignal(channelId, "env");
       }

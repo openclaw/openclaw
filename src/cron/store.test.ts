@@ -9,9 +9,9 @@ import {
 } from "../commands/doctor/cron/legacy-store-migration.js";
 import {
   loadCronJobsStoreWithConfigJobs,
+  loadCronJobsStoreSync,
   loadCronQuarantineFile,
   loadCronStore,
-  loadCronStoreSync,
   resolveCronQuarantinePath,
   resolveCronStorePath,
   saveCronQuarantineFile,
@@ -166,7 +166,7 @@ describe("cron store", () => {
     await fs.mkdir(path.dirname(store.storePath), { recursive: true });
     await fs.writeFile(store.storePath, JSON.stringify([job], null, 2), "utf-8");
 
-    const loaded = loadCronStoreSync(store.storePath);
+    const loaded = loadCronJobsStoreSync(store.storePath);
 
     expect(loaded.jobs).toHaveLength(0);
   });
@@ -266,7 +266,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = loadCronStoreSync(store.storePath);
+    const loaded = loadCronJobsStoreSync(store.storePath);
 
     expect(loaded.jobs.map((job) => job.id)).toEqual([]);
     expect(await fs.stat(store.storePath)).toBeTruthy();
@@ -316,7 +316,7 @@ describe("cron store", () => {
     const { storePath } = await makeStorePath();
     await saveCronStore(storePath, makeStore("job-sync", true));
 
-    const loaded = loadCronStoreSync(storePath);
+    const loaded = loadCronJobsStoreSync(storePath);
 
     expect(loaded.jobs).toHaveLength(1);
     expect(loaded.jobs[0]?.id).toBe("job-sync");
@@ -682,7 +682,7 @@ describe("cron store", () => {
       "utf-8",
     );
 
-    const loaded = loadCronStoreSync(storePath);
+    const loaded = loadCronJobsStoreSync(storePath);
 
     expect(loaded.jobs).toEqual([]);
   });

@@ -1691,5 +1691,4 @@ export const testing = {
   runPostCompactionSideEffects,
 } as const;
 
-export { runPostCompactionSideEffects } from "./compaction-hooks.js";
 export { testing as __testing };

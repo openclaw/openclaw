@@ -473,7 +473,12 @@ function assignGenAiSpanIdentityAttrs(
     attrs["gen_ai.system"] = lowCardinalityAttr(input.provider);
   }
   if (input.model) {
-    attrs["gen_ai.request.model"] = lowCardinalityAttr(input.model);
+    // Span attributes carry the full model id; only metric labels need bounded cardinality
+    // (the gen_ai metrics below still use lowCardinalityAttr). The low-cardinality allowlist
+    // regex rejects "/", so provider-qualified ids like "anthropic/claude-sonnet-4.6" collapse
+    // to "unknown" on the SPAN — breaking model attribution in trace backends (e.g. Langfuse
+    // reads gen_ai.request.model). Keep the redacted raw model on the span.
+    attrs["gen_ai.request.model"] = redactSensitiveText(input.model.trim());
   }
   attrs["gen_ai.operation.name"] = genAiOperationName(input.api);
 }

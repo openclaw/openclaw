@@ -41,11 +41,32 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # Keep the canonical main queue quiet long enough for a follow-up push to
+  # cancel this run before it registers the Blacksmith matrix.
+  runner-admission:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS: "90"
+    steps:
+      - name: Debounce canonical main pushes
+        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          echo "Waiting ${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}s for a superseding main push before Blacksmith admission"
+          sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"
+      - name: Admit non-main CI runs immediately
+        if: github.event_name != 'push' || github.repository != 'openclaw/openclaw' || github.ref != 'refs/heads/main'
+        run: echo "No canonical main debounce required"
+
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
     permissions:
       contents: read
+    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
@@ -197,7 +218,7 @@ jobs:
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
           import {
-            createNodeTestShards,
+            createNodeTestShardBundles,
           } from "./scripts/lib/ci-node-test-plan.mjs";
           import {
             createChannelContractTestShards,
@@ -272,18 +293,23 @@ jobs:
             }
           }
 
+          const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
           const nodeTestShards = runNodeFull
-            ? createNodeTestShards({
+            ? createNodeTestShardBundles({
                 includeReleaseOnlyPluginShards: false,
+                compact: compactPullRequest,
               }).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
                 shard_name: shard.shardName,
+                groups: shard.groups,
                 configs: shard.configs,
+                env: shard.env,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
+                timeout_minutes: shard.timeoutMinutes,
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -320,7 +346,14 @@ jobs:
             run_checks_windows: runWindows,
             checks_windows_matrix: createMatrix(
               runWindows
-                ? [{ check_name: "checks-windows-node-test", runtime: "node", task: "test" }]
+                ? [
+                    {
+                      check_name: "checks-windows-node-test",
+                      runtime: "node",
+                      task: "test",
+                      runner: "blacksmith-8vcpu-windows-2025",
+                    },
+                  ]
                 : [],
             ),
             run_macos_node: runMacos,
@@ -354,6 +387,7 @@ jobs:
   security-fast:
     permissions:
       contents: read
+    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
@@ -558,7 +592,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
@@ -819,7 +853,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - name: Checkout
@@ -909,7 +943,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -990,7 +1024,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -1139,11 +1173,11 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
-    timeout-minutes: 60
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout
@@ -1202,7 +1236,9 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
+          OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
@@ -1216,28 +1252,55 @@ jobs:
           import { writeFileSync } from "node:fs";
           import { join } from "node:path";
 
-          const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
-          if (!Array.isArray(configs) || configs.length === 0) {
-            console.error("Missing node test shard configs");
-            process.exit(1);
-          }
-          const includePatterns = JSON.parse(process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null");
-          const childEnv = { ...process.env };
-          if (Array.isArray(includePatterns) && includePatterns.length > 0) {
-            const includeFile = join(
-              process.env.RUNNER_TEMP ?? ".",
-              `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
+          const groups = JSON.parse(process.env.OPENCLAW_NODE_TEST_GROUPS_JSON ?? "null");
+          const plans = Array.isArray(groups) && groups.length > 0
+            ? groups
+            : [{
+                configs: JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]"),
+                env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON ?? "null"),
+                includePatterns: JSON.parse(
+                  process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
+                ),
+                shard_name: process.env.OPENCLAW_VITEST_SHARD_NAME,
+              }];
+          for (const plan of plans) {
+            const configs = plan.configs;
+            if (!Array.isArray(configs) || configs.length === 0) {
+              console.error("Missing node test shard configs");
+              process.exit(1);
+            }
+            const childEnv = {
+              ...process.env,
+              ...(plan.shard_name ? { OPENCLAW_VITEST_SHARD_NAME: plan.shard_name } : {}),
+            };
+            if (plan.env && typeof plan.env === "object" && !Array.isArray(plan.env)) {
+              for (const [key, value] of Object.entries(plan.env)) {
+                if (typeof value === "string") {
+                  childEnv[key] = value;
+                }
+              }
+            }
+            if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
+              const includeFile = join(
+                process.env.RUNNER_TEMP ?? ".",
+                `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
+              );
+              writeFileSync(includeFile, JSON.stringify(plan.includePatterns), "utf8");
+              childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+            } else {
+              delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+            }
+            const result = spawnSync(
+              "pnpm",
+              ["exec", "node", "scripts/test-projects.mjs", ...configs],
+              {
+                env: childEnv,
+                stdio: "inherit",
+              },
             );
-            writeFileSync(includeFile, JSON.stringify(includePatterns), "utf8");
-            childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
-          }
-
-          const result = spawnSync("pnpm", ["exec", "node", "scripts/test-projects.mjs", ...configs], {
-            env: childEnv,
-            stdio: "inherit",
-          });
-          if ((result.status ?? 1) !== 0) {
-            process.exit(result.status ?? 1);
+            if ((result.status ?? 1) !== 0) {
+              process.exit(result.status ?? 1);
+            }
           }
           EOF
 
@@ -1252,7 +1315,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         include:
           - check_name: check-guards
@@ -1269,7 +1332,7 @@ jobs:
             runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -1390,31 +1453,39 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         include:
           - check_name: check-additional-boundaries-a
             group: boundaries
             boundary_shard: 1/4
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-boundaries-bcd
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-session-transcript-reader-boundary
             group: session-transcript-reader-boundary
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-additional-extension-channels
             group: extension-channels
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-bundled
             group: extension-bundled
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
+            runner: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         shell: bash
@@ -1757,7 +1828,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-windows-2025' || 'windows-2025') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-windows-2025') || 'windows-2025') }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=8192

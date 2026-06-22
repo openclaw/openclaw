@@ -65,6 +65,25 @@ export function isSilentReplyText(
 
 type SilentReplyActionEnvelope = { action?: unknown };
 
+function isSilentReplyJsonStringText(
+  text: string | undefined,
+  token: string = SILENT_REPLY_TOKEN,
+): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed.startsWith('"') || !trimmed.endsWith('"') || !trimmed.includes(token)) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return typeof parsed === "string" && parsed.trim() === token;
+  } catch {
+    return false;
+  }
+}
+
 function isSilentReplyEnvelopeText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
@@ -200,6 +219,7 @@ export function isSilentReplyPayloadText(
 ): boolean {
   return (
     isSilentReplyText(text, token) ||
+    isSilentReplyJsonStringText(text, token) ||
     isSilentReplyEnvelopeText(text, token) ||
     isReasoningPrefixedSilentReplyText(text, token)
   );

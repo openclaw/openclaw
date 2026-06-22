@@ -206,13 +206,6 @@ export function pruneStaleEntries(
 export const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
 
-export interface QuotaSuspensionMaintenanceResult {
-  /** Suspensions whose state was advanced from "suspended" to "resuming" so the next attempt injects a handoff. */
-  resumed: Array<{ sessionKey: string; laneId?: string }>;
-  /** Entries whose `quotaSuspension` field was removed entirely (already-resumed records past 2x TTL). */
-  cleared: number;
-}
-
 export type QuotaSuspensionEntryMaintenanceResult = {
   /** Patch to apply to the entry, or null when no TTL transition is due. */
   patch: Partial<SessionEntry> | null;
@@ -251,54 +244,6 @@ export function resolveQuotaSuspensionEntryMaintenance(params: {
     };
   }
   return { patch: null, cleared: false };
-}
-
-/**
- * Two-stage TTL maintenance for `quotaSuspension` records:
- *  1. After `ttlMs`, transition `state: "suspended" → "resuming"` so the next
- *     attempt for that session sees the resume marker and injects a handoff.
- *  2. After `2 * ttlMs`, drop the field entirely (the record has done its job).
- *
- * Mutates `store` in-place. The caller is responsible for translating the
- * returned `resumed[]` into in-process lane-concurrency restoration calls,
- * which keeps this module free of `process/*` dependencies.
- */
-export function pruneQuotaSuspensions(params: {
-  store: Record<string, SessionEntry>;
-  now: number;
-  ttlMs?: number;
-  log?: boolean;
-}): QuotaSuspensionMaintenanceResult {
-  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
-  const resumed: Array<{ sessionKey: string; laneId?: string }> = [];
-  let cleared = 0;
-  for (const [sessionKey, entry] of Object.entries(params.store)) {
-    const result = resolveQuotaSuspensionEntryMaintenance({
-      entry,
-      now: params.now,
-      ttlMs,
-    });
-    if (!result.patch) {
-      continue;
-    }
-    if (result.cleared) {
-      delete entry.quotaSuspension;
-      cleared++;
-    } else if (result.patch.quotaSuspension) {
-      entry.quotaSuspension = result.patch.quotaSuspension;
-    }
-    if (result.resumed) {
-      resumed.push({ sessionKey, laneId: result.resumed.laneId });
-    }
-  }
-  if ((resumed.length > 0 || cleared > 0) && params.log !== false) {
-    log.info("processed quota-suspension TTLs", {
-      resumed: resumed.length,
-      cleared,
-      ttlMs,
-    });
-  }
-  return { resumed, cleared };
 }
 
 function getEntryUpdatedAt(entry?: SessionEntry): number {

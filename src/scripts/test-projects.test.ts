@@ -618,10 +618,10 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
     );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
   });
@@ -887,6 +887,7 @@ describe("test-projects args", () => {
           "test/scripts/codex-install-assertions.test.ts",
           "test/scripts/config-reload-mutate-metadata.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/docs-list.test.ts",
           "test/scripts/doctor-install-switch-wrapper.test.ts",
           "test/scripts/e2e-text-file-utils.test.ts",
           "test/scripts/fixture-common.test.ts",

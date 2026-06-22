@@ -1389,6 +1389,11 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: ["test/scripts/update-clawtributors.test.ts"],
     });
 
+    expect(resolveChangedTestTargetPlan(["scripts/docs-list.js"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/docs-list.test.ts"],
+    });
+
     expect(resolveChangedTestTargetPlan(["scripts/docs-link-audit.mjs"])).toEqual({
       mode: "targets",
       targets: ["src/scripts/docs-link-audit.test.ts"],
@@ -1975,22 +1980,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-npm-release.ts",
         ["test/plugin-npm-release.test.ts", "test/plugin-clawhub-release.test.ts"],
       ],
-      [
-        "scripts/plugin-clawhub-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-clawhub-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
+      ["scripts/plugin-clawhub-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-clawhub-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
       [
         "scripts/plugin-release-pretag-pack-check.ts",
         ["test/scripts/plugin-release-pretag-pack-check.test.ts"],

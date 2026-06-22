@@ -709,16 +709,6 @@ private fun ModuleListRow(
   }
 }
 
-@Composable
-private fun RecentSessionRow(
-  title: String,
-  subtitle: String,
-  metadata: String,
-  onClick: () -> Unit,
-) {
-  RecentSessionRowContent(title = title, subtitle = subtitle, metadata = metadata, onClick = onClick)
-}
-
 private data class RecentSessionListItem(
   val key: String,
   val title: String,

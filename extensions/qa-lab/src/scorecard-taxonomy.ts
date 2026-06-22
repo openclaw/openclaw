@@ -28,12 +28,14 @@ function isRepoRootRelativeRef(value: string) {
 
 const qaCoverageEvidenceRoleSchema = z.enum(["primary", "secondary"]);
 export const qaScorecardEvidenceModeSchema = z.enum(["full", "slim"]);
+export const qaScorecardChannelDriverSchema = z.enum(["qa-channel", "crabline", "live"]);
 
 const qaScorecardProfileSchema = z.object({
   id: qaScorecardIdSchema,
   description: z.string().trim().min(1),
   evidenceMode: qaScorecardEvidenceModeSchema.optional(),
   includeAllCategories: z.boolean().default(false),
+  channelDriver: qaScorecardChannelDriverSchema.default("qa-channel"),
   categoryIds: z.array(qaScorecardIdSchema).default([]),
 });
 
@@ -83,6 +85,20 @@ const qaMaturityTaxonomySchema = z
           message: `profile ${profile.id} cannot set categoryIds when includeAllCategories is true`,
         });
       }
+      if (profile.channelDriver === "crabline" && profile.includeAllCategories) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["profiles", profileIndex, "includeAllCategories"],
+          message: `profile ${profile.id} cannot set includeAllCategories when channelDriver is crabline`,
+        });
+      }
+      if (profile.channelDriver === "crabline" && !profile.categoryIds.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["profiles", profileIndex, "categoryIds"],
+          message: `profile ${profile.id} requires categoryIds when channelDriver is crabline`,
+        });
+      }
 
       const seenProfileCategoryIds = new Set<string>();
       for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
@@ -101,6 +117,7 @@ const qaMaturityTaxonomySchema = z
 export type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
 export type QaScorecardEvidenceKind = QaNativeCoverageEvidenceKind | "qa-scenario";
 export type QaScorecardEvidenceMode = z.infer<typeof qaScorecardEvidenceModeSchema>;
+export type QaScorecardChannelDriver = z.infer<typeof qaScorecardChannelDriverSchema>;
 type QaCoverageEvidenceRole = z.infer<typeof qaCoverageEvidenceRoleSchema>;
 type QaMaturityTaxonomy = z.infer<typeof qaMaturityTaxonomySchema>;
 
@@ -146,6 +163,7 @@ export type QaScorecardCategoryCoverageReport = {
 export type QaScorecardProfileReport = {
   id: string;
   evidenceMode: QaScorecardEvidenceMode;
+  channelDriver: QaScorecardChannelDriver;
   categoryIds: string[];
 };
 
@@ -333,12 +351,14 @@ export function readQaScorecardFeatureCoverageByCategory(repoRoot?: string) {
 export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
   const profile = profileId?.trim();
   if (!profile) {
-    return { evidenceMode: "full" as const };
+    return { evidenceMode: "full" as const, channelDriver: "qa-channel" as const };
   }
+  const profileOptions = readQaMaturityTaxonomy(repoRoot)?.profiles.find(
+    (entry) => entry.id === profile,
+  );
   return {
-    evidenceMode:
-      readQaMaturityTaxonomy(repoRoot)?.profiles.find((entry) => entry.id === profile)
-        ?.evidenceMode ?? "full",
+    evidenceMode: profileOptions?.evidenceMode ?? "full",
+    channelDriver: profileOptions?.channelDriver ?? "qa-channel",
   };
 }
 
@@ -478,6 +498,7 @@ export function buildQaScorecardTaxonomyReport(params: {
       return {
         id: profile.id,
         evidenceMode: profile.evidenceMode ?? "full",
+        channelDriver: profile.channelDriver,
         categoryIds: validCategoryIds,
       };
     }) ?? [];

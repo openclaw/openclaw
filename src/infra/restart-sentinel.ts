@@ -33,6 +33,7 @@ export type RestartSentinelStep = {
 export type RestartSentinelStats = {
   mode?: string;
   root?: string;
+  requiresRestart?: boolean;
   handoffId?: string;
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
@@ -342,9 +343,21 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
+function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): boolean {
+  return (
+    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
+    payload.status === "ok" &&
+    payload.stats?.requiresRestart === true
+  );
+}
+
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
+  }
+  if (isRestartRequiredConfigWriteSentinel(payload)) {
+    const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
+    return `Gateway restart required${mode}`.trim();
   }
   const kind = payload.kind;
   const status = payload.status;

@@ -1133,8 +1133,7 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
     );
     if (existingIndex >= 0) {
       const replacement = mergeProgressDraftLineUpdate(lines[existingIndex], line);
-      const replacementIdentity = normalizeChannelProgressDraftLineIdentity(replacement);
-      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === replacementIdentity) {
+      if (replacement === lines[existingIndex]) {
         return lines;
       }
       const next = [...lines];

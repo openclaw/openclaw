@@ -17,7 +17,6 @@ export {
   getOrCreateSessionMcpRuntime,
   getSessionMcpRuntimeManager,
   peekSessionMcpRuntime,
-  resolveSessionMcpConfigFingerprint,
   resolveSessionMcpConfigSummary,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,

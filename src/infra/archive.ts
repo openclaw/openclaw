@@ -18,10 +18,5 @@ export {
   resolveArchiveKind,
   resolvePackedRootDir,
   withStagedArchiveDestination,
-  type ArchiveExtractLimits,
-  type ArchiveKind,
-  type ArchiveLimitErrorCode,
   type ArchiveLogger,
-  type ArchiveSecurityErrorCode,
-  type TarEntryInfo,
 } from "@openclaw/fs-safe/archive";

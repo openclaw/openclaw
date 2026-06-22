@@ -166,14 +166,6 @@ class GatewayDiscovery(
     }
   }
 
-  private fun stopLocalDiscovery() {
-    try {
-      nsd.stopServiceDiscovery(discoveryListener)
-    } catch (_: Throwable) {
-      // ignore (best-effort)
-    }
-  }
-
   private fun startUnicastDiscovery(domain: String) {
     unicastJob =
       scope.launch(Dispatchers.IO) {

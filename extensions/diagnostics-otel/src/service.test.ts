@@ -2125,7 +2125,7 @@ describe("diagnostics-otel service", () => {
       sessionKey: "session-key",
       sessionId: "session-id",
       provider: "anthropic",
-      model: "claude-sonnet-4.6",
+      model: "anthropic/claude-sonnet-4.6",
       usage: {
         input: 100,
         output: 40,
@@ -2141,7 +2141,9 @@ describe("diagnostics-otel service", () => {
     const modelUsageOptions = startedSpanOptions("openclaw.model.usage");
     expect(modelUsageOptions?.attributes?.["gen_ai.operation.name"]).toBe("chat");
     expect(modelUsageOptions?.attributes?.["gen_ai.system"]).toBe("anthropic");
-    expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe("claude-sonnet-4.6");
+    expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe(
+      "anthropic/claude-sonnet-4.6",
+    );
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.input_tokens"]).toBe(150);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.output_tokens"]).toBe(40);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.cache_read.input_tokens"]).toBe(30);
@@ -2168,8 +2170,8 @@ describe("diagnostics-otel service", () => {
       runId: "run-1",
       callId: "call-1",
       sessionKey: "session-key",
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4.6",
       api: "openai-completions",
       durationMs: 250,
     });
@@ -2198,8 +2200,8 @@ describe("diagnostics-otel service", () => {
     expect(genAiOperationDuration?.record).toHaveBeenCalledTimes(2);
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(0.25, {
       "gen_ai.operation.name": "text_completion",
-      "gen_ai.provider.name": "openai",
-      "gen_ai.request.model": "gpt-5.4",
+      "gen_ai.provider.name": "anthropic",
+      "gen_ai.request.model": "unknown",
     });
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(1.25, {
       "gen_ai.operation.name": "generate_content",
