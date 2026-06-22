@@ -57,6 +57,14 @@ function normalizeDeliveryTarget(channel: string, to: string): string {
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
+function hashDeliveredText(text: string): string {
+  let hash = 5381;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 33) ^ text.charCodeAt(index);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 type NormalizedSilentReplyText = {
   text: string | undefined;
   strippedTrailingSilentToken: boolean;
@@ -913,6 +921,16 @@ export async function dispatchCronDelivery(
   let outputText = params.outputText;
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
+  let pendingRequesterConsumedCredit:
+    | {
+        requesterSessionKey: string;
+        runStartedAt: number;
+        runIds: string[];
+        kind: "cron_descendant_fallback";
+        deliveryTextHash: string;
+        consumerRunId: string;
+      }
+    | undefined;
 
   let delivered = verifiedMessageToolDelivery;
   let deliveryAttempted = verifiedMessageToolDelivery;
@@ -1168,6 +1186,13 @@ export async function dispatchCronDelivery(
       }
       // Only mark delivered when ALL payloads succeeded (no partial failure).
       delivered = deliveryResults.length > 0 && !hadPartialFailure;
+      if (delivered && pendingRequesterConsumedCredit) {
+        const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
+        subagentRegistryRuntime.markDescendantCompletionConsumedByRequester(
+          pendingRequesterConsumedCredit,
+        );
+        pendingRequesterConsumedCredit = undefined;
+      }
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
@@ -1308,7 +1333,7 @@ export async function dispatchCronDelivery(
     // doesn't match the narrow hint list). We still need to use the
     // descendant's output instead of the interim cron text.
     const completedDescendantReply = shouldCheckCompletedDescendants
-      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReplyWithRuns({
           sessionKey: subagentFollowupSessionKey,
           runStartedAt: params.runStartedAt,
         })
@@ -1325,10 +1350,22 @@ export async function dispatchCronDelivery(
         subagentFollowupSessionKey,
       );
       if (!finalReply && activeSubagentRuns === 0) {
-        finalReply = await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
-          sessionKey: subagentFollowupSessionKey,
-          runStartedAt: params.runStartedAt,
-        });
+        const fallbackReply =
+          await subagentFollowupRuntime?.readDescendantSubagentFallbackReplyWithRuns({
+            sessionKey: subagentFollowupSessionKey,
+            runStartedAt: params.runStartedAt,
+          });
+        if (fallbackReply) {
+          finalReply = fallbackReply.text;
+          pendingRequesterConsumedCredit = {
+            requesterSessionKey: subagentFollowupSessionKey,
+            runStartedAt: params.runStartedAt,
+            runIds: fallbackReply.consumedRunIds,
+            kind: "cron_descendant_fallback",
+            deliveryTextHash: hashDeliveredText(fallbackReply.text),
+            consumerRunId: createCronExecutionId(params.job.id, params.runStartedAt),
+          };
+        }
       }
       if (finalReply && activeSubagentRuns === 0) {
         outputText = finalReply;
@@ -1339,10 +1376,18 @@ export async function dispatchCronDelivery(
     } else if (completedDescendantReply) {
       // Descendants already finished before we got here. Use their output
       // directly instead of the cron agent's interim text.
-      outputText = completedDescendantReply;
-      summary = pickSummaryFromOutput(completedDescendantReply) ?? summary;
-      synthesizedText = completedDescendantReply;
-      deliveryPayloads = [{ text: completedDescendantReply }];
+      outputText = completedDescendantReply.text;
+      summary = pickSummaryFromOutput(completedDescendantReply.text) ?? summary;
+      synthesizedText = completedDescendantReply.text;
+      deliveryPayloads = [{ text: completedDescendantReply.text }];
+      pendingRequesterConsumedCredit = {
+        requesterSessionKey: subagentFollowupSessionKey,
+        runStartedAt: params.runStartedAt,
+        runIds: completedDescendantReply.consumedRunIds,
+        kind: "cron_descendant_fallback",
+        deliveryTextHash: hashDeliveredText(completedDescendantReply.text),
+        consumerRunId: createCronExecutionId(params.job.id, params.runStartedAt),
+      };
     }
     if (!params.deliveryBestEffort && activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
