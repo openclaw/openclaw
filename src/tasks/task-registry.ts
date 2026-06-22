@@ -1164,7 +1164,11 @@ export function reloadTaskRegistryFromStore(): void {
   restoreTaskRegistryOnce();
 }
 
-function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | null {
+function updateTask(
+  taskId: string,
+  patch: Partial<TaskRecord>,
+  pendingDeliveryState?: TaskDeliveryState,
+): TaskRecord | null {
   const current = tasks.get(taskId);
   if (!current) {
     return null;
@@ -1183,10 +1187,13 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   const parentFlowIndexChanged = current.parentFlowId?.trim() !== next.parentFlowId?.trim();
   // Persist before mutating memory. If the store rejects the write, keep the
   // in-memory mirror at the durable value and report that no mutation applied.
-  if (!tryPersistTaskUpsert(next, "update")) {
+  if (!tryPersistTaskUpsert(next, "update", pendingDeliveryState)) {
     return null;
   }
   tasks.set(taskId, next);
+  if (pendingDeliveryState) {
+    taskDeliveryStates.set(taskId, pendingDeliveryState);
+  }
   if (patch.runId && patch.runId !== current.runId) {
     rebuildRunIdIndex();
   }
@@ -1239,6 +1246,19 @@ function upsertTaskDeliveryState(state: TaskDeliveryState): TaskDeliveryState {
   }
   taskDeliveryStates.set(state.taskId, next);
   return cloneTaskDeliveryState(next);
+}
+
+function buildTaskDeliveryNotificationState(params: {
+  taskId: string;
+  requesterOrigin?: TaskDeliveryState["requesterOrigin"];
+  lastNotifiedEventAt: number;
+}): TaskDeliveryState {
+  const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  return {
+    taskId: params.taskId,
+    ...(requesterOrigin ? { requesterOrigin } : {}),
+    lastNotifiedEventAt: params.lastNotifiedEventAt,
+  };
 }
 
 function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
@@ -1475,14 +1495,18 @@ export async function maybeDeliverTaskStateChangeUpdate(
     }
     if (!canDeliverTaskToRequesterOrigin(current)) {
       queueTaskSystemEvent(current, eventText);
-      upsertTaskDeliveryState({
+      const nextDeliveryState = buildTaskDeliveryNotificationState({
         taskId,
         requesterOrigin: deliveryState?.requesterOrigin,
         lastNotifiedEventAt: latestEvent.at,
       });
-      return updateTask(taskId, {
-        lastEventAt: Date.now(),
-      });
+      return updateTask(
+        taskId,
+        {
+          lastEventAt: Date.now(),
+        },
+        nextDeliveryState,
+      );
     }
     const { sendMessage } = await loadTaskRegistryDeliveryRuntime();
     const requesterAgentId = parseAgentSessionKey(ownerSessionKey)?.agentId;
@@ -1505,14 +1529,18 @@ export async function maybeDeliverTaskStateChangeUpdate(
         idempotencyKey,
       },
     });
-    upsertTaskDeliveryState({
+    const nextDeliveryState = buildTaskDeliveryNotificationState({
       taskId,
       requesterOrigin: deliveryState?.requesterOrigin,
       lastNotifiedEventAt: latestEvent.at,
     });
-    return updateTask(taskId, {
-      lastEventAt: Date.now(),
-    });
+    return updateTask(
+      taskId,
+      {
+        lastEventAt: Date.now(),
+      },
+      nextDeliveryState,
+    );
   } catch (error) {
     log.warn("Failed to deliver background task state change", {
       taskId,

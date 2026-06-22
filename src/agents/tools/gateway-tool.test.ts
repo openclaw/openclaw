@@ -290,6 +290,7 @@ describe("gateway tool restart continuation", () => {
 
   it("reports continuationQueued=false when a coalesced restart belongs to another session (#86742)", async () => {
     requestSafeGatewayRestartMock.mockReturnValue({
+      ok: true,
       status: "coalesced",
       preflight: {
         safe: true,
@@ -302,6 +303,7 @@ describe("gateway tool restart continuation", () => {
           activeTasks: 0,
           totalActive: 0,
         },
+        blockers: [],
         taskBlockers: [],
       },
       restart: {
@@ -319,7 +321,7 @@ describe("gateway tool restart continuation", () => {
         activeWorkInterruptApproved: false,
         skipDeferralDowngraded: false,
       },
-    });
+    } as unknown as ReturnType<typeof requestSafeGatewayRestart> as never);
     const tool = createGatewayTool({
       agentSessionKey: "agent:main:main",
       config: {},

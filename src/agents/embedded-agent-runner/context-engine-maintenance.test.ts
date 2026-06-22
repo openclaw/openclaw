@@ -1610,7 +1610,7 @@ describe("runContextEngineMaintenance", () => {
         });
 
         await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
-        const [runningTask] = listTasksForOwnerKey(sessionKey).filter(
+        const runningTask = listTasksForOwnerKey(sessionKey).find(
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(runningTask?.status).toBe("running");
@@ -1619,7 +1619,7 @@ describe("runContextEngineMaintenance", () => {
         await flushAsyncWork();
         await waitForDeferredTurnMaintenanceForSession(sessionKey);
 
-        const [timedOutTask] = listTasksForOwnerKey(sessionKey).filter(
+        const timedOutTask = listTasksForOwnerKey(sessionKey).find(
           (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
         );
         expect(timedOutTask?.status).toBe("failed");

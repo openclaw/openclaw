@@ -14,6 +14,7 @@ const listSessionsFromStoreAsyncMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
 const loadSessionEntryMock = vi.fn((sessionKey: string, _opts?: { agentId?: string }) => ({
   canonicalKey: sessionKey,
+  storePath: undefined as string | undefined,
 }));
 
 vi.mock("../server-session-key.js", () => ({
@@ -420,7 +421,10 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("infers selected-agent global aborts from agent-prefixed aliases", async () => {
-    loadSessionEntryMock.mockImplementationOnce(() => ({ canonicalKey: "global" }));
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: "global",
+      storePath: undefined,
+    }));
     const context = createContext({ globalScope: true });
 
     await callSessions(
@@ -495,7 +499,10 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("infers selected-agent global subscriptions from agent-prefixed aliases", async () => {
-    loadSessionEntryMock.mockImplementationOnce(() => ({ canonicalKey: "global" }));
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: "global",
+      storePath: undefined,
+    }));
     const subscribeSessionMessageEvents = vi.fn();
     const context = createContext({
       globalScope: true,

@@ -28,7 +28,9 @@ import {
   listFreshTasksForOwnerKey,
   markTaskTerminalById,
   maybeDeliverTaskStateChangeUpdate,
+  resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
+  setTaskRegistryDeliveryRuntimeForTests,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
@@ -110,6 +112,7 @@ function createStoredTask(): TaskRecord {
 describe("task-registry store runtime", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
+    resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryForTests();
     resetTaskFlowRegistryForTests({ persist: false });
   });
@@ -311,6 +314,14 @@ describe("task-registry store runtime", () => {
   it("uses atomic task-plus-delivery store methods when available", async () => {
     const upsertTaskWithDeliveryState = vi.fn();
     const deleteTaskWithDeliveryState = vi.fn();
+    const sendMessage = vi.fn(async () => ({
+      channel: "telegram",
+      to: "telegram:-1001:topic:42",
+      via: "direct" as const,
+      mediaUrl: null,
+      result: { messageId: "message-1" },
+    }));
+    setTaskRegistryDeliveryRuntimeForTests({ sendMessage });
     configureTaskRegistryRuntime({
       store: {
         loadSnapshot: () => ({
@@ -333,6 +344,12 @@ describe("task-registry store runtime", () => {
       status: "running",
       notifyPolicy: "state_changes",
       deliveryStatus: "pending",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "telegram:-1001:topic:42",
+        accountId: "openclaw",
+        threadId: 42,
+      },
     });
 
     await maybeDeliverTaskStateChangeUpdate(created.taskId, {
@@ -354,7 +371,9 @@ describe("task-registry store runtime", () => {
         return params.deliveryState?.lastNotifiedEventAt === 200;
       }),
     ).toBe(true);
+    expect(sendMessage).toHaveBeenCalled();
     expect(deleteTaskWithDeliveryState).toHaveBeenCalledWith(created.taskId);
+    resetTaskRegistryDeliveryRuntimeForTests();
   });
 
   it("persists create requester origin with one projected snapshot when only separate upserts exist", () => {
