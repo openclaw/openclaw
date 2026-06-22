@@ -622,17 +622,15 @@ it("does not re-truncate tool results that already contain a truncation marker",
   expect(text1.length).toBeLessThan(medium.length);
   expect(text2.length).toBeLessThan(medium.length);
 
-  // The aggregate budget may be slightly exceeded because the already-truncated
-  // message is kept stable (not re-truncated). This is intentional — we prefer
-  // prompt-cache prefix stability over strict budget compliance.
+  // The already-truncated message's text length still counts against the aggregate
+  // budget (to avoid underestimating prompt pressure), so totalChars should be
+  // at or near the budget rather than exceeding it by 79+ chars.
   const totalChars = result.reduce(
     (sum, message) => sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
     0,
   );
-  // Budget is 12_000; the truncated messages fit within it, and the
-  // already-stable message (~79 chars) adds a small overhead.
-  expect(totalChars).toBeGreaterThan(12_000);
-  expect(totalChars).toBeLessThan(12_500);
+  expect(totalChars).toBeLessThanOrEqual(12_000);
+  expect(totalChars).toBeGreaterThan(11_500);
 });
 
 it("handles middle-omission markers in already-truncated tool results", () => {
