@@ -52,6 +52,8 @@ vi.mock("../pages/chat/data.ts", () => ({
 }));
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),
+}));
+vi.mock("../pages/chat/last-active-session.ts", () => ({
   setLastActiveSessionKey: vi.fn(),
 }));
 vi.mock("./app-tool-stream.ts", () => ({

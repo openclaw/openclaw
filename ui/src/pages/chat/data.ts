@@ -17,7 +17,6 @@ import {
 import { generateUUID } from "../../lib/uuid.ts";
 // Control UI module implements app chat behavior.
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
-import { setLastActiveSessionKey } from "../../ui/app-last-active-session.ts";
 import { resetToolStream } from "../../ui/app-tool-stream.ts";
 import { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
 import {
@@ -54,6 +53,7 @@ import {
   type LoadSessionsOverrides,
   type SessionsState,
 } from "../sessions/data.ts";
+import { setLastActiveSessionKey } from "./last-active-session.ts";
 import {
   cloneChatAttachmentsMetadata,
   discardChatAttachmentDataUrls,
@@ -90,6 +90,8 @@ import {
   type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./input-history.ts";
+// Control UI module implements app chat behavior.
+import { setLastActiveSessionKey } from "./last-active-session.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache, type ChatMessageCache } from "./session-message-cache.ts";
