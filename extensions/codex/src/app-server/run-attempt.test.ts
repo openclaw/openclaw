@@ -2871,6 +2871,50 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("keeps root MEMORY.md injected with memory tools when earlier workspace instructions exhaust the shared cap", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const memorySummary = "Memory summary survives the Codex bootstrap cap.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul guidance ".repeat(120));
+    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), "Tool guidance ".repeat(120));
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "User profile ".repeat(120));
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
+    registerMemoryPromptForTest();
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("memory_search"),
+      createRuntimeDynamicTool("memory_get"),
+    ]);
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.config = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          bootstrapMaxChars: 1000,
+          bootstrapTotalMaxChars: 2000,
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    setAgentWorkspaceForTest(params, workspaceDir);
+
+    const { inputText, systemPromptReport } = await buildCodexTurnContextForTest(
+      params,
+      workspaceDir,
+    );
+
+    expect(inputText).toContain(memorySummary);
+    const fileStats = new Map(
+      systemPromptReport.injectedWorkspaceFiles.map((file) => [file.name, file]),
+    );
+    expect(fileStats.get("MEMORY.md")).toMatchObject({
+      rawChars: memorySummary.length,
+      injectedChars: memorySummary.length,
+      truncated: false,
+    });
+  });
+
   it("keeps MEMORY.md bounded inside the Codex workspace context budget", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2923,9 +2967,10 @@ describe("runCodexAppServerAttempt", () => {
     );
     expect(fileStats.get("MEMORY.md")).toMatchObject({
       rawChars: memorySummary.trimEnd().length,
-      injectedChars: 1000,
       truncated: true,
     });
+    expect(fileStats.get("MEMORY.md")?.injectedChars).toBeGreaterThan(0);
+    expect(fileStats.get("MEMORY.md")?.injectedChars).toBeLessThanOrEqual(1000);
     expect(fileStats.get("ZZZ.md")).toMatchObject({
       rawChars: hookContext.length,
       injectedChars: hookContext.length,
