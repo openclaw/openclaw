@@ -73,6 +73,9 @@ describe("OpenClaw release publish policy workflow", () => {
     expect(policy.needs).toBeUndefined();
     expect(policy.environment).toBeUndefined();
     expect(policy.permissions).toEqual({ actions: "read", contents: "read" });
+    expect(policy.outputs).toMatchObject({
+      npm_dist_tag: "${{ steps.policy.outputs.npm_dist_tag }}",
+    });
     const gate = step("release_policy", "Validate release publication policy");
     expect(gate.run).toContain("validateStrictPublishPolicy");
     expect(gate.run).toContain("resolveNpmPublishPlan");
@@ -85,6 +88,30 @@ describe("OpenClaw release publish policy workflow", () => {
       contents: "read",
     });
     expect(job("publish").environment).toBe("npm-release");
+  });
+
+  it("normalizes legacy npm_dist_tag once while preserving strict stable empty", () => {
+    const gate = step("release_policy", "Validate release publication policy");
+    expect(gate.run).toContain('if [[ "$POLICY_MODE" == "legacy" && -z "$npm_dist_tag" ]]; then');
+    expect(gate.run).toContain('npm_dist_tag="beta"');
+    expect(gate.run).toContain('echo "npm_dist_tag=$npm_dist_tag"');
+
+    // Strict stable must pass the dist-tag check with an explicit empty value before
+    // the orchestrator rejects the release as intentionally nonpublishable.
+    expect(gate.run).toContain('if [[ -n "$npm_dist_tag" ]]; then');
+    expect(gate.run).toContain("Strict stable policy requires an empty npm_dist_tag.");
+    expect(gate.run).toContain("Strict stable policy is nonpublishable");
+  });
+
+  it("propagates only the normalized npm_dist_tag after the policy job", () => {
+    const jobs = workflow().jobs ?? {};
+    const downstreamJobs = Object.fromEntries(
+      Object.entries(jobs).filter(([name]) => name !== "release_policy"),
+    );
+    const downstreamText = JSON.stringify(downstreamJobs);
+
+    expect(downstreamText).not.toContain("${{ inputs.npm_dist_tag }}");
+    expect(downstreamText).toContain("${{ needs.release_policy.outputs.npm_dist_tag }}");
   });
 
   it("authenticates strict v2 and v3 predecessor evidence", () => {

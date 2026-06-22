@@ -28,6 +28,9 @@ type WorkflowJob = {
 };
 
 type Workflow = {
+  concurrency?: {
+    group?: string;
+  };
   on?: {
     workflow_dispatch?: {
       inputs?: Record<string, WorkflowInput>;
@@ -99,6 +102,7 @@ describe("OpenClaw npm release policy workflow", () => {
     expect(policy.environment).toBeUndefined();
     expect(policy.permissions).toEqual({ actions: "read", contents: "read" });
     expect(policy.outputs).toMatchObject({
+      npm_dist_tag: "${{ steps.policy.outputs.npm_dist_tag }}",
       publish_eligible: "${{ steps.policy.outputs.publish_eligible }}",
       release_policy: "${{ steps.policy.outputs.release_policy }}",
       release_policy_sha256: "${{ steps.policy.outputs.release_policy_sha256 }}",
@@ -127,6 +131,33 @@ describe("OpenClaw npm release policy workflow", () => {
     expect(gate.run).toContain("publish manifest target mismatch");
     expect(gate.run).toContain("publish manifest changelog mismatch");
     expect(gate.run).not.toContain('alpha) expected_dist_tag="alpha"');
+  });
+
+  it("normalizes omitted legacy npm_dist_tag to beta at policy ingress", () => {
+    const gate = step("release_policy", "Validate release policy and immutable publish evidence");
+    expect(gate.run).toContain('if [[ "$POLICY_MODE" == "legacy" && -z "$npm_dist_tag" ]]; then');
+    expect(gate.run).toContain('npm_dist_tag="beta"');
+    expect(gate.run).toContain('echo "npm_dist_tag=$npm_dist_tag"');
+
+    // Strict stable intentionally keeps the explicit empty tag instead of inheriting beta.
+    expect(gate.run).toContain('expected_dist_tag=""');
+    expect(gate.run).toContain('if [[ "$npm_dist_tag" != "$expected_dist_tag" ]]; then');
+
+    // Concurrency is evaluated before jobs, so it must mirror the closed ingress default.
+    expect(workflow().concurrency?.group).toContain(
+      "inputs.policy_mode == 'legacy' && (inputs.npm_dist_tag || 'beta') || inputs.npm_dist_tag",
+    );
+  });
+
+  it("propagates only the normalized npm_dist_tag after the policy job", () => {
+    const jobs = workflow().jobs ?? {};
+    const downstreamJobs = Object.fromEntries(
+      Object.entries(jobs).filter(([name]) => name !== "release_policy"),
+    );
+    const downstreamText = JSON.stringify(downstreamJobs);
+
+    expect(downstreamText).not.toContain("${{ inputs.npm_dist_tag }}");
+    expect(downstreamText).toContain("${{ needs.release_policy.outputs.npm_dist_tag }}");
   });
 
   it("emits the exact policy-only v2 bundle and preserves strict publishable v2", () => {
