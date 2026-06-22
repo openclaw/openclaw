@@ -54,14 +54,45 @@ export function buildCurrentInboundPrompt(params: {
   return [prefix, params.prompt].join(params.context?.promptJoiner ?? "\n\n");
 }
 
-function removeLastPromptOccurrence(text: string, prompt: string): string | null {
+function splitLastPromptOccurrence(
+  text: string,
+  prompt: string,
+): { before: string; after: string } | null {
   const index = text.lastIndexOf(prompt);
   if (index === -1) {
     return null;
   }
-  const before = text.slice(0, index).trimEnd();
-  const after = text.slice(index + prompt.length).trimStart();
-  return [before, after]
+  return {
+    before: text.slice(0, index),
+    after: text.slice(index + prompt.length),
+  };
+}
+
+function removePromptContextAroundOccurrence(params: {
+  text: string;
+  prompt: string;
+  hiddenBefore: string;
+  hiddenAfter: string;
+}): string | null {
+  const occurrence = splitLastPromptOccurrence(params.text, params.prompt);
+  if (!occurrence) {
+    return null;
+  }
+  const before = occurrence.before.trimEnd();
+  const after = occurrence.after.trimStart();
+  const hiddenBefore = params.hiddenBefore.trim();
+  const hiddenAfter = params.hiddenAfter.trim();
+  if (hiddenBefore && !before.endsWith(hiddenBefore)) {
+    return null;
+  }
+  if (hiddenAfter && !after.startsWith(hiddenAfter)) {
+    return null;
+  }
+  const keptBefore = hiddenBefore
+    ? before.slice(0, before.length - hiddenBefore.length).trimEnd()
+    : before;
+  const keptAfter = hiddenAfter ? after.slice(hiddenAfter.length).trimStart() : after;
+  return [keptBefore, params.prompt, keptAfter]
     .filter((part) => part.length > 0)
     .join("\n\n")
     .trim();
@@ -100,14 +131,18 @@ export function resolveRuntimeContextPromptParts(params: {
       ...(extracted.runtimeContext ? { runtimeContext: extracted.runtimeContext } : {}),
     };
   }
-  const hiddenRuntimeContext = modelPrompt
-    ? (removeLastPromptOccurrence(extracted.text, modelPrompt.text)?.trim() ??
-      (transcriptPrompt
-        ? removeLastPromptOccurrence(extracted.text, transcriptPrompt)?.trim()
-        : undefined))
+  const hiddenPromptParts = modelPrompt
+    ? (splitLastPromptOccurrence(extracted.text, modelPrompt.text) ??
+      (transcriptPrompt ? splitLastPromptOccurrence(extracted.text, transcriptPrompt) : undefined))
     : transcriptPrompt
-      ? removeLastPromptOccurrence(extracted.text, transcriptPrompt)?.trim()
+      ? splitLastPromptOccurrence(extracted.text, transcriptPrompt)
       : undefined;
+  const hiddenRuntimeContext = hiddenPromptParts
+    ? [hiddenPromptParts.before, hiddenPromptParts.after]
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0)
+        .join("\n\n")
+    : undefined;
   // The hidden context is whatever remains after removing the last visible
   // prompt occurrence, plus any explicit internal runtime-context block.
   const runtimeContext =
@@ -138,9 +173,13 @@ export function resolveRuntimeContextPromptParts(params: {
   // system-event prefix that was separated into runtimeContext. Strip it so
   // events aren't delivered to the model twice (Message A and Message B).
   const returnModelPromptText =
-    hiddenRuntimeContext && modelPrompt
-      ? (removeLastPromptOccurrence(modelPromptText, hiddenRuntimeContext)?.trim() ??
-        modelPromptText)
+    hiddenPromptParts && modelPrompt
+      ? (removePromptContextAroundOccurrence({
+          text: modelPromptText,
+          prompt: transcriptPrompt ?? extracted.text,
+          hiddenBefore: hiddenPromptParts.before,
+          hiddenAfter: hiddenPromptParts.after,
+        }) ?? modelPromptText)
       : modelPromptText;
 
   return {

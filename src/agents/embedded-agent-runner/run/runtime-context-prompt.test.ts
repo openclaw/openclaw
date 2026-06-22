@@ -140,6 +140,27 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("strips hidden prompt context on both sides without removing repeated hook text", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const untrustedContext = "Untrusted channel metadata";
+    const hookContext = systemEvent;
+    const effectivePrompt = [systemEvent, userText, untrustedContext].join("\n\n");
+    const modelPrompt = [hookContext, effectivePrompt, hookContext].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt,
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [hookContext, userText, hookContext].join("\n\n"),
+      runtimeContext: [systemEvent, untrustedContext].join("\n\n"),
+    });
+  });
+
   it("does not extract no-transcript delimiter text", () => {
     const effectivePrompt = [
       "visible ask",
