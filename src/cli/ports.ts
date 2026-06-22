@@ -141,6 +141,8 @@ async function isPortBusy(port: number): Promise<boolean> {
       return false;
     case "unknown":
       throw new Error(`isPortBusy: port ${port} probe returned unknown status`);
+    default:
+      return false;
   }
 }
 
