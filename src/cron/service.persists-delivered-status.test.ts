@@ -62,6 +62,17 @@ function buildFailureDestinationOnlyJob(name: string): CronAddInput {
   };
 }
 
+function buildFailureAlertOnlyJob(name: string): CronAddInput {
+  return {
+    ...buildIsolatedAgentTurnJob(name),
+    failureAlert: {
+      after: 1,
+      channel: "forum",
+      to: "123",
+    },
+  };
+}
+
 function buildBestEffortFailureDestinationOnlyJob(name: string): CronAddInput {
   return {
     ...buildFailureDestinationOnlyJob(name),
@@ -92,6 +103,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
   status?: "ok" | "error";
   delivered?: boolean;
   error?: string;
+  sendCronFailureAlert?: ConstructorParameters<typeof CronService>[0]["sendCronFailureAlert"];
   onFinished?: (evt: {
     jobId: string;
     delivered?: boolean;
@@ -116,6 +128,9 @@ function createIsolatedCronWithFinishedBarrier(params: {
       ...(params.error === undefined ? {} : { error: params.error }),
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
     })),
+    ...(params.sendCronFailureAlert === undefined
+      ? {}
+      : { sendCronFailureAlert: params.sendCronFailureAlert }),
     onEvent: (evt) => {
       if (evt.action === "finished") {
         params.onFinished?.({
@@ -190,6 +205,7 @@ async function runIsolatedJobAndReadState(params: {
   status?: "ok" | "error";
   delivered?: boolean;
   error?: string;
+  sendCronFailureAlert?: ConstructorParameters<typeof CronService>[0]["sendCronFailureAlert"];
   onFinished?: (evt: {
     jobId: string;
     delivered?: boolean;
@@ -208,6 +224,9 @@ async function runIsolatedJobAndReadState(params: {
     ...(params.status !== undefined ? { status: params.status } : {}),
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
     ...(params.error !== undefined ? { error: params.error } : {}),
+    ...(params.sendCronFailureAlert !== undefined
+      ? { sendCronFailureAlert: params.sendCronFailureAlert }
+      : {}),
     onFinished: (evt) => {
       params.onFinished?.(evt);
       finishedEvents.get(evt.jobId)?.(evt);
@@ -324,6 +343,102 @@ describe("CronService persists delivered status", () => {
     expect(capturedEvent?.delivered).toBeUndefined();
     expect(capturedEvent?.deliveryStatus).toBe("not-requested");
     expect(capturedEvent?.failureNotificationDelivery).toEqual({ status: "unknown" });
+  });
+
+  it("persists delivered status for requested per-job failureAlert", async () => {
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    let capturedEvent:
+      | {
+          delivered?: boolean;
+          deliveryStatus?: string;
+          failureNotificationDelivery?: {
+            delivered?: boolean;
+            status: string;
+            error?: string;
+          };
+        }
+      | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildFailureAlertOnlyJob("failure-alert-only"),
+      status: "error",
+      error: "Agent couldn't generate a response.",
+      sendCronFailureAlert,
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+    expect(updated?.state.lastFailureNotificationDelivered).toBe(true);
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("delivered");
+    expect(updated?.state.lastFailureNotificationDeliveryError).toBeUndefined();
+    expect(capturedEvent?.deliveryStatus).toBe("not-requested");
+    expect(capturedEvent?.failureNotificationDelivery).toEqual({
+      delivered: true,
+      status: "delivered",
+    });
+  });
+
+  it("persists not-delivered status when per-job failureAlert send fails", async () => {
+    const sendCronFailureAlert = vi.fn(async () => {
+      throw new Error("channel offline");
+    });
+    let capturedEvent:
+      | {
+          failureNotificationDelivery?: {
+            delivered?: boolean;
+            status: string;
+            error?: string;
+          };
+        }
+      | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildFailureAlertOnlyJob("failure-alert-send-fails"),
+      status: "error",
+      error: "Agent couldn't generate a response.",
+      sendCronFailureAlert,
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+    expect(updated?.state.lastFailureNotificationDelivered).toBe(false);
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastFailureNotificationDeliveryError).toBe("Error: channel offline");
+    expect(capturedEvent?.failureNotificationDelivery).toEqual({
+      delivered: false,
+      status: "not-delivered",
+      error: "Error: channel offline",
+    });
+  });
+
+  it("persists unknown status when per-job failureAlert send times out", async () => {
+    const sendCronFailureAlert = vi.fn(() => new Promise<never>(() => {}));
+    const updatedPromise = runIsolatedJobAndReadState({
+      job: buildFailureAlertOnlyJob("failure-alert-send-times-out"),
+      status: "error",
+      error: "Agent couldn't generate a response.",
+      sendCronFailureAlert,
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    await vi.waitFor(() => expect(sendCronFailureAlert).toHaveBeenCalledTimes(1));
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    const updated = await updatedPromise;
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+    expect(updated?.state.lastFailureNotificationDeliveryError).toBe(
+      "failure alert delivery timed out after 10000ms",
+    );
   });
 
   it("does not treat primary error delivery as alternate failure-destination delivery", async () => {

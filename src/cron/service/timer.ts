@@ -721,31 +721,13 @@ export function applyJobResult(
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
   // separate counter so opt-in skip alerts do not affect retry behavior.
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
-  const alertConfig = resolveFailureAlert(state, job);
   if (result.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
-    maybeEmitFailureAlert(state, {
-      job,
-      alertConfig,
-      status: "error",
-      error: result.error,
-      provider: result.provider,
-      consecutiveCount: job.state.consecutiveErrors,
-    });
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
-    if (alertConfig?.includeSkipped) {
-      maybeEmitFailureAlert(state, {
-        job,
-        alertConfig,
-        status: "skipped",
-        error: result.error,
-        provider: result.provider,
-        consecutiveCount: job.state.consecutiveSkipped,
-      });
-    } else {
+    if (!resolveFailureAlert(state, job)?.includeSkipped) {
       job.state.lastFailureAlertAtMs = undefined;
     }
   } else {
@@ -960,7 +942,43 @@ export function applyJobResult(
   return shouldDelete;
 }
 
-function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
+export async function maybeEmitPostRunFailureAlert(
+  state: CronServiceState,
+  job: CronJob,
+  result: {
+    status: CronRunStatus;
+    error?: string;
+    provider?: string;
+  },
+): Promise<void> {
+  const alertConfig = resolveFailureAlert(state, job);
+  if (result.status === "error") {
+    await maybeEmitFailureAlert(state, {
+      job,
+      alertConfig,
+      status: "error",
+      error: result.error,
+      provider: result.provider,
+      consecutiveCount: job.state.consecutiveErrors ?? 0,
+    });
+    return;
+  }
+  if (result.status === "skipped" && alertConfig?.includeSkipped) {
+    await maybeEmitFailureAlert(state, {
+      job,
+      alertConfig,
+      status: "skipped",
+      error: result.error,
+      provider: result.provider,
+      consecutiveCount: job.state.consecutiveSkipped ?? 0,
+    });
+  }
+}
+
+async function applyOutcomeToStoredJob(
+  state: CronServiceState,
+  result: TimedCronRunOutcome,
+): Promise<void> {
   tryFinishCronTaskRun(state, result);
   const store = state.store;
   if (!store) {
@@ -981,6 +999,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
         startedAt: result.startedAt,
         endedAt: result.endedAt,
       });
+      await maybeEmitPostRunFailureAlert(state, result.job, result);
       emitJobFinished(state, result.job, result, result.startedAt);
       state.deps.log.info(
         { jobId: result.jobId },
@@ -1004,6 +1023,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
+  await maybeEmitPostRunFailureAlert(state, job, result);
 
   emitJobFinished(state, job, result, result.startedAt);
 
@@ -1286,7 +1306,7 @@ export async function onTimer(state: CronServiceState) {
           finalizedResults = filterCurrentCronRunOutcomes(currentResults);
           finishRetiredCronTaskRuns(state, completedResults, finalizedResults);
           for (const result of finalizedResults) {
-            applyOutcomeToStoredJob(state, result);
+            await applyOutcomeToStoredJob(state, result);
           }
           if (finalizedResults.length === 0) {
             return;
@@ -1824,7 +1844,7 @@ async function applyStartupCatchupOutcomes(
         outcomes,
       );
       for (const result of finalizedOutcomes) {
-        applyOutcomeToStoredJob(state, result);
+        await applyOutcomeToStoredJob(state, result);
       }
       if (finalizedOutcomes.length === 0 && plan.deferredJobs.length === 0) {
         if (releasedReservations) {
@@ -2204,6 +2224,7 @@ export async function executeJob(
     startedAt,
     endedAt,
   });
+  await maybeEmitPostRunFailureAlert(state, job, coreResult);
 
   emitJobFinished(state, job, coreResult, startedAt);
 
