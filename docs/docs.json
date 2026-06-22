@@ -1658,11 +1658,7 @@
             "groups": [
               {
                 "group": "Scorecard",
-                "pages": [
-                  "maturity/scorecard",
-                  "maturity/taxonomy",
-                  "maturity/taxonomy-outline"
-                ]
+                "pages": ["maturity/scorecard", "maturity/taxonomy"]
               }
             ]
           },
