@@ -100,6 +100,7 @@ function removePromptContextAroundOccurrence(params: {
     }
     searchFrom = index + Math.max(1, params.prompt.length);
   }
+  return stripped;
 }
 
 /**
