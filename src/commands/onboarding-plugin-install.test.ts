@@ -408,6 +408,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
       expect.objectContaining({
         config: result.cfg,
+        installRecords: result.cfg.plugins?.installs,
         reason: "source-changed",
         policyPluginIds: ["demo-plugin"],
         traceCommand: "onboarding-plugin-install",

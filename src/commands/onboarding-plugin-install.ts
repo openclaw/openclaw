@@ -93,6 +93,7 @@ async function markOnboardingPluginInstalled(
   await refreshPluginRegistryAfterConfigMutation({
     config: result.cfg,
     reason: "source-changed",
+    installRecords: result.cfg.plugins?.installs ?? {},
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     policyPluginIds: [params.pluginId],
     traceCommand: "onboarding-plugin-install",
