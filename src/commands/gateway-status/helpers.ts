@@ -103,6 +103,19 @@ export function resolveTargets(
     add({ id: "explicit", kind: "explicit", url: explicit, active: true });
   }
 
+  const port = localPortOverride ?? resolveGatewayPort(cfg);
+  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const localLoopbackTarget: GatewayStatusTarget = {
+    id: "localLoopback",
+    kind: "localLoopback",
+    url: `${localScheme}://127.0.0.1:${port}`,
+    active: localPortOverride !== undefined || cfg.gateway?.mode !== "remote",
+  };
+  if (localPortOverride !== undefined && !explicit) {
+    add(localLoopbackTarget);
+    return targets;
+  }
+
   const remoteUrl =
     typeof cfg.gateway?.remote?.url === "string" ? normalizeWsUrl(cfg.gateway.remote.url) : null;
   if (remoteUrl) {
@@ -114,14 +127,7 @@ export function resolveTargets(
     });
   }
 
-  const port = localPortOverride ?? resolveGatewayPort(cfg);
-  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
-  add({
-    id: "localLoopback",
-    kind: "localLoopback",
-    url: `${localScheme}://127.0.0.1:${port}`,
-    active: cfg.gateway?.mode !== "remote",
-  });
+  add(localLoopbackTarget);
 
   return targets;
 }

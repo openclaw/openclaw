@@ -1241,6 +1241,38 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+  it("lets a local port override bypass gateway env URL and port in connection details", () => {
+    getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    resolveGatewayPort.mockImplementation((_config?: unknown, env?: unknown) => {
+      const candidateEnv = env as NodeJS.ProcessEnv | undefined;
+      return Number(candidateEnv?.OPENCLAW_GATEWAY_PORT ?? 18789);
+    });
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+    const prevUrl = process.env.OPENCLAW_GATEWAY_URL;
+    const prevPort = process.env.OPENCLAW_GATEWAY_PORT;
+    try {
+      process.env.OPENCLAW_GATEWAY_URL = "wss://browser-gateway.local:9443/ws";
+      process.env.OPENCLAW_GATEWAY_PORT = "19001";
+
+      const details = buildGatewayConnectionDetails({ localPortOverride: 19082 });
+
+      expect(details.url).toBe("ws://127.0.0.1:19082");
+      expect(details.urlSource).toBe("local loopback");
+      expect(details.bindDetail).toBe("Bind: loopback");
+    } finally {
+      if (prevUrl === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_URL;
+      } else {
+        process.env.OPENCLAW_GATEWAY_URL = prevUrl;
+      }
+      if (prevPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = prevPort;
+      }
+    }
+  });
+
   it("falls back to the default config loader when test deps drift", () => {
     const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);

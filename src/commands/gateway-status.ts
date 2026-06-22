@@ -65,12 +65,17 @@ export async function gatewayStatusCommand(
   const network = buildNetworkHints(cfg, portOverride);
   const remotePort = portOverride ?? resolveGatewayPort(cfg);
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
+  const hasExplicitUrl = typeof opts.url === "string" && opts.url.trim().length > 0;
+  const useConfiguredRemoteTargets = portOverride === undefined || hasExplicitUrl;
 
-  let sshTarget = sanitizeSshTarget(opts.ssh) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
+  let sshTarget =
+    sanitizeSshTarget(opts.ssh) ??
+    (useConfiguredRemoteTargets ? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget) : null);
   let sshIdentity =
-    sanitizeSshTarget(opts.sshIdentity) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity);
+    sanitizeSshTarget(opts.sshIdentity) ??
+    (useConfiguredRemoteTargets ? sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity) : null);
 
-  if (!sshTarget) {
+  if (!sshTarget && useConfiguredRemoteTargets) {
     // Remote URL inference gives users a useful SSH default without requiring
     // gateway.remote.sshTarget when the host already appears in config.
     sshTarget = inferSshTargetFromRemoteUrl(cfg.gateway?.remote?.url);

@@ -332,6 +332,56 @@ describe("gateway-status local target scheme", () => {
     const hints = buildNetworkHints(cfg as never, 19080);
     expect(hints.localLoopbackUrl).toBe("ws://127.0.0.1:19080");
   });
+
+  it("treats a bare local port override as the selected active local target", () => {
+    const cfg = {
+      gateway: {
+        mode: "remote",
+        port: 18789,
+        remote: { url: "wss://remote.example:18789" },
+      },
+    };
+
+    expect(resolveTargets(cfg as never, undefined, 19080)).toEqual([
+      {
+        id: "localLoopback",
+        kind: "localLoopback",
+        url: "ws://127.0.0.1:19080",
+        active: true,
+      },
+    ]);
+  });
+
+  it("preserves explicit URL targets when a local port override is also present", () => {
+    const cfg = {
+      gateway: {
+        mode: "remote",
+        port: 18789,
+        remote: { url: "wss://remote.example:18789" },
+      },
+    };
+
+    expect(resolveTargets(cfg as never, "wss://override.example/ws", 19080)).toEqual([
+      {
+        id: "explicit",
+        kind: "explicit",
+        url: "wss://override.example/ws",
+        active: true,
+      },
+      {
+        id: "configRemote",
+        kind: "configRemote",
+        url: "wss://remote.example:18789",
+        active: true,
+      },
+      {
+        id: "localLoopback",
+        kind: "localLoopback",
+        url: "ws://127.0.0.1:19080",
+        active: true,
+      },
+    ]);
+  });
 });
 
 describe("resolveProbeBudgetMs", () => {

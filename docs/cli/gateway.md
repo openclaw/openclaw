@@ -171,7 +171,7 @@ openclaw gateway health --port 18789
 The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed readiness responses include an `eventLoop` diagnostic block with event-loop delay, event-loop utilization, CPU core ratio, and a `degraded` flag.
 
 <ParamField path="--port <port>" type="number">
-  Target a local loopback Gateway on this port.
+  Target a local loopback Gateway on this port. This overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for the health call.
 </ParamField>
 
 ### `gateway usage-cost`
@@ -349,7 +349,7 @@ openclaw gateway probe --port 18789
 ```
 
 <ParamField path="--port <port>" type="number">
-  Use this port for the local loopback probe target and SSH tunnel remote port.
+  Use this port for the local loopback probe target and SSH tunnel remote port. Without `--url`, this selects the local loopback target instead of configured gateway environment or remote targets.
 </ParamField>
 
 <AccordionGroup>
