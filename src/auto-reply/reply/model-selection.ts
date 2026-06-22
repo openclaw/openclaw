@@ -286,7 +286,7 @@ export async function createModelSelectionState(params: {
       directStoredOverride.model,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    if (staleDirectStoredOverride || !visibilityPolicy.allowsKey(key)) {
+    if (staleDirectStoredOverride || (!visibilityPolicy.allowsKey(key) && sessionEntry?.modelOverrideSource !== "user")) {
       const { updated } = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
         selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
