@@ -1,16 +1,16 @@
 /* @vitest-environment jsdom */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../ui/types.ts";
+import { loadSessions } from "../sessions/data.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
   resetChatAttachmentPayloadStoreForTest,
-} from "../../ui/chat/attachment-payload-store.ts";
-import type { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../ui/types.ts";
-import { loadSessions } from "../sessions/data.ts";
+} from "./attachment-payload-store.ts";
 import type { ChatHost } from "./data.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;

@@ -1,10 +1,6 @@
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../lib/session-key.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import {
-  persistChatComposerState,
-  restoreChatComposerState,
-} from "../../ui/chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "../../ui/chat/run-lifecycle.ts";
 import { resetChatSessionPickerState } from "../../ui/chat/session-controls.ts";
 import {
@@ -13,6 +9,7 @@ import {
 } from "../../ui/chat/session-message-cache.ts";
 import { refreshSlashCommands } from "../../ui/chat/slash-commands.ts";
 import { loadSessions, syncSelectedSessionMessageSubscription } from "../sessions/data.ts";
+import { persistChatComposerState, restoreChatComposerState } from "./composer-persistence.ts";
 // Chat session switching state transitions shared by chat UI and feature handoffs.
 import {
   createChatSessionsLoadOverrides,

@@ -1,5 +1,9 @@
 import { appRouter, type ApplicationContext, startAppRouter } from "../app-routes.ts";
 import { createBrowserHistory } from "../app/browser.ts";
+import {
+  persistChatComposerState,
+  restoreChatComposerState,
+} from "../pages/chat/composer-persistence.ts";
 import type { ChatQueueItem } from "../pages/chat/types.ts";
 import { stopDebugPolling } from "../pages/debug/polling.ts";
 import { stopLogsPolling } from "../pages/logs/polling.ts";
@@ -15,7 +19,6 @@ import {
   syncSessionWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
-import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 

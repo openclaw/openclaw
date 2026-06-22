@@ -10,11 +10,6 @@ import {
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../ui/chat-model.test-helpers.ts";
-import {
-  getChatAttachmentDataUrl,
-  resetChatAttachmentPayloadStoreForTest,
-} from "../../ui/chat/attachment-payload-store.ts";
-import { renderChatQueue } from "../../ui/chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../../ui/chat/chat-sidebar-raw.ts";
 import { renderWelcomeState } from "../../ui/chat/chat-welcome.ts";
 import {
@@ -25,6 +20,11 @@ import { renderChatSessionSelect } from "../../ui/chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../ui/types.ts";
 import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
+import {
+  getChatAttachmentDataUrl,
+  resetChatAttachmentPayloadStoreForTest,
+} from "./attachment-payload-store.ts";
+import { renderChatQueue } from "./chat-queue.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
 
@@ -150,7 +150,7 @@ vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 
-vi.mock("../../ui/chat/build-chat-items.ts", () => ({
+vi.mock("./build-chat-items.ts", () => ({
   buildChatItems: buildChatItemsMock,
 }));
 

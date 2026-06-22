@@ -35,7 +35,7 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
   loadControlUiBootstrapConfig: loadBootstrapMock,
 }));
 
-vi.mock("./chat/composer-persistence.ts", () => ({
+vi.mock("../pages/chat/composer-persistence.ts", () => ({
   persistChatComposerState: vi.fn(),
   restoreChatComposerState: restoreComposerMock,
 }));

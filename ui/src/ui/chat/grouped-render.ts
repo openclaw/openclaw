@@ -7,19 +7,19 @@ import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
 import { resolveUiHourCycleOptions } from "../../lib/format.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import type { AssistantIdentity } from "../assistant-identity.ts";
-import type { EmbedSandboxMode } from "../embed-sandbox.ts";
-import { openExternalUrlSafe } from "../open-external-url.ts";
-import type { SidebarContent } from "../sidebar-content.ts";
-import { detectTextDirection } from "../text-direction.ts";
-import { resolveToolDisplay } from "../tool-display.ts";
 import type {
   ChatItem,
   MessageContentItem,
   MessageGroup,
   NormalizedMessage,
   ToolCard,
-} from "../types/chat-types.ts";
+} from "../../pages/chat/chat-types.ts";
+import type { AssistantIdentity } from "../assistant-identity.ts";
+import type { EmbedSandboxMode } from "../embed-sandbox.ts";
+import { openExternalUrlSafe } from "../open-external-url.ts";
+import type { SidebarContent } from "../sidebar-content.ts";
+import { detectTextDirection } from "../text-direction.ts";
+import { resolveToolDisplay } from "../tool-display.ts";
 import { resolveLocalUserName } from "../user-identity.ts";
 export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";

@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatQueueItem } from "../../pages/chat/types.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   loadChatComposerSnapshot,
@@ -8,6 +7,7 @@ import {
   removeStoredChatComposerQueueItem,
   restoreChatComposerState,
 } from "./composer-persistence.ts";
+import type { ChatQueueItem } from "./types.ts";
 
 function createState(overrides: Partial<Parameters<typeof persistChatComposerState>[0]> = {}) {
   return {

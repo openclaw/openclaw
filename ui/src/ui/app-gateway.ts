@@ -18,6 +18,10 @@ import {
 } from "../lib/session-key.ts";
 import { loadAgents, type AgentsState } from "../pages/agents/data.ts";
 import {
+  loadChatComposerSnapshot,
+  restoreChatComposerState,
+} from "../pages/chat/composer-persistence.ts";
+import {
   clearPendingQueueItemsForRun,
   createChatSessionsLoadOverrides,
   flushChatQueueForEvent,
@@ -59,7 +63,6 @@ import {
   type AgentEventPayload,
   type SessionOperationEventPayload,
 } from "./app-tool-stream.ts";
-import { loadChatComposerSnapshot, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";

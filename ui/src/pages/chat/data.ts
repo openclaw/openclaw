@@ -21,17 +21,6 @@ import { setLastActiveSessionKey } from "../../ui/app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "../../ui/app-scroll.ts";
 import { resetToolStream } from "../../ui/app-tool-stream.ts";
 import {
-  cloneChatAttachmentsMetadata,
-  discardChatAttachmentDataUrls,
-  getChatAttachmentDataUrl,
-  releaseChatAttachmentPayloads,
-} from "../../ui/chat/attachment-payload-store.ts";
-import {
-  INTERRUPTED_MODEL_WAIT_ERROR,
-  persistStoredChatComposerQueue,
-  removeStoredChatComposerQueueItem,
-} from "../../ui/chat/composer-persistence.ts";
-import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
   navigateChatInputHistory,
@@ -82,6 +71,17 @@ import {
   type LoadSessionsOverrides,
   type SessionsState,
 } from "../sessions/data.ts";
+import {
+  cloneChatAttachmentsMetadata,
+  discardChatAttachmentDataUrls,
+  getChatAttachmentDataUrl,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-store.ts";
+import {
+  INTERRUPTED_MODEL_WAIT_ERROR,
+  persistStoredChatComposerQueue,
+  removeStoredChatComposerQueueItem,
+} from "./composer-persistence.ts";
 import {
   abortChatRun,
   appendUserChatMessage,

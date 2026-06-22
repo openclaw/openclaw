@@ -8,16 +8,9 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
 import {
-  getChatAttachmentPreviewUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayload,
-} from "../../ui/chat/attachment-payload-store.ts";
-import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentFile,
 } from "../../ui/chat/attachment-support.ts";
-import { buildChatItems, type BuildChatItemsProps } from "../../ui/chat/build-chat-items.ts";
-import { renderChatQueue } from "../../ui/chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../../ui/chat/chat-sidebar-raw.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../../ui/chat/chat-welcome.ts";
 import { copyToClipboard } from "../../ui/chat/clipboard.ts";
@@ -80,6 +73,13 @@ import type {
 } from "../../ui/types.ts";
 import { resolveLocalUserName } from "../../ui/user-identity.ts";
 import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
+import {
+  getChatAttachmentPreviewUrl,
+  registerChatAttachmentPayload,
+  releaseChatAttachmentPayload,
+} from "./attachment-payload-store.ts";
+import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
+import { renderChatQueue } from "./chat-queue.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import "../../ui/components/resizable-divider.ts";
 

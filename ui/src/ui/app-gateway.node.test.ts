@@ -125,8 +125,8 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
   loadControlUiBootstrapConfig: loadControlUiBootstrapConfigMock,
 }));
 
-vi.mock("./chat/composer-persistence.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./chat/composer-persistence.ts")>();
+vi.mock("../pages/chat/composer-persistence.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pages/chat/composer-persistence.ts")>();
   return {
     ...actual,
     loadChatComposerSnapshot: loadChatComposerSnapshotMock,

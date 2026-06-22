@@ -26,6 +26,7 @@ import {
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "../pages/channels/actions.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
+import { restoreChatComposerState } from "../pages/chat/composer-persistence.ts";
 import {
   handleAbortChat as handleAbortChatInternal,
   handleChatDraftChange as handleChatDraftChangeInternal,
@@ -87,7 +88,6 @@ import {
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
-import { restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import {
   reconcileRealtimeTalkCatalogSelection,

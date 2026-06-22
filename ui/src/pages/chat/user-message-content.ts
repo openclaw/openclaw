@@ -1,6 +1,6 @@
-// Control UI chat module implements user message content behavior.
-import type { ChatAttachment } from "../../pages/chat/types.ts";
 import { getChatAttachmentPreviewUrl } from "./attachment-payload-store.ts";
+// Control UI chat module implements user message content behavior.
+import type { ChatAttachment } from "./types.ts";
 
 export type UserChatMessageContentBlock = {
   type: string;

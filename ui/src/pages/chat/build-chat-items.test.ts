@@ -1,7 +1,7 @@
 // Control UI tests cover build chat items behavior.
 import { describe, expect, it } from "vitest";
-import type { MessageGroup } from "../types/chat-types.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
+import type { MessageGroup } from "./chat-types.ts";
 
 const SENDER_METADATA_BLOCK =
   'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
