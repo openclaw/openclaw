@@ -221,6 +221,16 @@ function buildSelectedSessionRequestParams(state: SessionsState, key: string) {
   };
 }
 
+function buildSelectedSessionListParams(
+  state: SessionsState,
+  key: string,
+): Pick<LoadSessionsOverrides, "agentId"> | undefined {
+  const parsed = parseAgentSessionKey(key);
+  const agentId =
+    parsed?.agentId ?? (isUiGlobalSessionKey(key) ? resolveSelectedGlobalAgentId(state) : null);
+  return agentId ? { agentId: normalizeAgentId(agentId) } : undefined;
+}
+
 function beginSelectedSessionMessageSubscriptionSync(state: SessionsState): number {
   const key = state as object;
   const next = (selectedSessionMessageSubscriptionGenerations.get(key) ?? 0) + 1;
@@ -681,10 +691,7 @@ async function runCompactionMutation<T>(
       ...buildSelectedSessionRequestParams(state, key),
       checkpointId,
     });
-    await loadSessions(
-      state,
-      isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
-    );
+    await loadSessions(state, buildSelectedSessionListParams(state, key));
     return result;
   } catch (err) {
     state.sessionsError = String(err);
