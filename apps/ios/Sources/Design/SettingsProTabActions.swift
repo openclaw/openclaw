@@ -811,7 +811,7 @@ extension SettingsProTab {
         case .notAllowed:
             "Notifications have been denied. Enable them in iOS Settings."
         case .notSet:
-            "Enable notifications here to receive approval prompts and event alerts outside the app."
+            "Enable notifications to receive approval prompts and event alerts outside the app."
         case .unknown:
             "OpenClaw cannot determine the current notification permission state."
         }
@@ -828,6 +828,6 @@ extension SettingsProTab {
     }
 
     var notificationRelayDisclosureMessage: String {
-        "Enabling Notifications sends delivery data through OpenClaw's hosted push relay."
+        "Enabling this sends delivery data through OpenClaw's hosted push relay."
     }
 }

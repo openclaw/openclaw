@@ -313,7 +313,7 @@ extension SettingsProTab {
                     : (self.pendingApproval == nil ? "No gateway actions are waiting for review." :
                         "Review the pending gateway action."),
                 value: self.notificationsNeedAttention
-                    ? "alerts off"
+                    ? "Alerts Off"
                     : (self.pendingApproval == nil ? "clear" : "1 waiting"),
                 color: self.notificationsNeedAttention ? OpenClawBrand.warn :
                     (self.pendingApproval == nil ? OpenClawBrand.ok : OpenClawBrand.warn))
@@ -336,8 +336,6 @@ extension SettingsProTab {
                             .font(.subheadline.weight(.semibold))
                         Text(
                             """
-                            Exec approvals can only be reviewed while OpenClaw is open and connected.
-
                             Enable Notifications to receive approval notifications while OpenClaw is not open.
                             """)
                             .font(.caption)
