@@ -281,6 +281,24 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("preserves plugin-harness timeout isolation: aborted harness timeout surfaces error even with fallback (#86476)", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "prompt",
+        aborted: true,
+        externalAbort: false,
+        harnessOwnsTransport: true,
+        fallbackConfigured: true,
+        failoverFailure: true,
+        failoverReason: "timeout",
+        profileRotated: false,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
+  });
+
   it("does not rotate or fallback assistant timeouts that fired during tool execution (#52147)", () => {
     expect(
       resolveRunFailoverDecision({
