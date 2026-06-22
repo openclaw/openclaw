@@ -6,6 +6,7 @@ import type {
 } from "../../api/types.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { normalizeBasePath } from "../../app-routes.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   areUiSessionKeysEquivalent,
   DEFAULT_AGENT_ID,
@@ -78,7 +79,6 @@ import {
   type ChatMetadataResult,
   type ChatSendAck,
   type ChatState,
-  isGatewayMethodAdvertised,
 } from "./gateway.ts";
 import {
   handleChatDraftChange,

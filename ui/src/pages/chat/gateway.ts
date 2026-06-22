@@ -7,6 +7,7 @@ import type {
   GatewaySessionsDefaults,
   ModelCatalogEntry,
 } from "../../api/types.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   areUiSessionKeysEquivalent,
   DEFAULT_AGENT_ID,
@@ -25,7 +26,6 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../ui/controllers/scope-errors.ts";
-import { isGatewayMethodAdvertised } from "../../ui/gateway-methods.ts";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -58,8 +58,6 @@ import {
 } from "./stream-reconciliation.ts";
 import type { ChatAttachment } from "./types.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
-
-export { isGatewayMethodAdvertised } from "../../ui/gateway-methods.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =

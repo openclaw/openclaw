@@ -1,8 +1,9 @@
-// Shared Gateway hello method lookup for feature-gated UI calls.
-import type { GatewayHelloOk } from "./gateway.ts";
-
 export function isGatewayMethodAdvertised(
-  host: { hello?: GatewayHelloOk | null },
+  host: {
+    hello?: {
+      features?: { methods?: string[] } | null;
+    } | null;
+  },
   method: string,
 ): boolean | null {
   const methods = host.hello?.features?.methods;

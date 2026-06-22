@@ -1,6 +1,6 @@
 import type { ConfigSnapshot } from "../../api/types.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-import { isGatewayMethodAdvertised } from "../../ui/gateway-methods.ts";
 // Control UI controller manages dreaming gateway state.
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../ui/gateway.ts";
 
