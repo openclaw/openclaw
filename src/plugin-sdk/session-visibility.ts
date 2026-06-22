@@ -237,7 +237,7 @@ function a2aDeniedMessage(action: SessionAccessAction): string {
 
 function crossVisibilityMessage(action: SessionAccessAction): string {
   const suffix =
-    "Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true (with allow list) to allow cross-agent access.";
+    "Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.";
   if (action === "history") {
     return `Session history visibility is restricted. ${suffix}`;
   }
