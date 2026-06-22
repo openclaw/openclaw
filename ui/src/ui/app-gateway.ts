@@ -79,6 +79,7 @@ import {
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { setMcpAppContext } from "./mcp-app-context.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -812,6 +813,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       host.chatError = null;
       host.hello = hello;
+      setMcpAppContext(client, host.sessionKey);
       if (host.realtimeTalkOptionsOpen) {
         void host.fetchRealtimeTalkCatalog?.();
       }
@@ -911,6 +913,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      setMcpAppContext(null, null);
       markQueuedChatSendsWaitingForReconnect(
         host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
       );

@@ -69,6 +69,7 @@ describe("loadControlUiBootstrapConfig", () => {
         embedSandbox: "scripts",
         allowExternalEmbedUrls: true,
         chatMessageMaxWidth: "min(1280px, 82%)",
+        mcpAppsEnabled: true,
       }),
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
@@ -104,6 +105,7 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.embedSandboxMode).toBe("scripts");
     expect(state.allowExternalEmbedUrls).toBe(true);
     expect(state.chatMessageMaxWidth).toBe("min(1280px, 82%)");
+    expect(state.mcpAppsEnabled).toBe(true);
 
     vi.unstubAllGlobals();
   });

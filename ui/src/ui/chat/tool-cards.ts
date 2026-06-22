@@ -4,6 +4,7 @@ import { keyed } from "lit/directives/keyed.js";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
+import "../components/mcp-app-view.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
@@ -62,23 +63,46 @@ function coerceArgs(value: unknown): unknown {
   }
 }
 
-function extractToolText(item: Record<string, unknown>): string | undefined {
+function extractToolTextParts(item: Record<string, unknown>): string[] {
   if (typeof item.text === "string") {
-    return item.text;
+    return [item.text];
   }
   if (typeof item.content === "string") {
-    return item.content;
+    return [item.content];
   }
   if (Array.isArray(item.content)) {
-    const parts = item.content.flatMap((entry) => {
+    return item.content.flatMap((entry) => {
       if (!entry || typeof entry !== "object") {
         return [];
       }
       const text = (entry as { text?: unknown }).text;
       return typeof text === "string" ? [text] : [];
     });
-    if (parts.length > 0) {
-      return parts.join("\n");
+  }
+  return [];
+}
+
+function extractToolText(item: Record<string, unknown>): string | undefined {
+  const parts = extractToolTextParts(item);
+  if (parts.length > 0) {
+    return parts.join("\n");
+  }
+  return undefined;
+}
+
+function extractToolPreviewFromItem(
+  item: Record<string, unknown>,
+  outputText: string | undefined,
+  toolName: string,
+): ToolCard["preview"] | undefined {
+  const joinedPreview = extractToolPreview(outputText, toolName);
+  if (joinedPreview) {
+    return joinedPreview;
+  }
+  for (const part of extractToolTextParts(item)) {
+    const preview = extractToolPreview(part, toolName);
+    if (preview) {
+      return preview;
     }
   }
   return undefined;
@@ -295,7 +319,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       const cardId = resolveToolCardId(item, m, index, prefix);
       const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
-      const preview = extractToolPreview(text, name);
+      const preview = extractToolPreviewFromItem(item, text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
         fallbackMatchedCards.add(existing);
@@ -337,7 +361,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       outputText: text,
       messageId: transcriptMessageId,
       ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
-      preview: extractToolPreview(text, name),
+      preview: extractToolPreviewFromItem(m, text, name),
     });
   }
 
@@ -439,6 +463,7 @@ export function renderToolPreview(
     canvasPluginSurfaceUrl?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    mcpAppsEnabled?: boolean;
   },
 ) {
   if (!preview) {
@@ -450,25 +475,46 @@ export function renderToolPreview(
   if (preview.surface !== "assistant_message") {
     return nothing;
   }
+  if (preview.mcpApp && options?.mcpAppsEnabled !== true) {
+    return nothing;
+  }
+  const src = resolveCanvasIframeUrl(
+    preview.url,
+    options?.canvasPluginSurfaceUrl,
+    options?.allowExternalEmbedUrls ?? false,
+  );
+  const title = preview.title?.trim() || "Canvas";
+  const height = preview.preferredHeight ?? 600;
+  const sandboxMode = options?.embedSandboxMode ?? "scripts";
   return html`
     <div class="chat-tool-card__preview" data-kind="canvas" data-surface=${surface}>
       <div class="chat-tool-card__preview-header">
-        <span class="chat-tool-card__preview-label">${preview.title?.trim() || "Canvas"}</span>
+        <span class="chat-tool-card__preview-label">${title}</span>
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
-        ${renderPreviewFrame({
-          title: preview.title?.trim() || "Canvas",
-          src: resolveCanvasIframeUrl(
-            preview.url,
-            options?.canvasPluginSurfaceUrl,
-            options?.allowExternalEmbedUrls ?? false,
-          ),
-          height: preview.preferredHeight,
-          sandbox:
-            preview.kind === "canvas"
-              ? resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts")
-              : resolveCanvasPreviewSandbox(preview),
-        })}
+        ${preview.mcpApp && options?.mcpAppsEnabled === true
+          ? html`<mcp-app-view
+              .src=${src ?? ""}
+              .sandboxMode=${sandboxMode}
+              .height=${height}
+              .mcpTitle=${title}
+              .mcpServerName=${preview.mcpApp.serverName}
+              .mcpSessionKey=${preview.mcpApp.sessionKey ?? ""}
+              .mcpAppToolName=${preview.mcpApp.toolName}
+              .mcpUiResourceUri=${preview.mcpApp.uiResourceUri}
+              .mcpViewUrl=${preview.url ?? ""}
+              .mcpToolInput=${preview.mcpApp.toolInput}
+              .mcpToolResult=${preview.mcpApp.toolResult}
+            ></mcp-app-view>`
+          : renderPreviewFrame({
+              title,
+              src,
+              height: preview.preferredHeight,
+              sandbox:
+                preview.kind === "canvas"
+                  ? resolveEmbedSandbox(sandboxMode)
+                  : resolveCanvasPreviewSandbox(preview),
+            })}
       </div>
     </div>
   `;

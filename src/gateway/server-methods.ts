@@ -134,6 +134,10 @@ const loadModelsHandlers = lazyHandlerModule(
   () => import("./server-methods/models.js"),
   (module) => module.modelsHandlers,
 );
+const loadMcpAppProxyHandlers = lazyHandlerModule(
+  () => import("./server-methods/mcp-app-proxy.js"),
+  (module) => module.mcpAppProxyHandlers,
+);
 const loadNativeHookRelayHandlers = lazyHandlerModule(
   () => import("./server-methods/native-hook-relay.js"),
   (module) => module.nativeHookRelayHandlers,
@@ -435,6 +439,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["tools.invoke"],
     loadHandlers: loadToolsInvokeHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "mcp.callTool",
+      "mcp.listResources",
+      "mcp.listResourceTemplates",
+      "mcp.listTools",
+      "mcp.readResource",
+    ],
+    loadHandlers: loadMcpAppProxyHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [

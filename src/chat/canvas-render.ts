@@ -17,6 +17,16 @@ type CanvasPreview = {
   viewId?: string;
   className?: string;
   style?: string;
+  mcpApp?: McpAppPreviewMeta;
+};
+
+export type McpAppPreviewMeta = {
+  serverName: string;
+  toolName: string;
+  uiResourceUri: string;
+  sessionKey?: string;
+  toolInput?: unknown;
+  toolResult?: unknown;
 };
 
 function tryParseJsonRecord(value: string | undefined): Record<string, unknown> | undefined {
@@ -55,6 +65,29 @@ function getNestedRecord(
   return asOptionalRecord(value);
 }
 
+function coerceMcpAppMeta(
+  record: Record<string, unknown> | undefined,
+): McpAppPreviewMeta | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const serverName = getRecordStringField(record, "serverName");
+  const toolName = getRecordStringField(record, "toolName");
+  const uiResourceUri = getRecordStringField(record, "uiResourceUri");
+  if (!serverName || !toolName || !uiResourceUri) {
+    return undefined;
+  }
+  const sessionKey = getRecordStringField(record, "sessionKey");
+  return {
+    serverName,
+    toolName,
+    uiResourceUri,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(Object.hasOwn(record, "toolInput") ? { toolInput: record.toolInput } : {}),
+    ...(Object.hasOwn(record, "toolResult") ? { toolResult: record.toolResult } : {}),
+  };
+}
+
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {
   return value === "assistant_message" ? value : undefined;
 }
@@ -78,6 +111,7 @@ function coerceCanvasPreview(
   const presentation = getNestedRecord(record, "presentation");
   const view = getNestedRecord(record, "view");
   const source = getNestedRecord(record, "source");
+  const mcpApp = coerceMcpAppMeta(getNestedRecord(record, "mcpApp"));
   const requestedSurface =
     getRecordStringField(presentation, "target") ?? getRecordStringField(record, "target");
   const surface = requestedSurface ? normalizeSurface(requestedSurface) : "assistant_message";
@@ -108,6 +142,7 @@ function coerceCanvasPreview(
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
+      ...(mcpApp ? { mcpApp } : {}),
     };
   }
   const sourceType = getRecordStringField(source, "type")?.trim().toLowerCase();
@@ -125,6 +160,7 @@ function coerceCanvasPreview(
       ...(preferredHeight ? { preferredHeight } : {}),
       ...(className ? { className } : {}),
       ...(style ? { style } : {}),
+      ...(mcpApp ? { mcpApp } : {}),
     };
   }
   return undefined;

@@ -465,6 +465,12 @@ const McpServerSchema = z
 const McpConfigSchema = z
   .object({
     servers: z.record(z.string(), McpServerSchema).optional(),
+    apps: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     sessionIdleTtlMs: z.number().finite().min(0).optional(),
   })
   .strict()

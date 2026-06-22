@@ -2173,6 +2173,48 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("renders MCP app canvas blocks through the app bridge when enabled", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-mcp-app-canvas",
+        role: "assistant",
+        content: [
+          { type: "text", text: "Rendered MCP app." },
+          {
+            type: "canvas",
+            preview: {
+              kind: "canvas",
+              surface: "assistant_message",
+              render: "url",
+              viewId: "cv_mcp_app",
+              title: "MCP app",
+              url: "/__openclaw__/canvas/documents/cv_mcp_app/index.html",
+              preferredHeight: 320,
+              mcpApp: {
+                serverName: "weather",
+                toolName: "forecast",
+                uiResourceUri: "ui://weather/forecast",
+                sessionKey: "agent:test",
+              },
+            },
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { mcpAppsEnabled: true },
+    );
+
+    const appView = container.querySelector("mcp-app-view") as
+      | (HTMLElement & { mcpAppToolName?: string; mcpUiResourceUri?: string })
+      | null;
+    expect(appView).not.toBeNull();
+    expect(appView?.mcpAppToolName).toBe("forecast");
+    expect(appView?.mcpUiResourceUri).toBe("ui://weather/forecast");
+    expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
+  });
+
   it("renders server-history canvas blocks for the live toolResult sequence after history reload", () => {
     const container = document.createElement("div");
     renderAssistantMessage(

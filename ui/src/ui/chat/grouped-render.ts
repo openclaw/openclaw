@@ -431,6 +431,7 @@ type RenderMessageGroupOptions = {
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
+  mcpAppsEnabled?: boolean;
   contextWindow?: number | null;
   onDelete?: () => void;
 };
@@ -462,6 +463,7 @@ function buildGroupedMessageRenderOptions(
     assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
     embedSandboxMode: opts.embedSandboxMode,
     allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
+    mcpAppsEnabled: opts.mcpAppsEnabled ?? false,
   };
 }
 
@@ -1617,6 +1619,7 @@ function renderGroupedMessage(
     assistantAttachmentAuthToken?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    mcpAppsEnabled?: boolean;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -1882,6 +1885,7 @@ function renderGroupedMessage(
                     rawText: block.rawText ?? null,
                     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
                     embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+                    mcpAppsEnabled: opts.mcpAppsEnabled ?? false,
                   })}
                   ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
                 )}`

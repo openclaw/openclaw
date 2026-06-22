@@ -368,6 +368,45 @@ with Example Deck
     expect(card?.preview?.preferredHeight).toBe(420);
   });
 
+  it("extracts canvas previews from appended tool result text blocks", () => {
+    const [card] = extractToolCards(
+      {
+        role: "tool",
+        toolName: "weather__forecast",
+        content: [
+          { type: "text", text: "Forecast ready" },
+          {
+            type: "text",
+            text: JSON.stringify({
+              kind: "canvas",
+              view: {
+                backend: "canvas",
+                id: "cv_weather",
+                url: "/__openclaw__/canvas/documents/cv_weather/index.html",
+              },
+              presentation: {
+                target: "assistant_message",
+                title: "Forecast app",
+              },
+              mcpApp: {
+                serverName: "weather",
+                toolName: "forecast",
+                uiResourceUri: "ui://weather/forecast",
+              },
+            }),
+          },
+        ],
+      },
+      "msg:view:appended",
+    );
+
+    expect(card?.outputText).toContain("Forecast ready");
+    expect(card?.preview?.kind).toBe("canvas");
+    expect(card?.preview?.title).toBe("Forecast app");
+    expect(card?.preview?.mcpApp?.serverName).toBe("weather");
+    expect(card?.preview?.mcpApp?.uiResourceUri).toBe("ui://weather/forecast");
+  });
+
   it("uses transcript metadata ids for history-backed tool messages", () => {
     const [card] = extractToolCards(
       {

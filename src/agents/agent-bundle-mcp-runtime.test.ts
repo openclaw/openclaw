@@ -39,7 +39,13 @@ async function writeListToolsMcpServer(params: {
   delayMs?: number;
   hang?: boolean;
   inputSchema?: unknown;
-  tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>;
+  tools?: Array<{
+    name: string;
+    description?: string;
+    inputSchema?: unknown;
+    title?: string;
+    _meta?: unknown;
+  }>;
   capabilities?: Record<string, unknown>;
   listToolsMethodNotFound?: boolean;
   callToolIsError?: boolean;
@@ -285,6 +291,17 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("advertises MCP Apps client capabilities only when enabled", () => {
+    expect(testing.buildMcpClientCapabilities(false)).toEqual({});
+    expect(testing.buildMcpClientCapabilities(true)).toEqual({
+      extensions: {
+        "io.modelcontextprotocol/ui": {
+          mimeTypes: ["text/html;profile=mcp-app"],
+        },
+      },
+    });
+  });
+
   it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
     const validator = createBundleMcpJsonSchemaValidator().getValidator<{
       format: string;
@@ -698,6 +715,76 @@ describe("session MCP runtime", () => {
         toolCount: 1,
       });
       await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 1250");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("captures MCP Apps resource URI and visibility metadata from listed tools", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-ui-metadata-"));
+    const serverPath = path.join(tempDir, "ui-metadata.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        {
+          name: "forecast",
+          title: "Forecast",
+          description: "Show weather forecast",
+          inputSchema: { type: "object", properties: {} },
+          _meta: {
+            ui: {
+              resourceUri: "ui://weather/forecast",
+              visibility: ["model", "app", "ignored"],
+            },
+          },
+        },
+        {
+          name: "legacy_weather",
+          inputSchema: { type: "object", properties: {} },
+          _meta: {
+            "ui/resourceUri": "ui://weather/legacy",
+          },
+        },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-ui-metadata",
+      sessionKey: "agent:test:session-ui-metadata",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          apps: { enabled: true },
+          servers: {
+            weather: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      expect(runtime.mcpAppsEnabled).toBe(true);
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools).toMatchObject([
+        {
+          serverName: "weather",
+          toolName: "forecast",
+          title: "Forecast",
+          uiResourceUri: "ui://weather/forecast",
+          uiVisibility: ["app", "model"],
+        },
+        {
+          serverName: "weather",
+          toolName: "legacy_weather",
+          uiResourceUri: "ui://weather/legacy",
+        },
+      ]);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -1495,6 +1582,50 @@ process.on("SIGINT", shutdown);`,
     }
     expect(contentA.text).toBe("FROM-CONFIG-A");
     expect(contentB.text).toBe("FROM-CONFIG-B");
+  });
+
+  it("recreates the session runtime when MCP Apps are disabled", async () => {
+    const createRuntime: RuntimeFactory = (params) => ({
+      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? "fingerprint",
+      mcpAppsEnabled: params.cfg?.mcp?.apps?.enabled === true,
+    });
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+    const baseConfig = {
+      mcp: {
+        servers: {
+          configuredProbe: {
+            command: "node",
+            args: ["server-a.mjs"],
+          },
+        },
+      },
+    };
+
+    const runtimeA = await manager.getOrCreate({
+      sessionId: "session-app-toggle",
+      sessionKey: "agent:test:session-app-toggle",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          ...baseConfig.mcp,
+          apps: { enabled: true },
+        },
+      },
+    });
+    const runtimeB = await manager.getOrCreate({
+      sessionId: "session-app-toggle",
+      sessionKey: "agent:test:session-app-toggle",
+      workspaceDir: "/workspace",
+      cfg: baseConfig,
+    });
+
+    expect(runtimeA).not.toBe(runtimeB);
+    expect(runtimeA.mcpAppsEnabled).toBe(true);
+    expect(runtimeB.mcpAppsEnabled).toBe(false);
   });
 
   it("disposes catalog startup in-flight without leaving cached runtimes", async () => {

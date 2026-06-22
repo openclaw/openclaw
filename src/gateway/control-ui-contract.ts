@@ -20,6 +20,7 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   chatMessageMaxWidth?: string;
+  mcpAppsEnabled?: boolean;
   /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
   timeFormat?: "auto" | "12" | "24";
 };

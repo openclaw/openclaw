@@ -1,9 +1,13 @@
 /** Session-scoped MCP runtime manager, catalog loader, and transport lifecycle. */
 import crypto from "node:crypto";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Client, type ClientOptions } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ErrorCode,
+  type CallToolResult,
+  type ClientCapabilities,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
@@ -51,9 +55,12 @@ type ListedTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
 type CreateSessionMcpRuntime = (
   params: Parameters<typeof createSessionMcpRuntime>[0] & { configFingerprint?: string },
 ) => SessionMcpRuntime;
+type McpUiVisibility = "model" | "app";
 
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
+const MCP_APPS_CLIENT_EXTENSION = "io.modelcontextprotocol/ui";
+const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
@@ -279,6 +286,24 @@ function setBundleMcpCatalogListTimeoutMsForTest(timeoutMs?: number): void {
       ? Math.floor(timeoutMs)
       : undefined;
 }
+
+function buildMcpClientCapabilities(mcpAppsEnabled: boolean): ClientCapabilities {
+  if (!mcpAppsEnabled) {
+    return {};
+  }
+  return {
+    extensions: {
+      [MCP_APPS_CLIENT_EXTENSION]: {
+        mimeTypes: [MCP_APP_RESOURCE_MIME_TYPE],
+      },
+    },
+  };
+}
+
+function buildMcpClientOptions(mcpAppsEnabled: boolean): ClientOptions {
+  return { capabilities: buildMcpClientCapabilities(mcpAppsEnabled) };
+}
+
 async function listAllResources(client: Client, timeoutMs: number) {
   const resources: unknown[] = [];
   let cursor: string | undefined;
@@ -324,6 +349,16 @@ function normalizeStringList(value: unknown): string[] | undefined {
   }
   const entries = value.filter((entry): entry is string => typeof entry === "string");
   return entries.length > 0 ? entries : undefined;
+}
+
+function normalizeToolUiVisibility(value: unknown): Array<McpUiVisibility> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value.filter(
+    (item): item is McpUiVisibility => item === "model" || item === "app",
+  );
+  return normalized.length > 0 ? [...new Set(normalized)].toSorted() : undefined;
 }
 
 function getMcpToolSelection(rawServer: unknown): McpToolSelection {
@@ -415,8 +450,11 @@ async function disposeSession(session: BundleMcpSession) {
   }
 }
 
-function createCatalogFingerprint(servers: Record<string, unknown>): string {
-  return crypto.createHash("sha1").update(JSON.stringify(servers)).digest("hex");
+function createMcpConfigFingerprint(params: {
+  mcpServers: Record<string, unknown>;
+  mcpAppsEnabled: boolean;
+}): string {
+  return crypto.createHash("sha1").update(JSON.stringify(params)).digest("hex");
 }
 
 function loadSessionMcpConfig(params: {
@@ -440,7 +478,10 @@ function loadSessionMcpConfig(params: {
   }
   return {
     loaded,
-    fingerprint: createCatalogFingerprint(loaded.mcpServers),
+    fingerprint: createMcpConfigFingerprint({
+      mcpServers: loaded.mcpServers,
+      mcpAppsEnabled: params.cfg?.mcp?.apps?.enabled === true,
+    }),
   };
 }
 
@@ -499,6 +540,7 @@ export function createSessionMcpRuntime(params: {
   let catalogInvalidationGeneration = 0;
   const sessions = new Map<string, BundleMcpSession>();
   const serverBackoff = new Map<string, McpServerBackoffState>();
+  const mcpAppsEnabled = params.cfg?.mcp?.apps?.enabled === true;
   const recordServerToolFailure = (serverName: string, nowMs: number) => {
     const previous = serverBackoff.get(serverName);
     const failures = (previous?.failures ?? 0) + 1;
@@ -582,6 +624,7 @@ export function createSessionMcpRuntime(params: {
                 version: "0.0.0",
               },
               {
+                ...buildMcpClientOptions(mcpAppsEnabled),
                 jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
                 listChanged: {
                   tools: {
@@ -672,6 +715,13 @@ export function createSessionMcpRuntime(params: {
               if (!toolName) {
                 continue;
               }
+              const uiMeta = tool._meta?.ui as
+                | { resourceUri?: unknown; visibility?: unknown }
+                | undefined;
+              const rawUri = uiMeta?.resourceUri ?? tool._meta?.["ui/resourceUri"];
+              const uiResourceUri =
+                typeof rawUri === "string" && rawUri.startsWith("ui://") ? rawUri : undefined;
+              const uiVisibility = normalizeToolUiVisibility(uiMeta?.visibility);
               tools.push({
                 serverName,
                 safeServerName,
@@ -680,6 +730,8 @@ export function createSessionMcpRuntime(params: {
                 description: sanitizeMcpMetadataText(tool.description),
                 inputSchema: tool.inputSchema,
                 fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
+                ...(uiResourceUri ? { uiResourceUri } : {}),
+                ...(uiVisibility ? { uiVisibility } : {}),
               });
             }
           } catch (error) {
@@ -741,6 +793,7 @@ export function createSessionMcpRuntime(params: {
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     configFingerprint,
+    mcpAppsEnabled,
     createdAt,
     get lastUsedAt() {
       return lastUsedAt;
@@ -788,6 +841,19 @@ export function createSessionMcpRuntime(params: {
           )) as CallToolResult,
       );
     },
+    async listTools(serverName, requestParams) {
+      failIfDisposed();
+      await getCatalog();
+      const session = sessions.get(serverName);
+      if (!session) {
+        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
+      }
+      return await runGuardedServerRequest(
+        serverName,
+        async () =>
+          await session.client.listTools(requestParams, { timeout: session.requestTimeoutMs }),
+      );
+    },
     async listResources(serverName) {
       failIfDisposed();
       await getCatalog();
@@ -810,6 +876,21 @@ export function createSessionMcpRuntime(params: {
         serverName,
         async () =>
           await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs }),
+      );
+    },
+    async listResourceTemplates(serverName, requestParams) {
+      failIfDisposed();
+      await getCatalog();
+      const session = sessions.get(serverName);
+      if (!session) {
+        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
+      }
+      return await runGuardedServerRequest(
+        serverName,
+        async () =>
+          await session.client.listResourceTemplates(requestParams, {
+            timeout: session.requestTimeoutMs,
+          }),
       );
     },
     async listPrompts(serverName) {
@@ -1133,6 +1214,7 @@ export async function disposeAllSessionMcpRuntimes(): Promise<void> {
 }
 
 export const testing = {
+  buildMcpClientCapabilities,
   createSessionMcpRuntimeManager,
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();

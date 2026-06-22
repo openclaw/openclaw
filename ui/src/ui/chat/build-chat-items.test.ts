@@ -948,6 +948,62 @@ describe("buildChatItems", () => {
     expect(canvasBlocksIn(groups[1])).toStrictEqual([]);
   });
 
+  it("preserves MCP app metadata on lifted canvas previews", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "assistant-with-mcp-app",
+          role: "assistant",
+          content: [{ type: "text", text: "Forecast ready." }],
+          timestamp: 1_000,
+        },
+      ],
+      toolMessages: [
+        {
+          id: "tool-mcp-app-canvas",
+          role: "tool",
+          toolCallId: "call-mcp-app",
+          toolName: "forecast",
+          content: JSON.stringify({
+            kind: "canvas",
+            view: {
+              backend: "canvas",
+              id: "cv_mcp_app",
+              url: "/__openclaw__/canvas/documents/cv_mcp_app/index.html",
+              title: "Forecast",
+              preferred_height: 320,
+            },
+            presentation: {
+              target: "assistant_message",
+            },
+            mcpApp: {
+              serverName: "weather",
+              toolName: "forecast",
+              uiResourceUri: "ui://weather/forecast",
+              sessionKey: "main",
+              toolInput: { city: "Pittsburgh" },
+              toolResult: { temp: 72 },
+            },
+          }),
+          timestamp: 1_001,
+        },
+      ],
+    });
+
+    const canvasBlocks = canvasBlocksIn(groups[0]);
+    expect(canvasBlocks).toHaveLength(1);
+    const canvasBlock = requireRecord(canvasBlocks[0]);
+    const preview = requireRecord(canvasBlock.preview);
+    expect(preview.mcpApp).toEqual({
+      serverName: "weather",
+      toolName: "forecast",
+      uiResourceUri: "ui://weather/forecast",
+      sessionKey: "main",
+      toolInput: { city: "Pittsburgh" },
+      toolResult: { temp: 72 },
+    });
+  });
+
   it("preserves a metadata-only assistant anchor when lifting canvas previews", () => {
     const groups = messageGroups({
       messages: [

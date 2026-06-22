@@ -3917,6 +3917,7 @@ export function renderApp(state: AppViewState) {
                   localMediaPreviewRoots: state.localMediaPreviewRoots,
                   embedSandboxMode: state.embedSandboxMode,
                   allowExternalEmbedUrls: state.allowExternalEmbedUrls,
+                  mcpAppsEnabled: state.mcpAppsEnabled,
                   assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
                   basePath: state.basePath ?? "",
                 }),

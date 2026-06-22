@@ -439,6 +439,7 @@ function buildWebchatCanvasSection(params: {
       : "- `[embed ...]` is separate from `MEDIA:`. Use `MEDIA:` for final-reply attachments; use `[embed ...]` for web-only rich rendering.",
     '- Use self-closing form for hosted embed documents: `[embed ref="cv_123" title="Status" height="320" /]`.',
     '- You may also use an explicit hosted URL: `[embed url="/__openclaw__/canvas/documents/cv_123/index.html" title="Status" height="320" /]`.',
+    "- For MCP Apps UIs, call the listed MCP tool directly; do not use exec/curl to call MCP servers and do not invent `/__openclaw__/canvas/mcp-apps/...` embed URLs.",
     '- Never use local filesystem paths or `file://...` URLs in `[embed ...]`. Hosted embeds must point at `/__openclaw__/canvas/...` URLs or use `ref="..."`.',
     "- The active hosted embed root is profile-scoped, not workspace-scoped. If you manually stage a hosted embed file, write it under the active profile embed root, not in the workspace.",
     "- Quote all attribute values. Prefer `ref` for hosted documents unless you already have the full `/__openclaw__/canvas/documents/<id>/index.html` URL.",

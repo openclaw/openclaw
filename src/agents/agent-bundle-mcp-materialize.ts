@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { setPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
+import { buildMcpAppCanvasJson, fetchMcpAppView } from "./mcp-ui-resource.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -21,6 +22,10 @@ import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type ToolResultContentBlock = AgentToolResult<unknown>["content"][number];
+
+function isAppOnlyTool(uiVisibility: Array<"model" | "app"> | undefined): boolean {
+  return uiVisibility?.includes("app") === true && !uiVisibility.includes("model");
+}
 
 // AgentToolResult only carries text/image, but an MCP CallToolResult can also
 // return resource_link, resource, and audio blocks (MCP SDK ContentBlock union).
@@ -252,6 +257,9 @@ export function buildBundleMcpToolsFromCatalog(params: {
   });
 
   for (const tool of sortedCatalogTools) {
+    if (isAppOnlyTool(tool.uiVisibility)) {
+      continue;
+    }
     const originalName = tool.toolName.trim();
     if (!originalName) {
       continue;
@@ -404,11 +412,33 @@ export async function materializeBundleMcpToolsForRun(params: {
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-      return toAgentToolResult({
+      const agentResult = toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
         result,
       });
+      if (params.runtime.mcpAppsEnabled === true && tool.uiResourceUri) {
+        const view = await fetchMcpAppView({
+          runtime: params.runtime,
+          serverName: tool.serverName,
+          toolName: tool.toolName,
+          uiResourceUri: tool.uiResourceUri,
+        });
+        if (view) {
+          agentResult.content = [
+            ...agentResult.content,
+            {
+              type: "text",
+              text: buildMcpAppCanvasJson({
+                view,
+                toolInput: input,
+                toolResult: result,
+              }),
+            },
+          ];
+        }
+      }
+      return agentResult;
     },
     createResourceListExecute: params.runtime.listResources
       ? (serverName) => async () => {
