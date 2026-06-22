@@ -1113,6 +1113,21 @@ export function normalizeChannelProgressDraftLineIdentity(
   );
 }
 
+function areChannelProgressDraftLinesEquivalent(
+  left: string | ChannelProgressDraftLine,
+  right: string | ChannelProgressDraftLine,
+): boolean {
+  if (typeof left === "string" || typeof right === "string") {
+    return left === right;
+  }
+  const leftEntries = Object.entries(left);
+  return (
+    leftEntries.length === Object.keys(right).length &&
+    leftEntries.every(([key, value]) => right[key as keyof ChannelProgressDraftLine] === value) &&
+    progressDraftLineCorrelationKeys.get(left) === progressDraftLineCorrelationKeys.get(right)
+  );
+}
+
 export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
   /** Existing progress draft lines in display order. */
   lines: TLine[],
@@ -1133,7 +1148,7 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
     );
     if (existingIndex >= 0) {
       const replacement = mergeProgressDraftLineUpdate(lines[existingIndex], line);
-      if (replacement === lines[existingIndex]) {
+      if (areChannelProgressDraftLinesEquivalent(lines[existingIndex], replacement)) {
         return lines;
       }
       const next = [...lines];
