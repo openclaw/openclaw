@@ -2949,4 +2949,55 @@ describe("applySessionsChangedEvent title propagation", () => {
     expect(state.sessionsResult?.sessions[0]?.title).toBeUndefined();
     expect(state.sessionsResult?.sessions[0]?.label).toBeUndefined();
   });
+
+  it("applies canonical title updates from reliable websocket events", () => {
+    const state = {
+      client: null,
+      connected: true,
+      sessionsLoading: false,
+      sessionsResult: {
+        ts: 1,
+        path: "/tmp/sessions.json",
+        count: 1,
+        sessions: [
+          {
+            key: "agent:main:main",
+            kind: "direct",
+            sessionId: "sess-main",
+            title: "Old Title",
+            label: "Old Title",
+            updatedAt: 1,
+          },
+        ],
+      },
+      sessionsResultAgentId: null,
+      chatAgentSessionRowsByAgent: undefined,
+      sessionsError: null,
+      sessionsFilterActive: "",
+      sessionsFilterLimit: "",
+      sessionsIncludeGlobal: true,
+      sessionsIncludeUnknown: true,
+      sessionsShowArchived: false,
+      sessionsExpandedCheckpointKey: null,
+      sessionsCheckpointItemsByKey: {},
+      sessionsCheckpointLoadingKey: null,
+      sessionsCheckpointBusyKey: null,
+      sessionsCheckpointErrorByKey: {},
+    } as any;
+
+    const result = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      reason: "patch",
+      ts: 2,
+      kind: "direct",
+      sessionId: "sess-main",
+      title: "New Title",
+      label: "New Title",
+      updatedAt: 2,
+    });
+
+    expect(result).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult.sessions[0].title).toBe("New Title");
+    expect(state.sessionsResult.sessions[0].label).toBe("New Title");
+  });
 });
