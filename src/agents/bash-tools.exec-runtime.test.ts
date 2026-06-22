@@ -558,6 +558,33 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.aggregated).toContain("exit code 7");
   });
 
+  it("does not annotate private-network-looking output on zero-exit normal exits", () => {
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 123,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "saved log line: ssh: connect to host 192.168.147.163 port 22: No route to host",
+      durationMs: 123,
+      timeoutSec: 30,
+      command: "printf '%s\n' 'ssh: connect to host 192.168.147.163 port 22: No route to host'",
+    });
+
+    expect(outcome.status).toBe("completed");
+    if (outcome.status !== "completed") {
+      throw new Error(`Expected completed outcome, got ${outcome.status}`);
+    }
+    expect(outcome.exitCode).toBe(0);
+    expect(outcome.aggregated).not.toContain("OpenClaw exec private-network diagnostic");
+    expect(outcome.aggregated).not.toContain("(Command exited with code");
+  });
+
   it("does not annotate public-network connection failures", () => {
     const outcome = buildExecExitOutcome({
       exit: {

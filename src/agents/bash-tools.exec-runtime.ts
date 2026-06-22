@@ -548,11 +548,15 @@ export function buildExecExitOutcome(params: {
     isNormalExit && !isShellFailure ? "completed" : "failed";
   if (status === "completed") {
     const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
-    const aggregated = appendPrivateNetworkExecDiagnostic({
-      command: params.command,
-      output: params.aggregated + exitMsg,
-      exitCode,
-    });
+    const output = params.aggregated + exitMsg;
+    const aggregated =
+      exitCode !== 0
+        ? appendPrivateNetworkExecDiagnostic({
+            command: params.command,
+            output,
+            exitCode,
+          })
+        : output;
     return {
       status: "completed",
       exitCode,
