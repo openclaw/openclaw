@@ -1,4 +1,5 @@
 // Openshell plugin module implements fs bridge behavior.
+import { randomUUID } from "node:crypto";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
@@ -10,13 +11,13 @@ import type {
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
-import { movePathWithCopyFallback } from "./mirror.js";
 
 type ResolvedMountPath = SandboxResolvedPath & {
   mountHostRoot: string;
   writable: boolean;
   source: "workspace" | "agent" | "protectedSkill";
 };
+type FsRoot = Awaited<ReturnType<typeof fsRoot>>;
 
 const MATERIALIZED_SKILLS_CONTAINER_PARTS = [".openclaw", "sandbox-skills", "skills"] as const;
 
@@ -117,7 +118,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowFinalSymlinkForUnlink: false,
     });
     await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
-    await fsPromises.mkdir(hostPath, { recursive: true });
+    const root = await fsRoot(target.mountHostRoot);
+    await mkdirRootRelative(root, path.relative(target.mountHostRoot, hostPath));
   }
 
   async remove(params: {
@@ -141,7 +143,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       signal: params.signal,
       ignoreMissing: params.force !== false,
     });
-    await fsPromises.rm(hostPath, {
+    const root = await fsRoot(target.mountHostRoot);
+    await removeRootRelative(root, path.relative(target.mountHostRoot, hostPath), {
       recursive: params.recursive ?? false,
       force: params.force !== false,
     });
@@ -168,9 +171,32 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
-    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
-    await fsPromises.mkdir(path.dirname(toHostPath), { recursive: true });
-    await movePathWithCopyFallback({ from: fromHostPath, to: toHostPath });
+    const fromRoot = await fsRoot(from.mountHostRoot);
+    const toRoot = await fsRoot(to.mountHostRoot);
+    const fromRelativePath = path.relative(from.mountHostRoot, fromHostPath);
+    const toRelativePath = path.relative(to.mountHostRoot, toHostPath);
+    if (
+      !normalizeRootRelativePath(fromRelativePath) ||
+      !normalizeRootRelativePath(toRelativePath)
+    ) {
+      throw new Error(
+        `OpenShell mirror bridge cannot rename mount roots: ${from.containerPath} -> ${to.containerPath}`,
+      );
+    }
+    if (path.resolve(from.mountHostRoot) === path.resolve(to.mountHostRoot)) {
+      await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
+      await mkdirRootRelative(fromRoot, path.dirname(toRelativePath));
+      await fromRoot.move(fromRelativePath, toRelativePath, { overwrite: true });
+      return;
+    }
+    await moveBetweenRoots({
+      fromRoot,
+      fromRelativePath,
+      toRoot,
+      toRelativePath,
+      runRemoteRename: async () =>
+        await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal),
+    });
   }
 
   async stat(params: {
@@ -341,6 +367,157 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
     throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${params.filePath}`);
   }
+}
+
+async function mkdirRootRelative(root: FsRoot, relativePath: string): Promise<void> {
+  const normalized = normalizeRootRelativePath(relativePath);
+  if (!normalized) {
+    await root.ensureRoot();
+    return;
+  }
+  await root.mkdir(normalized);
+}
+
+async function removeRootRelative(
+  root: FsRoot,
+  relativePath: string,
+  options: { recursive: boolean; force: boolean },
+): Promise<void> {
+  const normalized = normalizeRootRelativePath(relativePath);
+  const stats = await root.stat(normalized).catch((err: unknown) => {
+    if (options.force && getErrorCode(err) === "not-found") {
+      return null;
+    }
+    throw err;
+  });
+  if (!stats) {
+    return;
+  }
+  if (stats.isDirectory && options.recursive) {
+    const entries = await root.list(normalized, { withFileTypes: true });
+    for (const entry of entries) {
+      await removeRootRelative(root, path.join(normalized, entry.name), options);
+    }
+  }
+  await root.remove(normalized);
+}
+
+async function moveBetweenRoots(params: {
+  fromRoot: FsRoot;
+  fromRelativePath: string;
+  toRoot: FsRoot;
+  toRelativePath: string;
+  runRemoteRename: () => Promise<void>;
+}): Promise<void> {
+  const stagedToRelativePath = path.join(
+    path.dirname(params.toRelativePath),
+    `.openclaw-mirror-move-${process.pid}-${randomUUID()}`,
+  );
+  let stagedPathToRemove: string | undefined;
+  try {
+    stagedPathToRemove = stagedToRelativePath;
+    await copyBetweenRoots(
+      params.fromRoot,
+      params.fromRelativePath,
+      params.toRoot,
+      stagedToRelativePath,
+    );
+    await params.runRemoteRename();
+    await removeRootRelative(params.toRoot, params.toRelativePath, {
+      recursive: true,
+      force: true,
+    });
+    await mkdirRootRelative(params.toRoot, path.dirname(params.toRelativePath));
+    await params.toRoot.move(stagedToRelativePath, params.toRelativePath, { overwrite: true });
+    stagedPathToRemove = undefined;
+    await removeRootRelative(params.fromRoot, params.fromRelativePath, {
+      recursive: true,
+      force: false,
+    });
+  } finally {
+    if (stagedPathToRemove) {
+      await removeRootRelative(params.toRoot, stagedPathToRemove, {
+        recursive: true,
+        force: true,
+      }).catch(() => undefined);
+    }
+  }
+}
+
+async function copyBetweenRoots(
+  fromRoot: FsRoot,
+  fromRelativePath: string,
+  toRoot: FsRoot,
+  toRelativePath: string,
+): Promise<void> {
+  const normalizedFrom = normalizeRootRelativePath(fromRelativePath);
+  const normalizedTo = normalizeRootRelativePath(toRelativePath);
+  const stats = await fromRoot.stat(normalizedFrom);
+  if (stats.isDirectory) {
+    await mkdirRootRelative(toRoot, normalizedTo);
+    const entries = await fromRoot.list(normalizedFrom, { withFileTypes: true });
+    for (const entry of entries) {
+      await copyBetweenRoots(
+        fromRoot,
+        path.join(normalizedFrom, entry.name),
+        toRoot,
+        path.join(normalizedTo, entry.name),
+      );
+    }
+    return;
+  }
+
+  await copyFileBetweenRoots(fromRoot, normalizedFrom, toRoot, normalizedTo, stats.mode);
+}
+
+async function copyFileBetweenRoots(
+  fromRoot: FsRoot,
+  fromRelativePath: string,
+  toRoot: FsRoot,
+  toRelativePath: string,
+  mode: number,
+): Promise<void> {
+  await mkdirRootRelative(toRoot, path.dirname(toRelativePath));
+  const opened = await fromRoot.open(fromRelativePath, { hardlinks: "allow" });
+  let writable: Awaited<ReturnType<FsRoot["openWritable"]>> | undefined;
+  let committed = false;
+  try {
+    writable = await toRoot.openWritable(toRelativePath, { mkdir: true, mode: mode & 0o777 });
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    while (true) {
+      const { bytesRead } = await opened.handle.read(buffer, 0, buffer.length, null);
+      if (bytesRead === 0) {
+        break;
+      }
+      let written = 0;
+      while (written < bytesRead) {
+        const { bytesWritten } = await writable.handle.write(buffer, written, bytesRead - written);
+        if (bytesWritten === 0) {
+          throw new Error(`OpenShell mirror copy made no write progress: ${toRelativePath}`);
+        }
+        written += bytesWritten;
+      }
+    }
+    committed = true;
+  } finally {
+    await opened.handle.close();
+    await writable?.handle.close();
+    if (!committed) {
+      await removeRootRelative(toRoot, toRelativePath, { recursive: true, force: true }).catch(
+        () => undefined,
+      );
+    }
+  }
+}
+
+function normalizeRootRelativePath(relativePath: string): string {
+  return relativePath === "." ? "" : relativePath;
+}
+
+function getErrorCode(err: unknown): string | undefined {
+  return typeof err === "object" && err !== null && "code" in err
+    ? String((err as { code: unknown }).code)
+    : undefined;
 }
 
 function resolveProtectedSkillTarget(params: {
