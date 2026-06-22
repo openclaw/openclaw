@@ -873,17 +873,6 @@ export type ModelAuthStatusProvider =
 export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
 
-export type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
-
-export type LogEntry = {
-  raw: string;
-  time?: string | null;
-  level?: LogLevel | null;
-  subsystem?: string | null;
-  message?: string | null;
-  meta?: Record<string, unknown> | null;
-};
-
 // ── Attention ───────────────────────────────────────
 
 export type AttentionSeverity = "error" | "warning" | "info";

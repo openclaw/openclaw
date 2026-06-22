@@ -24,8 +24,6 @@ type ScrollHost = {
   settings?: {
     chatAutoScroll?: ChatAutoScrollMode;
   };
-  logsScrollFrame: number | null;
-  logsAtBottom: boolean;
   activityScrollFrame?: number | null;
   activityAutoFollow?: boolean;
   activityAtBottom?: boolean;
@@ -149,28 +147,6 @@ export function scheduleChatScroll(
   });
 }
 
-export function scheduleLogsScroll(host: ScrollHost, force = false) {
-  if (host.logsScrollFrame) {
-    cancelAnimationFrame(host.logsScrollFrame);
-  }
-  void host.updateComplete.then(() => {
-    host.logsScrollFrame = requestAnimationFrame(() => {
-      host.logsScrollFrame = null;
-      const container = queryHost(host, ".log-stream") as HTMLElement | null;
-      if (!container) {
-        return;
-      }
-      const distanceFromBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight;
-      const shouldStick = force || distanceFromBottom < 80;
-      if (!shouldStick) {
-        return;
-      }
-      container.scrollTop = container.scrollHeight;
-    });
-  });
-}
-
 export function scheduleActivityScroll(host: ScrollHost, force = false) {
   if (host.activityScrollFrame) {
     cancelAnimationFrame(host.activityScrollFrame);
@@ -242,15 +218,6 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   }
 }
 
-export function handleLogsScroll(host: ScrollHost, event: Event) {
-  const container = event.currentTarget as HTMLElement | null;
-  if (!container) {
-    return;
-  }
-  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  host.logsAtBottom = distanceFromBottom < 80;
-}
-
 export function handleActivityScroll(host: ScrollHost, event: Event) {
   const container = event.currentTarget as HTMLElement | null;
   if (!container) {
@@ -269,20 +236,6 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatNewMessagesBelow = false;
   host.chatIsProgrammaticScroll = false;
   host.chatProgrammaticScrollTarget = 0;
-}
-
-export function exportLogs(lines: string[], label: string) {
-  if (lines.length === 0) {
-    return;
-  }
-  const blob = new Blob([`${lines.join("\n")}\n`], { type: "text/plain" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
-  anchor.href = url;
-  anchor.download = `openclaw-logs-${label}-${stamp}.log`;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }
 
 export function observeTopbar(host: ScrollHost) {

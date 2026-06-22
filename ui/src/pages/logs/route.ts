@@ -4,10 +4,9 @@ import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { definePage } from "../../router/index.ts";
-import { startLogsPolling, stopLogsPolling } from "../../ui/app-polling.ts";
-import { scheduleLogsScroll } from "../../ui/app-scroll.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
-import { loadLogs } from "../../ui/controllers/logs.ts";
+import { loadLogs } from "./data.ts";
+import { startLogsPolling, stopLogsPolling } from "./polling.ts";
+import { exportLogs, handleLogsScroll, scheduleLogsScroll } from "./scroll.ts";
 
 type LogsRenderContext = RouteRenderContext;
 type LogsLoadContext = { host: SettingsHost; app: SettingsAppHost };
@@ -16,7 +15,7 @@ export const page = definePage({
   id: "logs",
   path: "/logs",
   component: () =>
-    import("../../ui/views/logs.ts").then((module) => ({
+    import("./view.ts").then((module) => ({
       render: ({ state, navigate }: LogsRenderContext) => html`
         <section class="content-header">
           <div>
@@ -42,8 +41,8 @@ export const page = definePage({
               },
               onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
               onRefresh: () => void loadLogs(state, { reset: true }),
-              onExport: (lines, label) => state.exportLogs(lines, label),
-              onScroll: (event) => state.handleLogsScroll(event),
+              onExport: (lines, label) => exportLogs(lines, label),
+              onScroll: (event) => handleLogsScroll(state, event),
             }),
             "logs",
             navigate,
@@ -57,21 +56,17 @@ export const page = definePage({
           state.logsAtBottom &&
           (changed.has("logsEntries") || changed.has("logsAutoFollow"))
         ) {
-          scheduleLogsScroll(
-            state as unknown as Parameters<typeof scheduleLogsScroll>[0],
-            changed.has("logsAutoFollow"),
-          );
+          scheduleLogsScroll(state, changed.has("logsAutoFollow"));
         }
       },
     })),
   loader: async ({ host, app }: LogsLoadContext) => {
     await loadLogs(app, { reset: true });
-    scheduleLogsScroll(host as unknown as Parameters<typeof scheduleLogsScroll>[0], true);
+    scheduleLogsScroll(host, true);
   },
   onEnter: ({ host }: LogsLoadContext) => {
-    startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
+    startLogsPolling(host);
     host.logsAtBottom = true;
   },
-  onLeave: ({ host }: LogsLoadContext) =>
-    stopLogsPolling(host as unknown as Parameters<typeof stopLogsPolling>[0]),
+  onLeave: ({ host }: LogsLoadContext) => stopLogsPolling(host),
 });

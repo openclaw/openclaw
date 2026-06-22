@@ -18,6 +18,7 @@ import {
   type ChatInputHistoryKeyResult,
 } from "../pages/chat/data.ts";
 import { loadCron as loadCronPage } from "../pages/loaders.ts";
+import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../pages/logs/data.ts";
 import { loadOverview as loadOverviewPage } from "../pages/overview/data.ts";
 import { type SkillWorkshopState } from "../pages/skill-workshop/data.ts";
 import {
@@ -33,11 +34,7 @@ import {
   handleWhatsAppStart as handleWhatsAppStartInternal,
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "./app-channels.ts";
-import {
-  DEFAULT_CRON_FORM,
-  DEFAULT_LOG_LEVEL_FILTERS,
-  DEFAULT_SESSIONS_FILTERS,
-} from "./app-defaults.ts";
+import { DEFAULT_CRON_FORM, DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -50,10 +47,8 @@ import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
 import {
-  exportLogs as exportLogsInternal,
   handleActivityScroll as handleActivityScrollInternal,
   handleChatScroll as handleChatScrollInternal,
-  handleLogsScroll as handleLogsScrollInternal,
   resetChatScroll as resetChatScrollInternal,
   scheduleActivityScroll as scheduleActivityScrollInternal,
   scheduleChatScroll as scheduleChatScrollInternal,
@@ -148,8 +143,6 @@ import type {
   CronRunLogEntry,
   CronStatus,
   HealthSummary,
-  LogEntry,
-  LogLevel,
   ModelAuthStatusResult,
   ModelCatalogEntry,
   PresenceEntry,
@@ -956,13 +949,6 @@ export class OpenClawApp extends LitElement {
     );
   }
 
-  handleLogsScroll(event: Event) {
-    handleLogsScrollInternal(
-      this as unknown as Parameters<typeof handleLogsScrollInternal>[0],
-      event,
-    );
-  }
-
   handleActivityScroll(event: Event) {
     handleActivityScrollInternal(
       this as unknown as Parameters<typeof handleActivityScrollInternal>[0],
@@ -975,10 +961,6 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof scheduleActivityScrollInternal>[0],
       force,
     );
-  }
-
-  exportLogs(lines: string[], label: string) {
-    exportLogsInternal(lines, label);
   }
 
   resetToolStream() {
