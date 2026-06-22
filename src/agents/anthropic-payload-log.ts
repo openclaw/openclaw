@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { Model } from "../llm/types.js";
+import { redactSecrets } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
@@ -56,20 +57,24 @@ function getWriter(filePath: string): PayloadLogWriter {
   return getQueuedFileWriter(writers, filePath);
 }
 
+function redactDiagnosticPayload(value: unknown): unknown {
+  return redactSecrets(sanitizeDiagnosticPayload(value));
+}
+
 function formatError(error: unknown): string | undefined {
   if (error instanceof Error) {
-    const redacted = sanitizeDiagnosticPayload(error.message);
+    const redacted = redactDiagnosticPayload(error.message);
     return typeof redacted === "string" ? redacted : error.message;
   }
   if (typeof error === "string") {
-    const redacted = sanitizeDiagnosticPayload(error);
+    const redacted = redactDiagnosticPayload(error);
     return typeof redacted === "string" ? redacted : error;
   }
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return String(error);
   }
   if (error && typeof error === "object") {
-    return safeJsonStringify(sanitizeDiagnosticPayload(error)) ?? "unknown error";
+    return safeJsonStringify(redactDiagnosticPayload(error)) ?? "unknown error";
   }
   return undefined;
 }
@@ -151,7 +156,7 @@ export function createAnthropicPayloadLogger(params: {
       const nextOnPayload = (payload: unknown) => {
         // Forward the original payload to the provider hook, but persist only
         // the redacted diagnostic copy.
-        const redactedPayload = sanitizeDiagnosticPayload(payload);
+        const redactedPayload = redactDiagnosticPayload(payload);
         record({
           ...base,
           ts: new Date().toISOString(),
@@ -187,7 +192,7 @@ export function createAnthropicPayloadLogger(params: {
       ...base,
       ts: new Date().toISOString(),
       stage: "usage",
-      usage: sanitizeDiagnosticPayload(usage) as Record<string, unknown>,
+      usage: redactDiagnosticPayload(usage) as Record<string, unknown>,
       error: errorMessage,
     });
     log.info("anthropic usage", {

@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { redactSecrets } from "../logging/redact.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
@@ -113,6 +114,10 @@ function getWriter(filePath: string): CacheTraceWriter {
   return getQueuedFileWriter(writers, filePath);
 }
 
+function redactDiagnosticPayload(value: unknown): unknown {
+  return redactSecrets(sanitizeDiagnosticPayload(value));
+}
+
 function digest(value: unknown): string {
   const serialized = stableStringify(value);
   return crypto.createHash("sha256").update(serialized).digest("hex");
@@ -156,17 +161,17 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     };
 
     if (payload.prompt !== undefined && cfg.includePrompt) {
-      event.prompt = payload.prompt;
+      event.prompt = redactDiagnosticPayload(payload.prompt) as string;
     }
     if (payload.system !== undefined && cfg.includeSystem) {
-      event.system = sanitizeDiagnosticPayload(payload.system);
+      event.system = redactDiagnosticPayload(payload.system);
       event.systemDigest = digest(payload.system);
     }
     if (payload.options) {
-      event.options = sanitizeDiagnosticPayload(payload.options) as Record<string, unknown>;
+      event.options = redactDiagnosticPayload(payload.options) as Record<string, unknown>;
     }
     if (payload.model) {
-      event.model = sanitizeDiagnosticPayload(payload.model) as Record<string, unknown>;
+      event.model = redactDiagnosticPayload(payload.model) as Record<string, unknown>;
     }
 
     const messages = payload.messages;
@@ -179,15 +184,15 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       if (cfg.includeMessages) {
         // Full messages are optional; summaries/digests are always recorded when
         // message payloads are supplied.
-        event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
+        event.messages = redactDiagnosticPayload(messages) as AgentMessage[];
       }
     }
 
     if (payload.note) {
-      event.note = payload.note;
+      event.note = redactDiagnosticPayload(payload.note) as string;
     }
     if (payload.error) {
-      event.error = payload.error;
+      event.error = redactDiagnosticPayload(payload.error) as string;
     }
 
     const line = safeJsonStringify(event);

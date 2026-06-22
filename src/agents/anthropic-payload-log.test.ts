@@ -28,6 +28,10 @@ describe("createAnthropicPayloadLogger", () => {
           authorization: "Bearer sk-secret", // pragma: allowlist secret
           content: [
             {
+              type: "text",
+              text: "debug key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx", // pragma: allowlist secret
+            },
+            {
               type: "image",
               source: { type: "base64", media_type: "image/png", data: "QUJDRA==" },
             },
@@ -57,8 +61,9 @@ describe("createAnthropicPayloadLogger", () => {
     const message = ((sanitizedPayload.messages as unknown[] | undefined) ?? []) as Array<
       Record<string, unknown>
     >;
-    const source = (((message[0]?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
-      ?.source ?? {}) as Record<string, unknown>;
+    const content = (message[0]?.content as Array<Record<string, unknown>> | undefined) ?? [];
+    const imageContent = content.find((entry) => entry.type === "image") ?? {};
+    const source = (imageContent.source ?? {}) as Record<string, unknown>;
     const metadata = (sanitizedPayload.metadata ?? {}) as Record<string, unknown>;
     expect(message[0]).not.toHaveProperty("authorization");
     expect(metadata).not.toHaveProperty("api_key");
@@ -68,6 +73,7 @@ describe("createAnthropicPayloadLogger", () => {
     expect(source.bytes).toBe(4);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("QUJDRA==").digest("hex"));
     expect(event.payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(event)).not.toContain("sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx");
   });
 
   it("sanitizes usage and error fields before writing logs", () => {
@@ -88,15 +94,17 @@ describe("createAnthropicPayloadLogger", () => {
           content: "",
           usage: {
             input: 1,
+            output: "github token ghp_AbCdEfGhIjKlMnOpQrStUvWx1234", // pragma: allowlist secret
             authorization: "Bearer sk-secret", // pragma: allowlist secret
           },
         } as never,
       ],
-      new Error("failed with Bearer sk-secret"), // pragma: allowlist secret
+      new Error("failed with pplx-AbCdEfGhIjKlMnOpQrStUvWx"), // pragma: allowlist secret
     );
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
-    expect(event.error).toBe("failed with Bearer <redacted>");
-    expect(event.usage).toEqual({ input: 1 });
+    expect(event.error).not.toContain("pplx-AbCdEfGhIjKlMnOpQrStUvWx");
+    expect(JSON.stringify(event.usage)).not.toContain("ghp_AbCdEfGhIjKlMnOpQrStUvWx1234");
+    expect(event.usage).toMatchObject({ input: 1 });
   });
 });

@@ -178,11 +178,14 @@ describe("createCacheTrace", () => {
     const { lines, trace } = createMemoryTraceForTest();
 
     trace?.recordStage("stream:context", {
+      prompt: "prompt key sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx", // pragma: allowlist secret
       system: {
         provider: { apiKey: "sk-system-secret", baseUrl: "https://api.example.com" },
+        text: "aws key AKIAIOSFODNN7EXAMPLE", // pragma: allowlist secret
       },
       model: {
         id: "test-model",
+        label: "github token ghp_AbCdEfGhIjKlMnOpQrStUvWx1234", // pragma: allowlist secret
         apiKey: "sk-model-secret",
         tokenCount: 8192,
       },
@@ -202,6 +205,7 @@ describe("createCacheTrace", () => {
           metadata: {
             secretKey: "message-secret-key",
             label: "preserve-me",
+            detail: "perplexity token pplx-AbCdEfGhIjKlMnOpQrStUvWx", // pragma: allowlist secret
           },
           content: [
             {
@@ -211,6 +215,8 @@ describe("createCacheTrace", () => {
           ],
         },
       ] as unknown as [],
+      note: "google key AIzaSyA1bC2dE3fG4hI5jK6lM7nO8pQrStUvW", // pragma: allowlist secret
+      error: "xai key xai-1234567890AbCdEfGhIjKlMnOpQrStUvWx", // pragma: allowlist secret
     });
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
@@ -218,9 +224,11 @@ describe("createCacheTrace", () => {
       provider: {
         baseUrl: "https://api.example.com",
       },
+      text: expect.not.stringContaining("AKIAIOSFODNN7EXAMPLE"),
     });
     expect(event.model).toEqual({
       id: "test-model",
+      label: expect.not.stringContaining("ghp_AbCdEfGhIjKlMnOpQrStUvWx1234"),
       tokenCount: 8192,
     });
     expect(event.options).toEqual({
@@ -256,12 +264,17 @@ describe("createCacheTrace", () => {
     expect(firstMessage?.role).toBe("user");
     expect(firstMessage?.metadata).toEqual({
       label: "preserve-me",
+      detail: expect.not.stringContaining("pplx-AbCdEfGhIjKlMnOpQrStUvWx"),
     });
     const source = (((firstMessage?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
       ?.source ?? {}) as Record<string, unknown>;
     expect(source.data).toBe("<redacted>");
     expect(source.bytes).toBe(6);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("U0VDUkVU").digest("hex"));
+    expect(event.prompt).not.toContain("sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx");
+    expect(event.note).not.toContain("AIzaSyA1bC2dE3fG4hI5jK6lM7nO8pQrStUvW");
+    expect(event.error).not.toContain("xai-1234567890AbCdEfGhIjKlMnOpQrStUvWx");
+    expect(JSON.stringify(event)).not.toContain("AKIAIOSFODNN7EXAMPLE");
   });
 
   it("handles circular references in messages without stack overflow", () => {
