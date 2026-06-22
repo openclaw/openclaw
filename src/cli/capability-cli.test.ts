@@ -1877,6 +1877,7 @@ describe("capability cli", () => {
     expect(firstJsonOutput()?.id).toBe("image.generate");
     expect(firstJsonOutput()?.flags).toEqual([
       "--prompt",
+      "--file",
       "--model",
       "--count",
       "--size",
