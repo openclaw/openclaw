@@ -154,6 +154,7 @@ import { ADMIN_SCOPE } from "../method-scopes.js";
 import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
+import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
   capArrayByJsonBytes,
@@ -3746,6 +3747,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
+      let pendingDispatchLifecycleError:
+        | {
+            endedAt: number;
+            error: string;
+            sessionId: string;
+            startedAt: number;
+          }
+        | undefined;
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: baseUserTurnInput,
         resolveInput: () => userTurnInputPromise,
@@ -4957,6 +4966,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         })
         .catch(async (err: unknown) => {
+          const errorMessage = String(err);
           const emitAfterError =
             userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
               ? Promise.resolve()
@@ -4966,7 +4976,19 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
-          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          if (
+            !agentRunStarted &&
+            !activeRunAbort.controller.signal.aborted &&
+            !context.chatAbortedRuns.has(clientRunId)
+          ) {
+            pendingDispatchLifecycleError = {
+              endedAt: Date.now(),
+              error: errorMessage,
+              sessionId: activeRunAbort.entry?.sessionId ?? backingSessionId ?? clientRunId,
+              startedAt: activeRunAbort.entry?.startedAtMs ?? now,
+            };
+          }
+          const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
             key: `chat:${clientRunId}`,
@@ -4976,7 +4998,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               payload: {
                 runId: clientRunId,
                 status: "error" as const,
-                summary: String(err),
+                summary: errorMessage,
               },
               error,
             },
@@ -4986,14 +5008,57 @@ export const chatHandlers: GatewayRequestHandlers = {
             runId: clientRunId,
             sessionKey,
             agentId,
-            errorMessage: String(err),
+            errorMessage,
           });
         })
-        .finally(() => {
+        .finally(async () => {
           activeRunAbort.cleanup();
           clearAgentRunContext(clientRunId, lifecycleGeneration);
           clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
           context.removeChatRun(clientRunId, clientRunId, sessionKey);
+          if (!pendingDispatchLifecycleError) {
+            return;
+          }
+          const hasActiveRun = hasTrackedActiveSessionRun({
+            context,
+            requestedKey: rawSessionKey,
+            canonicalKey: sessionKey,
+            ...(sessionKey === "global" && agentId ? { agentId } : {}),
+            defaultAgentId: resolveDefaultAgentId(cfg),
+          });
+          if (hasActiveRun) {
+            return;
+          }
+          const persisted = await persistGatewaySessionLifecycleEvent({
+            sessionKey,
+            ...(sessionKey === "global" && agentId ? { agentId } : {}),
+            event: {
+              runId: clientRunId,
+              sessionId: pendingDispatchLifecycleError.sessionId,
+              lifecycleGeneration,
+              ts: pendingDispatchLifecycleError.endedAt,
+              data: {
+                phase: "error",
+                startedAt: pendingDispatchLifecycleError.startedAt,
+                endedAt: pendingDispatchLifecycleError.endedAt,
+                error: pendingDispatchLifecycleError.error,
+              },
+            },
+          })
+            .then(() => true)
+            .catch((persistErr) => {
+              context.logGateway.warn(
+                `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
+              );
+              return false;
+            });
+          if (persisted) {
+            emitSessionsChanged(context, {
+              sessionKey,
+              ...(agentId ? { agentId } : {}),
+              reason: "chat.dispatch-error",
+            });
+          }
         });
     } catch (err) {
       activeRunAbort.cleanup({ force: true });
