@@ -86,7 +86,11 @@ function normalizeWsUrl(value: string): string | null {
 }
 
 /** Builds the deduplicated ordered gateway probe targets from CLI input and config. */
-export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
+export function resolveTargets(
+  cfg: OpenClawConfig,
+  explicitUrl?: string,
+  portOverride?: number,
+): GatewayStatusTarget[] {
   const targets: GatewayStatusTarget[] = [];
   const add = (t: GatewayStatusTarget) => {
     if (!targets.some((x) => x.url === t.url)) {
@@ -110,7 +114,7 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
     });
   }
 
-  const port = resolveGatewayPort(cfg);
+  const port = portOverride ?? resolveGatewayPort(cfg);
   const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   add({
     id: "localLoopback",

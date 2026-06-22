@@ -19,6 +19,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { formatHelpExamples } from "../help-format.js";
+import { parsePort } from "../shared/parse-port.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { addGatewayRunCommand } from "./run-command.js";
@@ -91,6 +92,7 @@ function loadDaemonStatusGatherModule() {
 function gatewayCallOpts(cmd: Command): Command {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option("--port <port>", "Gateway port for local loopback targeting")
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
@@ -165,6 +167,30 @@ function resolveGatewayRpcOptions<T extends { token?: string; password?: string 
     ...opts,
     token: opts.token ?? parentToken,
     password: opts.password ?? parentPassword,
+  };
+}
+
+async function applyGatewayPortConfigOverride<T extends GatewayRpcOpts & { port?: unknown }>(
+  opts: T,
+): Promise<T> {
+  if (opts.port === undefined) {
+    return opts;
+  }
+  const port = parsePort(opts.port);
+  if (port === null) {
+    throw new Error(`Invalid --port value: ${String(opts.port)}`);
+  }
+  const { readBestEffortConfig } = await loadConfigModule();
+  const cfg = await readBestEffortConfig();
+  return {
+    ...opts,
+    config: {
+      ...cfg,
+      gateway: {
+        ...cfg.gateway,
+        port,
+      },
+    },
   };
 }
 
@@ -556,7 +582,9 @@ export function registerGatewayCli(program: Command) {
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = await applyGatewayPortConfigOverride(
+              resolveGatewayRpcOptions(opts, command),
+            );
             const [
               { emitReachableGatewayAuthDiagnostic, formatHealthChannelLines },
               { styleHealthChannelLine },
@@ -728,6 +756,7 @@ export function registerGatewayCli(program: Command) {
       "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
     )
     .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--port <port>", "Gateway port for local loopback and remote probes")
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)

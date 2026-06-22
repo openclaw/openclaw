@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
     ok: true,
   })),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
+  readBestEffortConfig: vi.fn(async () => ({})),
   defaultRuntime: {
     log: vi.fn(),
     error: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock("./call.js", () => ({
   gatewayCallOpts: (cmd: Command) =>
     cmd
       .option("--url <url>", "Gateway WebSocket URL")
+      .option("--port <port>", "Gateway port")
       .option("--token <token>", "Gateway token")
       .option("--password <password>", "Gateway password")
       .option("--timeout <ms>", "Timeout in ms", "10000")
@@ -72,7 +74,7 @@ vi.mock("../../commands/health.js", () => ({
 }));
 
 vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
-  readBestEffortConfig: async () => ({}),
+  readBestEffortConfig: () => mocks.readBestEffortConfig(),
   readSourceConfigBestEffort: async () => ({}),
 }));
 
@@ -147,9 +149,29 @@ describe("gateway register option collisions", () => {
     defaultRuntime.writeStdout.mockClear();
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
+    mocks.readBestEffortConfig.mockClear();
+    mocks.readBestEffortConfig.mockResolvedValue({});
   });
 
   it.each([
+    {
+      name: "registers gateway health --port so the flag is no longer rejected",
+      argv: ["gateway", "health", "--json"],
+      assert: () => {
+        const gateway = sharedProgram.commands.find((command) => command.name() === "gateway");
+        const health = gateway?.commands.find((command) => command.name() === "health");
+        expect(health?.options.some((option) => option.long === "--port")).toBe(true);
+      },
+    },
+    {
+      name: "accepts gateway probe --port and forwards it to status probing",
+      argv: ["gateway", "probe", "--port", "19001", "--json"],
+      assert: () => {
+        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+        const [opts] = firstGatewayStatusCall();
+        expect((opts as { port?: string } | undefined)?.port).toBe("19001");
+      },
+    },
     {
       name: "forwards --token to gateway call when parent and child option names collide",
       argv: ["gateway", "call", "health", "--token", "tok_call", "--json"],
