@@ -1157,6 +1157,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Shared GPT-5-family prompt overlay applied to matching model ids across providers such as OpenAI, OpenRouter, OpenCode, Codex, and compatible gateways.",
   "agents.defaults.promptOverlays.gpt5.personality":
     'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
+  "agents.defaults.experimental.sessionFamilyCarryover":
+    "Experimental opt-in for embedded-agent prompts to prepend one compaction summary from reset-family transcripts when the active session has no summary. Default: false. Enabling this may send archived reset context to the selected model provider.",
   "agents.defaults.envelopeTimezone":
     'Timezone for message envelopes ("utc", "local", "user", or an IANA timezone string).',
   "agents.defaults.envelopeTimestamp":

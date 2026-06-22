@@ -214,6 +214,7 @@ export function installSessionFamilyCarryoverContextTransform(params: {
 
 export function shouldInstallSessionFamilyCarryoverContextTransform(params: {
   isRawModelRun: boolean;
+  enabled: boolean;
 }): boolean {
-  return !params.isRawModelRun;
+  return params.enabled && !params.isRawModelRun;
 }

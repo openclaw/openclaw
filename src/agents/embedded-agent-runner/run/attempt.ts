@@ -2575,7 +2575,12 @@ export async function runEmbeddedAttempt(
         activeSession.agent.convertToLlm = async (messages) =>
           await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()));
       }
-      if (shouldInstallSessionFamilyCarryoverContextTransform({ isRawModelRun })) {
+      if (
+        shouldInstallSessionFamilyCarryoverContextTransform({
+          isRawModelRun,
+          enabled: params.config?.agents?.defaults?.experimental?.sessionFamilyCarryover === true,
+        })
+      ) {
         installSessionFamilyCarryoverContextTransform({
           messages: activeSession.messages,
           getTransformContext: () => activeSession.agent.transformContext,

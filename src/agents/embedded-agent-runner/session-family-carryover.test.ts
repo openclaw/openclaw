@@ -324,7 +324,7 @@ describe("session family carryover", () => {
       ]);
     }
 
-    const archiveHeavyAncestorId = ancestorSessionIds[5]!;
+    const archiveHeavyAncestorId = ancestorSessionIds[5];
     for (let index = 0; index < 35; index += 1) {
       writeTranscript(
         path.join(
@@ -510,11 +510,23 @@ describe("session family carryover", () => {
   });
 
   it("keeps reset-family carryover out of raw model runs", () => {
-    expect(shouldInstallSessionFamilyCarryoverContextTransform({ isRawModelRun: true })).toBe(
-      false,
-    );
-    expect(shouldInstallSessionFamilyCarryoverContextTransform({ isRawModelRun: false })).toBe(
-      true,
-    );
+    expect(
+      shouldInstallSessionFamilyCarryoverContextTransform({
+        isRawModelRun: false,
+        enabled: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldInstallSessionFamilyCarryoverContextTransform({
+        isRawModelRun: true,
+        enabled: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldInstallSessionFamilyCarryoverContextTransform({
+        isRawModelRun: false,
+        enabled: true,
+      }),
+    ).toBe(true);
   });
 });
