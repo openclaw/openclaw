@@ -13,7 +13,14 @@ const NATIVE_KIMI_TOOL_CALL_ID_RE = /^functions\.[A-Za-z0-9_-]+:\d+$/;
 const OPENAI_TOOL_CALL_ID_RE = /^call_[A-Za-z0-9_-]+$/;
 
 const STRICT9_LEN = 9;
-const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 type ToolCallLike = {
   id: string;
@@ -411,11 +418,7 @@ function rewriteAssistantToolCallIds(params: {
     const rec = block as { type?: unknown; id?: unknown };
     const type = rec.type;
     const id = rec.id;
-    if (
-      (type !== "functionCall" && type !== "toolUse" && type !== "toolCall") ||
-      typeof id !== "string" ||
-      !id
-    ) {
+    if (typeof type !== "string" || !TOOL_CALL_TYPES.has(type) || typeof id !== "string" || !id) {
       return block;
     }
     const nextId = params.resolveId(id);
@@ -451,7 +454,33 @@ function rewriteToolResultIds(params: {
   const nextToolUseId =
     sharedResolvedId ?? (toolUseIdStr ? params.resolveId(toolUseIdStr) : undefined);
 
-  if (nextToolCallId === toolCallId && nextToolUseId === toolUseIdStr) {
+  // Also handle snake_case tool result ID fields (tool_call_id, tool_use_id)
+  // so that replay messages from OpenAI-responses are fully sanitized.
+  // Avoid duplicate resolveId calls when the same value is in both formats.
+  const toolCallIdSnake = (params.message as { tool_call_id?: unknown }).tool_call_id;
+  const toolCallIdSnakeStr =
+    typeof toolCallIdSnake === "string" && toolCallIdSnake ? toolCallIdSnake : undefined;
+  const toolUseIdSnake = (params.message as { tool_use_id?: unknown }).tool_use_id;
+  const toolUseIdSnakeStr =
+    typeof toolUseIdSnake === "string" && toolUseIdSnake ? toolUseIdSnake : undefined;
+
+  const nextToolCallIdSnake = toolCallIdSnakeStr
+    ? toolCallIdSnakeStr === toolCallId
+      ? nextToolCallId
+      : params.resolveId(toolCallIdSnakeStr)
+    : undefined;
+  const nextToolUseIdSnake = toolUseIdSnakeStr
+    ? toolUseIdSnakeStr === toolUseIdStr
+      ? nextToolUseId
+      : params.resolveId(toolUseIdSnakeStr)
+    : undefined;
+
+  if (
+    nextToolCallId === toolCallId &&
+    nextToolUseId === toolUseIdStr &&
+    nextToolCallIdSnake === toolCallIdSnakeStr &&
+    nextToolUseIdSnake === toolUseIdSnakeStr
+  ) {
     return params.message;
   }
 
@@ -459,6 +488,8 @@ function rewriteToolResultIds(params: {
     ...params.message,
     ...(nextToolCallId && { toolCallId: nextToolCallId }),
     ...(nextToolUseId && { toolUseId: nextToolUseId }),
+    ...(nextToolCallIdSnake && { tool_call_id: nextToolCallIdSnake }),
+    ...(nextToolUseIdSnake && { tool_use_id: nextToolUseIdSnake }),
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 

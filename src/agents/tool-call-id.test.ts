@@ -360,6 +360,58 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       ).toBe("call123fc123");
     });
 
+    it("rewrites composite call_XXX|fc_YYY ids with snake_case tool_use type (#95623)", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call_abc123|fc_456", name: "read", input: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_abc123|fc_456",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
+      expect(out).not.toBe(input);
+      expectSingleToolCallRewrite(out, "callabc123fc456", "strict");
+    });
+
+    it("rewrites snake_case tool_result fields alongside camelCase (#95623)", () => {
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "call_a1b2c3|fc_d4e5f6", name: "read", input: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_a1b2c3|fc_d4e5f6",
+          tool_call_id: "call_a1b2c3|fc_d4e5f6",
+          toolUseId: "call_a1b2c3|fc_d4e5f6",
+          tool_use_id: "call_a1b2c3|fc_d4e5f6",
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict");
+      expect(out).not.toBe(input);
+      const assistant = out[0] as Extract<AgentMessage, { role: "assistant" }>;
+      const toolBlock = assistant.content?.[0] as { id?: string };
+      const expectedId = "calla1b2c3fcd4e5f6";
+      expect(toolBlock.id).toBe(expectedId);
+      const result = out[1] as Extract<AgentMessage, { role: "toolResult" }> & {
+        tool_call_id?: string;
+        tool_use_id?: string;
+      };
+      expect(result.toolCallId).toBe(expectedId);
+      expect(result.tool_call_id).toBe(expectedId);
+      expect(result.toolUseId).toBe(expectedId);
+      expect(result.tool_use_id).toBe(expectedId);
+    });
+
     it("preserves replay-safe signed-thinking tool ids when requested", () => {
       const input = castAgentMessages([
         {
