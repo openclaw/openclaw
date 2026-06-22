@@ -258,3 +258,16 @@ USER node
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "const p=process.env.PORT||18789;fetch('http://127.0.0.1:'+p+'/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 CMD ["sh", "-c", "exec node --max-old-space-size=4096 openclaw.mjs gateway --bind lan --port ${PORT:-18789} --allow-unconfigured"]
+
+# >>> railway-volume-perms >>>
+# Railway mounts persistent volumes ROOT-OWNED, but OpenClaw runs as the node
+# user, so it cannot create its workspace under the mounted state dir (EACCES on
+# /home/node/.openclaw/workspace) and heartbeats/memory/sessions fail. The
+# entrypoint starts as root, chowns the mounted volume, then drops to node.
+# This block intentionally overrides the USER/CMD above; do not add USER node.
+USER root
+COPY scripts/railway-entrypoint.sh /usr/local/bin/railway-entrypoint.sh
+RUN chmod +x /usr/local/bin/railway-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/railway-entrypoint.sh"]
+CMD []
+# <<< railway-volume-perms <<<
