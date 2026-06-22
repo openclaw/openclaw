@@ -134,7 +134,10 @@ vi.mock("../agents/subagent-control.js", () => ({
 
 vi.mock("../utils/message-channel.js", () => ({
   isDeliverableMessageChannel: (channel: string) =>
-    channel === "notifychat" || channel === "guildchat" || channel === "discord",
+    channel === "notifychat" ||
+    channel === "guildchat" ||
+    channel === "discord" ||
+    channel === "telegram",
 }));
 
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
@@ -1541,6 +1544,64 @@ describe("task-registry", () => {
         expect.stringContaining("Background task ready for review: ACP background task"),
       ]);
       expect(hasPendingHeartbeatWake()).toBe(true);
+    });
+  });
+
+  it("delivers group topic task state changes directly while terminal completion stays parent-routed", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:42",
+        via: "direct",
+      });
+      const ownerKey = "agent:main:telegram:group:-1001234567890:topic:42";
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey,
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:42",
+          threadId: 42,
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-topic-state-change",
+        task: "Investigate topic acknowledgement",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "state_changes",
+        startedAt: 100,
+      });
+
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
+      expectRecordFields(sentMessageCall(), {
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:42",
+        threadId: 42,
+        content: "Background task started: ACP background task (run run-topi).",
+      });
+      expect(peekSystemEvents(ownerKey)).toStrictEqual([]);
+
+      emitAgentEvent({
+        runId: task.runId!,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() =>
+        expectRecordFields(requireTaskByRunId("run-topic-state-change"), {
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(peekSystemEvents(ownerKey)).toEqual([
+        expect.stringContaining("Background task ready for review: ACP background task"),
+      ]);
     });
   });
 

@@ -835,6 +835,7 @@ function dispatchAgentRunFromGateway(params: {
   ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
   runId: string;
   trackingSessionKey?: string;
+  requesterOrigin?: DeliveryContext;
   dedupeKeys: readonly string[];
   /**
    * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
@@ -853,12 +854,14 @@ function dispatchAgentRunFromGateway(params: {
     try {
       const trackingSessionKey = params.trackingSessionKey?.trim() || params.ingressOpts.sessionKey;
       const now = Date.now();
-      const requesterOrigin = normalizeDeliveryContext({
-        channel: params.ingressOpts.channel,
-        to: params.ingressOpts.to,
-        accountId: params.ingressOpts.accountId,
-        threadId: params.ingressOpts.threadId,
-      });
+      const requesterOrigin =
+        normalizeDeliveryContext(params.requesterOrigin) ??
+        normalizeDeliveryContext({
+          channel: params.ingressOpts.channel,
+          to: params.ingressOpts.to,
+          accountId: params.ingressOpts.accountId,
+          threadId: params.ingressOpts.threadId,
+        });
       taskTracked = Boolean(
         createRunningTaskRun({
           runtime: "cli",
@@ -2643,6 +2646,12 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
+          const requesterOrigin = normalizeDeliveryContext({
+            channel: turnSourceChannel ?? resolvedChannel,
+            to: turnSourceTo ?? resolvedTo,
+            accountId: turnSourceAccountId ?? resolvedAccountId,
+            threadId: explicitThreadId ?? resolvedThreadId,
+          });
 
           dispatchAgentRunFromGateway({
             ingressOpts: {
@@ -2731,6 +2740,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             },
             runId,
             trackingSessionKey: requestedSessionKeyRaw,
+            requesterOrigin,
             dedupeKeys: agentDedupeKeys,
             abortController: activeRunAbort.controller,
             cleanupAbortController: activeRunAbort.cleanup,

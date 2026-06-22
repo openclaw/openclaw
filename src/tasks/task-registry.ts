@@ -1274,6 +1274,10 @@ function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   return canDeliverToRequesterOrigin(owner.requesterOrigin);
 }
 
+function canDeliverTaskStateChangeToRequesterOrigin(task: TaskRecord): boolean {
+  return canDeliverToRequesterOrigin(resolveTaskDeliveryOwner(task).requesterOrigin);
+}
+
 function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"]): boolean {
   const channel = origin?.channel?.trim();
   const to = origin?.to?.trim();
@@ -1493,7 +1497,7 @@ export async function maybeDeliverTaskStateChangeUpdate(
         lastEventAt: Date.now(),
       });
     }
-    if (!canDeliverTaskToRequesterOrigin(current)) {
+    if (!canDeliverTaskStateChangeToRequesterOrigin(current)) {
       queueTaskSystemEvent(current, eventText);
       const nextDeliveryState = buildTaskDeliveryNotificationState({
         taskId,

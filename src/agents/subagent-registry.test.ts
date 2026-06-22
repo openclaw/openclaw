@@ -360,6 +360,36 @@ describe("subagent registry seam flow", () => {
     ]);
   });
 
+  it("keeps requester-origin subagent task state changes deliverable when terminal completion is suppressed", async () => {
+    const { findTaskByRunId, resetTaskRegistryForTests } =
+      await import("../tasks/task-registry.js");
+    resetTaskRegistryForTests();
+
+    mod.registerSubagentRun({
+      runId: "run-topic-start-ack",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+      requesterDisplayKey: "agent:main:telegram:group:-1001234567890:topic:42",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:42",
+        threadId: 42,
+      },
+      task: "visible topic task",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+
+    expectRecordFields(
+      findTaskByRunId("run-topic-start-ack"),
+      {
+        deliveryStatus: "pending",
+        notifyPolicy: "state_changes",
+      },
+      "registered task",
+    );
+  });
+
   it("schedules orphan recovery instead of terminally failing on recoverable wait transport errors", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {

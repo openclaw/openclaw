@@ -695,7 +695,13 @@ export function createSubagentRunManager(params: {
         agentId: registerParams.agentId,
         requesterAgentId: registerParams.requesterAgentId,
         deliveryStatus:
-          registerParams.expectsCompletionMessage === false ? "not_applicable" : "pending",
+          registerParams.expectsCompletionMessage === false && !requesterOrigin
+            ? "not_applicable"
+            : "pending",
+        notifyPolicy:
+          registerParams.expectsCompletionMessage === false && requesterOrigin
+            ? "state_changes"
+            : undefined,
         startedAt: now,
         lastEventAt: now,
       });

@@ -28,6 +28,10 @@ const agentIngressMocks = vi.hoisted(() => ({
   agentCommandFromIngress: vi.fn(async () => ({ ok: true })),
 }));
 
+const taskRuntimeMocks = vi.hoisted(() => ({
+  createRunningTaskRun: vi.fn(),
+}));
+
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: configMocks.getRuntimeConfig,
 }));
@@ -41,7 +45,7 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 vi.mock("../../tasks/detached-task-runtime.js", () => ({
-  createRunningTaskRun: vi.fn(),
+  createRunningTaskRun: taskRuntimeMocks.createRunningTaskRun,
 }));
 
 import { agentHandlers } from "./agent.js";
@@ -62,6 +66,11 @@ describe("agent handler session create events", () => {
     configMocks.getRuntimeConfig.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockClear();
     agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
+    taskRuntimeMocks.createRunningTaskRun.mockReset().mockReturnValue({
+      taskId: "task-created",
+      runtime: "cli",
+      status: "running",
+    });
     await fs.writeFile(storePath, "{}\n", "utf8");
   });
 
@@ -123,6 +132,55 @@ describe("agent handler session create events", () => {
         expect(call?.[3]).toEqual({ dropIfSlow: true });
       },
       { timeout: 2_000, interval: 5 },
+    );
+  });
+
+  it("tracks Telegram topic agent turns with requester origin even when final delivery is off", async () => {
+    const respond = vi.fn();
+
+    await agentHandlers.agent({
+      params: {
+        message: "topic work",
+        agentId: "main",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+        channel: "telegram",
+        to: "telegram:-1001234567890:topic:42",
+        threadId: "42",
+        deliver: false,
+        idempotencyKey: "idem-topic-start-ack",
+      },
+      respond,
+      context: {
+        dedupe: new Map(),
+        deps: {} as never,
+        logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
+        chatAbortControllers: new Map(),
+        addChatRun: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        getRuntimeConfig: configMocks.getRuntimeConfig,
+        getSessionEventSubscriberConnIds: () => new Set(),
+        broadcastToConnIds: vi.fn(),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+      req: { id: "req-topic-start-ack" } as never,
+    });
+
+    await vi.waitFor(() => {
+      expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalled();
+    });
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtime: "cli",
+        sourceId: "idem-topic-start-ack",
+        ownerKey: "agent:main:telegram:group:-1001234567890:topic:42",
+        requesterOrigin: {
+          channel: "telegram",
+          to: "telegram:-1001234567890:topic:42",
+          threadId: "42",
+        },
+        deliveryStatus: "pending",
+      }),
     );
   });
 });
