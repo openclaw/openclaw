@@ -240,7 +240,13 @@ export function buildGroupChatContext(params: {
   const botUsername = normalizeOptionalString(params.sessionCtx.BotUsername);
 
   const lines: string[] = [];
-  lines.push(`You are in a ${providerLabel} group chat.`);
+  // Declare the venue by its authoritative ChatType. "group chat" is overloaded
+  // (the `group` enum value *and* a loose adjective), so calling a `channel` a
+  // "group chat" here contradicts the trusted `chat_type: channel` meta and makes
+  // agents emit `group` for public/private channels (#95645).
+  const chatType = normalizeOptionalLowercaseString(params.sessionCtx.ChatType);
+  const venueNoun = chatType === "channel" ? "channel" : "group chat";
+  lines.push(`You are in a ${providerLabel} ${venueNoun}.`);
   if (params.sessionCtx.ExplicitlyMentionedBot === true && botUsername) {
     lines.push(
       `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`,
