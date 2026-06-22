@@ -76,7 +76,7 @@ describe("ci workflow guards", () => {
     );
     expect(validationStep.run).toContain("release_gate must run from the branch at target_ref");
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
-      "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
+      "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || (steps.head_scope.outputs.empty_head_commit != 'true' && (steps.changed_scope.outputs.run_android || 'false')) }}",
     );
   });
 
@@ -99,6 +99,21 @@ describe("ci workflow guards", () => {
     expect(action).toContain("docs_changed=false");
     expect(action).toContain("test/fixtures/*)");
     expect(action).toContain("docs/* | *.md | *.mdx)");
+  });
+
+  it("skips the matrix for empty pull-request head commits", () => {
+    const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
+    const workflow = readCiWorkflow();
+    const preflightSteps = workflow.jobs.preflight.steps;
+    const headScope = preflightSteps.find((step) => step.name === "Detect empty head commit");
+
+    expect(headScope.if).toBe("github.event_name == 'pull_request'");
+    expect(headScope.env.PR_NUMBER).toBe("${{ github.event.pull_request.number }}");
+    expect(headScope.run).toContain("refs/pull/${PR_NUMBER}/head");
+    expect(headScope.run).toContain('git diff --quiet "${PR_HEAD}^" "$PR_HEAD"');
+    expect(headScope.run).toContain("empty_head_commit=true");
+    expect(workflowSource).toContain("OPENCLAW_CI_EMPTY_HEAD_COMMIT");
+    expect(workflowSource).toContain("!emptyHeadCommit && parseBoolean");
   });
 
   it("runs the session accessor ratchet as a visible additional check", () => {
