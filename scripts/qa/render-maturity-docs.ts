@@ -305,7 +305,17 @@ function ltsText(lts?: QaMaturityScoreSurfaceLts): string {
   if (!lts || typeof lts !== "object") {
     return "unscored";
   }
-  return `${lts.status ?? "unknown"} (${lts.supported_categories ?? 0}/${lts.total_categories ?? 0})`;
+  const supportedCategories = lts.supported_categories ?? 0;
+  if (lts.status === "full") {
+    return `full (${supportedCategories})`;
+  }
+  if (lts.status === "partial") {
+    return `partial (${supportedCategories})`;
+  }
+  if (lts.status === "none") {
+    return "none";
+  }
+  return lts.status ?? "unknown";
 }
 
 function renderScoreBands(): string[] {
