@@ -12,7 +12,7 @@ import {
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
   parseAgentSessionKey,
-} from "./session-key.ts";
+} from "../lib/session-key.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;

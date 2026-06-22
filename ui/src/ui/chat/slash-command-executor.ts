@@ -7,6 +7,7 @@ import {
   formatFastModeCommandOptions,
   formatFastModeCurrentStatus,
 } from "../../../../src/shared/fast-mode.js";
+import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../../lib/session-key.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -17,7 +18,6 @@ import {
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../session-key.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import {
   formatThinkingLevels,

@@ -18,6 +18,12 @@ import {
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import {
+  isSessionKeyTiedToAgent,
+  normalizeAgentId,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../lib/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatCommands } from "../pages/chat/data.ts";
@@ -32,15 +38,9 @@ import {
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { renderChatSessionSelect } from "./chat/session-controls.ts";
-import { icons } from "./icons.ts";
 import "../components/dashboard-header.ts";
+import { icons } from "./icons.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
-import {
-  isSessionKeyTiedToAgent,
-  normalizeAgentId,
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-} from "./session-key.ts";
 import type { GatewaySessionRow } from "./types.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";

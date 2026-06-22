@@ -5,6 +5,7 @@ import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/cont
 import { appRouter, createApplicationContext, type ApplicationContext } from "../app-routes.ts";
 import { createRouterOutletSnapshot } from "../app/router-outlet.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
+import { resolveAgentIdFromSessionKey } from "../lib/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import {
@@ -121,7 +122,6 @@ import {
   restoreNativeTitleTooltip,
 } from "./dom-tooltips.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
-import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
 import {
   loadLocalUserIdentity,

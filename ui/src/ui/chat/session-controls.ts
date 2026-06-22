@@ -5,6 +5,16 @@ import { pathForRoute, type RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import {
+  areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
+  canArchiveSessionRow,
+  isSessionKeyTiedToAgent,
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
+} from "../../lib/session-key.ts";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
@@ -26,16 +36,6 @@ import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { collectQuotaWindowsFromAuthStatus, formatQuotaReset } from "../provider-quota-summary.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../session-display.ts";
-import {
-  areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
-  canArchiveSessionRow,
-  isSessionKeyTiedToAgent,
-  isSubagentSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-} from "../session-key.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import {
   formatInheritedThinkingLabel,

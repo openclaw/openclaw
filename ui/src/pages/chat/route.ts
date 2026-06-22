@@ -2,6 +2,12 @@ import { guard } from "lit/directives/guard.js";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { i18n } from "../../i18n/index.ts";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../../lib/session-key.ts";
 import { definePage } from "../../router/index.ts";
 import {
   createChatSession,
@@ -13,12 +19,6 @@ import {
 } from "../../ui/app-render.helpers.ts";
 import { scheduleChatScroll } from "../../ui/app-scroll.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import {
-  buildAgentMainSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveUiSelectedGlobalAgentId,
-} from "../../ui/session-key.ts";
 import { loadLocalAssistantIdentity } from "../../ui/storage.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import { loadChatPage } from "../loaders.ts";

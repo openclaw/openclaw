@@ -1,5 +1,6 @@
 // Control UI controller manages agents gateway state.
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import { resolveAgentIdFromSessionKey } from "../../lib/session-key.ts";
 import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
@@ -9,7 +10,6 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../ui/controllers/scope-errors.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import { resolveAgentIdFromSessionKey } from "../../ui/session-key.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,

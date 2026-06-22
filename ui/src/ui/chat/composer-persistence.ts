@@ -1,6 +1,6 @@
+import { DEFAULT_AGENT_ID, normalizeAgentId, parseAgentSessionKey } from "../../lib/session-key.ts";
 // Control UI chat module implements composer persistence behavior.
 import { getSafeSessionStorage } from "../../local-storage.ts";
-import { DEFAULT_AGENT_ID, normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import type { ChatAttachment, ChatQueueItem, ChatQueueSkillWorkshopRevision } from "../ui-types.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 

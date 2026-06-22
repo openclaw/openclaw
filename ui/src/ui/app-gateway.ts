@@ -6,6 +6,16 @@ import {
 } from "../../../src/gateway/events.js";
 import { appRouter, getVisibleRouteId, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
+import {
+  areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiSelectedGlobalAgentId,
+} from "../lib/session-key.ts";
 import { loadAgents, type AgentsState } from "../pages/agents/data.ts";
 import {
   clearPendingQueueItemsForRun,
@@ -81,16 +91,6 @@ import {
   type GatewayHelloOk,
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
-import {
-  areUiSessionKeysEquivalent,
-  buildAgentMainSessionKey,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveUiDefaultAgentId,
-  resolveUiGlobalAliasAgentId,
-  resolveUiSelectedGlobalAgentId,
-} from "./session-key.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,

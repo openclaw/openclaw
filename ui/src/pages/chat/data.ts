@@ -1,5 +1,16 @@
 import { normalizeBasePath } from "../../app-routes.ts";
 import {
+  areUiSessionKeysEquivalent,
+  DEFAULT_AGENT_ID,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiKnownSelectedGlobalAgentId,
+  resolveUiSelectedGlobalAgentId,
+} from "../../lib/session-key.ts";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
@@ -56,17 +67,6 @@ import {
   type GatewayBrowserClient,
   type GatewayHelloOk,
 } from "../../ui/gateway.ts";
-import {
-  areUiSessionKeysEquivalent,
-  DEFAULT_AGENT_ID,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveUiDefaultAgentId,
-  resolveUiGlobalAliasAgentId,
-  resolveUiKnownSelectedGlobalAgentId,
-  resolveUiSelectedGlobalAgentId,
-} from "../../ui/session-key.ts";
 import { isSessionRunActive } from "../../ui/session-run-state.ts";
 import type {
   AgentsListResult,
