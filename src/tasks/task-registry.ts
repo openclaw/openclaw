@@ -1523,42 +1523,6 @@ export async function maybeDeliverTaskStateChangeUpdate(
   }
 }
 
-export function setTaskProgressById(params: {
-  taskId: string;
-  progressSummary?: string | null;
-  lastEventAt?: number;
-}): TaskRecord | null {
-  ensureTaskRegistryReady();
-  const patch: Partial<TaskRecord> = {};
-  if (params.progressSummary !== undefined) {
-    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
-  }
-  if (params.lastEventAt != null) {
-    patch.lastEventAt = params.lastEventAt;
-  }
-  return updateTask(params.taskId, patch);
-}
-
-export function setTaskTimingById(params: {
-  taskId: string;
-  startedAt?: number;
-  endedAt?: number;
-  lastEventAt?: number;
-}): TaskRecord | null {
-  ensureTaskRegistryReady();
-  const patch: Partial<TaskRecord> = {};
-  if (params.startedAt != null) {
-    patch.startedAt = params.startedAt;
-  }
-  if (params.endedAt != null) {
-    patch.endedAt = params.endedAt;
-  }
-  if (params.lastEventAt != null) {
-    patch.lastEventAt = params.lastEventAt;
-  }
-  return updateTask(params.taskId, patch);
-}
-
 export function setTaskCleanupAfterById(params: {
   taskId: string;
   cleanupAfter: number;
@@ -2012,22 +1976,6 @@ export function recordTaskProgressByRunId(params: {
     progressSummary: params.progressSummary,
     eventSummary: params.eventSummary,
   });
-}
-
-export function markTaskTerminalByRunId(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
-  startedAt?: number;
-  endedAt: number;
-  lastEventAt?: number;
-  error?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  terminalOutcome?: TaskTerminalOutcome | null;
-}) {
-  return finalizeTaskRunByRunId(params);
 }
 
 export function finalizeTaskRunByRunId(params: {
