@@ -4,6 +4,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { pathForRoute, type RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
+import { isCronSessionKey, resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -35,7 +36,6 @@ import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { collectQuotaWindowsFromAuthStatus, formatQuotaReset } from "../provider-quota-summary.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
-import { isCronSessionKey, resolveSessionDisplayName } from "../session-display.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import {
   formatInheritedThinkingLabel,

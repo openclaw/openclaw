@@ -6,6 +6,7 @@ import type { RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../../lib/format.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { isMonitoredAuthProvider } from "../../ui/model-auth-helpers.ts";
 import { formatNextRun } from "../../ui/presenter.ts";
 import {
@@ -13,7 +14,6 @@ import {
   formatQuotaReset,
   type QuotaWindowSummary,
 } from "../../ui/provider-quota-summary.ts";
-import { resolveSessionDisplayName } from "../../ui/session-display.ts";
 import type {
   SessionsUsageResult,
   SessionsListResult,
