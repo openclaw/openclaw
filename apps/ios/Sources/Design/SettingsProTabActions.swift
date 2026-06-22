@@ -426,15 +426,30 @@ extension SettingsProTab {
             self.openNotificationSettings()
             return
         }
+        guard self.notificationStatus == .notSet else { return }
 
+        if PushBuildConfig.current.usesOpenClawHostedRelay {
+            self.showNotificationRelayDisclosure = true
+            return
+        }
+        self.requestNotificationAuthorizationFromSettings()
+    }
+
+    func requestNotificationAuthorizationFromSettings() {
+        guard !self.isRequestingNotificationAuthorization else { return }
+        self.isRequestingNotificationAuthorization = true
         Task {
             let granted = await (try? UNUserNotificationCenter.current().requestAuthorization(options: [
                 .alert,
                 .badge,
                 .sound,
             ])) ?? false
+            let settings = await UNUserNotificationCenter.current().notificationSettings()
             await MainActor.run {
-                self.notificationStatus = granted ? .allowed : .notAllowed
+                self.isRequestingNotificationAuthorization = false
+                self.notificationStatus = SettingsNotificationStatus(settings.authorizationStatus)
+                guard granted, self.notificationStatus.allowsNotifications else { return }
+                UIApplication.shared.registerForRemoteNotifications()
             }
         }
     }
@@ -661,6 +676,9 @@ extension SettingsProTab {
         if self.appModel.isAppleReviewDemoModeEnabled {
             return "Live gateway requests are disabled in demo mode."
         }
+        if self.notificationsNeedAttention {
+            return "Foreground approvals still appear while OpenClaw is connected."
+        }
         return self.gatewayConnected ? "Gateway requests will appear here." : "Connect to the gateway."
     }
 
@@ -700,7 +718,19 @@ extension SettingsProTab {
     }
 
     var approvalsDetail: String {
-        self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
+        if self.notificationsNeedAttention {
+            return self.pendingApproval == nil ? "Notifications off" : "1 waiting, notifications off"
+        }
+        return self.pendingApproval == nil ? "No approvals waiting" : "1 request waiting"
+    }
+
+    var notificationsNeedAttention: Bool {
+        switch self.notificationStatus {
+        case .allowed, .checking:
+            false
+        case .notAllowed, .notSet, .unknown:
+            true
+        }
     }
 
     var approvalItems: [SettingsApprovalItem] {
@@ -770,5 +800,34 @@ extension SettingsProTab {
 
     var notificationActionText: String {
         self.notificationStatus.actionTitle
+    }
+
+    var notificationStatusDetail: String {
+        switch self.notificationStatus {
+        case .checking:
+            "Checking iOS notification permission."
+        case .allowed:
+            "OpenClaw can show approval prompts and event alerts when the app is not active."
+        case .notAllowed:
+            "Notifications have been denied. Enable them in iOS Settings."
+        case .notSet:
+            "Enable notifications to receive approval prompts and event alerts outside the app."
+        case .unknown:
+            "OpenClaw cannot determine the current notification permission state."
+        }
+    }
+
+    var notificationRelayDetail: String {
+        if PushBuildConfig.current.usesOpenClawHostedRelay {
+            return """
+            This build uses OpenClaw's hosted push relay at ios-push-relay.openclaw.ai for notification \
+            delivery data.
+            """
+        }
+        return "This build is not configured to use OpenClaw's hosted push relay."
+    }
+
+    var notificationRelayDisclosureMessage: String {
+        "Enabling this sends delivery data through OpenClaw's hosted push relay."
     }
 }
