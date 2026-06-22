@@ -4480,7 +4480,7 @@ async function migrateLegacyMemoryStore(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
-  const { detected } = params;
+  const { detected, now } = params;
 
   if (!detected.memoryStore.hasLegacy) {
     return { changes, warnings };
@@ -4498,7 +4498,8 @@ async function migrateLegacyMemoryStore(params: {
   if (targetExists) {
     try {
       // Use same agent DB opening logic as runtime
-      const db = requireNodeSqlite().Database.open(targetPath);
+      const sqlite = requireNodeSqlite();
+      const db = new sqlite.DatabaseSync(targetPath);
       const result = db.prepare("SELECT COUNT(*) as count FROM memory_index_chunks").get() as {
         count: number;
       };
@@ -4516,8 +4517,9 @@ async function migrateLegacyMemoryStore(params: {
 
   try {
     // Verify legacy schema exists (meta, files, chunks)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const checkLegacySchema = (db: any): boolean => {
+    const sqlite = requireNodeSqlite();
+
+    const checkLegacySchema = (db: typeof sqlite.DatabaseSync.prototype): boolean => {
       const hasMeta =
         db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get() !=
         null;
@@ -4530,7 +4532,7 @@ async function migrateLegacyMemoryStore(params: {
       return hasMeta && hasFiles && hasChunks;
     };
 
-    const legacyDb = requireNodeSqlite().Database.open(legacyPath, { readonly: true });
+    const legacyDb = new sqlite.DatabaseSync(legacyPath, { readOnly: true });
     if (!checkLegacySchema(legacyDb)) {
       warnings.push(
         `Legacy memory store at ${legacyPath} does not have expected schema (meta, files, chunks). Skipping migration.`,
@@ -4551,7 +4553,7 @@ async function migrateLegacyMemoryStore(params: {
     fs.copyFileSync(legacyPath, targetPath);
 
     // Open target for in-place migration
-    const db = requireNodeSqlite().Database.open(targetPath);
+    const db = new sqlite.DatabaseSync(targetPath);
 
     // Begin transaction
     db.exec("SAVEPOINT migrate_legacy_memory_index_tables");
