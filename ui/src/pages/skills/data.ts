@@ -1,15 +1,15 @@
-// Control UI controller manages skills gateway state.
+// Control UI page data owns skills gateway state.
 import {
   ClawHubTrustErrorCodes,
   readClawHubTrustErrorDetails,
 } from "../../../../packages/gateway-protocol/src/clawhub-trust-error-details.js";
-import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import type {
   AgentsListResult,
   SkillClawHubLink,
   SkillStatusEntry,
   SkillStatusReport,
-} from "../types.ts";
+} from "../../ui/types.ts";
 
 export type ClawHubSearchResult = {
   score: number;

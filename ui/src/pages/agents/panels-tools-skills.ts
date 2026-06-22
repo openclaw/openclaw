@@ -2,6 +2,13 @@
 import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
 import { t } from "../../i18n/index.ts";
+import type { SkillGroup } from "../../lib/skills-grouping.ts";
+import { groupSkills } from "../../lib/skills-grouping.ts";
+import {
+  computeSkillMissing,
+  computeSkillReasons,
+  renderSkillStatusChips,
+} from "../../lib/skills-shared.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../../ui/string-coerce.ts";
 import type {
   SkillStatusEntry,
@@ -20,13 +27,6 @@ import {
   resolveToolProfile,
   resolveToolSections,
 } from "../../ui/views/agents-utils.ts";
-import type { SkillGroup } from "../../ui/views/skills-grouping.ts";
-import { groupSkills } from "../../ui/views/skills-grouping.ts";
-import {
-  computeSkillMissing,
-  computeSkillReasons,
-  renderSkillStatusChips,
-} from "../../ui/views/skills-shared.ts";
 
 function renderToolMetaBadges(labels: string[]) {
   if (labels.length === 0) {

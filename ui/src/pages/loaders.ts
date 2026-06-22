@@ -8,7 +8,6 @@ import {
   loadWikiMemoryPalace,
 } from "../ui/controllers/dreaming.ts";
 import { loadModelAuthStatusState } from "../ui/controllers/model-auth-status.ts";
-import { loadSkills, reconcileSkillsAgentId } from "../ui/controllers/skills.ts";
 import { loadUsage } from "../ui/controllers/usage.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../ui/session-key.ts";
 import { loadAgents } from "./agents/data.ts";
@@ -28,12 +27,6 @@ export async function loadSettingsPage(host: SettingsHost, app: SettingsAppHost)
 
 export async function loadUsagePage(app: SettingsAppHost) {
   await loadUsage(app);
-}
-
-export async function loadSkillsPage(app: SettingsAppHost) {
-  await loadAgents(app);
-  reconcileSkillsAgentId(app, app.agentsList);
-  await loadSkills(app);
 }
 
 export async function loadDreamsPage(host: SettingsHost, app: SettingsAppHost) {

@@ -13,7 +13,7 @@ import {
   setSkillsAgentId,
   updateSkillEnabled,
   type SkillsState,
-} from "./skills.ts";
+} from "./data.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 

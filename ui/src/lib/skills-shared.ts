@@ -1,6 +1,6 @@
-// Control UI view renders skills shared screen content.
+// Shared skill status rendering and classification helpers.
 import { html, nothing } from "lit";
-import type { SkillStatusEntry } from "../types.ts";
+import type { SkillStatusEntry } from "../ui/types.ts";
 
 export function computeSkillMissing(skill: SkillStatusEntry): string[] {
   return [

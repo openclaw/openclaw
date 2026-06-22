@@ -3,6 +3,7 @@ import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
+import { loadAgents } from "../agents/data.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -17,8 +18,7 @@ import {
   setSkillsAgentId,
   updateSkillEdit,
   updateSkillEnabled,
-} from "../../ui/controllers/skills.ts";
-import { loadAgents } from "../agents/data.ts";
+} from "./data.ts";
 
 type SkillsLoadContext = { app: SettingsAppHost };
 type SkillsRenderContext = { state: AppViewState };
@@ -29,7 +29,7 @@ export const page = definePage({
   id: "skills",
   path: "/skills",
   component: () =>
-    import("../../ui/views/skills.ts").then((module) => ({
+    import("./view.ts").then((module) => ({
       shell: "page" as const,
       header: true,
       render: ({ state }: SkillsRenderContext) => html`

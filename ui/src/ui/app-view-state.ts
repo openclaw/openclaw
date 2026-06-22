@@ -4,6 +4,12 @@ import type { ChatAbortOptions, ChatSendOptions } from "../pages/chat/data.ts";
 import type { CronModelSuggestionsState, CronState } from "../pages/cron/data.ts";
 import type { LogEntry, LogLevel } from "../pages/logs/data.ts";
 import type { SkillWorkshopState } from "../pages/skill-workshop/data.ts";
+import type {
+  ClawHubSearchResult,
+  ClawHubSkillSecurityVerdict,
+  ClawHubSkillDetail,
+  SkillMessage,
+} from "../pages/skills/data.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
@@ -17,12 +23,6 @@ import type { ChatStreamSegment } from "./chat/stream-text.ts";
 import type { DevicePairingList, DevicePairSetup } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type {
-  ClawHubSearchResult,
-  ClawHubSkillSecurityVerdict,
-  ClawHubSkillDetail,
-  SkillMessage,
-} from "./controllers/skills.ts";
 import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { SidebarContent } from "./sidebar-content.ts";

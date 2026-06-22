@@ -1,28 +1,28 @@
-// Control UI view renders skills screen content.
+// Control UI page renders skills screen content.
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
-import type {
-  ClawHubSkillSecurityVerdict,
-  ClawHubSearchResult,
-  ClawHubSkillDetail,
-  SkillMessageMap,
-} from "../controllers/skills.ts";
-import { clawhubVerdictKey } from "../controllers/skills.ts";
-import { clampText } from "../format.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
-import { resolveSafeExternalUrl } from "../open-external-url.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../types.ts";
-import { groupSkills } from "./skills-grouping.ts";
+import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
   isSkillAvailable,
   renderSkillStatusChips,
-} from "./skills-shared.ts";
+} from "../../lib/skills-shared.ts";
+import { clampText } from "../../ui/format.ts";
+import { toSanitizedMarkdownHtml } from "../../ui/markdown.ts";
+import { resolveSafeExternalUrl } from "../../ui/open-external-url.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
+import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../ui/types.ts";
+import type {
+  ClawHubSkillSecurityVerdict,
+  ClawHubSearchResult,
+  ClawHubSkillDetail,
+  SkillMessageMap,
+} from "./data.ts";
+import { clawhubVerdictKey } from "./data.ts";
 
 function safeExternalHref(raw?: string): string | null {
   if (!raw) {

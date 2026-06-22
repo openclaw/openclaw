@@ -1,5 +1,5 @@
-// Control UI view renders skills grouping screen content.
-import type { SkillStatusEntry } from "../types.ts";
+// Shared pure skill grouping helper.
+import type { SkillStatusEntry } from "../ui/types.ts";
 
 export type SkillGroup = {
   id: string;

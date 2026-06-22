@@ -2,8 +2,8 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../types.ts";
-import { renderSkills, type SkillsProps } from "./skills.ts";
+import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../ui/types.ts";
+import { renderSkills, type SkillsProps } from "./view.ts";
 
 const dialogRestores: Array<() => void> = [];
 

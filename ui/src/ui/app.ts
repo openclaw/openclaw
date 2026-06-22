@@ -27,6 +27,12 @@ import { DEFAULT_CRON_FORM } from "../pages/cron/data.ts";
 import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../pages/logs/data.ts";
 import { loadOverview as loadOverviewPage } from "../pages/overview/data.ts";
 import { type SkillWorkshopState } from "../pages/skill-workshop/data.ts";
+import type {
+  ClawHubSearchResult,
+  ClawHubSkillSecurityVerdict,
+  ClawHubSkillDetail,
+  SkillMessage,
+} from "../pages/skills/data.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
   handleChannelConfigSave as handleChannelConfigSaveInternal,
@@ -108,12 +114,6 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import type {
-  ClawHubSearchResult,
-  ClawHubSkillSecurityVerdict,
-  ClawHubSkillDetail,
-  SkillMessage,
-} from "./controllers/skills.ts";
 import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import {
   clearActiveFloatingTooltips,
