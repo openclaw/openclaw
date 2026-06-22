@@ -66,12 +66,14 @@ function throwMalformedGeminiResponse(): never {
   throw new Error("Gemini API error: malformed JSON response");
 }
 
-const GEMINI_FRESHNESS_HINTS: Record<GeminiFreshness, string> = {
-  day: "Prioritize web sources published in the last 24 hours.",
-  week: "Prioritize web sources published in the last 7 days.",
-  month: "Prioritize web sources published in the last 30 days.",
-  year: "Prioritize web sources published in the last 365 days.",
+const GEMINI_FRESHNESS_DAYS: Record<GeminiFreshness, number> = {
+  day: 1,
+  week: 7,
+  month: 30,
+  year: 365,
 };
+
+const GEMINI_DAY_FRESHNESS_HINT = "Prioritize web sources published in the last 24 hours.";
 
 // Gemini's google_search.time_range_filter accepts second-precision RFC 3339
 // only. Despite the underlying google.protobuf.Timestamp type accepting "0, 3,
@@ -93,18 +95,24 @@ function isoDateExclusiveEnd(value: string): string {
   return toGeminiTimeRangeTimestamp(end);
 }
 
-function queryWithSoftFreshness(query: string, freshness?: GeminiFreshness): string {
-  if (!freshness) {
+function freshnessStartTime(freshness: GeminiFreshness, now: Date): string {
+  const start = new Date(now);
+  start.setUTCDate(start.getUTCDate() - GEMINI_FRESHNESS_DAYS[freshness]);
+  return toGeminiTimeRangeTimestamp(start);
+}
+
+function queryWithSoftFreshness(query: string, freshness?: "day"): string {
+  if (freshness !== "day") {
     return query;
   }
-  return `${query}\n\nSearch recency instruction: ${GEMINI_FRESHNESS_HINTS[freshness]} If no matching recent sources are available, state that limitation and use the most relevant available sources.`;
+  return `${query}\n\nSearch recency instruction: ${GEMINI_DAY_FRESHNESS_HINT} If no matching recent sources are available, state that limitation and use the most relevant available sources.`;
 }
 
 function resolveGeminiTimeRangeFilter(
   args: Record<string, unknown>,
   now = new Date(),
 ):
-  | { timeRangeFilter?: GeminiTimeRangeFilter; freshness?: GeminiFreshness }
+  | { timeRangeFilter?: GeminiTimeRangeFilter; freshness?: "day" }
   | {
       error:
         | "invalid_freshness"
@@ -134,8 +142,18 @@ function resolveGeminiTimeRangeFilter(
 
   const { freshness, dateAfter, dateBefore } = parsedTimeFilters;
   if (freshness) {
+    // Gemini rejects 24-hour google_search.timeRangeFilter windows, while
+    // wider freshness windows still preserve the hard grounding contract.
+    if (freshness === "day") {
+      return {
+        freshness,
+      };
+    }
     return {
-      freshness,
+      timeRangeFilter: {
+        startTime: freshnessStartTime(freshness, now),
+        endTime: toGeminiTimeRangeTimestamp(now),
+      },
     };
   }
 
