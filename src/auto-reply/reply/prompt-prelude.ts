@@ -4,7 +4,7 @@ import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-ru
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
+import { EXEC_COMPLETION_TRANSCRIPT_PROMPT, HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
@@ -199,7 +199,9 @@ export function buildReplyPromptEnvelopeBase(
       ? resetModelBody
       : "[User sent media without caption]";
   const transcriptBody = params.isHeartbeat
-    ? HEARTBEAT_TRANSCRIPT_PROMPT
+    ? params.ctx.Provider === "exec-event"
+      ? `${EXEC_COMPLETION_TRANSCRIPT_PROMPT}\n\n${effectiveBaseBody}`
+      : HEARTBEAT_TRANSCRIPT_PROMPT
     : params.isBareSessionReset
       ? softResetTail || `[OpenClaw session ${params.startupAction}]`
       : isRoomEvent

@@ -2250,10 +2250,12 @@ export function startHeartbeatRunner(opts: {
     now: number,
     reason?: string,
     intent: HeartbeatWakeIntent = "event",
+    source?: HeartbeatWakeSource,
   ): DeferDecision => {
     const decision = shouldDeferWake({
       intent,
       reason,
+      source,
       now,
       nextDueMs: agent.nextDueMs,
       lastRunStartedAtMs: agent.lastRunStartedAtMs,
@@ -2434,7 +2436,7 @@ export function startHeartbeatRunner(opts: {
         if (!targetAgent) {
           return { status: "skipped", reason: "disabled" };
         }
-        const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
+        const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent, params.source);
         if (deferral.defer) {
           advanceStaleScheduleAfterDeferral(targetAgent, now, reason, deferral);
           return { status: "skipped", reason: deferral.reason };
@@ -2496,7 +2498,7 @@ export function startHeartbeatRunner(opts: {
         retryableBusySkip?: HeartbeatRunResult;
       };
       const runOneAgent = async (agent: HeartbeatAgentState): Promise<AgentWakeOutcome> => {
-        const deferral = evaluateWakeDeferral(agent, now, reason, intent);
+        const deferral = evaluateWakeDeferral(agent, now, reason, intent, params.source);
         if (deferral.defer) {
           advanceStaleScheduleAfterDeferral(agent, now, reason, deferral);
           return { ran: false };

@@ -6,7 +6,11 @@ import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/rec
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
+import {
+  isExecCompletionUserMessage,
+  isHeartbeatOkResponse,
+  isHeartbeatUserMessage,
+} from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { extractCanvasFromText } from "../chat/canvas-render.js";
 import {
@@ -1446,6 +1450,9 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT)) {
     return true;
   }
+  if (isExecCompletionUserMessage(roleContent)) {
+    return true;
+  }
   return isHeartbeatOkResponse(roleContent);
 }
 
@@ -1509,7 +1516,8 @@ function filterVisibleProjectedHistoryMessages(
     if (
       currentRoleContent &&
       nextRoleContent &&
-      isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
+      (isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) ||
+        isExecCompletionUserMessage(currentRoleContent)) &&
       isHeartbeatOkResponse(nextRoleContent) &&
       !isProjectedSessionsSendForwardedMessage(next)
     ) {

@@ -12,7 +12,11 @@
 // defer it?" Both the targeted and broadcast dispatch branches must call
 // `shouldDeferWake` so the gate can never be forgotten on one path.
 
-import type { HeartbeatWakeIntent, HeartbeatWakeSource } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_SKIP_MIN_SPACING,
+  type HeartbeatWakeIntent,
+  type HeartbeatWakeSource,
+} from "./heartbeat-wake.js";
 
 // Default minimum spacing between heartbeat runs for the same agent, regardless
 // of configured `every`. Even when `nextDueMs` is enforced, two wakes arriving
@@ -28,7 +32,7 @@ export const DEFAULT_FLOOD_THRESHOLD = 5;
 
 export type DeferDecision =
   | { defer: false }
-  | { defer: true; reason: "not-due" | "min-spacing" | "flood" };
+  | { defer: true; reason: "not-due" | typeof HEARTBEAT_SKIP_MIN_SPACING | "flood" };
 
 export type ShouldDeferInput = {
   /** Scheduler behavior requested by the wake producer. */
@@ -120,7 +124,7 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
 
   const minSpacing = input.minSpacingMs ?? DEFAULT_MIN_WAKE_SPACING_MS;
   if (minSpacing > 0 && input.now - input.lastRunStartedAtMs < minSpacing) {
-    return { defer: true, reason: "min-spacing" };
+    return { defer: true, reason: HEARTBEAT_SKIP_MIN_SPACING };
   }
 
   return { defer: false };

@@ -347,7 +347,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
         sessionKey,
         {
           source: "exec-event",
-          intent: "event",
+          intent: "immediate",
           reason: "exec-event",
           coalesceMs: 0,
         },

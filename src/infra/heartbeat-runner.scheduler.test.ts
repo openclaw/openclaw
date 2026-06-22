@@ -708,7 +708,8 @@ describe("startHeartbeatRunner", () => {
     }
 
     // Total elapsed: ~40s. Configured `every` is 30m. Subsequent exec-events
-    // should NOT trigger fresh runs within the cooldown window.
+    // should NOT trigger fresh runs within the cooldown window — they are
+    // deferred as retryable and delivered at the next interval tick.
     expect(runSpy).toHaveBeenCalledTimes(1);
 
     runner.stop();
