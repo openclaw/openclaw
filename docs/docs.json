@@ -1851,7 +1851,14 @@
               {
                 "group": "Release and CI",
                 "pages": [
-                  "maturity-scorecard",
+                  {
+                    "group": "Maturity",
+                    "pages": [
+                      "maturity/scorecard",
+                      "maturity/taxonomy",
+                      "maturity/taxonomy-outline"
+                    ]
+                  },
                   "reference/RELEASING",
                   "reference/full-release-validation",
                   "reference/release-performance-sweep",

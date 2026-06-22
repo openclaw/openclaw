@@ -44,8 +44,8 @@ out of this repo. If a score needs private evidence, use the redacted
   `qaMaturityScoresSchema` and `parseQaMaturityScores`; use that schema to
   validate score output instead of duplicating score labels, bands, or object
   shapes in prompts.
-- Generated scorecard previews come from `pnpm maturity:render`; do not hand-edit
-  generated Markdown to change score results.
+- Generated docs under `docs/maturity/` come from `pnpm maturity:render`; do
+  not hand-edit generated Markdown to change score results.
 - `qa-evidence.json` artifacts provide per-run QA scorecard evidence. They can
   enrich generated artifact docs, but they are not committed as inventory.
 

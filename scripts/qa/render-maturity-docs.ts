@@ -121,7 +121,7 @@ function parseArgs(argv: string[]): Args {
 Options:
   --taxonomy <path>     Taxonomy YAML path (default: taxonomy.yaml)
   --scores <path>       Aggregate score YAML path (default: qa/maturity-scores.yaml)
-  --output-dir <path>   Directory for maturity-scorecard.md, taxonomy.md, and taxonomy-outline.md
+  --output-dir <path>   Directory for maturity/scorecard.md, maturity/taxonomy.md, and maturity/taxonomy-outline.md
   --static-assets-dir <path>
                         Copy source YAML and QA evidence JSON for docs components
   --evidence-dir <path> Optional directory containing qa-evidence.json artifacts
@@ -664,7 +664,7 @@ function main(): void {
       : [];
   const outputs = new Map<string, string>([
     [
-      "maturity-scorecard.md",
+      "maturity/scorecard.md",
       renderMaturityScorecard({
         taxonomy,
         scores,
@@ -676,8 +676,8 @@ function main(): void {
         staticAssetsPath,
       }),
     ],
-    ["taxonomy.md", renderTaxonomy({ taxonomy, scores })],
-    ["taxonomy-outline.md", renderTaxonomyOutline({ taxonomy })],
+    ["maturity/taxonomy.md", renderTaxonomy({ taxonomy, scores })],
+    ["maturity/taxonomy-outline.md", renderTaxonomyOutline({ taxonomy })],
   ]);
   const changed: string[] = [];
   for (const [fileName, content] of outputs) {
