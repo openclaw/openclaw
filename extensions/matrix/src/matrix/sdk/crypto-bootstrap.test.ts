@@ -1,6 +1,7 @@
 // Matrix tests cover crypto bootstrap plugin behavior.
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { MatrixCryptoBootstrapper, type MatrixCryptoBootstrapperDeps } from "./crypto-bootstrap.js";
+import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixRawEvent } from "./types.js";
 
 type BootstrapCrossSigningMock = Mock<MatrixCryptoBootstrapApi["bootstrapCrossSigning"]>;
@@ -44,7 +45,9 @@ function createBootstrapperDeps() {
       trackVerificationRequest: vi.fn(),
     },
     recoveryKeyStore: {
-      bootstrapSecretStorageWithRecoveryKey: vi.fn<any>(async () => {}),
+      bootstrapSecretStorageWithRecoveryKey: vi.fn<
+        MatrixRecoveryKeyStore["bootstrapSecretStorageWithRecoveryKey"]
+      >(async () => {}),
     },
     decryptBridge: {
       bindCryptoRetrySignals: vi.fn(),
@@ -402,16 +405,17 @@ describe("MatrixCryptoBootstrapper", () => {
     expect(bootstrapCrossSigning).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry cross-signing when passwordless forced reset hits stale SSSS", async () => {
+  it("repairs stale SSSS and retries an unpublished passwordless forced reset", async () => {
     const deps = createBootstrapperDeps();
     deps.getPassword = vi.fn<() => string | undefined>(() => undefined);
     const bootstrapCrossSigning = vi
       .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("getSecretStorageKey callback returned falsey"));
+      .mockRejectedValueOnce(new Error("getSecretStorageKey callback returned falsey"))
+      .mockResolvedValueOnce(undefined);
     const crypto = createCryptoApi({
       bootstrapCrossSigning,
-      isCrossSigningReady: vi.fn(async () => false),
-      userHasCrossSigningKeys: vi.fn(async () => false),
+      isCrossSigningReady: vi.fn(async () => true),
+      userHasCrossSigningKeys: vi.fn(async () => true),
       getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
     });
     const bootstrapper = new MatrixCryptoBootstrapper(
@@ -419,27 +423,26 @@ describe("MatrixCryptoBootstrapper", () => {
     );
 
     const result = await bootstrapper.bootstrap(crypto, {
-      strict: false,
+      strict: true,
       forceResetCrossSigning: true,
       allowSecretStorageRecreateWithoutRecoveryKey: true,
     });
 
-    // Forced reset failed without repair, so cross-signing is not ready.
-    expect(result.crossSigningReady).toBe(false);
+    expect(result.crossSigningReady).toBe(true);
+    expect(result.crossSigningPublished).toBe(true);
 
-    // SSSS was deferred (passwordless), so no upfront SSSS. Only the cross-signing
-    // reset was attempted — once. The repair retry block is blocked for all forced
-    // reset modes, so no second bootstrapCrossSigning call (gh-78396, gh-93328).
-    expect(bootstrapCrossSigning).toHaveBeenCalledTimes(1);
+    // The first reset generated local keys but failed during SSSS export, before publication.
+    // matrix-js-sdk cannot resume that reset, so passwordless recovery recreates SSSS and retries.
+    expect(bootstrapCrossSigning).toHaveBeenCalledTimes(2);
     expectBootstrapCrossSigningCall(bootstrapCrossSigning, 1, { setupNewCrossSigning: true });
-    // The repair block was not entered: bootstrapSecretStorageWithRecoveryKey was
-    // called only for the post-cross-signing second pass, not with forceNewSecretStorage.
-    expect(
-      deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey.mock.calls.some(
-        (call: unknown[]) =>
-          (call as [unknown, Record<string, unknown>])[1]?.forceNewSecretStorage === true,
-      ),
-    ).toBe(false);
+    expectBootstrapCrossSigningCall(bootstrapCrossSigning, 2, { setupNewCrossSigning: true });
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenCalledWith(
+      crypto,
+      {
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
+        forceNewSecretStorage: true,
+      },
+    );
   });
 
   it("recreates secret storage upfront and does a single forced cross-signing reset", async () => {

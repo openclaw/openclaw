@@ -64,20 +64,21 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     if (!deferSecretStorageBootstrapUntilAfterCrossSigning) {
       await this.bootstrapSecretStorage(crypto, {
         strict: forceReset ? false : strict,
-        allowSecretStorageRecreateWithoutRecoveryKey:
-          forceReset ? true : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+        allowSecretStorageRecreateWithoutRecoveryKey: forceReset
+          ? true
+          : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
       });
     }
 
     const crossSigning = await this.bootstrapCrossSigning(crypto, {
       forceResetCrossSigning: forceReset,
       allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
-      // Prevent the repair block from doing a second reset after recreating secret storage
-      // for all forced reset modes, including passwordless with stale SSSS (gh-78396).
-      allowSecretStorageRecreateWithoutRecoveryKey:
-        forceReset
-          ? false
-          : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+      // Password-backed resets repair SSSS before generating keys, so never reset twice.
+      // Passwordless resets must repair after the first unpublished reset fails during SSSS export;
+      // matrix-js-sdk cannot resume that reset, so one retry is the only recovery path.
+      allowSecretStorageRecreateWithoutRecoveryKey: forceReset
+        ? deferSecretStorageBootstrapUntilAfterCrossSigning
+        : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
       strict,
     });
 
