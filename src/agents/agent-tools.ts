@@ -22,6 +22,7 @@ import {
   type ExecSecurity,
   resolveExecPolicyForMode,
 } from "../infra/exec-approvals.js";
+import { resolveExecDenyPathPatterns } from "../infra/exec-deny-path.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -382,6 +383,10 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
+    denyPathPatterns: resolveExecDenyPathPatterns({
+      global: globalExec?.denyPathPatterns,
+      agent: agentExec?.denyPathPatterns,
+    }),
     strictInlineEval: agentExec?.strictInlineEval ?? globalExec?.strictInlineEval,
     commandHighlighting: resolveExecCommandHighlighting({
       config: cfg,
@@ -848,6 +853,10 @@ export function createOpenClawCodingTools(options?: {
         node: options?.exec?.node ?? execConfig.node,
         pathPrepend: options?.exec?.pathPrepend ?? execConfig.pathPrepend,
         safeBins: options?.exec?.safeBins ?? execConfig.safeBins,
+        denyPathPatterns: resolveExecDenyPathPatterns({
+          global: execConfig.denyPathPatterns,
+          agent: options?.exec?.denyPathPatterns,
+        }),
         strictInlineEval: options?.exec?.strictInlineEval ?? execConfig.strictInlineEval,
         commandHighlighting: options?.exec?.commandHighlighting ?? execConfig.commandHighlighting,
         safeBinTrustedDirs: options?.exec?.safeBinTrustedDirs ?? execConfig.safeBinTrustedDirs,

@@ -19,6 +19,22 @@ const shellEnvMocks = vi.hoisted(() => ({
   getShellPathFromLoginShell: vi.fn<GetShellPathFromLoginShell>(() => "/custom/bin:/opt/bin"),
   resolveShellEnvFallbackTimeoutMs: vi.fn(() => 1234),
 }));
+const nodeHostMocks = vi.hoisted(() => ({
+  executeNodeHostCommand: vi.fn(
+    async (params: { command: string; workdir?: string }) =>
+      ({
+        content: [
+          {
+            type: "text" as const,
+            text: `node:${params.workdir ?? "default"}:${params.command}`,
+          },
+        ],
+        details: {},
+      }) as Awaited<
+        ReturnType<typeof import("./bash-tools.exec-host-node.js").executeNodeHostCommand>
+      >,
+  ),
+}));
 
 const parseShellSingleQuoted = (input: string) => {
   if (!input.startsWith("'")) {
@@ -111,6 +127,10 @@ vi.mock("../process/supervisor/index.js", () => ({
   }),
 }));
 
+vi.mock("./bash-tools.exec-host-node.js", () => ({
+  executeNodeHostCommand: nodeHostMocks.executeNodeHostCommand,
+}));
+
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
 
 function createExecApprovals(): ExecApprovalsResolved {
@@ -188,6 +208,7 @@ describe("exec PATH login shell merge", () => {
     shellEnvMocks.getShellPathFromLoginShell.mockReturnValue("/custom/bin:/opt/bin");
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset();
     shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReturnValue(1234);
+    nodeHostMocks.executeNodeHostCommand.mockClear();
   });
 
   afterEach(() => {
@@ -397,6 +418,79 @@ describe("exec host env validation", () => {
       yieldMs: FOREGROUND_TEST_YIELD_MS,
     });
     expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe("ok");
+  });
+
+  it("blocks denyPathPatterns inside shell wrapper payloads", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      denyPathPatterns: ["~/.openclaw/secrets/**"],
+    });
+
+    await expect(
+      tool.execute("call-deny-shell-wrapper", {
+        command: "bash -c 'cat ~/.openclaw/secrets/foo.env'",
+      }),
+    ).rejects.toThrow(/SYSTEM_RUN_DENIED: argument matches tools\.exec\.denyPathPatterns/);
+  });
+
+  it("blocks denyPathPatterns inside transparent dispatch wrapper shell payloads", async () => {
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      denyPathPatterns: ["~/.openclaw/secrets/**"],
+    });
+
+    await expect(
+      tool.execute("call-deny-dispatch-wrapper-shell", {
+        command: "timeout 5s bash -lc 'cat ~/.openclaw/secrets/foo.env'",
+      }),
+    ).rejects.toThrow(/SYSTEM_RUN_DENIED: argument matches tools\.exec\.denyPathPatterns/);
+  });
+
+  it("hard-denies a bare relative deny target on the node host even when workdir is omitted", async () => {
+    // #74379 review: `**/.env` is a documented hard-deny example and must block
+    // `cat .env` on the node path where the gateway forwards no workdir. The
+    // globstar matches the bare basename, so the command never reaches the host.
+    const tool = createExecTool({
+      host: "node",
+      security: "full",
+      ask: "off",
+      denyPathPatterns: ["**/.env"],
+    });
+
+    await expect(
+      tool.execute("call-node-no-workdir", {
+        command: "cat .env",
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      }),
+    ).rejects.toThrow(/SYSTEM_RUN_DENIED: argument matches tools\.exec\.denyPathPatterns/);
+
+    expect(nodeHostMocks.executeNodeHostCommand).not.toHaveBeenCalled();
+  });
+
+  it("still denies a deny target when shell tokenization fails (unbalanced quote)", async () => {
+    // #74379: when splitShellArgs returns null (e.g. an unterminated quote),
+    // denyArgv is empty and the gate falls back to tokenizing the raw command
+    // string as shellPayload. The deny gate must fail TOWARD checking the raw
+    // payload, never fail open on malformed input.
+    const tool = createExecTool({
+      host: "node",
+      security: "full",
+      ask: "off",
+      denyPathPatterns: ["**/.ssh/*"],
+    });
+
+    await expect(
+      tool.execute("call-deny-malformed-quote", {
+        command: `cat ~/.ssh/id_rsa "unterminated`,
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      }),
+    ).rejects.toThrow(/SYSTEM_RUN_DENIED: argument matches tools\.exec\.denyPathPatterns/);
+
+    expect(nodeHostMocks.executeNodeHostCommand).not.toHaveBeenCalled();
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
