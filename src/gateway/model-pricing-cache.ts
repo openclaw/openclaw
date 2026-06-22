@@ -27,6 +27,7 @@ import type {
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
+import { isPrivateOrLoopbackHost } from "./net.js";
 import {
   clearLoadPluginMetadataSnapshotMemo,
   resolvePluginMetadataSnapshot,
@@ -790,30 +791,6 @@ function addConfiguredWebSearchPluginModels(params: {
   }
 }
 
-function isPrivateOrLoopbackHost(hostname: string): boolean {
-  const host = hostname
-    .trim()
-    .toLowerCase()
-    .replace(/^\[|\]$/g, "");
-  if (
-    host === "localhost" ||
-    host === "localhost.localdomain" ||
-    host.endsWith(".localhost") ||
-    host.endsWith(".local")
-  ) {
-    return true;
-  }
-  if (host === "::1" || host === "0:0:0:0:0:0:0:1" || host.startsWith("fe80:")) {
-    return true;
-  }
-  if (host.startsWith("fc") || host.startsWith("fd")) {
-    return true;
-  }
-  if (host.startsWith("127.") || host.startsWith("10.") || host.startsWith("192.168.")) {
-    return true;
-  }
-  return /^172\.(1[6-9]|2\d|3[0-1])\./u.test(host) || host.startsWith("169.254.");
-}
 
 function isPrivateOrLoopbackBaseUrl(baseUrl: string | undefined): boolean {
   if (!baseUrl) {
