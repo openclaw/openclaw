@@ -1233,6 +1233,20 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("keeps captured live prepared backend cleanup with the whole-run owner", async () => {
+    const mcpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-capture-"));
+    const mcpConfigPath = path.join(mcpConfigDir, "mcp-captured.json");
+    await fs.writeFile(
+      mcpConfigPath,
+      JSON.stringify({
+        mcpServers: {
+          openclaw: {
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {},
+          },
+        },
+      }),
+      "utf-8",
+    );
     let stdoutListener: ((chunk: string) => void) | undefined;
     let resolveExit: ((exit: RunExit) => void) | undefined;
     const exited = new Promise<RunExit>((resolve) => {
@@ -1287,7 +1301,7 @@ describe("runCliAgent spawn path", () => {
       runId: "run-captured-live-cleanup",
       prompt: "first",
       backend: {
-        args: ["-p", "--strict-mcp-config", "--mcp-config", "/tmp/mcp-captured.json"],
+        args: ["-p", "--strict-mcp-config", "--mcp-config", mcpConfigPath],
         liveSession: "claude-stdio",
       },
       mcpConfigHash: "captured-cleanup-mcp-config",
@@ -1303,6 +1317,7 @@ describe("runCliAgent spawn path", () => {
 
     await context.preparedBackend.cleanup?.();
     expect(preparedBackendCleanup).toHaveBeenCalledOnce();
+    await fs.rm(mcpConfigDir, { recursive: true, force: true });
   });
 
   it("preserves completed output when system prompt cleanup fails after delivery", async () => {
@@ -1762,40 +1777,41 @@ describe("runCliAgent spawn path", () => {
     const backend = {
       liveSession: "claude-stdio" as const,
     };
-    const runs = Array.from({ length: 17 }, (_, index) =>
-      (() => {
-        const context = buildPreparedCliRunContext({
-          provider: "claude-cli",
-          model: "sonnet",
-          runId: `run-live-cap-${index}`,
-          prompt: `prompt ${index}`,
-          sessionId: `session-${index}`,
-          backend,
-        });
-        return runClaudeLiveSessionTurn({
-          context,
-          args: context.preparedBackend.backend.args ?? [],
-          env: {},
-          prompt: `prompt ${index}`,
-          useResume: false,
-          noOutputTimeoutMs: 1_000,
-          getProcessSupervisor: () => ({
-            spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
-              supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
-            cancel: vi.fn(),
-            cancelScope: vi.fn(),
-            reconcileOrphans: vi.fn(),
-            getRecord: vi.fn(),
-          }),
-          onAssistantDelta: () => {},
-          cleanup: async () => {},
-        });
-      })(),
-    );
+    const runs = Array.from({ length: 17 }, (_, index) => {
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: `run-live-cap-${index}`,
+        prompt: `prompt ${index}`,
+        sessionId: `session-${index}`,
+        backend,
+      });
+      const run = runClaudeLiveSessionTurn({
+        context,
+        args: context.preparedBackend.backend.args ?? [],
+        env: {},
+        prompt: `prompt ${index}`,
+        useResume: false,
+        noOutputTimeoutMs: 1_000,
+        getProcessSupervisor: () => ({
+          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+          cancel: vi.fn(),
+          cancelScope: vi.fn(),
+          reconcileOrphans: vi.fn(),
+          getRecord: vi.fn(),
+        }),
+        onAssistantDelta: () => {},
+        cleanup: async () => {},
+      });
+      return index === 16 ? run.catch((error: unknown) => error) : run;
+    });
 
     await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledTimes(16));
     const rejectedRun = runs[16];
-    await expect(rejectedRun).rejects.toThrow("Too many Claude CLI live sessions are active.");
+    await expect(rejectedRun).resolves.toMatchObject({
+      message: "Too many Claude CLI live sessions are active.",
+    });
     releaseSpawn?.();
     await expect(Promise.all(runs.slice(0, 16))).resolves.toHaveLength(16);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(16);
