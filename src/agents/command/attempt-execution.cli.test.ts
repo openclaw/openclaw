@@ -390,7 +390,7 @@ describe("CLI attempt execution", () => {
       );
 
       expect(runCliAgentMock).not.toHaveBeenCalled();
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     },
   );
 
@@ -2922,9 +2922,9 @@ describe("embedded attempt harness pinning", () => {
       sessionId: "tools-allow-session",
       updatedAt: Date.now(),
     };
-    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    runEmbeddedAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
-    } satisfies EmbeddedPiRunResult);
+    } satisfies EmbeddedAgentRunResult);
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -2957,7 +2957,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: false,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         toolsAllow: ["read", "exec"],
       }),
