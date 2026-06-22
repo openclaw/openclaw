@@ -21,7 +21,7 @@ export function buildPlatformRuntimeLogHints(params: {
     // where mocked env values may carry Windows drive prefixes.
     return [
       `Launchd stdout (if installed): ${toDarwinDisplayPath(logs.stdoutPath)}`,
-      "Launchd stderr (if installed): suppressed",
+      `Launchd stderr (if installed): ${toDarwinDisplayPath(logs.stderrPath)}`,
       `Restart attempts: ${toDarwinDisplayPath(resolveGatewayRestartLogPath(env))}`,
     ];
   }
