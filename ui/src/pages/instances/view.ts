@@ -1,9 +1,9 @@
-// Control UI view renders instances screen content.
+// Instances page renders its screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { icons } from "../icons.ts";
-import { formatPresenceAge } from "../presenter.ts";
-import type { PresenceEntry } from "../types.ts";
+import { icons } from "../../ui/icons.ts";
+import { formatPresenceAge } from "../../ui/presenter.ts";
+import type { PresenceEntry } from "../../ui/types.ts";
 
 export type InstancesProps = {
   loading: boolean;

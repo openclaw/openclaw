@@ -9,12 +9,12 @@ import {
   roundedControlUiDurationMs,
 } from "../../ui/control-ui-performance.ts";
 import { loadModelAuthStatusState } from "../../ui/controllers/model-auth-status.ts";
-import { loadPresence } from "../../ui/controllers/presence.ts";
 import { loadUsage } from "../../ui/controllers/usage.ts";
 import { isMonitoredAuthProvider } from "../../ui/model-auth-helpers.ts";
 import { loadChannels } from "../channels/data.ts";
 import { loadCronJobsPage, loadCronStatus } from "../cron/data.ts";
 import { loadDebug } from "../debug/data.ts";
+import { loadPresence } from "../instances/data.ts";
 import { loadSessions } from "../sessions/data.ts";
 import { loadSkills } from "../skills/data.ts";
 
