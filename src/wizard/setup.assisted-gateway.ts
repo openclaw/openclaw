@@ -316,6 +316,92 @@ function canSafelyProbeInvalidAuth(params: { url: string; config: OpenClawConfig
   }
 }
 
+type GatewaySecurityProbeResult =
+  | { ok: true }
+  | {
+      ok: false;
+      detail?: string;
+      ownershipLost?: boolean;
+      retryable: boolean;
+    };
+
+async function probeGatewaySecuritySettings(params: {
+  url: string;
+  auth: GatewayProbeAuth;
+  config: OpenClawConfig;
+  settings: GatewayWizardSettings;
+  listenerStillMatches: () => Promise<boolean>;
+  env: NodeJS.ProcessEnv;
+  timeoutMs: number;
+  signal?: AbortSignal;
+  tlsFingerprint?: string;
+}): Promise<GatewaySecurityProbeResult> {
+  const invalidAuth =
+    params.settings.authMode !== "none" && canSafelyProbeInvalidAuth(params)
+      ? buildInvalidProbeAuth(params.settings, params.auth)
+      : undefined;
+  if (params.settings.authMode !== "none" && !invalidAuth) {
+    return {
+      ok: false,
+      detail: "Gateway auth enforcement cannot be probed safely.",
+      retryable: false,
+    };
+  }
+  if (!(await params.listenerStillMatches())) {
+    return { ok: false, ownershipLost: true, retryable: false };
+  }
+  const expected = await probeGateway({
+    url: params.url,
+    auth: params.auth,
+    timeoutMs: params.timeoutMs,
+    detailLevel: "full",
+    env: params.env,
+    signal: params.signal,
+    tlsFingerprint: params.tlsFingerprint,
+  });
+  if (!(await params.listenerStillMatches())) {
+    return { ok: false, ownershipLost: true, retryable: false };
+  }
+  if (!expected.ok) {
+    return { ok: false, detail: expected.error ?? undefined, retryable: true };
+  }
+  if (
+    !snapshotMatchesGatewaySettings({
+      configSnapshot: expected.configSnapshot,
+      config: params.config,
+      settings: params.settings,
+    })
+  ) {
+    return {
+      ok: false,
+      detail: "Gateway config snapshot does not match the active setup settings.",
+      retryable: false,
+    };
+  }
+  if (!invalidAuth) {
+    return { ok: true };
+  }
+  const invalid = await probeGateway({
+    url: params.url,
+    auth: invalidAuth,
+    timeoutMs: params.timeoutMs,
+    detailLevel: "none",
+    env: params.env,
+    signal: params.signal,
+    tlsFingerprint: params.tlsFingerprint,
+  });
+  if (!(await params.listenerStillMatches())) {
+    return { ok: false, ownershipLost: true, retryable: false };
+  }
+  return invalidAuthProbeProvesEnforcement({ settings: params.settings, probe: invalid })
+    ? { ok: true }
+    : {
+        ok: false,
+        detail: invalid.error ?? "Gateway did not reject invalid setup credentials.",
+        retryable: false,
+      };
+}
+
 async function probeVerifiedExistingGateway(params: {
   url: string;
   auth: GatewayProbeAuth;
@@ -324,23 +410,11 @@ async function probeVerifiedExistingGateway(params: {
   listenerPids: number[];
   tlsFingerprint?: string;
 }): Promise<boolean> {
-  const invalidAuth =
-    params.settings.authMode !== "none" && canSafelyProbeInvalidAuth(params)
-      ? buildInvalidProbeAuth(params.settings, params.auth)
-      : undefined;
   const listenerStillMatchesRuntime = () =>
     verifiedGatewayRuntimeStillMatches({
       settings: params.settings,
       listenerPids: params.listenerPids,
     });
-  // Shared-secret Gateway reuse requires proving that invalid auth is rejected.
-  // Fail closed when the rate-limit policy makes that probe unsafe.
-  if (params.settings.authMode !== "none" && !invalidAuth) {
-    return false;
-  }
-  if (!(await listenerStillMatchesRuntime())) {
-    return false;
-  }
   // Do not let cached device credentials prove a listener that rejects the
   // active config's shared secret.
   return await withTempWorkspace(
@@ -350,45 +424,17 @@ async function probeVerifiedExistingGateway(params: {
         ...process.env,
         OPENCLAW_STATE_DIR: stateWorkspace.dir,
       };
-      const expected = await probeGateway({
+      const result = await probeGatewaySecuritySettings({
         url: params.url,
         auth: params.auth,
-        timeoutMs: 1500,
-        detailLevel: "full",
+        config: params.config,
+        settings: params.settings,
+        listenerStillMatches: listenerStillMatchesRuntime,
         env,
+        timeoutMs: 1500,
         tlsFingerprint: params.tlsFingerprint,
       });
-      if (
-        !expected.ok ||
-        !snapshotMatchesGatewaySettings({
-          configSnapshot: expected.configSnapshot,
-          config: params.config,
-          settings: params.settings,
-        })
-      ) {
-        return false;
-      }
-      if (!(await listenerStillMatchesRuntime())) {
-        return false;
-      }
-      if (!invalidAuth) {
-        return true;
-      }
-      if (!(await listenerStillMatchesRuntime())) {
-        return false;
-      }
-      const invalid = await probeGateway({
-        url: params.url,
-        auth: invalidAuth,
-        timeoutMs: 1500,
-        detailLevel: "none",
-        env,
-        tlsFingerprint: params.tlsFingerprint,
-      });
-      return (
-        (await listenerStillMatchesRuntime()) &&
-        invalidAuthProbeProvesEnforcement({ settings: params.settings, probe: invalid })
-      );
+      return result.ok;
     },
   );
 }
@@ -507,6 +553,7 @@ function temporaryGatewayOwnershipFailureDetail(params: {
 async function waitForOwnedGatewayReachable(params: {
   url: string;
   auth: GatewayProbeAuth;
+  config: OpenClawConfig;
   port: number;
   settings: GatewayWizardSettings;
   child: ChildProcess;
@@ -523,35 +570,48 @@ async function waitForOwnedGatewayReachable(params: {
   const startedAt = Date.now();
   let lastDetail: string | undefined;
   try {
-    while (Date.now() - startedAt < params.deadlineMs) {
-      // Revalidate ownership immediately before every authenticated attempt.
-      if (!(await temporaryGatewayOwnsExpectedListeners(params))) {
-        return { ok: false, detail: temporaryGatewayOwnershipFailureDetail(params) };
-      }
-      const remainingMs = params.deadlineMs - (Date.now() - startedAt);
-      const probe = await probeGateway({
-        url: params.url,
-        auth: params.auth,
-        timeoutMs: Math.min(1500, remainingMs),
-        detailLevel: "none",
-        signal: abortController.signal,
-        tlsFingerprint: params.tlsFingerprint,
-      });
-      // Never accept a successful response after the owned listener has changed.
-      if (!(await temporaryGatewayOwnsExpectedListeners(params))) {
-        return { ok: false, detail: temporaryGatewayOwnershipFailureDetail(params) };
-      }
-      if (probe.ok) {
-        return { ok: true };
-      }
-      lastDetail = probe.error ?? undefined;
-      const nextRemainingMs = params.deadlineMs - (Date.now() - startedAt);
-      if (nextRemainingMs <= 0) {
-        break;
-      }
-      await sleep(Math.min(400, nextRemainingMs));
-    }
-    return { ok: false, detail: lastDetail };
+    return await withTempWorkspace(
+      { rootDir: os.tmpdir(), prefix: "openclaw-setup-gateway-probe-" },
+      async (stateWorkspace) => {
+        const env = {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateWorkspace.dir,
+        };
+        const listenerStillMatches = () => temporaryGatewayOwnsExpectedListeners(params);
+        while (Date.now() - startedAt < params.deadlineMs) {
+          const remainingMs = params.deadlineMs - (Date.now() - startedAt);
+          const probeCount = params.settings.authMode === "none" ? 1 : 2;
+          const timeoutMs = Math.max(1, Math.min(1500, Math.floor(remainingMs / probeCount)));
+          const result = await probeGatewaySecuritySettings({
+            url: params.url,
+            auth: params.auth,
+            config: params.config,
+            settings: params.settings,
+            listenerStillMatches,
+            env,
+            timeoutMs,
+            signal: abortController.signal,
+            tlsFingerprint: params.tlsFingerprint,
+          });
+          if (result.ok) {
+            return { ok: true };
+          }
+          if (result.ownershipLost) {
+            return { ok: false, detail: temporaryGatewayOwnershipFailureDetail(params) };
+          }
+          lastDetail = result.detail;
+          if (!result.retryable) {
+            return { ok: false, detail: lastDetail };
+          }
+          const nextRemainingMs = params.deadlineMs - (Date.now() - startedAt);
+          if (nextRemainingMs <= 0) {
+            break;
+          }
+          await sleep(Math.min(400, nextRemainingMs));
+        }
+        return { ok: false, detail: lastDetail };
+      },
+    );
   } finally {
     params.child.removeListener("error", abortProbe);
     params.child.removeListener("exit", abortProbe);
@@ -668,6 +728,7 @@ export async function ensureAgentAssistedGatewayRuntime(params: {
       ? await waitForOwnedGatewayReachable({
           url: links.wsUrl,
           auth,
+          config: params.config,
           port: params.settings.port,
           settings: params.settings,
           child,

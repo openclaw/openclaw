@@ -90,6 +90,20 @@ function createMockChild(): MockChild {
   return child;
 }
 
+function matchingGatewayConfigSnapshot(auth: Record<string, unknown> = { mode: "token" }) {
+  return {
+    path: "/tmp/openclaw.json",
+    config: {
+      gateway: {
+        port: 18789,
+        bind: "loopback",
+        auth,
+        tailscale: { mode: "off" },
+      },
+    },
+  };
+}
+
 describe("agent-assisted Gateway runtime", () => {
   const settings = {
     port: 18789,
@@ -923,7 +937,18 @@ describe("agent-assisted Gateway runtime", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "fallback-password");
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
-    probeGateway.mockResolvedValueOnce({ ok: true });
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: matchingGatewayConfigSnapshot({
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_PASSWORD_MISMATCH" },
+      });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
 
     const result = await ensureAgentAssistedGatewayRuntime({
@@ -945,9 +970,17 @@ describe("agent-assisted Gateway runtime", () => {
 
     expect(result.temporary).toBe(true);
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenLastCalledWith(18789);
-    expect(probeGateway).toHaveBeenCalledWith(
+    expect(probeGateway).toHaveBeenCalledTimes(2);
+    expect(probeGateway.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({
         auth: { password: "fallback-password" },
+        detailLevel: "full",
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(probeGateway.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        auth: { password: expect.stringMatching(/^openclaw-setup-invalid-/) },
         detailLevel: "none",
         signal: expect.any(AbortSignal),
       }),
@@ -1056,7 +1089,15 @@ describe("agent-assisted Gateway runtime", () => {
   it("runs a temporary Gateway when none is reachable", async () => {
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
-    probeGateway.mockResolvedValueOnce({ ok: true });
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: matchingGatewayConfigSnapshot(),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_TOKEN_MISMATCH" },
+      });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
     const prompter = createWizardPrompter();
 
@@ -1076,7 +1117,8 @@ describe("agent-assisted Gateway runtime", () => {
       }),
     );
     expect(prompter.note).toHaveBeenCalled();
-    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledTimes(4);
+    expect(probeGateway).toHaveBeenCalledTimes(2);
+    expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledTimes(5);
     expect(findVerifiedGatewayListenerPidsOnPortSync.mock.invocationCallOrder[2]).toBeLessThan(
       probeGateway.mock.invocationCallOrder[0] ?? 0,
     );
@@ -1085,6 +1127,54 @@ describe("agent-assisted Gateway runtime", () => {
     child.emit("exit", 0, null);
     await stop;
 
+    expect(killProcessTree).toHaveBeenCalledWith(4321, {
+      detached: process.platform !== "win32",
+      graceMs: 1500,
+    });
+    expect(detach).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a temporary Gateway that accepts invalid token auth", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/tmp/ambient-openclaw-state");
+    const child = createMockChild();
+    spawn.mockReturnValueOnce(child);
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: matchingGatewayConfigSnapshot(),
+      })
+      .mockResolvedValueOnce({ ok: true });
+    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
+    killProcessTree.mockImplementationOnce(() => queueMicrotask(() => child.emit("exit", 0, null)));
+
+    await expect(
+      ensureAgentAssistedGatewayRuntime({
+        config: {},
+        settings,
+        prompter: createWizardPrompter(),
+      }),
+    ).rejects.toThrow("Unable to start Gateway for assisted setup");
+
+    expect(probeGateway).toHaveBeenCalledTimes(2);
+    const activeProbe = probeGateway.mock.calls[0]?.[0];
+    const invalidProbe = probeGateway.mock.calls[1]?.[0];
+    expect(activeProbe).toEqual(
+      expect.objectContaining({
+        auth: { token: "test-token" },
+        detailLevel: "full",
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: expect.stringContaining("openclaw-setup-gateway-probe-"),
+        }),
+      }),
+    );
+    expect(invalidProbe).toEqual(
+      expect.objectContaining({
+        auth: { token: expect.stringMatching(/^openclaw-setup-invalid-/) },
+        detailLevel: "none",
+        env: activeProbe?.env,
+      }),
+    );
+    expect(activeProbe?.env.OPENCLAW_STATE_DIR).not.toBe("/tmp/ambient-openclaw-state");
     expect(killProcessTree).toHaveBeenCalledWith(4321, {
       detached: process.platform !== "win32",
       graceMs: 1500,
@@ -1132,7 +1222,15 @@ describe("agent-assisted Gateway runtime", () => {
     });
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
-    probeGateway.mockResolvedValueOnce({ ok: true });
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: matchingGatewayConfigSnapshot(),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_TOKEN_MISMATCH" },
+      });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
 
     const result = await ensureAgentAssistedGatewayRuntime({
@@ -1143,12 +1241,15 @@ describe("agent-assisted Gateway runtime", () => {
 
     expect(result.temporary).toBe(true);
     expect(loadGatewayTlsRuntime).toHaveBeenCalledWith({ enabled: true });
-    expect(probeGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "wss://127.0.0.1:18789",
-        tlsFingerprint: "sha256:test-local-gateway",
-      }),
-    );
+    expect(probeGateway).toHaveBeenCalledTimes(2);
+    for (const [probeOptions] of probeGateway.mock.calls) {
+      expect(probeOptions).toEqual(
+        expect.objectContaining({
+          url: "wss://127.0.0.1:18789",
+          tlsFingerprint: "sha256:test-local-gateway",
+        }),
+      );
+    }
 
     const stop = result.stop();
     child.emit("exit", 0, null);
@@ -1179,7 +1280,15 @@ describe("agent-assisted Gateway runtime", () => {
   it("stops the temporary Gateway when post-spawn setup fails", async () => {
     const child = createMockChild();
     spawn.mockReturnValueOnce(child);
-    probeGateway.mockResolvedValueOnce({ ok: true });
+    probeGateway
+      .mockResolvedValueOnce({
+        ok: true,
+        configSnapshot: matchingGatewayConfigSnapshot(),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        connectErrorDetails: { code: "AUTH_TOKEN_MISMATCH" },
+      });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValueOnce([]).mockReturnValue([4321]);
     killProcessTree.mockImplementationOnce(() => queueMicrotask(() => child.emit("exit", 0, null)));
     const prompter = createWizardPrompter({
