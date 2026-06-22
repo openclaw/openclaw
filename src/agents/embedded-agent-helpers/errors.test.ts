@@ -7,7 +7,6 @@ import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-f
 import {
   formatAssistantErrorText,
   isLikelyContextOverflowError,
-  isStreamAbortErrorMessage,
 } from "./errors.js";
 
 const { toolPolicyAuditInfo } = vi.hoisted(() => ({
@@ -112,26 +111,9 @@ describe("isLikelyContextOverflowError", () => {
   });
 });
 
-describe("isStreamAbortErrorMessage", () => {
-  it("matches the Bedrock Converse stream abort message (#87876)", () => {
-    expect(isStreamAbortErrorMessage("This operation was aborted")).toBe(true);
-  });
-
-  it("is case-insensitive", () => {
-    expect(isStreamAbortErrorMessage("this operation was aborted")).toBe(true);
-    expect(isStreamAbortErrorMessage("THIS OPERATION WAS ABORTED")).toBe(true);
-  });
-
-  it("matches when embedded in a longer message", () => {
-    expect(
-      isStreamAbortErrorMessage(
-        "ConverseStream failed: This operation was aborted at connection drop",
-      ),
-    ).toBe(true);
-  });
-
-  it("does not match unrelated abort messages", () => {
-    expect(isStreamAbortErrorMessage("Request was aborted")).toBe(false);
-    expect(isStreamAbortErrorMessage("aborted by user")).toBe(false);
+describe("stream abort error classification (#87876)", () => {
+  it("the existing timeout classifier already matches 'This operation was aborted'", async () => {
+    const { isTimeoutErrorMessage } = await import("./failover-matches.js");
+    expect(isTimeoutErrorMessage("This operation was aborted")).toBe(true);
   });
 });
