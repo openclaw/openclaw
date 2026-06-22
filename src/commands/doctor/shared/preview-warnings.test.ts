@@ -7,10 +7,15 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import {
   collectDoctorPreviewNotes,
   collectChannelBoundMessageToolPolicyWarnings,
-  collectDoctorPreviewWarnings,
   collectProfileConfiguredToolSectionWarnings,
   collectVisibleReplyToolPolicyWarnings,
 } from "./preview-warnings.js";
+
+async function collectDoctorPreviewWarnings(
+  params: Parameters<typeof collectDoctorPreviewNotes>[0],
+): Promise<string[]> {
+  return (await collectDoctorPreviewNotes(params)).warningNotes;
+}
 
 type TestManifestRecord = {
   id: string;
