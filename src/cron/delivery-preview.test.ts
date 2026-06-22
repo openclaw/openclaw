@@ -141,4 +141,52 @@ describe("resolveCronDeliveryPreview", () => {
       detail: "message tool target unresolved: no route",
     });
   });
+
+  it("previews implicit no-channel announce-to-last as silent ok, not fail-closed", async () => {
+    // #56078: an implicit announce-to-`last` with no resolvable channel never had
+    // a sendable target, so runtime downgrades it to a silent ok (delivered=false)
+    // instead of failing the run. The preview must match instead of threatening a
+    // fail-closed that never happens.
+    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
+      ok: false,
+      mode: "implicit",
+      error: new Error("Channel is required when delivery.channel=last has no previous channel"),
+    });
+    const job = makeCronJob({
+      agentId: "avery",
+      delivery: undefined,
+    });
+
+    const preview = await resolveCronDeliveryPreview({
+      cfg: {} as never,
+      job,
+    });
+
+    expect(preview.detail).toBe(
+      "last -> no route, will skip delivery (ok, not delivered): Channel is required when delivery.channel=last has no previous channel",
+    );
+  });
+
+  it("previews channel-resolved-but-stale last targets as fail-closed", async () => {
+    // #56078 codex P1: when a channel resolves but its remembered route is
+    // stale/invalid (ok:false WITH channel), that is a real delivery failure the
+    // runtime keeps visible (fail-closed) — only the no-channel case is silent.
+    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
+      ok: false,
+      channel: "telegram",
+      mode: "implicit",
+      error: new Error("stale route"),
+    });
+    const job = makeCronJob({
+      agentId: "avery",
+      delivery: undefined,
+    });
+
+    const preview = await resolveCronDeliveryPreview({
+      cfg: {} as never,
+      job,
+    });
+
+    expect(preview.detail).toBe("last -> no route, will fail-closed: stale route");
+  });
 });

@@ -21,9 +21,20 @@ function formatDeliveryDetail(params: {
   resolved: boolean;
   sessionKey?: string;
   error?: string;
+  willFailClosed?: boolean;
 }): string {
   if (params.requestedChannel === "last" || !params.requestedChannel) {
     if (!params.resolved) {
+      // Mirror runtime: an unresolved "last" target only hard-fails the run when
+      // the job named a concrete target (or a channel resolved but its route is
+      // stale) and did not opt into best-effort. An implicit announce-to-`last`
+      // with no resolvable channel downgrades to a silent ok (delivered=false,
+      // #56078), so the preview must not threaten a fail-closed that never happens.
+      if (!params.willFailClosed) {
+        return params.error
+          ? `last -> no route, will skip delivery (ok, not delivered): ${params.error}`
+          : "last -> no route, will skip delivery (ok, not delivered)";
+      }
       return params.error
         ? `last -> no route, will fail-closed: ${params.error}`
         : "last -> no route, will fail-closed";
@@ -68,8 +79,17 @@ export async function resolveCronDeliveryPreview(params: {
     { dryRun: true },
   );
   if (!resolved.ok) {
-    // Preview mirrors runtime fail-closed behavior for "last" delivery so the
-    // UI can show unresolved routes before the cron job actually runs.
+    // Preview mirrors runtime fail-closed behavior for "last" delivery so the UI
+    // can show unresolved routes before the cron job actually runs. The runtime
+    // (delivery-dispatch.ts) only hard-fails an unresolved target when the job
+    // named a concrete target, OR a channel resolved but its route is stale, AND
+    // it did not opt into best-effort. An implicit announce-to-`last` with no
+    // resolvable channel downgrades to a silent ok (#56078), so keep the two
+    // surfaces aligned and avoid threatening a fail-closed that never happens.
+    const targetResolvedButFailed = resolved.channel != null;
+    const willFailClosed =
+      params.job.delivery?.bestEffort !== true &&
+      (hasExplicitCronDeliveryTarget(plan) || targetResolvedButFailed);
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
       detail:
@@ -80,6 +100,7 @@ export async function resolveCronDeliveryPreview(params: {
               resolved: false,
               sessionKey: deliverySessionKey,
               error: resolved.error.message,
+              willFailClosed,
             }),
     };
   }
