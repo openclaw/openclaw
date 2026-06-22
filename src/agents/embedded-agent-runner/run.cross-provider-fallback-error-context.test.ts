@@ -189,20 +189,29 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     // Timeout failover has no reliable current assistant. Reusing the previous
     // provider's session error would misattribute the failed candidate.
     const getLastFormattedAssistant = captureFormattedAssistant();
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        assistantTexts: [],
-        timedOut: true,
-        lastAssistant: makeAssistantMessageFixture({
-          stopReason: "error",
-          errorMessage: "You exceeded your current OpenAI quota.",
-          provider: "openai",
-          model: "gpt-5.4",
-          content: [],
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          timedOut: true,
+          lastAssistant: makeAssistantMessageFixture({
+            stopReason: "error",
+            errorMessage: "You exceeded your current OpenAI quota.",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          }),
+          currentAttemptAssistant: undefined,
         }),
-        currentAttemptAssistant: undefined,
-      }),
-    );
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          timedOut: true,
+          lastAssistant: undefined,
+          currentAttemptAssistant: undefined,
+        }),
+      );
 
     const promise = runEmbeddedAgent({
       ...overflowBaseRunParams,
