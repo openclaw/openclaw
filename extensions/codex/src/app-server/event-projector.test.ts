@@ -278,6 +278,11 @@ describe("CodexAppServerEventProjector", () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
       await createProjectorWithAssistantHooks();
 
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-1", phase: "final_answer", text: "" },
+      }),
+    );
     await projector.handleNotification(agentMessageDelta("hel"));
     await projector.handleNotification(agentMessageDelta("lo"));
     await projector.handleNotification(
@@ -348,8 +353,8 @@ describe("CodexAppServerEventProjector", () => {
 
   it("streams assistant deltas when the app-server omits the item phase", async () => {
     // Newer Codex app-servers (>= 0.139) stream agentMessage deltas without a
-    // "final_answer" phase. These must still surface as live partial replies
-    // instead of only appearing as one chunk at turn completion.
+    // "final_answer" phase. These surface on the replaceable agent-event path;
+    // legacy append-oriented partial callbacks stay quiet.
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
     const params = await createParams();
@@ -362,10 +367,7 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(agentMessageDelta("hel", "msg-final"));
     await projector.handleNotification(agentMessageDelta("lo", "msg-final"));
 
-    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
-      { text: "hel", delta: "hel" },
-      { text: "hello", delta: "lo" },
-    ]);
+    expect(onPartialReply).not.toHaveBeenCalled();
     expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
       { stream: "assistant", data: { text: "hel", delta: "hel", replaceable: true } },
       { stream: "assistant", data: { text: "hello", delta: "lo", replaceable: true } },
@@ -387,12 +389,7 @@ describe("CodexAppServerEventProjector", () => {
     await projector.handleNotification(agentMessageDelta("final ", "msg-final"));
     await projector.handleNotification(agentMessageDelta("answer", "msg-final"));
 
-    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
-      { text: "coordination ", delta: "coordination " },
-      { text: "coordination draft", delta: "draft" },
-      { text: "final ", delta: "", replace: true },
-      { text: "final answer", delta: "answer" },
-    ]);
+    expect(onPartialReply).not.toHaveBeenCalled();
     expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
       {
         stream: "assistant",
@@ -1108,19 +1105,9 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
     expect(onAssistantMessageStart).toHaveBeenCalledTimes(1);
-    // Intermediate (non-commentary) deltas stream live and are then superseded by
-    // the final item; turn completion still keeps them out of the persisted reply.
-    expect(onPartialReply.mock.calls.map((call) => call[0])).toEqual([
-      {
-        text: "checking thread context; then post a tight progress reply here.",
-        delta: "checking thread context; then post a tight progress reply here.",
-      },
-      {
-        text: "release fixes first. please drop affected PRs, failing checks, and blockers here.",
-        delta: "",
-        replace: true,
-      },
-    ]);
+    // Phase-less snapshots stay on the replaceable agent-event path so legacy
+    // append-only channel previews do not render superseded coordination text.
+    expect(onPartialReply).not.toHaveBeenCalled();
     expect(result.assistantTexts).toEqual([
       "release fixes first. please drop affected PRs, failing checks, and blockers here.",
     ]);

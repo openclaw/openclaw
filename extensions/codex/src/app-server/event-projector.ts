@@ -536,7 +536,12 @@ export class CodexAppServerEventProjector {
         stream: "assistant",
         data: { ...streamPayload, replaceable: true as const },
       });
-      await this.params.onPartialReply?.(streamPayload);
+      // Legacy channel preview callbacks are append-oriented and do not all
+      // understand replacement snapshots. Keep them on the known final-answer
+      // path; replaceable snapshots stay on the typed agent-event path.
+      if (this.shouldStreamAssistantPartial(itemId) && !replace) {
+        await this.params.onPartialReply?.(streamPayload);
+      }
     }
     // Stream non-commentary assistant deltas as partial replies and assistant
     // agent events so live surfaces (TUI, WebChat) render incremental answer
@@ -1075,6 +1080,10 @@ export class CodexAppServerEventProjector {
 
   private isCommentaryAssistantItem(itemId: string): boolean {
     return this.assistantPhaseByItem.get(itemId) === "commentary";
+  }
+
+  private shouldStreamAssistantPartial(itemId: string): boolean {
+    return this.assistantPhaseByItem.get(itemId) === "final_answer";
   }
 
   private emitCommentaryProgress(params: { itemId: string; text: string }): void {
