@@ -35,6 +35,31 @@ function estimateMessageBytes(message: AgentMessage): number {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
 }
 
+function findTranscriptRewriteMatches(
+  branch: readonly SessionBranchEntry[],
+  replacementsById: ReadonlyMap<string, AgentMessage>,
+): { matchedIndices: number[]; bytesFreed: number } {
+  const matchedIndices: number[] = [];
+  let bytesFreed = 0;
+
+  for (let index = 0; index < branch.length; index++) {
+    const entry = branch[index];
+    if (entry.type !== "message") {
+      continue;
+    }
+    const replacement = replacementsById.get(entry.id);
+    if (!replacement) {
+      continue;
+    }
+    const originalBytes = estimateMessageBytes(entry.message);
+    const replacementBytes = estimateMessageBytes(replacement);
+    matchedIndices.push(index);
+    bytesFreed += Math.max(0, originalBytes - replacementBytes);
+  }
+
+  return { matchedIndices, bytesFreed };
+}
+
 function remapEntryId(
   entryId: string | null | undefined,
   rewrittenEntryIds: ReadonlyMap<string, string>,
@@ -185,23 +210,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
     };
   }
 
-  const matchedIndices: number[] = [];
-  let bytesFreed = 0;
-
-  for (let index = 0; index < branch.length; index++) {
-    const entry = branch[index];
-    if (entry.type !== "message") {
-      continue;
-    }
-    const replacement = replacementsById.get(entry.id);
-    if (!replacement) {
-      continue;
-    }
-    const originalBytes = estimateMessageBytes(entry.message);
-    const replacementBytes = estimateMessageBytes(replacement);
-    matchedIndices.push(index);
-    bytesFreed += Math.max(0, originalBytes - replacementBytes);
-  }
+  const { matchedIndices, bytesFreed } = findTranscriptRewriteMatches(branch, replacementsById);
 
   if (matchedIndices.length === 0) {
     return {
@@ -339,23 +348,7 @@ export function rewriteTranscriptEntriesInState(params: {
     };
   }
 
-  const matchedIndices: number[] = [];
-  let bytesFreed = 0;
-
-  for (let index = 0; index < branch.length; index++) {
-    const entry = branch[index];
-    if (entry.type !== "message") {
-      continue;
-    }
-    const replacement = replacementsById.get(entry.id);
-    if (!replacement) {
-      continue;
-    }
-    const originalBytes = estimateMessageBytes(entry.message);
-    const replacementBytes = estimateMessageBytes(replacement);
-    matchedIndices.push(index);
-    bytesFreed += Math.max(0, originalBytes - replacementBytes);
-  }
+  const { matchedIndices, bytesFreed } = findTranscriptRewriteMatches(branch, replacementsById);
 
   if (matchedIndices.length === 0) {
     return {

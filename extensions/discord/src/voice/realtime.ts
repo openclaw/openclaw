@@ -1128,7 +1128,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     logger.info(
-      `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatRealtimeLogPreview(consultMessage)}`,
+      `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatVoiceLogPreview(consultMessage)}`,
     );
     const nativeConsult = this.forcedConsults.recordNativeConsult(event.args, callId);
     const pendingConsult = nativeConsult.kind === "pending" ? nativeConsult.handle : undefined;
@@ -1184,7 +1184,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     void promise
       .then((text) => {
         logger.info(
-          `discord voice: realtime consult answer (${text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatRealtimeLogPreview(text)}`,
+          `discord voice: realtime consult answer (${text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatVoiceLogPreview(text)}`,
         );
         session.submitToolResult(callId, { text });
       })
@@ -1478,7 +1478,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       this.setRecentAgentProxyConsultPromise(pending, promise);
       const text = await promise;
       logger.info(
-        `discord voice: realtime forced agent consult answer (${text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatRealtimeLogPreview(text)}`,
+        `discord voice: realtime forced agent consult answer (${text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
       );
       if (text.trim()) {
         this.enqueueExactSpeechMessage(text);

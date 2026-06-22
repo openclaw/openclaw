@@ -10,13 +10,6 @@ const UPDATE_COMMAND_RE =
   /^(?:pnpm|npm|bunx|npx)\s+openclaw\b.*(?:^|\s)update(?:\s|$)|^openclaw\b.*(?:^|\s)update(?:\s|$)/;
 const CONTAINER_HINT_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
-export function quoteCliArg(value: string): string {
-  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
-    return value;
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 /** Add active root options to a displayed command without duplicating explicit flags. */
 export function formatCliCommand(
   command: string,

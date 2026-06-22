@@ -108,14 +108,30 @@ describe("ci workflow guards", () => {
     expect(workflow.concurrency["cancel-in-progress"]).toContain(
       "github.event_name == 'pull_request'",
     );
-    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(4);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(6);
-    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(4);
-    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(4);
-    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(4);
-    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(4);
+    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(8);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
+  });
+
+  it("debounces canonical main pushes before Blacksmith admission", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const admission = workflow.jobs["runner-admission"];
+
+    expect(admission["runs-on"]).toBe("ubuntu-24.04");
+    expect(admission.steps[0].if).toContain("github.ref == 'refs/heads/main'");
+    expect(admission.steps[0].run).toContain('sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"');
+    expect(admission.env.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBe("90");
+    expect(workflow.jobs.preflight.needs).toContain("runner-admission");
+    expect(workflow.jobs["security-fast"].needs).toContain("runner-admission");
+    expect(source).toContain(
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}",
+    );
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -440,10 +456,12 @@ describe("ci workflow guards", () => {
 
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
+    const preflightJob = workflow.jobs.preflight;
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
     const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
 
-    expect(nodeTestJob["timeout-minutes"]).toBe(60);
+    expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
+    expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");

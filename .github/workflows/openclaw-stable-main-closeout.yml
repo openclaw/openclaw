@@ -244,6 +244,11 @@ jobs:
             exit 1
           fi
           if [[ -z "$ROLLBACK_DRILL_ID" || -z "$ROLLBACK_DRILL_DATE" ]]; then
+            if [[ "$EVENT_NAME" == "push" ]]; then
+              echo "::warning::Stable closeout skipped: rollback drill repository variables are missing; manual dispatch remains required to complete closeout."
+              echo "should_closeout=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             echo "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides." >&2
             exit 1
           fi

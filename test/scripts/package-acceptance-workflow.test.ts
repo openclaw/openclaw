@@ -120,6 +120,12 @@ describe("package acceptance workflow", () => {
     const existingCloseoutEvidenceMatchIndex = workflow.indexOf(
       'if [[ -n "$existing_closeout_full_release_validation_run_id" &&',
     );
+    const rollbackDrillGateIndex = workflow.indexOf(
+      'if [[ -z "$ROLLBACK_DRILL_ID" || -z "$ROLLBACK_DRILL_DATE" ]]; then',
+    );
+    const rollbackDrillPushSkipIndex = workflow.indexOf(
+      "Stable closeout skipped: rollback drill repository variables are missing",
+    );
 
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
@@ -169,6 +175,9 @@ describe("package acceptance workflow", () => {
       "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it.",
     );
     expect(workflow).toContain(
+      "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides.",
+    );
+    expect(workflow).toContain(
       "REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}",
     );
     expect(workflow).toContain('--allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT"');
@@ -186,6 +195,8 @@ describe("package acceptance workflow", () => {
     expect(partialRepairIndex).toBeGreaterThan(-1);
     expect(partialRepairIndex).toBeLessThan(releaseVersionGateIndex);
     expect(evidenceDownloadIndex).toBeGreaterThan(releaseVersionGateIndex);
+    expect(rollbackDrillGateIndex).toBeGreaterThan(existingCloseoutEvidenceMatchIndex);
+    expect(rollbackDrillPushSkipIndex).toBeGreaterThan(rollbackDrillGateIndex);
   });
 
   it("keeps pnpm version selection sourced from packageManager", () => {
