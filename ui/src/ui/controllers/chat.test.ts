@@ -1067,7 +1067,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
-  it("does not materialize stream segments when final payload is renderable", () => {
+  it("keeps pre-final stream segments when final payload is renderable", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -1087,10 +1087,12 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "before tool");
+    expect(state.chatMessages[1]).toEqual(payload.message);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
-    expect(state.chatStreamSegments).toEqual([{ text: "before tool", ts: 1 }]);
+    expect(state.chatStreamSegments).toEqual([]);
   });
 
   it("processes aborted from own run and keeps partial assistant message", () => {
