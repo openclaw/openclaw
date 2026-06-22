@@ -11,15 +11,15 @@ import type { FastMode } from "../../api/types.ts";
 import type { BorderRadiusStop, TextScaleStop } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
-import { icons } from "../../components/icons.ts";
-import { t } from "../../i18n/index.ts";
-import { resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import {
   normalizeLocalUserIdentity,
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
-} from "../../ui/user-identity.ts";
+} from "../../app/user-identity.ts";
+import { icons } from "../../components/icons.ts";
+import { t } from "../../i18n/index.ts";
+import { resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import {
   assistantAvatarFallbackUrl,
   resolveAssistantTextAvatar,

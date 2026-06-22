@@ -9,6 +9,7 @@ import type {
   SessionGoal,
   SessionsListResult,
 } from "../../api/types.ts";
+import { resolveLocalUserName } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
@@ -43,7 +44,6 @@ import {
 } from "./tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
-import { resolveLocalUserName } from "../../ui/user-identity.ts";
 import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
 import {
   getChatAttachmentPreviewUrl,
