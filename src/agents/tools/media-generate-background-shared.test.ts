@@ -495,6 +495,72 @@ describe("createMediaGenerationTaskLifecycle", () => {
     });
   });
 
+  it("does not pin a stored thread from a different requester target", () => {
+    subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
+      entry: {
+        lastChannel: "telegram",
+        lastTo: "room-b",
+        lastThreadId: 99,
+      },
+    });
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+
+    const handle = lifecycle.createTaskRun({
+      sessionKey: "agent:main:telegram:room-a",
+      requesterOrigin: { channel: "telegram", to: "room-a" },
+      prompt: "proof image",
+    });
+
+    expect(handle?.requesterOrigin).toEqual({
+      channel: "telegram",
+      to: "room-a",
+      accountId: undefined,
+    });
+  });
+
+  it("pins the external session route for an internal requester origin", () => {
+    subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
+      entry: {
+        lastChannel: "telegram",
+        lastTo: "room-a",
+        lastAccountId: "bot-1",
+      },
+    });
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+
+    const handle = lifecycle.createTaskRun({
+      sessionKey: "agent:main:telegram:room-a",
+      requesterOrigin: { channel: "webchat" },
+      prompt: "proof image",
+    });
+
+    expect(handle?.requesterOrigin).toEqual({
+      channel: "telegram",
+      to: "room-a",
+      accountId: "bot-1",
+    });
+  });
+
   it("returns the completion wake delivery result", async () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: true,

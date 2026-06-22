@@ -21,10 +21,10 @@ import {
 } from "../../tasks/task-completion-contract.js";
 import {
   deliveryContextFromSession,
-  mergeDeliveryContext,
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../../utils/delivery-context.js";
+import type { DeliveryContextSessionSource } from "../../utils/delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -39,6 +39,7 @@ import {
   loadRequesterSessionEntry,
 } from "../subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
+import { resolveAnnounceOrigin } from "../subagent-announce-origin.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
@@ -65,15 +66,17 @@ export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void>
 
 function resolvePinnedMediaRequesterOrigin(params: {
   requesterOrigin?: DeliveryContext;
-  sessionOrigin?: DeliveryContext;
+  sessionEntry?: DeliveryContextSessionSource;
 }): DeliveryContext | undefined {
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
-  const sessionOrigin = normalizeDeliveryContext(params.sessionOrigin);
+  const sessionOrigin = deliveryContextFromSession(params.sessionEntry);
   const accountsConflict =
     requesterOrigin?.accountId &&
     sessionOrigin?.accountId &&
     requesterOrigin.accountId !== sessionOrigin.accountId;
-  return accountsConflict ? requesterOrigin : mergeDeliveryContext(requesterOrigin, sessionOrigin);
+  return accountsConflict
+    ? requesterOrigin
+    : resolveAnnounceOrigin(params.sessionEntry, requesterOrigin);
 }
 
 /** Returns whether a media generation request should detach for a session. */
@@ -166,7 +169,7 @@ function createMediaGenerationTaskRun(params: {
     // session state can move to another peer while generation is still running.
     const requesterOrigin = resolvePinnedMediaRequesterOrigin({
       requesterOrigin: params.requesterOrigin,
-      sessionOrigin: deliveryContextFromSession(loadRequesterSessionEntry(sessionKey).entry),
+      sessionEntry: loadRequesterSessionEntry(sessionKey).entry,
     });
     const task = createRunningTaskRun({
       runtime: "cli",
