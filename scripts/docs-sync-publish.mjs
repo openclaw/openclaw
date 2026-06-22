@@ -168,6 +168,13 @@ const GENERATED_LOCALES = [
     // once the docs host accepts it.
     navigation: false,
   },
+  {
+    language: "he",
+    dir: "he",
+    navFile: "he-navigation.json",
+    tmFile: "he.tm.jsonl",
+    navMode: "clone-en",
+  },
 ];
 
 function readOptionValue(argv, index, optionName) {

@@ -159,6 +159,7 @@ describe("i18n", () => {
     for (const [locale, value] of Object.entries({
       ar,
       fa,
+      he,
       it: itLocale,
       nl,
       vi: viLocale,
