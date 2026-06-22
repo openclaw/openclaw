@@ -33,16 +33,134 @@ describe("agents bind matrix integration", () => {
     ]);
   });
 
-  it("rejects a binding spec with extra colon segments instead of silently truncating", () => {
+  it("accepts a three-segment peer binding spec (channel:peer_kind:peer_id)", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
     );
 
-    const parsed = parseBindingSpecs({ agentId: "main", specs: ["matrix:work:extra"], config: {} });
+    const parsed = parseBindingSpecs({
+      agentId: "main",
+      specs: ["matrix:group:oc_test"],
+      config: {},
+    });
+
+    expect(parsed.errors).toStrictEqual([]);
+    expect(parsed.bindings).toEqual([
+      {
+        type: "route",
+        agentId: "main",
+        match: { channel: "matrix", peer: { kind: "group", id: "oc_test" } },
+      },
+    ]);
+  });
+
+  it("rejects a binding spec with more than three colon segments", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({
+      agentId: "main",
+      specs: ["matrix:work:extra:too_many"],
+      config: {},
+    });
 
     expect(parsed.bindings).toEqual([]);
     expect(parsed.errors).toEqual([
-      'Invalid binding "matrix:work:extra". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.',
+      'Invalid binding "matrix:work:extra:too_many". Too many segments. Use <channel>:<account> (e.g., telegram:default) or <channel>:<peer_kind>:<peer_id> (e.g., feishu:group:oc_test).',
+    ]);
+  });
+
+  it("rejects peer binding with invalid peer kind", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({
+      agentId: "main",
+      specs: ["matrix:invalid:oc_test"],
+      config: {},
+    });
+
+    expect(parsed.bindings).toEqual([]);
+    expect(parsed.errors).toEqual([
+      'Invalid binding "matrix:invalid:oc_test". Peer kind "invalid" is not valid. Use one of: direct, group, channel. For example feishu:group:oc_test.',
+    ]);
+  });
+
+  it("rejects peer binding with empty peer kind", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({
+      agentId: "main",
+      specs: ["matrix::oc_test"],
+      config: {},
+    });
+
+    expect(parsed.bindings).toEqual([]);
+    expect(parsed.errors).toEqual([
+      'Invalid binding "matrix::oc_test". Peer kind is empty. Use <channel>:<peer_kind>:<peer_id>, for example feishu:group:oc_test.',
+    ]);
+  });
+
+  it("rejects peer binding with empty peer id", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({
+      agentId: "main",
+      specs: ["matrix:group:"],
+      config: {},
+    });
+
+    expect(parsed.bindings).toEqual([]);
+    expect(parsed.errors).toEqual([
+      'Invalid binding "matrix:group:". Peer id is empty. Use <channel>:<peer_kind>:<peer_id>, for example feishu:group:oc_test.',
+    ]);
+  });
+
+  it("normalizes peer kind aliases (dm -> direct)", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({
+      agentId: "main",
+      specs: ["matrix:dm:user123"],
+      config: {},
+    });
+
+    expect(parsed.errors).toStrictEqual([]);
+    expect(parsed.bindings).toEqual([
+      {
+        type: "route",
+        agentId: "main",
+        match: { channel: "matrix", peer: { kind: "direct", id: "user123" } },
+      },
+    ]);
+  });
+
+  it("accepts peer binding with channel kind", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", plugin: matrixBindingPlugin, source: "test" }]),
+    );
+
+    const parsed = parseBindingSpecs({
+      agentId: "main",
+      specs: ["matrix:channel:news"],
+      config: {},
+    });
+
+    expect(parsed.errors).toStrictEqual([]);
+    expect(parsed.bindings).toEqual([
+      {
+        type: "route",
+        agentId: "main",
+        match: { channel: "matrix", peer: { kind: "channel", id: "news" } },
+      },
     ]);
   });
 
