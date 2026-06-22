@@ -1906,6 +1906,48 @@ async function runEmbeddedAgentInternal(
             });
           }
           runLoopIterations += 1;
+
+          // Check for live model switch before each attempt iteration so that
+          // compaction and retry paths use the most recent user-selected model.
+          const liveSwitch = shouldSwitchToLiveModel({
+            cfg: params.config,
+            sessionKey: resolvedSessionKey,
+            agentId: params.agentId,
+            defaultProvider: DEFAULT_PROVIDER,
+            defaultModel: DEFAULT_MODEL,
+            currentProvider: provider,
+            currentModel: modelId,
+            currentAuthProfileId: preferredProfileId,
+            currentAuthProfileIdSource: params.authProfileIdSource,
+          });
+          if (liveSwitch) {
+            provider = liveSwitch.provider;
+            modelId = liveSwitch.model;
+            // Re-resolve the effective model so compaction and subsequent attempts
+            // use the switched model instead of the stale one.
+            const newModelResolution = await resolveModelAsync(
+              provider,
+              modelId,
+              agentDir,
+              params.config,
+              { workspaceDir: resolvedWorkspace },
+            );
+            if (newModelResolution.model) {
+              effectiveModel = newModelResolution.model;
+            }
+            // Clear the pending flag so subsequent iterations do not re-trigger.
+            clearLiveModelSwitchPending({
+              cfg: params.config,
+              sessionKey: resolvedSessionKey,
+              agentId: params.agentId,
+            }).catch(() => {
+              /* best-effort */
+            });
+            log.info(
+              `[run] live model switch applied before attempt ${runLoopIterations}: ${provider}/${modelId}`,
+            );
+          }
+
           const runtimeAuthRetry = authRetryPending;
           authRetryPending = false;
           attemptedThinking.add(thinkLevel);
