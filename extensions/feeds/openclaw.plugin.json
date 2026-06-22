@@ -1,0 +1,52 @@
+{
+  "id": "feeds",
+  "name": "Feeds",
+  "description": "Adds configured catalog feed source validation for skills and plugins.",
+  "activation": {
+    "onStartup": false,
+    "onCommands": ["doctor", "feeds"]
+  },
+  "commandAliases": [{ "name": "feeds", "kind": "cli" }],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Enable feeds doctor checks."
+      },
+      "sources": {
+        "type": "array",
+        "description": "Catalog feed sources used for curated skill and plugin discovery.",
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "url"],
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Stable local feed identifier."
+            },
+            "url": {
+              "type": "string",
+              "description": "Absolute https:// or file:// feed document URL."
+            },
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable this feed source. Defaults to true."
+            },
+            "trust": {
+              "type": "string",
+              "enum": ["unsigned", "pinned"],
+              "description": "Whether this source is accepted unsigned or pinned by integrity hash."
+            },
+            "integrity": {
+              "type": "string",
+              "description": "Optional sha256:<hex> hash for pinned feed documents."
+            }
+          }
+        }
+      }
+    }
+  }
+}

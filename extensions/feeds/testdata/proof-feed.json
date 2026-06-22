@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "openclaw-feeds-proof",
+  "generatedAt": "2026-06-19T00:00:00.000Z",
+  "entries": [
+    {
+      "type": "plugin",
+      "id": "proof-calendar-helper",
+      "version": "1.0.0",
+      "name": "Proof Calendar Helper",
+      "description": "Fixture entry used by HTTPS feed behavior proof.",
+      "tags": ["proof", "calendar"],
+      "install": {
+        "source": "clawhub",
+        "spec": "proof-calendar-helper"
+      }
+    }
+  ]
+}
