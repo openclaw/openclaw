@@ -103,6 +103,21 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
+  it("rejects option-looking string flag values before scanning built plugin artifacts", () => {
+    for (const args of [
+      ["--extension", "-h"],
+      ["--json", "-h"],
+    ]) {
+      const result = runProfileExtensionMemory(args);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`[extension-memory] ${args[0]} requires a value`);
+      expect(result.stderr).not.toContain("dist/extensions");
+      expect(result.stderr).not.toContain("at ");
+    }
+  });
+
   it("bounds noisy child output without losing RSS samples", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
     try {

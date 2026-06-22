@@ -1,4 +1,5 @@
 // Command queue tests cover bounded command execution and queue ordering.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { CommandLane } from "./lanes.js";
@@ -499,6 +500,34 @@ describe("command queue", () => {
         activeCount: 0,
         queuedCount: 0,
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized task timeouts before arming lane timers", async () => {
+    const lane = `timeout-clamp-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const blocker = createDeferred();
+      const task = enqueueCommandInLane(
+        lane,
+        async () => {
+          await blocker.promise;
+        },
+        { taskTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1 },
+      );
+
+      await Promise.resolve();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+      blocker.resolve();
+      await task;
+      setTimeoutSpy.mockRestore();
     } finally {
       vi.useRealTimers();
     }

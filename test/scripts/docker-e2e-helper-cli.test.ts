@@ -103,13 +103,16 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("rejects missing timings limits without a Node stack trace", () => {
-    const result = runHelper("scripts/docker-e2e-timings.mjs", "summary.json", "--limit");
+    for (const limit of [undefined, "-h"]) {
+      const args = ["scripts/docker-e2e-timings.mjs", "summary.json", "--limit"];
+      const result = runHelper(...(limit === undefined ? args : [...args, limit]));
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("--limit requires a value");
-    expect(result.stderr).not.toContain("Error:");
-    expect(result.stderr).not.toContain("at file:");
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("--limit requires a value");
+      expect(result.stderr).not.toContain("Error:");
+      expect(result.stderr).not.toContain("at file:");
+    }
   });
 
   it("prints rerun help without detecting the GitHub repository", () => {
@@ -187,4 +190,187 @@ describe("Docker E2E helper CLIs", () => {
       }
     },
   );
+
+  it("ignores artifact-provided GitHub rerun commands", () => {
+    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-command-`);
+    try {
+      const file = path.join(root, "failures.json");
+      writeFileSync(
+        file,
+        `${JSON.stringify(
+          {
+            lanes: [
+              {
+                ghWorkflowCommand: "echo poisoned-command",
+                name: "gateway-network",
+                status: 1,
+              },
+            ],
+            status: "failed",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", "abc123");
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("docker_lanes='gateway-network'");
+      expect(result.stdout).not.toContain("poisoned-command");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("preserves whitelisted rerun inputs from artifact commands", () => {
+    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-inputs-`);
+    try {
+      const file = path.join(root, "failures.json");
+      writeFileSync(
+        file,
+        `${JSON.stringify(
+          {
+            lanes: [
+              {
+                ghWorkflowCommand:
+                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f package_artifact_run_id='12345' -f package_artifact_name='docker-e2e-package' -f docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test' -f published_upgrade_survivor_baselines='openclaw@2026.5.3' -f published_upgrade_survivor_scenarios='plugin-dependency-cleanup' -f unsafe_input='do-not-copy'",
+                name: "published-upgrade-survivor-openclaw-2026-5-3",
+                status: 1,
+              },
+            ],
+            status: "failed",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", "abc123");
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      const combinedCommand = result.stdout.match(/Combined GitHub rerun:\n([^\n]+)/u)?.[1] ?? "";
+      expect(combinedCommand).toContain("--ref 'release/2026.6'");
+      expect(combinedCommand).toContain("package_artifact_run_id='12345'");
+      expect(combinedCommand).toContain(
+        "docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test'",
+      );
+      expect(combinedCommand).toContain("published_upgrade_survivor_baselines='openclaw@2026.5.3'");
+      expect(combinedCommand).toContain(
+        "published_upgrade_survivor_scenarios='plugin-dependency-cleanup'",
+      );
+      expect(combinedCommand).not.toContain("unsafe_input");
+      expect(result.stdout).toContain("package_artifact_run_id='12345'");
+      expect(result.stdout).toContain(
+        "docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test'",
+      );
+      expect(result.stdout).toContain("published_upgrade_survivor_baselines='openclaw@2026.5.3'");
+      expect(result.stdout).toContain(
+        "published_upgrade_survivor_scenarios='plugin-dependency-cleanup'",
+      );
+      expect(result.stdout).not.toContain("unsafe_input");
+      expect(result.stdout).not.toContain("do-not-copy");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("groups combined reruns by recovered workflow inputs", () => {
+    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-groups-`);
+    try {
+      const file = path.join(root, "failures.json");
+      writeFileSync(
+        file,
+        `${JSON.stringify(
+          {
+            lanes: [
+              {
+                ghWorkflowCommand:
+                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f published_upgrade_survivor_baselines='openclaw@2026.5.3'",
+                name: "published-upgrade-survivor-openclaw-2026-5-3",
+                status: 1,
+              },
+              {
+                ghWorkflowCommand:
+                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f published_upgrade_survivor_baselines='openclaw@2026.5.2'",
+                name: "published-upgrade-survivor-openclaw-2026-5-2",
+                status: 1,
+              },
+            ],
+            status: "failed",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", "abc123");
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("Combined GitHub reruns:");
+      expect(result.stdout).toContain(
+        "- published-upgrade-survivor-openclaw-2026-5-3: gh workflow run",
+      );
+      expect(result.stdout).toContain(
+        "- published-upgrade-survivor-openclaw-2026-5-2: gh workflow run",
+      );
+      expect(result.stdout).toContain(
+        "docker_lanes='published-upgrade-survivor-openclaw-2026-5-3'",
+      );
+      expect(result.stdout).toContain(
+        "docker_lanes='published-upgrade-survivor-openclaw-2026-5-2'",
+      );
+      expect(result.stdout).not.toContain(
+        "docker_lanes='published-upgrade-survivor-openclaw-2026-5-3 published-upgrade-survivor-openclaw-2026-5-2'",
+      );
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("merges duplicate lane entries before printing reruns", () => {
+    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-merge-`);
+    try {
+      const file = path.join(root, "failures.json");
+      writeFileSync(
+        file,
+        `${JSON.stringify(
+          {
+            lanes: [
+              {
+                name: "published-upgrade-survivor-openclaw-2026-5-3",
+                status: 1,
+              },
+              {
+                ghWorkflowCommand:
+                  "gh workflow run 'openclaw-live-and-e2e-checks-reusable.yml' --ref 'release/2026.6' -f published_upgrade_survivor_baselines='openclaw@2026.5.3'",
+                name: "published-upgrade-survivor-openclaw-2026-5-3",
+                status: 1,
+              },
+            ],
+            status: "failed",
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const result = runHelper("scripts/docker-e2e-rerun.mjs", file, "--ref", "abc123");
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      const combinedCommand = result.stdout.match(/Combined GitHub rerun:\n([^\n]+)/u)?.[1] ?? "";
+      expect(combinedCommand).toContain("--ref 'release/2026.6'");
+      expect(combinedCommand).toContain("published_upgrade_survivor_baselines='openclaw@2026.5.3'");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 });

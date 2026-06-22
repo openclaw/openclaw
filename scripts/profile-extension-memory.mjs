@@ -87,7 +87,7 @@ export function parseArgs(argv) {
       case "--extension":
       case "-e": {
         const next = args[index + 1];
-        if (!next) {
+        if (!next || next.startsWith("-")) {
           throw new Error(`${arg} requires a value`);
         }
         options.extensions.push(next);
@@ -112,7 +112,7 @@ export function parseArgs(argv) {
         break;
       case "--json": {
         const next = args[index + 1];
-        if (!next) {
+        if (!next || next.startsWith("-")) {
           throw new Error(`${arg} requires a value`);
         }
         options.jsonPath = path.resolve(next);

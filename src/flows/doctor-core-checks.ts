@@ -684,33 +684,6 @@ const browserCheck: HealthCheck = {
   },
 };
 
-const workspaceStatusCheck: HealthCheck = {
-  id: "core/doctor/workspace-status",
-  kind: "core",
-  description: "Workspace directory exists and has no legacy duplicates.",
-  source: "doctor",
-  async detect(ctx) {
-    const { detectLegacyWorkspaceDirs } = await loadDoctorWorkspaceModule();
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-    const legacy = detectLegacyWorkspaceDirs({ workspaceDir });
-    if (legacy.legacyDirs.length === 0) {
-      return [];
-    }
-    return [
-      {
-        checkId: "core/doctor/workspace-status",
-        severity: "info",
-        message: `Detected ${legacy.legacyDirs.length} legacy workspace director${
-          legacy.legacyDirs.length === 1 ? "y" : "ies"
-        } alongside the active workspace.`,
-        path: workspaceDir,
-        fixHint:
-          "Inspect the legacy directories and migrate or remove them; see `openclaw doctor` for the detailed migration prompt.",
-      },
-    ];
-  },
-};
-
 function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
   return {
     id: "core/doctor/skills-readiness",
@@ -989,7 +962,6 @@ export function createCoreHealthChecks(
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
-    workspaceStatusCheck,
     createSkillsReadinessCheck(deps),
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,

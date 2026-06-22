@@ -9,12 +9,12 @@ import type { OpenClawConfig } from "../config/config.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionDirect } from "./embedded-agent-runner/compact.runtime.js";
+import { extractAssistantText } from "./embedded-agent-utils.js";
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
-  extractAssistantText,
   LIVE_CACHE_TEST_ENABLED,
   logLiveCache,
   resolveLiveDirectModel,

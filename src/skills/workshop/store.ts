@@ -98,13 +98,6 @@ function resolveProposalRecordPath(
   return path.join(resolveProposalDir(proposalId, options), PROPOSAL_RECORD_FILE);
 }
 
-export function resolveProposalDraftPath(
-  proposalId: string,
-  options: SkillWorkshopStoreOptions = {},
-): string {
-  return path.join(resolveProposalDir(proposalId, options), PROPOSAL_DRAFT_FILE);
-}
-
 export function prepareSkillProposalSupportFiles(
   input: readonly SkillProposalSupportFileInput[] | undefined,
 ): PreparedSkillProposalSupportFile[] {

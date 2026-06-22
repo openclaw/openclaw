@@ -309,15 +309,63 @@ function extractTrailingJsonObject(input) {
   try {
     return JSON.parse(trimmed);
   } catch {
-    // Some local runs emit stderr diagnostics before the final JSON payload.
-    // Walk backward and keep the last parseable top-level object.
-    for (let index = trimmed.lastIndexOf("{"); index >= 0; index = trimmed.lastIndexOf("{", index - 1)) {
-      const candidate = trimmed.slice(index);
+    // Agent lifecycle diagnostics can surround --json output. Prefer an agent
+    // result envelope so a structured post-result diagnostic cannot replace it.
+    let lastParsed;
+    let lastAgentResult;
+    for (let index = 0; index < trimmed.length; index += 1) {
+      if (trimmed[index] !== "{") {
+        continue;
+      }
+      let depth = 0;
+      let inString = false;
+      let escaping = false;
+      let end = -1;
+      for (let cursor = index; cursor < trimmed.length; cursor += 1) {
+        const char = trimmed[cursor];
+        if (inString) {
+          if (escaping) {
+            escaping = false;
+          } else if (char === "\\") {
+            escaping = true;
+          } else if (char === '"') {
+            inString = false;
+          }
+          continue;
+        }
+        if (char === '"') {
+          inString = true;
+        } else if (char === "{") {
+          depth += 1;
+        } else if (char === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            end = cursor;
+            break;
+          }
+        }
+      }
+      if (end < 0) {
+        continue;
+      }
       try {
-        return JSON.parse(candidate);
+        lastParsed = JSON.parse(trimmed.slice(index, end + 1));
+        if (
+          Array.isArray(lastParsed?.result?.payloads) ||
+          Array.isArray(lastParsed?.payloads)
+        ) {
+          lastAgentResult = lastParsed;
+        }
       } catch {
         // keep scanning
       }
+      index = end;
+    }
+    if (lastAgentResult !== undefined) {
+      return lastAgentResult;
+    }
+    if (lastParsed !== undefined) {
+      return lastParsed;
     }
     throw new Error(`could not extract JSON payload from agent output:\n${trimmed}`);
   }

@@ -5,6 +5,9 @@ import { parse } from "yaml";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
+const LIVE_MEDIA_RUNNER_DOCKERFILE = ".github/images/live-media-runner/Dockerfile";
+const LIVE_MEDIA_RUNNER_IMAGE = "ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04";
+const LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW = ".github/workflows/live-media-runner-image.yml";
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
@@ -853,9 +856,23 @@ describe("package artifact reuse", () => {
     expect(workflow).toMatch(
       /validate_live_media_provider_suites:[\s\S]*?runs-on: \$\{\{ inputs\.use_github_hosted_runners && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
     );
-    expect(workflow).toContain("image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04");
+    expect(workflow).toContain(`image: ${LIVE_MEDIA_RUNNER_IMAGE}`);
     expect(workflow).toContain("ffmpeg -version | head -1");
     expect(workflow).toContain("ffprobe -version | head -1");
+    const imageDockerfile = readFileSync(LIVE_MEDIA_RUNNER_DOCKERFILE, "utf8");
+    const imageWorkflow = readFileSync(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "utf8");
+    const buildJob = workflowJob(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "build");
+    const buildStep = workflowStep(buildJob, "Build and push live media runner image");
+    expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04$/m);
+    expect(imageDockerfile).toContain("apt-get install -y --no-install-recommends");
+    for (const packageName of ["bash", "curl", "ffmpeg", "git", "openssh-client", "zstd"]) {
+      expect(imageDockerfile).toContain(`    ${packageName} \\`);
+    }
+    expect(imageDockerfile).toContain("rm -rf /var/lib/apt/lists/*");
+    expect(imageWorkflow).toContain(`- "${LIVE_MEDIA_RUNNER_DOCKERFILE}"`);
+    expect(buildStep.with?.context).toBe(".github/images/live-media-runner");
+    expect(buildStep.with?.file).toBe(LIVE_MEDIA_RUNNER_DOCKERFILE);
+    expect(buildStep.with?.tags).toContain(LIVE_MEDIA_RUNNER_IMAGE);
     expect(workflow).toContain("suite_id: native-live-extensions-media-audio");
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");

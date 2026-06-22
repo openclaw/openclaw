@@ -188,7 +188,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
-  serviceTier?: CodexServiceTier;
+  serviceTier?: CodexServiceTier | null;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
