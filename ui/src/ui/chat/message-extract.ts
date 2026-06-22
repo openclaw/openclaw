@@ -9,8 +9,12 @@ import { stripThinkingTags } from "../strip-thinking-tags.ts";
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
 
-function isTextContentBlockType(value: unknown): boolean {
-  return value === "text" || value === "input_text" || value === "output_text";
+function isTextContentBlockType(value: unknown, role: string): boolean {
+  return (
+    value === "text" ||
+    (role === "user" && value === "input_text") ||
+    (role === "assistant" && value === "output_text")
+  );
 }
 
 function processMessageText(text: string, role: string): string {
@@ -94,6 +98,7 @@ export function extractThinkingCached(message: unknown): string | null {
 
 export function extractRawText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(m.role);
   const content = m.content;
   if (typeof content === "string") {
     return content;
@@ -102,7 +107,7 @@ export function extractRawText(message: unknown): string | null {
     const parts = content
       .map((p) => {
         const item = p as Record<string, unknown>;
-        if (isTextContentBlockType(item.type) && typeof item.text === "string") {
+        if (isTextContentBlockType(item.type, role) && typeof item.text === "string") {
           return item.text;
         }
         return null;

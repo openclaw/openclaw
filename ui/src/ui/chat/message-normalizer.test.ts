@@ -111,6 +111,20 @@ describe("message-normalizer", () => {
       expect(assistant.content).toEqual([{ type: "text", text: "Persisted assistant answer" }]);
     });
 
+    it("does not reinterpret persisted Responses text blocks from the wrong role", () => {
+      const user = normalizeMessage({
+        role: "user",
+        content: [{ type: "output_text", text: "Assistant-only block" }],
+      });
+      const assistant = normalizeMessage({
+        role: "assistant",
+        content: [{ type: "input_text", text: "User-only block" }],
+      });
+
+      expect(user.content).not.toContainEqual({ type: "text", text: "Assistant-only block" });
+      expect(assistant.content).not.toContainEqual({ type: "text", text: "User-only block" });
+    });
+
     it("normalizes structured base64 audio content blocks as renderable attachments", () => {
       const result = normalizeMessage({
         role: "assistant",

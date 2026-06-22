@@ -15,12 +15,15 @@ import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 export { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
 
-function isTextContentBlock(item: Record<string, unknown>): item is Record<string, unknown> & {
-  text: string;
-} {
+function isTextContentBlock(
+  item: Record<string, unknown>,
+  role: string,
+): item is Record<string, unknown> & { text: string } {
   return (
     typeof item.text === "string" &&
-    (item.type === "text" || item.type === "input_text" || item.type === "output_text")
+    (item.type === "text" ||
+      (role === "user" && item.type === "input_text") ||
+      (role === "assistant" && item.type === "output_text"))
   );
 }
 
@@ -415,7 +418,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           },
         ];
       }
-      if (isTextContentBlock(item)) {
+      if (isTextContentBlock(item, role)) {
         if (isAssistantMessage) {
           const expanded = expandTextContent(item.text);
           audioAsVoice = audioAsVoice || expanded.audioAsVoice;

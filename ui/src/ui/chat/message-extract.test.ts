@@ -59,6 +59,21 @@ describe("extractTextCached", () => {
     ).toBe("Persisted assistant answer");
   });
 
+  it("ignores persisted Responses text blocks from the wrong role", () => {
+    expect(
+      extractText({
+        role: "user",
+        content: [{ type: "output_text", text: "Assistant-only block" }],
+      }),
+    ).toBeNull();
+    expect(
+      extractText({
+        role: "assistant",
+        content: [{ type: "input_text", text: "User-only block" }],
+      }),
+    ).toBeNull();
+  });
+
   it("prefers final_answer assistant text over commentary text", () => {
     const message = {
       role: "assistant",
