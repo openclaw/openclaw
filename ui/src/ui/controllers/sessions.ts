@@ -50,6 +50,13 @@ export type SessionsState = SessionsChatRunState & {
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
   sessionsShowArchived: boolean;
+  /**
+   * When true, the next `sessions.list` call pulls every configured agent's
+   * store and skips the per-agent `agentId` scope filter so child-spawned
+   * subagent sessions owned by other agents become visible (issue #95295).
+   * The view's default is to scope to the assistant's agent.
+   */
+  sessionsAllAgents?: boolean;
   sessionsExpandedCheckpointKey: string | null;
   sessionsCheckpointItemsByKey: Record<string, SessionCompactionCheckpoint[]>;
   sessionsCheckpointLoadingKey: string | null;
@@ -64,6 +71,14 @@ export type SessionsState = SessionsChatRunState & {
 };
 
 export type LoadSessionsOverrides = {
+  /**
+   * Explicit per-agent scope. When set, the request is scoped to this agent
+   * only and child-spawned subagent sessions from other agents stay hidden.
+   * When unset (and `configuredAgentsOnly: true`), every configured agent's
+   * store is queried so cross-agent subagent sessions surface in the result
+   * (issue #95295). Explicit overrides are ALWAYS respected, never widened
+   * silently by sidebar/toggle state.
+   */
   agentId?: string;
   activeMinutes?: number;
   limit?: number;
@@ -72,6 +87,10 @@ export type LoadSessionsOverrides = {
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   showArchived?: boolean;
+  /**
+   * Constrain the loaded stores to configured agents (default true). When
+   * combined with no `agentId`, this is the cross-agent visibility path.
+   */
   configuredAgentsOnly?: boolean;
   append?: boolean;
   publishChatRunStatus?: boolean;
@@ -1117,13 +1136,22 @@ async function loadSessionsOnce(
     const limit =
       normalizeSessionsFilterOverride(overrides?.limit) ??
       parseSessionsFilterInteger(state.sessionsFilterLimit);
+    // Cross-agent visibility (issue #95295): the caller decides whether to
+    // scope to a single `agentId` (per-agent sidebar) or to surface every
+    // configured agent's child-spawned subagent sessions (toggle on). When
+    // `agentId` is absent, `filterSessionEntries` skips its strict per-agent
+    // match naturally. An explicit `agentId` override is ALWAYS respected so
+    // scoped refreshes do not silently widen — even when the user's toggle
+    // state would otherwise hide them (issue #95295 P1 finding: refresh
+    // override widening).
     const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
+    const explicitAgentId = overrides?.agentId?.trim() ?? "";
+    const agentId = explicitAgentId;
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
       configuredAgentsOnly,
     };
-    const agentId = overrides?.agentId?.trim();
     const resultAgentId = agentId ? normalizeAgentId(agentId) : null;
     if (agentId) {
       params.agentId = agentId;

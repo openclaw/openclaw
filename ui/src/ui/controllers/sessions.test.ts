@@ -623,6 +623,62 @@ describe("loadSessions", () => {
     expect(state.sessionsResult?.count).toBe(2);
   });
 
+  it("always respects an explicit agentId override (#95295)", async () => {
+    // Issue #95295 P1 finding: explicit scoped refreshes must not be silently
+    // widened by the cross-agent sidebar scope. When the caller passes an
+    // `agentId` override, the request must scope to that agent.
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, { agentId: "main" });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "main",
+    });
+  });
+
+  it("omits agentId when no override is supplied so cross-agent child rows surface (#95295)", async () => {
+    // Cross-agent visibility path: omitting agentId while keeping
+    // configuredAgentsOnly: true lets the combined loader pull every on-disk
+    // store (configured + discovered) and `filterSessionStoreToConfiguredAgents`
+    // keeps rows that belong to a configured agent or whose parent does.
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
   it("keeps terminal non-archived sessions visible by default", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {

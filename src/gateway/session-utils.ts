@@ -2548,6 +2548,11 @@ function filterSessionEntries(params: {
       if (!includeUnknown && key === "unknown") {
         return false;
       }
+      // Cross-agent visibility (issue #95295): when the caller pins a specific
+      // `agentId` we strict-match against it; when they don't, every configured
+      // agent's child-spawned subagent sessions surface naturally so the
+      // Control UI can render cross-agent rows. `global` / `unknown` rows still
+      // honor their explicit include flags above.
       if (agentId) {
         if (key === "global") {
           return includeGlobal;
