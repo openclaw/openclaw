@@ -28,7 +28,9 @@ export function getMattermostChannelKind(
 ): ChatType | undefined {
   const key = makeCacheKey(channelId, accountId);
   const entry = channelKindStore.get(key);
-  if (!entry) return undefined;
+  if (!entry) {
+    return undefined;
+  }
   if (Date.now() > entry.expiresAt) {
     channelKindStore.delete(key);
     return undefined;
