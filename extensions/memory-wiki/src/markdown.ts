@@ -446,23 +446,24 @@ function hasHumanNotesBlock(markdown: string): boolean {
   return markdown.includes(HUMAN_START_MARKER) && markdown.includes(HUMAN_END_MARKER);
 }
 
-const SOURCE_CONTENT_HEADING = "\n## Content\n";
+const SOURCE_CONTENT_HEADING = /(?:^|\r?\n)## Content\r?\n/u;
 
 function afterSourceContentFence(page: string): number {
-  const headingIndex = page.indexOf(SOURCE_CONTENT_HEADING);
-  if (headingIndex === -1) {
+  const heading = SOURCE_CONTENT_HEADING.exec(page);
+  if (!heading) {
     return 0;
   }
-  const fenceLineStart = headingIndex + SOURCE_CONTENT_HEADING.length;
+  const fenceLineStart = heading.index + heading[0].length;
   const fence = /^`+/.exec(page.slice(fenceLineStart))?.[0];
   if (!fence) {
     return fenceLineStart;
   }
-  const closeIndex = page.indexOf(`\n${fence}`, fenceLineStart + fence.length);
-  if (closeIndex === -1) {
+  const closingFence = new RegExp(`\\r?\\n${fence}(?=\\r?\\n|$)`, "u");
+  const close = closingFence.exec(page.slice(fenceLineStart + fence.length));
+  if (!close) {
     return fenceLineStart;
   }
-  return closeIndex + fence.length + 1;
+  return fenceLineStart + fence.length + close.index + close[0].length;
 }
 
 function findNotesHumanBlock(page: string): { start: number; end: number } | null {

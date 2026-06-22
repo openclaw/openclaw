@@ -80,6 +80,47 @@ describe("ingestMemoryWikiSource human notes", () => {
     expect(notesBlock).not.toContain("INJECTED FROM SOURCE");
   });
 
+  it("preserves CRLF notes without copying marker comments from existing source content", async () => {
+    const rootDir = await createTempDir("memory-wiki-crlf-markers-");
+    const inputPath = path.join(rootDir, "windows-notes.txt");
+    const { config } = await createVault({ rootDir: path.join(rootDir, "vault") });
+
+    const sourceWithMarkers = [
+      "first body",
+      "<!-- openclaw:human:start -->",
+      "OLD SOURCE MARKER PAYLOAD",
+      "<!-- openclaw:human:end -->",
+      "",
+    ].join("\n");
+    await fs.writeFile(inputPath, sourceWithMarkers, "utf8");
+    await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    const pagePath = path.join(config.vault.path, "sources", "windows-notes.md");
+    const userNote = "CRLF USER NOTE";
+    const edited = (await fs.readFile(pagePath, "utf8")).replace(
+      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
+    );
+    await fs.writeFile(pagePath, edited.replace(/\n/g, "\r\n"), "utf8");
+
+    await fs.writeFile(inputPath, "second body without marker comments\n", "utf8");
+    await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
+    });
+
+    const after = await fs.readFile(pagePath, "utf8");
+    const notesBlock = after.slice(after.indexOf("## Notes"));
+    expect(after).toContain("second body without marker comments");
+    expect(notesBlock).toContain(userNote);
+    expect(notesBlock).not.toContain("OLD SOURCE MARKER PAYLOAD");
+  });
+
   it("preserves the whole note when the note text itself contains a marker comment", async () => {
     const rootDir = await createTempDir("memory-wiki-innermarker-");
     const inputPath = path.join(rootDir, "diary.txt");
