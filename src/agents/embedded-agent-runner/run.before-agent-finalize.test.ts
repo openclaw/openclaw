@@ -1,8 +1,15 @@
 // Coverage for before_agent_finalize revision handling in embedded runs.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { extractAssistantVisibleText, isAssistantMessage } from "../embedded-agent-utils.js";
+import { SessionManager } from "../sessions/session-manager.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildEmbeddedRunPayloads,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
@@ -11,6 +18,12 @@ import {
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+
+function buildPayloadsStrippingSilentTokens(params: { assistantTexts: string[] }) {
+  return params.assistantTexts
+    .filter((text) => !isSilentReplyText(text, SILENT_REPLY_TOKEN))
+    .map((text) => ({ text }));
+}
 
 function finalAnswerAttempt(
   text: string,
@@ -45,6 +58,50 @@ function attemptCall(index: number): {
     throw new Error(`Expected embedded attempt call ${index}`);
   }
   return call[0] as { prompt?: string; suppressNextUserMessagePersistence?: boolean };
+}
+
+async function createFinalizeRetrySession(): Promise<{
+  tempDir: string;
+  sessionFile: string;
+  manager: SessionManager;
+}> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-finalize-retry-"));
+  const manager = SessionManager.create(tempDir, tempDir);
+  manager.appendMessage({
+    role: "user",
+    content: "Question?",
+    timestamp: 1,
+  });
+  const sessionFile = manager.getSessionFile();
+  if (!sessionFile) {
+    throw new Error("Expected test session file.");
+  }
+  return { tempDir, sessionFile, manager };
+}
+
+function appendAssistantTurn(manager: SessionManager, text: string): void {
+  manager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    stopReason: "stop",
+    provider: "openai",
+    model: "gpt-5.5",
+    timestamp: Date.now(),
+  } as Parameters<SessionManager["appendMessage"]>[0]);
+}
+
+function readVisibleTranscriptTexts(sessionFile: string, tempDir: string): string[] {
+  return SessionManager.open(sessionFile, tempDir, tempDir)
+    .buildSessionContext()
+    .messages.map((message) => {
+      if (isAssistantMessage(message)) {
+        return extractAssistantVisibleText(message);
+      }
+      if (message.role === "user" && typeof message.content === "string") {
+        return message.content;
+      }
+      return "";
+    });
 }
 
 describe("runEmbeddedAgent before_agent_finalize", () => {
@@ -101,6 +158,87 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
     expect(attemptCall(1).prompt).toContain("Mention the validated behavior.");
     expect(attemptCall(1).prompt).not.toContain("hello");
     expect(attemptCall(1).suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it("removes the rejected answer from transcript before a finalize retry", async () => {
+    const { tempDir, sessionFile, manager } = await createFinalizeRetrySession();
+    try {
+      mockedBuildEmbeddedRunPayloads.mockImplementation(buildPayloadsStrippingSilentTokens);
+      mockedRunEmbeddedAttempt
+        .mockImplementationOnce(async () => {
+          appendAssistantTurn(manager, "First answer.");
+          return finalAnswerAttempt("First answer.", {
+            beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
+          });
+        })
+        .mockImplementationOnce(async () => {
+          expect(readVisibleTranscriptTexts(sessionFile, tempDir)).toEqual(["Question?"]);
+          appendAssistantTurn(
+            SessionManager.open(sessionFile, tempDir, tempDir),
+            "Revised answer.",
+          );
+          return finalAnswerAttempt("Revised answer.");
+        });
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        sessionFile,
+        workspaceDir: tempDir,
+        provider: "openai",
+        model: "gpt-5.5",
+        runId: "run-before-finalize-retry-transcript",
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expect(result.payloads).toEqual([{ text: "Revised answer." }]);
+      expect(readVisibleTranscriptTexts(sessionFile, tempDir)).toEqual([
+        "Question?",
+        "Revised answer.",
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a silent finalize retry authoritative after transcript reset", async () => {
+    const { tempDir, sessionFile, manager } = await createFinalizeRetrySession();
+    try {
+      mockedBuildEmbeddedRunPayloads.mockImplementation(buildPayloadsStrippingSilentTokens);
+      mockedRunEmbeddedAttempt
+        .mockImplementationOnce(async () => {
+          appendAssistantTurn(manager, "First answer.");
+          return finalAnswerAttempt("First answer.", {
+            beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
+          });
+        })
+        .mockImplementationOnce(async () => {
+          expect(readVisibleTranscriptTexts(sessionFile, tempDir)).toEqual(["Question?"]);
+          appendAssistantTurn(
+            SessionManager.open(sessionFile, tempDir, tempDir),
+            SILENT_REPLY_TOKEN,
+          );
+          return finalAnswerAttempt(SILENT_REPLY_TOKEN);
+        });
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        sessionFile,
+        workspaceDir: tempDir,
+        provider: "openai",
+        model: "gpt-5.5",
+        runId: "run-before-finalize-silent-authoritative",
+        allowEmptyAssistantReplyAsSilent: true,
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+      expect(result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+      expect(readVisibleTranscriptTexts(sessionFile, tempDir)).toEqual([
+        "Question?",
+        SILENT_REPLY_TOKEN,
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps finalizing when the attempt accepted a side-effecting revise decision", async () => {
