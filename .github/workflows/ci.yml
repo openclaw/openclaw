@@ -164,10 +164,14 @@ jobs:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
+          if ! timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
             -c protocol.version=2 \
             fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
-            "+${PR_HEAD_SHA}:refs/remotes/origin/pr-head"
+            "+${PR_HEAD_SHA}:refs/remotes/origin/pr-head"; then
+            echo "empty_head_commit=false" >> "$GITHUB_OUTPUT"
+            echo "Unable to fetch the immutable PR head; continuing with normal CI fan-out."
+            exit 0
+          fi
           PR_HEAD="refs/remotes/origin/pr-head"
           if git rev-parse --verify "${PR_HEAD}^" >/dev/null 2>&1 && git diff --quiet "${PR_HEAD}^" "$PR_HEAD"; then
             echo "empty_head_commit=true" >> "$GITHUB_OUTPUT"

@@ -110,6 +110,7 @@ describe("ci workflow guards", () => {
     expect(headScope.if).toBe("github.event_name == 'pull_request'");
     expect(headScope.env.PR_HEAD_SHA).toBe("${{ github.event.pull_request.head.sha }}");
     expect(headScope.run).toContain("+${PR_HEAD_SHA}:refs/remotes/origin/pr-head");
+    expect(headScope.run).toContain("Unable to fetch the immutable PR head");
     expect(headScope.run).toContain('git diff --quiet "${PR_HEAD}^" "$PR_HEAD"');
     expect(headScope.run).toContain("empty_head_commit=true");
     expect(workflowSource).toContain("OPENCLAW_CI_EMPTY_HEAD_COMMIT");
