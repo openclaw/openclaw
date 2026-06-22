@@ -21,9 +21,9 @@ body:
   - type: input
     id: doc_paths
     attributes:
-      label: Affected docs path(s)
-      description: Repo-relative docs file path(s).
-      placeholder: docs/gateway/config-channels.md
+      label: Affected docs path(s) or URL(s)
+      description: Repo-relative docs file path(s) or published docs URL(s).
+      placeholder: docs/gateway/config-channels.md or https://docs.openclaw.ai/gateway/config-channels
     validations:
       required: true
   - type: textarea
