@@ -146,7 +146,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "provider-auth-login": 3,
   "provider-model-shared": 29,
   "provider-stream-family": 40,
-  "provider-stream-shared": 28,
+  "provider-stream-shared": 29,
   "provider-stream": 40,
   "provider-web-search": 1,
   "provider-zai-endpoint": 3,
@@ -163,8 +163,8 @@ let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
     publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 321),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10328),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5185),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10329),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5186),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       3247,

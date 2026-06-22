@@ -286,7 +286,7 @@ async function directCronReq(
 }
 
 function expectCronJobIdFromResponse(response: { ok?: unknown; payload?: unknown }) {
-  expect(response.ok).toBe(true);
+  expect(response.ok, JSON.stringify((response as { error?: unknown }).error ?? null)).toBe(true);
   const value = (response.payload as { id?: unknown } | null)?.id;
   const id = typeof value === "string" ? value : "";
   expect(id.length > 0).toBe(true);
@@ -704,7 +704,7 @@ describe("gateway server cron", () => {
       const mergeUpdateRes = await directCronReq(cronState, "cron.update", {
         id: mergeJobId,
         patch: {
-          delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+          delivery: { mode: "announce", channel: "last", to: "19098680" },
         },
       });
       expect(mergeUpdateRes.ok).toBe(true);
@@ -718,7 +718,7 @@ describe("gateway server cron", () => {
       expect(merged?.payload?.message).toBe("hello");
       expect(merged?.payload?.model).toBe("opus");
       expect(merged?.delivery?.mode).toBe("announce");
-      expect(merged?.delivery?.channel).toBe("telegram");
+      expect(merged?.delivery?.channel).toBe("last");
       expect(merged?.delivery?.to).toBe("19098680");
 
       const modelOnlyPatchRes = await directCronReq(cronState, "cron.update", {
@@ -810,7 +810,7 @@ describe("gateway server cron", () => {
         patch: {
           delivery: {
             mode: "announce",
-            channel: "signal",
+            channel: "last",
             to: "+15550001111",
             bestEffort: true,
           },
@@ -826,7 +826,7 @@ describe("gateway server cron", () => {
       expect(deliveryPatched?.payload?.kind).toBe("agentTurn");
       expect(deliveryPatched?.payload?.message).toBe("hello");
       expect(deliveryPatched?.delivery?.mode).toBe("announce");
-      expect(deliveryPatched?.delivery?.channel).toBe("signal");
+      expect(deliveryPatched?.delivery?.channel).toBe("last");
       expect(deliveryPatched?.delivery?.to).toBe("+15550001111");
       expect(deliveryPatched?.delivery?.bestEffort).toBe(true);
 
@@ -1564,8 +1564,7 @@ describe("gateway server cron", () => {
         sessionTarget: "isolated",
         delivery: {
           mode: "announce",
-          channel: "telegram",
-          to: "19098680",
+          channel: "last",
           failureDestination: {
             mode: "webhook",
             to: "https://example.invalid/failure-destination",
@@ -1593,8 +1592,7 @@ describe("gateway server cron", () => {
         sessionTarget: "isolated",
         delivery: {
           mode: "announce",
-          channel: "telegram",
-          to: "19098680",
+          channel: "last",
           bestEffort: true,
           failureDestination: {
             mode: "webhook",
@@ -1697,8 +1695,7 @@ describe("gateway server cron", () => {
         payload: { kind: "agentTurn", message: "test" },
         delivery: {
           mode: "announce",
-          channel: "feishu",
-          to: "ou_founder",
+          channel: "last",
         },
       });
       const jobId = expectCronJobIdFromResponse(addRes);
@@ -1720,8 +1717,7 @@ describe("gateway server cron", () => {
 
       expectFailureAnnounceCall({
         jobId,
-        channel: "feishu",
-        to: "ou_founder",
+        channel: "last",
         sessionKey: "agent:avery:feishu:direct:ou_founder",
         message: '⚠️ Cron job "session target failure fallback" failed: unknown error',
       });

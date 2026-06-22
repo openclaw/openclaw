@@ -118,6 +118,13 @@ function isExecutableFile(path, platform) {
 function spawnInvocation(command, commandArgs, env, platform) {
   const extension = extname(command).toLowerCase();
   if (platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
+    const nodeShim = resolveNodeCmdShim(command, platform);
+    if (nodeShim) {
+      return {
+        command: nodeShim.node,
+        args: [...nodeShim.args, ...commandArgs],
+      };
+    }
     return {
       command: resolveWindowsCmdExePath(env),
       args: ["/d", "/s", "/c", buildBatchCommandLine(command, commandArgs)],
@@ -125,6 +132,56 @@ function spawnInvocation(command, commandArgs, env, platform) {
     };
   }
   return { command, args: commandArgs };
+}
+
+function resolveNodeCmdShim(command, platform) {
+  let content;
+  try {
+    content = readFileSync(command, "utf8");
+  } catch {
+    return null;
+  }
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    const match = /^"([^"]+node(?:\.exe)?)"\s+"%~dp0([^"]+)"\s+%\*$/iu.exec(line);
+    if (!match) {
+      continue;
+    }
+    const script = resolve(dirname(command), match[2]);
+    if (!isExecutableFile(script, platform)) {
+      continue;
+    }
+    return { node: match[1], args: [script] };
+  }
+  const npmCmdShim = resolveNpmNodeCmdShim(command, content, platform);
+  if (npmCmdShim) {
+    return npmCmdShim;
+  }
+  return null;
+}
+
+function resolveNpmNodeCmdShim(command, content, platform) {
+  const lines = content.split(/\r?\n/u).map((line) => line.trim());
+  if (
+    !lines.some((line) => /^IF EXIST "%dp0%\\node\.exe" \($/iu.test(line)) ||
+    !lines.some((line) => /^SET "_prog=node(?:\.exe)?"$/iu.test(line))
+  ) {
+    return null;
+  }
+  const invocation = lines.find((line) => line.includes('"%_prog%"') && line.endsWith("%*"));
+  if (!invocation) {
+    return null;
+  }
+  const match = /(?:^|&)\s*"%_prog%"\s+(.*?)"(%dp0%\\[^"]+)"\s+%\*$/iu.exec(invocation);
+  if (!match || match[1].trim()) {
+    return null;
+  }
+  const script = resolve(dirname(command), match[2].replace(/^%dp0%\\/iu, ""));
+  if (!isExecutableFile(script, platform)) {
+    return null;
+  }
+  const localNode = resolve(dirname(command), "node.exe");
+  return { node: isExecutableFile(localNode, platform) ? localNode : "node", args: [script] };
 }
 
 const cmdMetaCharactersRe = /([()\][%!^"`<>&|;, *?])/g;

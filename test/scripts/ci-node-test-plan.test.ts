@@ -834,7 +834,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
     const expected = listTestFiles("src/agents")
-      .filter((file) => !relative("src/agents", file).includes("/"))
+      .filter((file) => !relative("src/agents", file).replaceAll("\\", "/").includes("/"))
       .toSorted((a, b) => a.localeCompare(b));
 
     expect(actual).toEqual(expected);
