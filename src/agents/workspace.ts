@@ -1222,6 +1222,7 @@ async function resolveExtraBootstrapPatternPaths(
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
+  opts?: { trustExternal?: boolean },
 ): Promise<{
   files: WorkspaceBootstrapFile[];
   diagnostics: ExtraBootstrapLoadDiagnostic[];
@@ -1258,6 +1259,40 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       });
       continue;
     }
+    // mod(bootstrap-extra-files): when opts.trustExternal is set (operator
+    // opt-in via `bootstrapTrustExternal: true` in openclaw.json), bypass
+    // workspace-boundary check so AOS Agents/ layered files under OneDrive
+    // can be ingested. Default behavior (no opt-in) is unchanged.
+    if (opts?.trustExternal === true) {
+      try {
+        const stat = await fs.stat(filePath);
+        if (stat.size > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+          diagnostics.push({
+            path: filePath,
+            reason: "io",
+            detail: `bootstrap file exceeds ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte cap (${stat.size})`,
+          });
+          continue;
+        }
+        const content = await fs.readFile(filePath, "utf-8");
+        files.push({
+          name: baseName as WorkspaceBootstrapFileName,
+          path: filePath,
+          content,
+          missing: false,
+        });
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        const reason: ExtraBootstrapLoadDiagnosticCode = code === "ENOENT" ? "missing" : "io";
+        diagnostics.push({
+          path: filePath,
+          reason,
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      continue;
+    }
+
     const loaded = await readWorkspaceFileWithGuards({
       filePath,
       workspaceDir: resolvedDir,

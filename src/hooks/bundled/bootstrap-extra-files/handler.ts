@@ -41,10 +41,13 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     return;
   }
 
+  const trustExternal = (hookConfig as Record<string, unknown>).bootstrapTrustExternal === true;
+
   try {
     const { files: extras, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
       context.workspaceDir,
       patterns,
+      { trustExternal },
     );
     if (diagnostics.length > 0) {
       log.debug("skipped extra bootstrap candidates", {
