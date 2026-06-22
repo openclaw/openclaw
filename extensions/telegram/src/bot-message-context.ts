@@ -29,6 +29,7 @@ import {
   resolveTelegramMessageContextStorePath,
 } from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
+import { getTelegramTextParts } from "./bot/body-helpers.js";
 import {
   buildTelegramInboundOriginTarget,
   buildTypingThreadParams,
@@ -74,6 +75,7 @@ async function loadTelegramMessageContextRuntime() {
 }
 
 type TelegramMessageContextPayload = Awaited<ReturnType<typeof buildTelegramInboundContextPayload>>;
+type TelegramMessage = BuildTelegramMessageContextParams["primaryCtx"]["message"];
 type TelegramReactionApi = (
   chatId: BuildTelegramMessageContextParams["primaryCtx"]["message"]["chat"]["id"],
   messageId: number,
@@ -123,6 +125,67 @@ export type TelegramMessageContext = {
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
 };
+
+const DIRECT_AUDIO_TYPING_PREFLIGHT_TIMEOUT_MS = 100;
+
+async function waitForDirectAudioTypingPreflight(
+  sendTypingPromise: Promise<void>,
+  params: {
+    chatId: TelegramMessage["chat"]["id"];
+  },
+): Promise<void> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  const guardedSendTypingPromise = sendTypingPromise.then(
+    () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    },
+    (err: unknown) => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      throw err;
+    },
+  );
+  const timeoutPromise = new Promise<void>((resolve) => {
+    timeoutId = setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, DIRECT_AUDIO_TYPING_PREFLIGHT_TIMEOUT_MS);
+  });
+
+  try {
+    await Promise.race([guardedSendTypingPromise, timeoutPromise]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  if (timedOut) {
+    void guardedSendTypingPromise.catch((err: unknown) => {
+      logVerbose(
+        `telegram audio preflight direct typing cue failed for chat ${params.chatId}: ${String(err)}`,
+      );
+    });
+  }
+}
+
+function shouldSendDirectAudioTypingBeforeBodyResolution(params: {
+  msg: TelegramMessage;
+  allMedia: BuildTelegramMessageContextParams["allMedia"];
+  isGroup: boolean;
+}): boolean {
+  if (params.isGroup) {
+    return false;
+  }
+  if (getTelegramTextParts(params.msg).text.trim()) {
+    return false;
+  }
+  return params.allMedia.some((media) => media.contentType?.startsWith("audio/"));
+}
 
 export const buildTelegramMessageContext = async ({
   primaryCtx,
@@ -377,33 +440,37 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
   let initialTypingCueSent = false;
+  let configuredBindingReadyPromise: Promise<boolean> | undefined;
   const ensureConfiguredBindingReady = async (): Promise<boolean> => {
     if (bindingMode.kind !== "configured") {
       return true;
     }
-    const ensureConfiguredBindingRouteReady =
-      runtime?.ensureConfiguredBindingRouteReady ??
-      (await loadTelegramMessageContextRuntime()).ensureConfiguredBindingRouteReady;
-    const ensured = await ensureConfiguredBindingRouteReady({
-      cfg: freshCfg,
-      bindingResolution: bindingMode.binding,
-    });
-    if (ensured.ok) {
+    configuredBindingReadyPromise ??= (async () => {
+      const ensureConfiguredBindingRouteReady =
+        runtime?.ensureConfiguredBindingRouteReady ??
+        (await loadTelegramMessageContextRuntime()).ensureConfiguredBindingRouteReady;
+      const ensured = await ensureConfiguredBindingRouteReady({
+        cfg: freshCfg,
+        bindingResolution: bindingMode.binding,
+      });
+      if (ensured.ok) {
+        logVerbose(
+          `telegram: using configured ACP binding for ${bindingMode.binding.record.conversation.conversationId} -> ${bindingMode.sessionKey}`,
+        );
+        return true;
+      }
       logVerbose(
-        `telegram: using configured ACP binding for ${bindingMode.binding.record.conversation.conversationId} -> ${bindingMode.sessionKey}`,
+        `telegram: configured ACP binding unavailable for ${bindingMode.binding.record.conversation.conversationId}: ${ensured.error}`,
       );
-      return true;
-    }
-    logVerbose(
-      `telegram: configured ACP binding unavailable for ${bindingMode.binding.record.conversation.conversationId}: ${ensured.error}`,
-    );
-    logInboundDrop({
-      log: logVerbose,
-      channel: "telegram",
-      reason: "configured ACP binding unavailable",
-      target: bindingMode.binding.record.conversation.conversationId,
-    });
-    return false;
+      logInboundDrop({
+        log: logVerbose,
+        channel: "telegram",
+        reason: "configured ACP binding unavailable",
+        target: bindingMode.binding.record.conversation.conversationId,
+      });
+      return false;
+    })();
+    return await configuredBindingReadyPromise;
   };
 
   const baseSessionKey = resolveTelegramConversationBaseSessionKey({
@@ -456,6 +523,26 @@ export const buildTelegramMessageContext = async ({
     direction: "inbound",
   });
 
+  const shouldPreflightDirectAudioTyping = shouldSendDirectAudioTypingBeforeBodyResolution({
+    msg,
+    allMedia,
+    isGroup,
+  });
+  if (shouldPreflightDirectAudioTyping && !(await ensureConfiguredBindingReady())) {
+    return null;
+  }
+
+  if (shouldPreflightDirectAudioTyping) {
+    initialTypingCueSent = true;
+    try {
+      await waitForDirectAudioTypingPreflight(sendTyping(), { chatId });
+    } catch (err) {
+      logVerbose(
+        `telegram audio preflight direct typing cue failed for chat ${chatId}: ${String(err)}`,
+      );
+    }
+  }
+
   const originatingTo = buildTelegramInboundOriginTarget(chatId, threadSpec);
   const bodyResult = await resolveTelegramInboundBody({
     cfg,
@@ -487,6 +574,10 @@ export const buildTelegramMessageContext = async ({
     return null;
   }
 
+  if (!(await ensureConfiguredBindingReady())) {
+    return null;
+  }
+
   const groupHistoryContextMode = isGroup
     ? resolveTelegramGroupHistoryContextModeForAccount({
         cfg,
@@ -494,13 +585,9 @@ export const buildTelegramMessageContext = async ({
       })
     : undefined;
 
-  if (!(await ensureConfiguredBindingReady())) {
-    return null;
-  }
-
   // Direct chats are now reply-eligible; send the first typing cue before
   // expensive context/session construction without showing typing for dropped turns.
-  if (!isGroup) {
+  if (!isGroup && !initialTypingCueSent) {
     initialTypingCueSent = true;
     void sendTyping().catch((err: unknown) => {
       logVerbose(`telegram early direct typing cue failed for chat ${chatId}: ${String(err)}`);

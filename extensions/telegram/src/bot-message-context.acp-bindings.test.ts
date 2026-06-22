@@ -143,6 +143,89 @@ function createConfiguredTelegramRoute() {
   } as const;
 }
 
+function createConfiguredTelegramDirectRoute() {
+  const configuredBinding = createConfiguredTelegramBinding();
+  const directRecord = {
+    ...configuredBinding.record,
+    bindingId: "config:acp:telegram:work:42",
+    targetSessionKey: "agent:codex:acp:binding:telegram:work:direct-42",
+    conversation: {
+      channel: "telegram",
+      accountId: "work",
+      conversationId: "42",
+    },
+  } as const;
+  return {
+    bindingMode: {
+      kind: "configured",
+      binding: {
+        conversation: directRecord.conversation,
+        compiledBinding: {
+          channel: "telegram",
+          accountPattern: "work",
+          binding: {
+            type: "acp",
+            agentId: "codex",
+            match: {
+              channel: "telegram",
+              accountId: "work",
+              peer: {
+                kind: "direct",
+                id: "42",
+              },
+            },
+          },
+          bindingConversationId: "42",
+          target: {
+            conversationId: "42",
+          },
+          agentId: "codex",
+          provider: {
+            compileConfiguredBinding: () => ({
+              conversationId: "42",
+            }),
+            matchInboundConversation: () => ({
+              conversationId: "42",
+            }),
+          },
+          targetFactory: {
+            driverId: "acp",
+            materialize: () => ({
+              record: directRecord,
+              statefulTarget: {
+                kind: "stateful",
+                driverId: "acp",
+                sessionKey: directRecord.targetSessionKey,
+                agentId: configuredBinding.spec.agentId,
+              },
+            }),
+          },
+        },
+        match: {
+          conversationId: "42",
+        },
+        record: directRecord,
+        statefulTarget: {
+          kind: "stateful",
+          driverId: "acp",
+          sessionKey: directRecord.targetSessionKey,
+          agentId: configuredBinding.spec.agentId,
+        },
+      },
+      sessionKey: directRecord.targetSessionKey,
+    },
+    route: {
+      agentId: "codex",
+      accountId: "work",
+      channel: "telegram",
+      sessionKey: directRecord.targetSessionKey,
+      mainSessionKey: "agent:codex:main",
+      matchedBy: "binding.channel",
+      lastRoutePolicy: "bound",
+    },
+  } as const;
+}
+
 describe("buildTelegramMessageContext ACP configured bindings", () => {
   beforeAll(async () => {
     ({ buildTelegramMessageContextForTest } =
@@ -242,5 +325,37 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
     expect(ctx).toBeNull();
     expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send direct voice typing before unavailable configured binding drops", async () => {
+    resolveTelegramConversationRouteMock.mockReturnValue(createConfiguredTelegramDirectRoute());
+    ensureConfiguredBindingRouteReadyMock.mockResolvedValue({
+      ok: false,
+      error: "gateway unavailable",
+    });
+    const sendChatAction = vi.fn(async () => undefined);
+
+    const ctx = await buildTelegramMessageContextForTest({
+      accountId: "work",
+      runtime: configuredBindingRuntime,
+      sessionRuntime: configuredBindingSessionRuntime,
+      message: {
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        text: undefined,
+        voice: { file_id: "voice-1", duration: 1 },
+      },
+      allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
+      sendChatActionHandler: {
+        sendChatAction,
+        isSuspended: () => false,
+        reset: () => undefined,
+      },
+    });
+
+    expect(ctx).toBeNull();
+    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledTimes(1);
+    expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
+    expect(sendChatAction).not.toHaveBeenCalled();
   });
 });
