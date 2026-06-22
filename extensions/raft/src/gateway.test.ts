@@ -310,7 +310,7 @@ describe("Raft wake gateway", () => {
         },
         body: JSON.stringify({ eventId: "wake-runtime-session" }),
       });
-      await expect(response).toMatchObject({ status: 202 });
+      expect(response).toMatchObject({ status: 202 });
       await expect(response.json()).resolves.toMatchObject({
         accepted: true,
         ok: true,
