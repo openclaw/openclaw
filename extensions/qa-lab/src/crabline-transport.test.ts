@@ -61,7 +61,7 @@ function createProvider(overrides: Partial<QaCrablineProviderAdapter> = {}) {
 }
 
 describe("crabline transport", () => {
-  it("configures a local mock transport without live channel plugins or secrets", async () => {
+  it("configures a Crabline transport without live channel plugins or secrets", async () => {
     const outputDir = await createTempOutputDir();
     const transport = await createQaCrablineTransportAdapter({
       env: {},
@@ -184,7 +184,7 @@ describe("crabline transport", () => {
     expect(provider.cleanup).toHaveBeenCalled();
   });
 
-  it("executes generic message actions against the local mock bus", async () => {
+  it("executes generic message actions against the Crabline-backed bus", async () => {
     const transport = await createQaCrablineTransportAdapter({
       outputDir: await createTempOutputDir(),
       selection: createSelection(),

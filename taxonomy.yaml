@@ -7,7 +7,8 @@ snapshot:
   source_ref: origin/main@41eef4a7965
 profiles:
   - id: smoke-ci
-    description: Deterministic PR and merge proof with mock model providers and Crabline channel mocks; no live external service required.
+    description: Deterministic PR and merge proof with mock model providers and the
+      Crabline-backed channel driver; no live external service required.
     evidenceMode: slim
     channelDriver: crabline
     categoryIds:

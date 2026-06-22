@@ -1,9 +1,15 @@
-// Qa Lab plugin module implements the Crabline-backed local mock QA transport.
+// Qa Lab plugin module implements the Crabline-backed QA transport.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { ManifestDefinition, ProviderAdapter, ProviderContext, Registry } from "crabline";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
 import type { QaCrablineChannelDriverSelection } from "./crabline-channel-driver.js";
+import {
+  createQaCrablineManifestInput,
+  parseQaCrablineManifest,
+  type QaCrablineManifestSchema,
+} from "./crabline-manifest.js";
 import {
   createQaChannelGatewayConfig,
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
@@ -25,98 +31,12 @@ import type {
 } from "./runtime-api.js";
 
 const CRABLINE_TRANSPORT_ID = "crabline";
-const CRABLINE_USER_NAME = "openclaw-qa";
 
-const CRABLINE_WEBHOOK_DEFAULTS: Record<string, { path: string; port: number }> = {
-  discord: { path: "/discord/interactions", port: 8788 },
-  feishu: { path: "/feishu/webhook", port: 8795 },
-  googlechat: { path: "/googlechat/webhook", port: 8792 },
-  imessage: { path: "/imessage/webhook", port: 8796 },
-  matrix: { path: "/matrix/webhook", port: 8797 },
-  mattermost: { path: "/mattermost/webhook", port: 8793 },
-  msteams: { path: "/msteams/webhook", port: 8791 },
-  slack: { path: "/slack/events", port: 8787 },
-  telegram: { path: "/telegram/webhook", port: 8790 },
-  whatsapp: { path: "/whatsapp/webhook", port: 8789 },
-  zalo: { path: "/zalo/webhook", port: 8794 },
-};
-
-type CrablineInboundEnvelope = {
-  author?: string;
-  id: string;
-  provider?: string;
-  raw?: unknown;
-  sentAt: string;
-  text: string;
-  threadId?: string;
-};
-
-type CrablineFixtureDefinition = {
-  env?: string[];
-  id: string;
-  inboundMatch?: Record<string, unknown>;
-  mode?: string;
-  provider: string;
-  retries?: number;
-  tags?: string[];
-  target: {
-    behavior?: string;
-    channelId?: string;
-    id: string;
-    metadata?: Record<string, unknown>;
-    threadId?: string;
-  };
-  timeoutMs?: number;
-};
-
-type CrablineManifestDefinition = {
-  configVersion: number;
-  fixtures: CrablineFixtureDefinition[];
-  providers: Record<string, Record<string, unknown>>;
-  userName: string;
-};
-
-type CrablineProviderContext = {
-  config: Record<string, unknown>;
-  fixture: CrablineFixtureDefinition;
-  manifestPath: string;
-  providerId: string;
-  userName: string;
-};
-
-type CrablineSendResult = {
-  accepted?: boolean;
-  messageId: string;
-  threadId?: string;
-};
-
-export type QaCrablineProviderAdapter = {
-  [key: string]: unknown;
-  cleanup?: () => Promise<void> | void;
-  send: (
-    params: CrablineProviderContext & {
-      mode: "agent" | "send";
-      nonce: string;
-      text: string;
-    },
-  ) => Promise<CrablineSendResult>;
-  waitForInbound: (
-    params: CrablineProviderContext & {
-      nonce: string;
-      since: string;
-      threadId?: string;
-      timeoutMs: number;
-    },
-  ) => Promise<CrablineInboundEnvelope | null>;
-};
+export type QaCrablineProviderAdapter = ProviderAdapter;
 
 type CrablineRuntimeModule = {
-  createRegistry: (
-    manifest: CrablineManifestDefinition,
-    manifestPath: string,
-  ) => {
-    resolve: (providerId: string, fixtureId: string) => QaCrablineProviderAdapter;
-  };
+  ManifestSchema: QaCrablineManifestSchema;
+  createRegistry: (manifest: ManifestDefinition, manifestPath: string) => Registry;
 };
 
 type CrablineRuntime = {
@@ -132,7 +52,7 @@ type QaCrablineTransportState = QaTransportState & {
 };
 
 type CrablineStateParams = {
-  fixtureContext: CrablineProviderContext;
+  fixtureContext: ProviderContext;
   provider: QaCrablineProviderAdapter;
   selection: QaCrablineChannelDriverSelection;
   state: QaBusState;
@@ -148,75 +68,12 @@ async function loadCrablineRuntime(env: NodeJS.ProcessEnv): Promise<CrablineRunt
   return (await import("crabline")) as unknown as CrablineRuntimeModule;
 }
 
-function providerConfigForChannel(channel: string, outputDir: string) {
-  const webhook = CRABLINE_WEBHOOK_DEFAULTS[channel] ?? {
-    path: `/${channel}/webhook`,
-    port: 0,
-  };
-  return {
-    adapter: channel,
-    capabilities: ["probe", "send", "roundtrip", "agent"],
-    env: [],
-    platform: channel,
-    status: "active",
-    [channel]: {
-      recorder: {
-        path: path.join(outputDir, "artifacts", "crabline", `${channel}-recorder.jsonl`),
-      },
-      webhook: {
-        host: "127.0.0.1",
-        path: webhook.path,
-        port: 0,
-      },
-    },
-  };
-}
-
-function createCrablineManifest(params: {
-  outputDir: string;
-  selection: QaCrablineChannelDriverSelection;
-}) {
-  const channel = params.selection.channel;
-  const fixtureId = `qa-crabline-${channel}`;
-  return {
-    fixtureId,
-    manifest: {
-      configVersion: 1,
-      fixtures: [
-        {
-          env: [],
-          id: fixtureId,
-          inboundMatch: {
-            author: "assistant",
-            nonce: "ignore",
-            strategy: "contains",
-          },
-          mode: "agent",
-          provider: channel,
-          retries: 0,
-          tags: [],
-          target: {
-            id: `${channel}-default`,
-            metadata: {},
-          },
-          timeoutMs: 5_000,
-        },
-      ],
-      providers: {
-        [channel]: providerConfigForChannel(channel, params.outputDir),
-      },
-      userName: CRABLINE_USER_NAME,
-    } satisfies CrablineManifestDefinition,
-    manifestPath: path.join(params.outputDir, "crabline-runtime.json"),
-  };
-}
-
 function createFixtureContext(params: {
   fixtureId: string;
-  manifest: CrablineManifestDefinition;
+  manifest: ManifestDefinition;
   manifestPath: string;
   providerId: string;
-}): CrablineProviderContext {
+}): ProviderContext {
   const fixture = params.manifest.fixtures.find((entry) => entry.id === params.fixtureId);
   const config = params.manifest.providers[params.providerId];
   if (!fixture || !config) {
@@ -235,7 +92,7 @@ function targetForConversation(message: QaBusMessage) {
   return `${message.conversation.kind === "direct" ? "dm" : "channel"}:${message.conversation.id}`;
 }
 
-function withTarget(context: CrablineProviderContext, targetId: string): CrablineProviderContext {
+function withTarget(context: ProviderContext, targetId: string): ProviderContext {
   return {
     ...context,
     fixture: {
@@ -282,7 +139,7 @@ function createCrablineState(params: CrablineStateParams): QaCrablineTransportSt
   };
 }
 
-class QaCrablineLocalMockTransport extends QaStateBackedTransportAdapter {
+class QaCrablineTransport extends QaStateBackedTransportAdapter {
   readonly #selection: QaCrablineChannelDriverSelection;
   readonly #state: QaCrablineTransportState;
 
@@ -354,13 +211,13 @@ class QaCrablineLocalMockTransport extends QaStateBackedTransportAdapter {
           }),
         };
       default:
-        throw new Error(`unsupported Crabline local mock action: ${_params.action}`);
+        throw new Error(`unsupported Crabline action: ${String(_params.action)}`);
     }
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
-    `Runs ${this.#selection.channel}-shaped QA messages through openclaw/crabline local mocks.`,
-    "No live channel service, provider SDK, or external credential lease is required.",
+    `Runs ${this.#selection.channel}-shaped QA messages through openclaw/crabline.`,
+    "No live channel service or external credential lease is required.",
   ];
 
   async cleanup() {
@@ -381,17 +238,17 @@ export async function createQaCrablineTransportAdapter(params: {
   await fs.mkdir(path.join(params.outputDir, "artifacts", "crabline"), {
     recursive: true,
   });
-  const { fixtureId, manifest, manifestPath } = createCrablineManifest({
-    outputDir: params.outputDir,
-    selection: params.selection,
-  });
+  const { fixtureId, manifest: manifestInput } = createQaCrablineManifestInput(
+    params.selection.channel,
+  );
+  const manifestPath = path.join(params.outputDir, "crabline-runtime.json");
+  const runtime = await loadCrablineRuntime(env);
+  const manifest = parseQaCrablineManifest(runtime.ManifestSchema, manifestInput);
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
   const provider =
     params.runtime?.provider ??
-    (await loadCrablineRuntime(env))
-      .createRegistry(manifest, manifestPath)
-      .resolve(params.selection.channel, fixtureId);
+    runtime.createRegistry(manifest, manifestPath).resolve(params.selection.channel, fixtureId);
   const fixtureContext = createFixtureContext({
     fixtureId,
     manifest,
@@ -399,7 +256,7 @@ export async function createQaCrablineTransportAdapter(params: {
     providerId: params.selection.channel,
   });
 
-  return new QaCrablineLocalMockTransport({
+  return new QaCrablineTransport({
     selection: params.selection,
     state: createCrablineState({
       fixtureContext,

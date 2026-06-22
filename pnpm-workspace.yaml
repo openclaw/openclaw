@@ -140,6 +140,7 @@ allowBuilds:
   openclaw: true
   "@openclaw/proxyline": true
   clawpdf: true
+  crabline: true
   rastermill: true
 
 packageExtensions:

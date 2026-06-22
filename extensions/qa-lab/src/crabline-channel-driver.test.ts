@@ -1,8 +1,8 @@
 // Qa Lab tests cover Crabline channel-driver metadata behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
   runQaCrablineChannelDriverSmoke,
   resolveQaCrablineChannelDriverSelection,
@@ -10,13 +10,12 @@ import {
 
 const tempDirs: string[] = [];
 
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+afterEach(() => {
+  cleanupTempDirs(tempDirs);
 });
 
 async function createFakeCrablineCli() {
-  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-fake-crabline-"));
-  tempDirs.push(outputDir);
+  const outputDir = makeTempDir(tempDirs, "qa-fake-crabline-");
   const cliPath = path.join(outputDir, "fake-crabline.mjs");
   await fs.writeFile(
     cliPath,
@@ -49,15 +48,10 @@ if (command === "providers") {
 }
 
 describe("crabline channel driver metadata", () => {
-  it("returns null when no channel driver is selected", async () => {
-    await expect(resolveQaCrablineChannelDriverSelection({})).resolves.toBeNull();
-  });
-
   it("resolves the Telegram SDK-backed channel driver", async () => {
     const crablineBin = await createFakeCrablineCli();
     const selection = await resolveQaCrablineChannelDriverSelection({
       channel: "telegram",
-      channelDriver: "crabline",
       env: { ...process.env, OPENCLAW_QA_CRABLINE_BIN: crablineBin },
     });
 
@@ -74,7 +68,6 @@ describe("crabline channel driver metadata", () => {
     await expect(
       resolveQaCrablineChannelDriverSelection({
         channel: "slack",
-        channelDriver: "crabline",
         env: { ...process.env, OPENCLAW_QA_CRABLINE_BIN: crablineBin },
       }),
     ).resolves.toMatchObject({
@@ -84,8 +77,7 @@ describe("crabline channel driver metadata", () => {
   });
 
   it("runs Crabline's Chat SDK provider doctor through the package CLI", async () => {
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-crabline-driver-"));
-    tempDirs.push(outputDir);
+    const outputDir = makeTempDir(tempDirs, "qa-crabline-driver-");
     const crablineBin = await createFakeCrablineCli();
     try {
       const result = await runQaCrablineChannelDriverSmoke(
@@ -120,8 +112,7 @@ describe("crabline channel driver metadata", () => {
   });
 
   it("fails Crabline's Chat SDK provider doctor when the CLI reports a failure", async () => {
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-crabline-driver-"));
-    tempDirs.push(outputDir);
+    const outputDir = makeTempDir(tempDirs, "qa-crabline-driver-");
     const crablineBin = await createFakeCrablineCli();
     try {
       await expect(
@@ -150,9 +141,7 @@ describe("crabline channel driver metadata", () => {
   it("defaults to Telegram and rejects channels not reported ready by Crabline", async () => {
     const crablineBin = await createFakeCrablineCli();
     const env = { ...process.env, OPENCLAW_QA_CRABLINE_BIN: crablineBin };
-    await expect(
-      resolveQaCrablineChannelDriverSelection({ channelDriver: "crabline", env }),
-    ).resolves.toEqual({
+    await expect(resolveQaCrablineChannelDriverSelection({ env })).resolves.toEqual({
       capabilityMatrixPath: "crabline-channel-capability-matrix.json",
       channel: "telegram",
       channelDriver: "crabline",
@@ -161,15 +150,8 @@ describe("crabline channel driver metadata", () => {
     await expect(
       resolveQaCrablineChannelDriverSelection({
         channel: "signal",
-        channelDriver: "crabline",
         env,
       }),
     ).rejects.toThrow("--channel must be one of");
-  });
-
-  it("rejects channel identity without a channel driver", async () => {
-    await expect(resolveQaCrablineChannelDriverSelection({ channel: "telegram" })).rejects.toThrow(
-      "--channel requires --channel-driver crabline",
-    );
   });
 });

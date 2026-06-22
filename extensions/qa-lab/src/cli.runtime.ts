@@ -895,7 +895,9 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
   const channelDriver = normalizeQaSuiteChannelDriver(opts.channelDriver);
   if (opts.channel?.trim() && channelDriver !== "crabline") {
-    throw new Error("--channel requires --channel-driver crabline.");
+    throw new Error(
+      "--channel override is currently only supported with --channel-driver crabline.",
+    );
   }
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
@@ -906,24 +908,19 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   if (channelDriver === "crabline" && runner !== "host") {
     throw new Error("--channel-driver crabline requires --runner host.");
   }
-  const selectedScenarioChannel =
-    channelDriver === "crabline"
-      ? resolveQaSuiteScenarioChannel({
-          defaultChannel: QA_CRABLINE_DEFAULT_CHANNEL,
-          explicitChannel: opts.channel,
-          scenarios: selectQaScenarioDefinitionsForChannelResolution({
-            scenarioIds,
-            providerMode,
-            primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
-            claudeCliAuthMode,
-          }),
-        })
-      : opts.channel;
   const channelDriverSelection =
     channelDriver === "crabline"
       ? await resolveQaCrablineChannelDriverSelection({
-          channel: selectedScenarioChannel,
-          channelDriver,
+          channel: resolveQaSuiteScenarioChannel({
+            defaultChannel: QA_CRABLINE_DEFAULT_CHANNEL,
+            explicitChannel: opts.channel,
+            scenarios: selectQaScenarioDefinitionsForChannelResolution({
+              scenarioIds,
+              providerMode,
+              primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
+              claudeCliAuthMode,
+            }),
+          }),
         })
       : undefined;
   if (
