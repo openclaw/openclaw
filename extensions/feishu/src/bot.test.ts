@@ -2883,6 +2883,72 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("extracts text from interactive card sub-messages instead of dropping to a placeholder", () => {
+    const card = {
+      schema: "2.0",
+      config: { wide_screen_mode: true },
+      header: { title: { tag: "plain_text", content: "Quarterly Report" } },
+      body: {
+        elements: [
+          { tag: "markdown", content: "Revenue is **up 12%**" },
+          { tag: "hr" },
+          {
+            tag: "column_set",
+            columns: [
+              {
+                tag: "column",
+                elements: [{ tag: "div", text: { tag: "lark_md", content: "Q1: 100" } }],
+              },
+              {
+                tag: "column",
+                elements: [{ tag: "div", text: { tag: "plain_text", content: "Q2: 140" } }],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const content = JSON.stringify([
+      {
+        message_id: "container",
+        msg_type: "merge_forward",
+        body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+      },
+      {
+        message_id: "card",
+        upper_message_id: "container",
+        msg_type: "interactive",
+        body: { content: JSON.stringify(card) },
+        create_time: "1000",
+      },
+    ]);
+
+    expect(parseMergeForwardContent({ content })).toBe(
+      "[Merged and Forwarded Messages]\n- Quarterly Report\nRevenue is **up 12%**\nQ1: 100\nQ2: 140",
+    );
+  });
+
+  it("keeps a placeholder when an interactive card carries no text", () => {
+    const content = JSON.stringify([
+      {
+        message_id: "container",
+        msg_type: "merge_forward",
+        body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+      },
+      {
+        message_id: "image-only-card",
+        upper_message_id: "container",
+        msg_type: "interactive",
+        body: { content: JSON.stringify({ elements: [{ tag: "img", img_key: "img_xxx" }] }) },
+        create_time: "1000",
+      },
+    ]);
+
+    expect(parseMergeForwardContent({ content })).toBe(
+      "[Merged and Forwarded Messages]\n- [Interactive Card]",
+    );
+  });
+
   it("falls back when merge_forward API returns no sub-messages", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockCreateFeishuClient.mockReturnValue({

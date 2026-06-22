@@ -177,6 +177,42 @@ export function parseMessageContent(content: string, messageType: string): strin
   }
 }
 
+// Interactive card bodies nest display text under `content` (header title, div
+// text, markdown, note) at arbitrary depth (column_set, table, action). Walk the
+// whole card and collect those strings so forwarded cards keep their text
+// instead of collapsing to a bare `[interactive]` placeholder.
+function extractFeishuCardText(content: string): string {
+  let card: unknown;
+  try {
+    card = JSON.parse(content);
+  } catch {
+    return "";
+  }
+  const parts: string[] = [];
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        visit(item);
+      }
+      return;
+    }
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    const record = node as Record<string, unknown>;
+    if (typeof record.content === "string" && record.content.trim()) {
+      parts.push(record.content.trim());
+    }
+    for (const value of Object.values(record)) {
+      if (value && typeof value === "object") {
+        visit(value);
+      }
+    }
+  };
+  visit(card);
+  return parts.join("\n");
+}
+
 function formatSubMessageContent(content: string, contentType: string): string {
   try {
     const parsed = JSON.parse(content);
@@ -195,6 +231,8 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Video]";
       case "sticker":
         return "[Sticker]";
+      case "interactive":
+        return extractFeishuCardText(content) || "[Interactive Card]";
       case "merge_forward":
         return "[Nested Merged Forward]";
       default:
