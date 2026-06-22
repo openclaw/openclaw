@@ -125,6 +125,7 @@
     "!dist/extensions/qa-matrix/**",
     "!dist/extensions/openshell/**",
     "!dist/extensions/qwen/**",
+    "!dist/extensions/sherpa-onnx-tts/**",
     "!dist/extensions/slack/**",
     "!dist/extensions/stepfun/**",
     "!dist/extensions/synology-chat/**",

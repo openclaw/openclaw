@@ -452,7 +452,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   },
 
   skills: {
-    allowBundled: ["gemini", "peekaboo"],
+    allowBundled: ["summarize", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"],
       allowSymlinkTargets: ["~/Projects/agent-scripts/skills"],

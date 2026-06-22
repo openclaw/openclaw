@@ -957,11 +957,11 @@ export async function runPluginInstallCommand(params: {
           const entry = getOfficialExternalPluginCatalogEntry(pluginId);
           const resolvedPluginId = entry ? resolveOfficialExternalPluginId(entry) : undefined;
           const install = entry ? resolveOfficialExternalPluginInstall(entry) : null;
-          const npmSpec = install?.npmSpec;
-          return resolvedPluginId && npmSpec
+          return resolvedPluginId && install
             ? {
                 pluginId: resolvedPluginId,
-                npmSpec,
+                ...(install.clawhubSpec ? { clawhubSpec: install.clawhubSpec } : {}),
+                ...(install.npmSpec ? { npmSpec: install.npmSpec } : {}),
                 ...(install.expectedIntegrity
                   ? { expectedIntegrity: install.expectedIntegrity }
                   : {}),
@@ -1277,7 +1277,7 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
-  if (officialExternalPlan) {
+  if (officialExternalPlan?.source === "npm") {
     const npmResult = await tryInstallPluginOrHookPackFromNpmSpec({
       snapshot,
       installMode,
@@ -1298,12 +1298,21 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
-  if (clawhubSpec) {
+  const clawhubInstallSpec =
+    officialExternalPlan?.source === "clawhub"
+      ? officialExternalPlan.clawhubSpec
+      : clawhubSpec
+        ? raw
+        : undefined;
+  if (clawhubInstallSpec) {
     const result = await installPluginFromClawHub({
       ...safetyOverrides,
       mode: installMode,
-      spec: raw,
+      spec: clawhubInstallSpec,
       extensionsDir,
+      ...(officialExternalPlan?.source === "clawhub"
+        ? { expectedPluginId: officialExternalPlan.pluginId }
+        : {}),
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
@@ -1316,7 +1325,7 @@ export async function runPluginInstallCommand(params: {
       pluginId: result.pluginId,
       install: {
         ...buildClawHubPluginInstallRecordFields(result.clawhub),
-        spec: raw,
+        spec: clawhubInstallSpec,
         installPath: result.targetDir,
       },
       invalidateRuntimeCache,

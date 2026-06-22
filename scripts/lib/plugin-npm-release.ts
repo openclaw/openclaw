@@ -292,7 +292,7 @@ export function collectPublishablePluginPackageErrors(
   if (extensions.some((entry) => typeof entry !== "string" || !entry.trim())) {
     errors.push("openclaw.extensions must contain only non-empty strings.");
   }
-  if (!installNpmSpec) {
+  if (packageJson.openclaw?.release?.publishToNpm === true && !installNpmSpec) {
     errors.push("openclaw.install.npmSpec must be a non-empty string for publishable plugins.");
   }
   errors.push(

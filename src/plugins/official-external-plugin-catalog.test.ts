@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   type OfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogManifest,
   listOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalProviderPluginIds,
@@ -60,6 +61,19 @@ describe("official external plugin catalog", () => {
       defaultChoice: "npm",
       minHostVersion: ">=2026.6.9",
     });
+  });
+
+  it("keeps Sherpa ONNX TTS ClawHub-only without inventing an npm fallback", () => {
+    const sherpa = expectCatalogEntry("sherpa-onnx-tts");
+
+    expect(resolveOfficialExternalPluginInstall(sherpa)).toEqual({
+      clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
+      defaultChoice: "clawhub",
+      minHostVersion: ">=2026.6.9",
+    });
+    expect(
+      getOfficialExternalPluginCatalogManifest(sherpa)?.contracts?.speechProviders,
+    ).toBeUndefined();
   });
 
   it("resolves third-party channel lookup aliases to published plugin ids", () => {

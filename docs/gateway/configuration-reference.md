@@ -190,7 +190,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 ```json5
 {
   skills: {
-    allowBundled: ["gemini", "peekaboo"],
+    allowBundled: ["summarize", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"],
       allowSymlinkTargets: ["~/Projects/manager/skills"],
@@ -209,7 +209,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
         env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
       },
       peekaboo: { enabled: true },
-      sag: { enabled: false },
+      summarize: { enabled: false },
     },
   },
 }

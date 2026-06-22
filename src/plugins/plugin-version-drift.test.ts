@@ -109,6 +109,22 @@ describe("detectPluginVersionDrift", () => {
     expect(result.drifts.map((d) => d.pluginId)).toEqual(["discord"]);
   });
 
+  it("includes ClawHub-only official plugins in the drift check", () => {
+    const result = detectPluginVersionDrift({
+      gatewayVersion: "2026.6.9",
+      installRecords: {
+        "sherpa-onnx-tts": clawhubRecord("2026.6.8", {
+          spec: "clawhub:@openclaw/sherpa-onnx-tts",
+          clawhubPackage: "@openclaw/sherpa-onnx-tts",
+          clawhubChannel: "official",
+          clawhubUrl: "https://clawhub.ai",
+        }),
+      },
+    });
+
+    expect(result.drifts.map((d) => d.pluginId)).toEqual(["sherpa-onnx-tts"]);
+  });
+
   it("ignores community npm installs without an official lockstep contract", () => {
     const result = detectPluginVersionDrift({
       gatewayVersion: "2026.5.4",

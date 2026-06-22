@@ -849,7 +849,7 @@ extension OnboardingView {
                     systemImage: "rectangle.inset.filled.and.person.filled")
                 self.featureActionRow(
                     title: "Give your agent more powers",
-                    subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
+                    subtitle: "Enable bundled and ClawHub skills from Settings → Skills.",
                     systemImage: "sparkles",
                     buttonTitle: "Open Settings → Skills")
                 {

@@ -291,6 +291,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[raft](/plugins/reference/raft)** (`@openclaw/raft`) - npm; ClawHub. OpenClaw Raft channel plugin for secure CLI wake bridges.
 
+- **[sherpa-onnx-tts](/plugins/reference/sherpa-onnx-tts)** (`@openclaw/sherpa-onnx-tts`) - ClawHub: `clawhub:@openclaw/sherpa-onnx-tts`. Offline local text-to-speech skill using sherpa-onnx.
+
 - **[slack](/plugins/reference/slack)** (`@openclaw/slack`) - npm; ClawHub. OpenClaw Slack channel plugin for channels, DMs, commands, and app events.
 
 - **[stepfun](/plugins/reference/stepfun)** (`@openclaw/stepfun-provider`) - npm; ClawHub: `clawhub:@openclaw/stepfun-provider`. Adds StepFun, StepFun Plan model provider support to OpenClaw.

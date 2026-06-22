@@ -87,6 +87,16 @@ describe("collectClawHubPublishablePluginPackages", () => {
     );
   });
 
+  it("allows ClawHub-only packages without an npm install source", () => {
+    const repoDir = createTempPluginRepo({
+      includeNpmSpec: false,
+    });
+
+    expect(
+      collectClawHubPublishablePluginPackages(repoDir).map((plugin) => plugin.packageName),
+    ).toEqual(["@openclaw/demo-plugin"]);
+  });
+
   it("validates only selected package names when filters are provided", () => {
     const repoDir = createTempPluginRepo({
       extraExtensionIds: ["broken-plugin"],
@@ -1407,6 +1417,7 @@ function createTempPluginRepo(
     extraExtensionIds?: string[];
     publishToClawHub?: boolean;
     includeClawHubContract?: boolean;
+    includeNpmSpec?: boolean;
   } = {},
 ) {
   const repoDir = makeTempRepoRoot(tempDirs, "openclaw-clawhub-release-");
@@ -1443,9 +1454,15 @@ function createTempPluginRepo(
                     openclawVersion: "2026.4.1",
                   },
                 }),
-            install: {
-              npmSpec: `@openclaw/${currentExtensionId}`,
-            },
+            install:
+              options.includeNpmSpec === false
+                ? {
+                    clawhubSpec: `clawhub:@openclaw/${currentExtensionId}`,
+                    defaultChoice: "clawhub",
+                  }
+                : {
+                    npmSpec: `@openclaw/${currentExtensionId}`,
+                  },
             release: {
               publishToClawHub: options.publishToClawHub ?? true,
             },

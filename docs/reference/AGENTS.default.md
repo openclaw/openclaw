@@ -95,25 +95,27 @@ git commit -m "Add Clawd workspace"
 - macOS app manages permissions (screen recording, notifications, microphone) and exposes the `openclaw` CLI via its bundled binary.
 - Direct chats collapse into the agent's `main` session by default; groups stay isolated as `agent:<agentId>:<channel>:group:<id>` (rooms/channels: `agent:<agentId>:<channel>:channel:<id>`); heartbeats keep background tasks alive.
 
-## Core skills (enable in Settings → Skills)
+## Bundled and plugin skills (enable in Settings → Skills)
 
-- **mcporter** - Tool server runtime/CLI for managing external skill backends.
-- **Peekaboo** - Fast macOS screenshots with optional AI vision analysis.
-- **camsnap** - Capture frames, clips, or motion alerts from RTSP/ONVIF security cams.
-- **oracle** - OpenAI-ready agent CLI with session replay and browser control.
-- **eightctl** - Control your sleep, from the terminal.
-- **imsg** - Send, read, stream iMessage & SMS.
-- **wacli** - WhatsApp CLI: sync, search, send.
-- **discord** - Discord actions: react, stickers, polls. Use `user:<id>` or `channel:<id>` targets (bare numeric ids are ambiguous).
-- **gog** - Google Suite CLI: Gmail, Calendar, Drive, Contacts.
-- **spotify-player** - Terminal Spotify client to search/queue/control playback.
-- **sag** - ElevenLabs speech with mac-style say UX; streams to speakers by default.
-- **Sonos CLI** - Control Sonos speakers (discover/status/playback/volume/grouping) from scripts.
-- **blucli** - Play, group, and automate BluOS players from scripts.
-- **OpenHue CLI** - Philips Hue lighting control for scenes and automations.
-- **OpenAI Whisper** - Local speech-to-text for quick dictation and voicemail transcripts.
-- **Gemini CLI** - Google Gemini models from the terminal for fast Q&A.
-- **agent-tools** - Utility toolkit for automations and helper scripts.
+- **clawhub** - Search, verify, install, update, and publish ClawHub skills.
+- **summarize** - Summarize or transcribe URLs, media, PDFs, and local files.
+- **weather** - Current weather and forecasts.
+- **node-connect** - Diagnose node pairing, routing, authentication, and connection failures.
+- **Peekaboo** - Capture and automate the macOS UI.
+- **mcporter** - Configure, authenticate, call, and inspect MCP servers and tools.
+- **gog** - Google Workspace CLI for Gmail, Calendar, Drive, Contacts, Sheets, and Docs.
+- **spotify-player** - Terminal Spotify playback and search.
+- **diagram-maker** - Create diagrams and whiteboards.
+- **gifgrep** - Search GIF providers, download results, and extract stills or sheets.
+- **songsee** - Generate spectrograms and audio feature visualizations.
+- **healthcheck** - Audit and harden OpenClaw hosts.
+- **model-usage** - Summarize local model cost logs.
+- **skill-creator** - Create, audit, and validate skills.
+- **canvas** - Present and inspect HTML on connected node canvases.
+- **discord** - Discord message actions when the Discord plugin is configured.
+- **slack** - Slack message actions when the Slack plugin is configured.
+- **wacli** - WhatsApp history sync, search, and third-party sends when its CLI is installed.
+- **voice-call** - Start or inspect calls when the voice-call plugin is configured.
 
 ## Usage notes
 

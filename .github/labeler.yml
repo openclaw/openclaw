@@ -471,6 +471,11 @@
       - any-glob-to-any-file:
           - "extensions/senseaudio/**"
           - "docs/providers/senseaudio.md"
+"extensions: sherpa-onnx-tts":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sherpa-onnx-tts/**"
+          - "docs/plugins/reference/sherpa-onnx-tts.md"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:

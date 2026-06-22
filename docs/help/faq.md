@@ -378,7 +378,15 @@ lives on the [First-run FAQ](/help/faq-first-run).
   </Accordion>
 
   <Accordion title="Can I run Apple macOS-only skills from Linux?">
-    Not directly. macOS skills are gated by `metadata.openclaw.os` plus required binaries, and skills only appear in the system prompt when they are eligible on the **Gateway host**. On Linux, `darwin`-only skills (like `apple-notes`, `apple-reminders`, `things-mac`) will not load unless you override the gating.
+    Not directly. Apple-specific skills are not part of the bundled starter
+    set, so install them from ClawHub first. If your config still names a
+    removed bundled skill, install the desired owner-qualified ClawHub package
+    first. After that, `openclaw skills update --all` updates the tracked
+    install; bare legacy names are not auto-installed.
+    macOS skills are gated by `metadata.openclaw.os` plus required binaries,
+    and skills only appear in the system prompt when they are eligible on the
+    **Gateway host**. On Linux, installed `darwin`-only skills will not load
+    unless you override the gating.
 
     You have three supported patterns:
 
