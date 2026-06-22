@@ -635,9 +635,25 @@ async function buildListResult(params: {
   search?: string;
 }): Promise<{ root?: string; files: SessionFileEntry[]; browser?: SessionFileBrowserResult }> {
   const loaded = await loadSessionFiles(params);
-  const files = await Promise.all(
-    loaded.files.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
-  );
+  const files = (
+    await Promise.all(
+      loaded.files.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
+    )
+  ).filter((entry) => {
+    // Files outside the configured workspace directory cannot be stat'd and
+    // would be marked as "missing" despite existing and being read successfully.
+    // Exclude them from the workspace rail list — only workspace-internal files
+    // that genuinely don't exist on disk should show as missing.
+    if (!entry.missing) {
+      return true;
+    }
+    const resolved = resolveTouchedFilePath({
+      root: loaded.root,
+      fileRoot: loaded.fileRoot,
+      filePath: entry.path,
+    });
+    return Boolean(resolved);
+  });
   const browser = await buildBrowserResult({
     root: loaded.root,
     fileRoot: loaded.fileRoot,
