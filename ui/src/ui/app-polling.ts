@@ -1,5 +1,4 @@
 // Control UI module implements app polling behavior.
-import { getVisibleRouteId } from "../app-routes.ts";
 import type { DebugState } from "./controllers/debug.ts";
 import { loadDebug } from "./controllers/debug.ts";
 import type { LogsState } from "./controllers/logs.ts";
@@ -20,9 +19,6 @@ export function startNodesPolling(host: PollingHost) {
     return;
   }
   host.nodesPollInterval = window.setInterval(() => {
-    if (getVisibleRouteId() !== "nodes") {
-      return;
-    }
     void loadNodes(host as unknown as NodesState, { quiet: true });
   }, NODES_ACTIVE_POLL_INTERVAL_MS);
 }
@@ -40,9 +36,6 @@ export function startLogsPolling(host: PollingHost) {
     return;
   }
   host.logsPollInterval = window.setInterval(() => {
-    if (getVisibleRouteId() !== "logs") {
-      return;
-    }
     void loadLogs(host as unknown as LogsState, { quiet: true });
   }, 2000);
 }
@@ -60,9 +53,6 @@ export function startDebugPolling(host: PollingHost) {
     return;
   }
   host.debugPollInterval = window.setInterval(() => {
-    if (getVisibleRouteId() !== "debug") {
-      return;
-    }
     void loadDebug(host as unknown as DebugState);
   }, 3000);
 }
