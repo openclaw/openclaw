@@ -506,6 +506,8 @@ export type GatewaySessionRow = {
   childSessions?: string[];
   model?: string;
   modelProvider?: string;
+  /** Resolved effective usage-footer mode (session override → per-channel config → default → off), carried from gateway session rows/events. */
+  effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   compactionCheckpointCount?: number;
@@ -588,7 +590,8 @@ export type CronSortDir = "asc" | "desc";
 export type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number };
+  | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
+  | { kind: "on-exit"; command: string; cwd?: string };
 
 export type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 export type CronWakeMode = "next-heartbeat" | "now";
