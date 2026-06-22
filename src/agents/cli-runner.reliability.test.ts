@@ -1905,6 +1905,7 @@ describe("runCliAgent reliability", () => {
           messageProvider: "acp",
           messageChannel: "telegram",
           trigger: "user",
+          rawBody: "hi",
           senderId: "sender-1",
           chatId: "chat-1",
           channelContext: {
@@ -1983,6 +1984,7 @@ describe("runCliAgent reliability", () => {
         "agent_end event",
       );
       expect(agentEndEvent.success).toBe(true);
+      expect(agentEndEvent.rawBody).toBe("hi");
       const messages = requireArray(agentEndEvent.messages, "agent_end messages");
       expect(messages).toHaveLength(2);
       expectTextMessage(messages[0], { role: "user", content: "hi" });

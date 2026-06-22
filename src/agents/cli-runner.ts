@@ -581,6 +581,7 @@ export async function runPreparedCliAgent(
     success: false,
     error,
     durationMs: Date.now() - context.started,
+    rawBody: params.rawBody,
   });
 
   const buildBlockedAgentEndEvent = (message: string) => ({
@@ -591,6 +592,7 @@ export async function runPreparedCliAgent(
     success: false,
     error: message,
     durationMs: Date.now() - context.started,
+    rawBody: params.rawBody,
   });
 
   const buildBlockedBeforeAgentRunResult = (message: string): EmbeddedAgentRunResult => ({
@@ -1063,6 +1065,7 @@ export async function runPreparedCliAgent(
             messages: buildAgentEndMessages(lastAssistant),
             success: true,
             durationMs: Date.now() - context.started,
+            rawBody: params.rawBody,
           },
           ctx: hookContext,
           hookRunner,

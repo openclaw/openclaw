@@ -63,6 +63,8 @@ export type RunCliAgentParams = {
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
+  /** Clean direct-user input text forwarded to before_prompt_build/agent_end hooks. */
+  rawBody?: string;
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;

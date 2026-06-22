@@ -1144,6 +1144,7 @@ function refreshSessionEntryFromStore(params: {
 export async function runReplyAgent(params: {
   commandBody: string;
   transcriptCommandBody?: string;
+  rawBody?: string;
   followupRun: FollowupRun;
   queueKey: string;
   resolvedQueue: QueueSettings;
@@ -1182,6 +1183,7 @@ export async function runReplyAgent(params: {
   const {
     commandBody,
     transcriptCommandBody,
+    rawBody,
     followupRun,
     queueKey,
     resolvedQueue,
@@ -1285,6 +1287,13 @@ export async function runReplyAgent(params: {
       {
         steeringMode: "all",
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        // PR #52664: always carry this steered turn's gated rawBody (possibly
+        // undefined) so the active embedded run refreshes currentRawBody to the
+        // new inbound. Presence of the key — not a defined value — drives the
+        // refresh, so a provenance-gated (inter_session / internal_system)
+        // steered message clears the previous direct-user rawBody instead of
+        // leaking it onto later before_prompt_build / agent_end events.
+        rawBody: followupRun.rawBody,
       },
     );
     if (steerOutcome.queued) {
@@ -1724,6 +1733,7 @@ export async function runReplyAgent(params: {
       runAgentTurnWithFallback({
         commandBody,
         transcriptCommandBody,
+        rawBody,
         followupRun,
         sessionCtx,
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,

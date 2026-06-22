@@ -3730,6 +3730,13 @@ export async function runEmbeddedAttempt(
         params.onAttemptAbort?.();
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
+      // PR #52664: track the latest user-input rawBody for hook events.
+      // The initial value is captured at run start; steered injections
+      // (queueMessage carrying a rawBody key) refresh it so subsequent
+      // before_prompt_build / agent_end hook events reflect the most
+      // recent user message rather than the original turn's text.
+      let currentRawBody: string | undefined = params.rawBody;
+
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
@@ -3738,6 +3745,12 @@ export async function runEmbeddedAttempt(
         queueMessage: async (text: string, options) => {
           if (options?.steeringMode) {
             activeSession.agent.steeringMode = options.steeringMode;
+          }
+          // Refresh on key presence, not definedness: a steered turn always
+          // carries a rawBody key, so a gated (undefined) value clears the
+          // previous direct-user rawBody rather than leaving it stale.
+          if (options && "rawBody" in options) {
+            currentRawBody = options.rawBody;
           }
           await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
         },
@@ -3972,6 +3985,7 @@ export async function runEmbeddedAttempt(
               config: params.config ?? getRuntimeConfig(),
               prompt: params.prompt,
               messages: promptBuildMessages,
+              rawBody: currentRawBody,
               hookCtx,
               hookRunner,
               beforeAgentStartResult: params.beforeAgentStartResult,
@@ -5280,6 +5294,7 @@ export async function runEmbeddedAttempt(
               success: !aborted && !promptError,
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
+              rawBody: currentRawBody,
             },
             ctx: {
               runId: params.runId,

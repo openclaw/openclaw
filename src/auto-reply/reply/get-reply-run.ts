@@ -661,8 +661,9 @@ export async function runPreparedReply(
       ? "none"
       : "generic";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
-  const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
+  // Candidate text for bare reset detection and (when from a user channel) the plugin hook rawBody payload.
+  const rawBodyCandidate = ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
+  const rawBodyTrimmed = rawBodyCandidate.trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   const normalizedCommandBody = command.commandBodyNormalized.trim();
   const softResetTriggered = command.softResetTriggered === true;
@@ -673,6 +674,17 @@ export async function runPreparedReply(
   const isWholeMessageCommand =
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
+  const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
+  // Gate the plugin hook field to direct external-user channel input. System
+  // events (heartbeat, cron, exec) reuse system prompt text in
+  // Body/CommandBody/RawBody, and inter-session/internal-system handoffs carry a
+  // model-facing "not a direct user instruction" annotation (see
+  // input-provenance.ts). Neither may leak to plugins as clean user rawBody, so
+  // only external_user (or unmarked direct-channel) input qualifies.
+  const isDirectExternalUserInput =
+    !isSystemEventProvider(ctx.Provider) &&
+    (inputProvenance === undefined || inputProvenance.kind === "external_user");
+  const rawBodyForPluginEvent = isDirectExternalUserInput ? rawBodyCandidate : undefined;
   const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   if (
     allowTextCommands &&
@@ -1245,7 +1257,6 @@ export async function runPreparedReply(
       ? (opts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
-  const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
   const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
     hasMedia: userTurnMediaForPersistence.length > 0,
@@ -1320,6 +1331,7 @@ export async function runPreparedReply(
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
     queuedLifecycle: opts?.queuedFollowupLifecycle,
+    rawBody: rawBodyForPluginEvent,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
@@ -1453,6 +1465,7 @@ export async function runPreparedReply(
   return runReplyAgent({
     commandBody: prefixedCommandBody,
     transcriptCommandBody,
+    rawBody: rawBodyForPluginEvent,
     followupRun,
     queueKey,
     resolvedQueue,

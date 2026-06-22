@@ -33,6 +33,15 @@ export type EmbeddedAgentQueueMessageOptions = {
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /**
+   * Provenance-gated clean user-input text for the steered message. Presence of
+   * this key (not a defined value) makes the embedded run refresh its tracked
+   * rawBody for subsequent `before_prompt_build` / `agent_end` hook events: a
+   * string updates it to the steered turn's text, and an explicit `undefined`
+   * (gated inter_session / internal_system input) clears it so stale
+   * direct-user text is not reported. See PR #52664.
+   */
+  rawBody?: string;
 };
 
 export type ActiveEmbeddedRunSnapshot = {

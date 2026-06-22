@@ -1058,6 +1058,7 @@ export function createFollowupRunner(params: {
                     currentInboundAudio: queued.currentInboundAudio,
                     currentInboundContext: queued.currentInboundContext,
                     inputProvenance: run.inputProvenance,
+                    rawBody: queued.rawBody,
                     provider: cliExecutionProvider,
                     model,
                     ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
@@ -1172,6 +1173,7 @@ export function createFollowupRunner(params: {
                 currentInboundEventKind: queued.currentInboundEventKind,
                 currentInboundAudio: queued.currentInboundAudio,
                 currentInboundContext: queued.currentInboundContext,
+                rawBody: queued.rawBody,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
