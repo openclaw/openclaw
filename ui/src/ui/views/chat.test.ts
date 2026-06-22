@@ -4788,4 +4788,85 @@ describe("chat session controls", () => {
     expect(state.chatSessionPickerRenameDraft).toBe("Side");
     expect(state.chatSessionPickerRenamePendingKeys["agent:main:work"]).toBeUndefined();
   });
+
+  it("preserves a newer rename error when an older rename succeeds late", async () => {
+    patchSessionMock.mockClear();
+    let finishFirstPatch: () => void = () => {};
+    patchSessionMock
+      .mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            finishFirstPatch = () => resolve(true);
+          }),
+      )
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        (args[0] as AppViewState).sessionsError = "second rename failed";
+        return false;
+      });
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const rows: GatewaySessionRow[] = [
+      { key: "main", kind: "direct", label: "Main", updatedAt: 3 },
+      { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 2 },
+      { key: "agent:main:side", kind: "direct", label: "Side", updatedAt: 1 },
+    ];
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    let options = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ];
+    options
+      .find((button) => button.dataset.sessionKey === "agent:main:work")
+      ?.closest(".chat-session-picker__row")
+      ?.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')
+      ?.click();
+    render(renderChatSessionSelect(state), container);
+    let input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-rename-input="true"]',
+    );
+    input!.value = "Renamed work";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushTasks();
+
+    render(renderChatSessionSelect(state), container);
+    options = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ];
+    options
+      .find((button) => button.dataset.sessionKey === "agent:main:side")
+      ?.closest(".chat-session-picker__row")
+      ?.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')
+      ?.click();
+    render(renderChatSessionSelect(state), container);
+    input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-rename-input="true"]',
+    );
+    input!.value = "Renamed side";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushTasks();
+    await waitForTimerTurn();
+
+    expect(state.chatSessionPickerError).toBe("second rename failed");
+    expect(state.chatSessionPickerRenameKey).toBe("agent:main:side");
+
+    finishFirstPatch();
+    await flushTasks();
+    await waitForTimerTurn();
+
+    expect(state.chatSessionPickerError).toBe("second rename failed");
+    expect(state.chatSessionPickerRenameKey).toBe("agent:main:side");
+    expect(state.chatSessionPickerRenameDraft).toBe("Renamed side");
+  });
 });

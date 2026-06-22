@@ -673,6 +673,13 @@ async function commitChatSessionRename(state: AppViewState, key: string) {
     requestHostUpdate(state);
     return;
   }
+  if (!requestIsCurrent) {
+    invalidateChatSessionPickerSearchRequests(state);
+    state.chatSessionPickerResult = null;
+    state.chatSessionPickerLoading = false;
+    requestHostUpdate(state);
+    return;
+  }
   if (state.chatSessionPickerOpen) {
     invalidateChatSessionPickerSearchRequests(state);
     await loadChatSessionPickerPage(state);
