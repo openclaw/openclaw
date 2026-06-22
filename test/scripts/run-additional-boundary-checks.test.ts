@@ -3,7 +3,6 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
@@ -279,7 +278,7 @@ describe("run-additional-boundary-checks", () => {
         args: ["-e", "setTimeout(() => process.exit(0), 25)"],
       },
       {
-        checkTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+        checkTimeoutMs: Number.MAX_SAFE_INTEGER,
         cwd: process.cwd(),
         env: process.env,
         outputMaxBytes: 4096,

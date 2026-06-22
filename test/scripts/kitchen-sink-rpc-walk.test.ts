@@ -175,16 +175,18 @@ describe("kitchen-sink RPC isolated state", () => {
   });
 
   it("clamps timer env values before they reach Node timers", () => {
-    expect(readPositiveTimerMs(String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1), 60_000)).toBe(
+    const oversizedTimerMs = String(Number.MAX_SAFE_INTEGER);
+
+    expect(readPositiveTimerMs(oversizedTimerMs, 60_000)).toBe(
       MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
     );
 
     const config = resolveKitchenSinkRpcConfig({
-      OPENCLAW_KITCHEN_SINK_RPC_CALL_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
-      OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
-      OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
-      OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
-      OPENCLAW_KITCHEN_SINK_RPC_READY_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
+      OPENCLAW_KITCHEN_SINK_RPC_CALL_MS: oversizedTimerMs,
+      OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS: oversizedTimerMs,
+      OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS: oversizedTimerMs,
+      OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS: oversizedTimerMs,
+      OPENCLAW_KITCHEN_SINK_RPC_READY_MS: oversizedTimerMs,
     });
 
     expect(config.rpcTimeoutMs).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
@@ -710,6 +712,26 @@ describe("kitchen-sink RPC command output capture", () => {
     expect(result.stderr).toBe("XYZ");
     expect(result.stdoutTruncatedChars).toBe(3);
     expect(result.stderrTruncatedChars).toBe(3);
+  });
+
+  it("clamps oversized command timeout env values before scheduling timers", async () => {
+    const previousTimeout = process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS;
+    process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS = String(Number.MAX_SAFE_INTEGER);
+    try {
+      await expect(
+        runCommand(process.execPath, [
+          "--input-type=module",
+          "--eval",
+          "setTimeout(() => process.exit(0), 25);",
+        ]),
+      ).resolves.toMatchObject({ stdout: "", stderr: "" });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS;
+      } else {
+        process.env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS = previousTimeout;
+      }
+    }
   });
 
   posixIt("kills timed command process groups", async () => {
@@ -2239,6 +2261,22 @@ describe("kitchen-sink RPC process sampling", () => {
       code: "ETOOBIG",
       message: "fetch response body exceeded 1024 bytes",
     });
+  });
+
+  it("clamps oversized HTTP probe timeouts before scheduling timers", async () => {
+    const fetchImpl = vi.fn(async () => {
+      await delay(25);
+      return new Response('{"status":"live"}', { status: 200 });
+    });
+
+    await expect(
+      fetchJson("http://127.0.0.1:19680/healthz", {
+        attempts: 1,
+        fetchImpl,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).resolves.toEqual({ ok: true, status: 200, body: { status: "live" } });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("rejects oversized HTTP probe responses before reading declared large bodies", async () => {
