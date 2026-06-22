@@ -54,11 +54,36 @@ function providerMatchesFilter(params: {
   provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
   providerFilter: string;
 }): boolean {
-  return [
-    params.provider.id,
-    ...(params.provider.aliases ?? []),
-    ...(params.provider.hookAliases ?? []),
-  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
+  return readProviderFilterCandidates(params.provider).some(
+    (providerId) => normalizeProviderId(providerId) === params.providerFilter,
+  );
+}
+
+function readProviderFilterCandidates(
+  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">,
+): string[] {
+  const candidates: string[] = [];
+  try {
+    if (typeof provider.id === "string") {
+      candidates.push(provider.id);
+    }
+  } catch {
+    return candidates;
+  }
+  for (const key of ["aliases", "hookAliases"] as const) {
+    let values: readonly unknown[] | undefined;
+    try {
+      values = Array.isArray(provider[key]) ? provider[key] : undefined;
+    } catch {
+      continue;
+    }
+    for (const value of values ?? []) {
+      if (typeof value === "string") {
+        candidates.push(value);
+      }
+    }
+  }
+  return candidates;
 }
 
 function collectMatchingContributionOwners(

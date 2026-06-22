@@ -706,6 +706,34 @@ describe("loadProviderCatalogModelsForList", () => {
     ).resolves.toEqual(["openai"]);
   });
 
+  it("skips unreadable provider discovery aliases while checking static catalog filters", async () => {
+    providerDiscoveryMocks.resolveProviderOwners.mockReturnValueOnce([]);
+    providerDiscoveryMocks.resolveProviderContractPluginIdsForProviderAlias.mockReturnValueOnce([
+      "openai",
+    ]);
+    providerDiscoveryMocks.resolveBundledProviderCompatPluginIds.mockReturnValueOnce(["openai"]);
+    providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValueOnce([
+      {
+        get id() {
+          throw new Error("provider static catalog id exploded");
+        },
+        pluginId: "openai",
+        label: "Broken OpenAI",
+        auth: [],
+        staticCatalog: { run: async () => null },
+      },
+      openaiProvider,
+    ]);
+
+    await expect(
+      hasProviderStaticCatalogForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "azure-openai-responses",
+      }),
+    ).resolves.toBe(true);
+  });
+
   it("does not execute workspace provider static catalogs", async () => {
     const workspaceStaticCatalog = vi.fn(async () => ({
       provider: { baseUrl: "https://workspace.example/v1", models: [] },
