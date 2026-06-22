@@ -1,5 +1,14 @@
 // Voice Call tests cover twilio plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { guardedJsonApiRequestMock } = vi.hoisted(() => ({
+  guardedJsonApiRequestMock: vi.fn(),
+}));
+
+vi.mock("./shared/guarded-json-api.js", () => ({
+  guardedJsonApiRequest: guardedJsonApiRequestMock,
+}));
+
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
 import { TwilioApiError } from "./twilio/api.js";
@@ -8,6 +17,7 @@ const STREAM_URL = "wss://example.ngrok.app/voice/stream";
 
 beforeEach(() => {
   vi.useRealTimers();
+  guardedJsonApiRequestMock.mockReset();
 });
 
 function createProvider(): TwilioProvider {
@@ -113,6 +123,27 @@ function configureTelephonyTwiMlFallback(params: { providerCallId: string; strea
 }
 
 describe("TwilioProvider", () => {
+  it("uses the configured Twilio Edge and Region for call status", async () => {
+    guardedJsonApiRequestMock.mockResolvedValue({ status: "completed" });
+    const provider = new TwilioProvider({
+      accountSid: "AC123",
+      authToken: "secret",
+      edge: "dublin",
+      region: "ie1",
+    });
+
+    await expect(provider.getCallStatus({ providerCallId: "CA123" })).resolves.toEqual({
+      status: "completed",
+      isTerminal: true,
+    });
+    expect(guardedJsonApiRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://api.dublin.ie1.twilio.com/2010-04-01/Accounts/AC123/Calls/CA123.json",
+        allowedHostnames: ["api.dublin.ie1.twilio.com"],
+      }),
+    );
+  });
+
   it("sends direct initial TwiML for notify-mode outbound calls", async () => {
     const provider = createProvider();
     const apiRequest = createApiRequestMock(async () => ({ sid: "CA123", status: "queued" }));

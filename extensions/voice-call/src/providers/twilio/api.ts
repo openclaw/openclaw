@@ -16,6 +16,30 @@ type ParsedTwilioApiError = {
 
 const TWILIO_API_TIMEOUT_MS = 30_000;
 
+export type TwilioApiTarget = {
+  baseUrl: string;
+  hostname: string;
+};
+
+/** Build the exact Twilio REST target shared by requests and their SSRF policy. */
+export function createTwilioApiTarget(params: {
+  accountSid: string;
+  edge?: string;
+  region?: string;
+}): TwilioApiTarget {
+  if (Boolean(params.edge) !== Boolean(params.region)) {
+    throw new Error("Twilio Edge and Region must be configured together");
+  }
+  const hostname =
+    params.edge && params.region
+      ? `api.${params.edge}.${params.region}.twilio.com`
+      : "api.twilio.com";
+  return {
+    baseUrl: `https://${hostname}/2010-04-01/Accounts/${params.accountSid}`,
+    hostname,
+  };
+}
+
 /** Parse Twilio JSON error responses without trusting response shape. */
 function parseTwilioApiError(text: string): ParsedTwilioApiError {
   try {
@@ -52,7 +76,7 @@ export class TwilioApiError extends Error {
 
 /** POST a form-encoded Twilio REST API request through the SSRF guard. */
 export async function twilioApiRequest<T = unknown>(params: {
-  baseUrl: string;
+  target: TwilioApiTarget;
   accountSid: string;
   authToken: string;
   endpoint: string;
@@ -73,7 +97,7 @@ export async function twilioApiRequest<T = unknown>(params: {
           return acc;
         }, new URLSearchParams());
 
-  const requestUrl = `${params.baseUrl}${params.endpoint}`;
+  const requestUrl = `${params.target.baseUrl}${params.endpoint}`;
   const { response, release } = await fetchWithSsrFGuard({
     url: requestUrl,
     init: {
@@ -84,7 +108,7 @@ export async function twilioApiRequest<T = unknown>(params: {
       },
       body: bodyParams,
     },
-    policy: { allowedHostnames: ["api.twilio.com"] },
+    policy: { allowedHostnames: [params.target.hostname] },
     timeoutMs: TWILIO_API_TIMEOUT_MS,
     auditContext: "voice-call.twilio.api",
   });

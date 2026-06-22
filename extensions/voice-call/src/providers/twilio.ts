@@ -32,7 +32,12 @@ import {
 } from "./shared/call-status.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 import type { TwilioProviderOptions } from "./twilio.types.js";
-import { TwilioApiError, twilioApiRequest } from "./twilio/api.js";
+import {
+  createTwilioApiTarget,
+  TwilioApiError,
+  twilioApiRequest,
+  type TwilioApiTarget,
+} from "./twilio/api.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 export type { TwilioProviderOptions } from "./twilio.types.js";
@@ -72,6 +77,8 @@ type StreamSendResult = {
 type TwilioProviderConfig = {
   accountSid?: string;
   authToken?: string;
+  edge?: string;
+  region?: string;
 };
 
 export class TwilioProvider implements VoiceCallProvider {
@@ -79,7 +86,7 @@ export class TwilioProvider implements VoiceCallProvider {
 
   private readonly accountSid: string;
   private readonly authToken: string;
-  private readonly baseUrl: string;
+  private readonly apiTarget: TwilioApiTarget;
   private readonly callWebhookUrls = new Map<string, string>();
   private readonly options: TwilioProviderOptions;
 
@@ -144,7 +151,11 @@ export class TwilioProvider implements VoiceCallProvider {
 
     this.accountSid = config.accountSid;
     this.authToken = config.authToken;
-    this.baseUrl = `https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}`;
+    this.apiTarget = createTwilioApiTarget({
+      accountSid: this.accountSid,
+      edge: config.edge,
+      region: config.region,
+    });
     this.options = options;
 
     if (options.publicUrl) {
@@ -221,7 +232,7 @@ export class TwilioProvider implements VoiceCallProvider {
     options?: { allowNotFound?: boolean },
   ): Promise<T> {
     return await twilioApiRequest<T>({
-      baseUrl: this.baseUrl,
+      target: this.apiTarget,
       accountSid: this.accountSid,
       authToken: this.authToken,
       endpoint,
@@ -824,13 +835,13 @@ export class TwilioProvider implements VoiceCallProvider {
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
     try {
       const data = await guardedJsonApiRequest<{ status?: string }>({
-        url: `${this.baseUrl}/Calls/${input.providerCallId}.json`,
+        url: `${this.apiTarget.baseUrl}/Calls/${input.providerCallId}.json`,
         method: "GET",
         headers: {
           Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString("base64")}`,
         },
         allowNotFound: true,
-        allowedHostnames: ["api.twilio.com"],
+        allowedHostnames: [this.apiTarget.hostname],
         auditContext: "twilio-get-call-status",
         errorPrefix: "Twilio get call status error",
       });

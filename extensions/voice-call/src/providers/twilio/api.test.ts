@@ -9,7 +9,9 @@ vi.mock("../../../api.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { TwilioApiError, twilioApiRequest } from "./api.js";
+import { createTwilioApiTarget, TwilioApiError, twilioApiRequest } from "./api.js";
+
+const DEFAULT_TARGET = createTwilioApiTarget({ accountSid: "AC123" });
 
 type FetchGuardRequest = {
   url?: string;
@@ -67,7 +69,7 @@ describe("twilioApiRequest", () => {
 
     await expect(
       twilioApiRequest({
-        baseUrl: "https://api.twilio.com",
+        target: DEFAULT_TARGET,
         accountSid: "AC123",
         authToken: "secret",
         endpoint: "/Calls.json",
@@ -79,7 +81,7 @@ describe("twilioApiRequest", () => {
     ).resolves.toEqual({ sid: "CA123" });
 
     const { url, init, auditContext, policy, timeoutMs } = requireFirstFetchGuardRequest();
-    expect(url).toBe("https://api.twilio.com/Calls.json");
+    expect(url).toBe("https://api.twilio.com/2010-04-01/Accounts/AC123/Calls.json");
     expect(auditContext).toBe("voice-call.twilio.api");
     expect(policy).toEqual({ allowedHostnames: ["api.twilio.com"] });
     expect(timeoutMs).toBe(30_000);
@@ -98,6 +100,41 @@ describe("twilioApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("uses the configured Twilio Edge and Region for the request and SSRF policy", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ sid: "CA123" }), { status: 200 }),
+      release,
+    });
+    const target = createTwilioApiTarget({
+      accountSid: "AC123",
+      edge: "dublin",
+      region: "ie1",
+    });
+
+    await twilioApiRequest({
+      target,
+      accountSid: "AC123",
+      authToken: "secret",
+      endpoint: "/Calls.json",
+      body: {},
+    });
+
+    const { url, policy } = requireFirstFetchGuardRequest();
+    expect(url).toBe("https://api.dublin.ie1.twilio.com/2010-04-01/Accounts/AC123/Calls.json");
+    expect(policy).toEqual({ allowedHostnames: ["api.dublin.ie1.twilio.com"] });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects partial Twilio regional routing", () => {
+    expect(() => createTwilioApiTarget({ accountSid: "AC123", edge: "dublin" })).toThrow(
+      "Twilio Edge and Region must be configured together",
+    );
+    expect(() => createTwilioApiTarget({ accountSid: "AC123", region: "ie1" })).toThrow(
+      "Twilio Edge and Region must be configured together",
+    );
+  });
+
   it("passes through URLSearchParams, allows 404s, and returns undefined for empty bodies", async () => {
     const missing = cancelTrackedTextResponse("missing", { status: 404 });
     const responses = [new Response(null, { status: 204 }), missing.response];
@@ -109,7 +146,7 @@ describe("twilioApiRequest", () => {
 
     await expect(
       twilioApiRequest({
-        baseUrl: "https://api.twilio.com",
+        target: DEFAULT_TARGET,
         accountSid: "AC123",
         authToken: "secret",
         endpoint: "/Calls.json",
@@ -119,7 +156,7 @@ describe("twilioApiRequest", () => {
 
     await expect(
       twilioApiRequest({
-        baseUrl: "https://api.twilio.com",
+        target: DEFAULT_TARGET,
         accountSid: "AC123",
         authToken: "secret",
         endpoint: "/Calls/missing.json",
@@ -140,7 +177,7 @@ describe("twilioApiRequest", () => {
 
     await expect(
       twilioApiRequest({
-        baseUrl: "https://api.twilio.com",
+        target: DEFAULT_TARGET,
         accountSid: "AC123",
         authToken: "secret",
         endpoint: "/Calls.json",
@@ -160,7 +197,7 @@ describe("twilioApiRequest", () => {
 
     try {
       await twilioApiRequest({
-        baseUrl: "https://api.twilio.com",
+        target: DEFAULT_TARGET,
         accountSid: "AC123",
         authToken: "secret",
         endpoint: "/Calls.json",
@@ -187,7 +224,7 @@ describe("twilioApiRequest", () => {
 
     await expect(
       twilioApiRequest({
-        baseUrl: "https://api.twilio.com",
+        target: DEFAULT_TARGET,
         accountSid: "AC123",
         authToken: "secret",
         endpoint: "/Calls.json",
@@ -212,7 +249,7 @@ describe("twilioApiRequest", () => {
 
     try {
       await twilioApiRequest({
-        baseUrl: "https://api.twilio.com",
+        target: DEFAULT_TARGET,
         accountSid: "AC123",
         authToken: "secret",
         endpoint: "/Calls/CA123.json",

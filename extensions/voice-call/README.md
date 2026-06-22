@@ -43,6 +43,9 @@ Put under `plugins.entries.voice-call.config`:
   twilio: {
     accountSid: "ACxxxxxxxx",
     authToken: "your_token",
+    // Optional non-US routing; configure both fields together.
+    edge: "dublin",
+    region: "ie1",
   },
 
   telnyx: {
@@ -98,6 +101,7 @@ Put under `plugins.entries.voice-call.config`:
 Notes:
 
 - Twilio/Telnyx/Plivo require a **publicly reachable** webhook URL.
+- Twilio defaults to US1. Non-US Regions require both `twilio.edge` and `twilio.region`, plus credentials created in that Region. For IE1, use `edge: "dublin"` and `region: "ie1"`; see [Twilio's regional REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - If older configs still use `provider: "log"`, `twilio.from`, or legacy `streaming.*` OpenAI keys, run `openclaw doctor --fix` to rewrite them.

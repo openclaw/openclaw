@@ -71,6 +71,14 @@
       "label": "Twilio Auth Token",
       "sensitive": true
     },
+    "twilio.edge": {
+      "label": "Twilio Edge",
+      "advanced": true
+    },
+    "twilio.region": {
+      "label": "Twilio Region",
+      "advanced": true
+    },
     "outbound.defaultMode": {
       "label": "Default Call Mode"
     },
@@ -280,12 +288,26 @@
       "twilio": {
         "type": "object",
         "additionalProperties": false,
+        "dependencies": {
+          "edge": ["region"],
+          "region": ["edge"]
+        },
         "properties": {
           "accountSid": {
             "type": "string"
           },
           "authToken": {
             "type": ["string", "object"]
+          },
+          "edge": {
+            "type": "string",
+            "maxLength": 63,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+          },
+          "region": {
+            "type": "string",
+            "maxLength": 63,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
           }
         }
       },

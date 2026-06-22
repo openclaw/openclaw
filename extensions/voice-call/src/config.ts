@@ -55,14 +55,39 @@ const TelnyxConfigSchema = z
   .strict();
 export type TelnyxConfig = z.infer<typeof TelnyxConfigSchema>;
 
+const TwilioRoutingLabelSchema = z
+  .string()
+  .max(63)
+  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, "must be a lowercase Twilio Edge or Region label");
+
 const TwilioConfigSchema = z
   .object({
     /** Twilio Account SID */
     accountSid: z.string().min(1).optional(),
     /** Twilio Auth Token */
     authToken: SecretInputSchema.optional(),
+    /** Twilio Edge Location (for example, dublin) */
+    edge: TwilioRoutingLabelSchema.optional(),
+    /** Twilio processing Region (for example, ie1) */
+    region: TwilioRoutingLabelSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.edge && !value.region) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["region"],
+        message: "is required when twilio.edge is configured",
+      });
+    }
+    if (value.region && !value.edge) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["edge"],
+        message: "is required when twilio.region is configured",
+      });
+    }
+  });
 
 const PlivoConfigSchema = z
   .object({
