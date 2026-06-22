@@ -218,6 +218,49 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("uses the configured qmd search timeout for the memory_search deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchSignal = opts?.signal;
+        return await new Promise(() => undefined);
+      });
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          memory: {
+            backend: "qmd",
+            qmd: { limits: { timeoutMs: 45_000 } },
+          },
+        }),
+      });
+
+      let settled = false;
+      const resultPromise = tool.execute("qmd-timeout", { query: "hello" }).then((result) => {
+        settled = true;
+        return result;
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(settled).toBe(false);
+      expect(searchSignal?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 45s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      expect(searchSignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("re-resolves the manager once when a cached sqlite handle was closed", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {

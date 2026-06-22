@@ -250,6 +250,19 @@ semantic readiness checks to `vsearch` or `query` setups.
 **Search times out?** Increase `memory.qmd.limits.timeoutMs` (default: 4000ms).
 Set to `120000` for slower hardware.
 
+Manual smoke test after raising the timeout:
+
+1. Set `memory.backend = "qmd"` and raise `memory.qmd.limits.timeoutMs` to a
+   value above the old tool deadline, for example `45000`.
+2. Restart the gateway so the runtime picks up the config change.
+3. From a tool-enabled agent session, run `memory_search` with a query that is
+   known to take longer than 15 seconds on that machine.
+4. Inspect the gateway/backend logs for the search window. The old failure
+   string, `memory_search timed out after 15s`, should not appear. A successful
+   search may return results or an empty result set. If the search still exceeds
+   the configured budget, the unavailable payload should name the configured
+   timeout, for example `memory_search timed out after 45s`.
+
 **Empty results in group chats?** Check `memory.qmd.scope` -- the default only
 allows direct and channel sessions.
 

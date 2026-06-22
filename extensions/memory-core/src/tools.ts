@@ -45,7 +45,7 @@ type MemorySearchToolResult =
 type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWithPurpose>>;
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
 
-const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
+const DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
@@ -74,6 +74,16 @@ function recordMemorySearchToolCooldown(key: string, error: string): void {
     until: Date.now() + MEMORY_SEARCH_TOOL_COOLDOWN_MS,
     error,
   });
+}
+
+function resolveMemorySearchToolTimeoutMs(resolved: {
+  backend?: string;
+  qmd?: { limits?: { timeoutMs?: unknown } };
+}): number {
+  const qmdTimeoutMs = resolved.backend === "qmd" ? resolved.qmd?.limits?.timeoutMs : undefined;
+  return typeof qmdTimeoutMs === "number" && Number.isFinite(qmdTimeoutMs) && qmdTimeoutMs > 0
+    ? Math.floor(qmdTimeoutMs)
+    : DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS;
 }
 
 export const testing = {
@@ -411,11 +421,13 @@ export function createMemorySearchTool(options: {
             }
           }
         };
+        const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
+        const resolvedMemoryBackend = resolveMemoryBackendConfig({ cfg, agentId });
+        const memorySearchToolTimeoutMs = resolveMemorySearchToolTimeoutMs(resolvedMemoryBackend);
 
         const outcome = await runMemorySearchToolWithDeadline({
-          timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+          timeoutMs: memorySearchToolTimeoutMs,
           run: async (deadlineSignal) => {
-            const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
             const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
             const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
             if (cooldown && !shouldQuerySupplements) {
@@ -555,12 +567,11 @@ export function createMemorySearchTool(options: {
                   }
                   const status = activeMemory.manager.status();
                   const decorated = decorateCitations(rawResults, includeCitations);
-                  const resolved = resolveMemoryBackendConfig({ cfg, agentId });
                   const memoryResults =
                     status.backend === "qmd"
                       ? clampResultsByInjectedChars(
                           decorated,
-                          resolved.qmd?.limits.maxInjectedChars,
+                          resolvedMemoryBackend.qmd?.limits.maxInjectedChars,
                         )
                       : decorated;
                   surfacedMemoryResults = memoryResults.map((result) => ({
