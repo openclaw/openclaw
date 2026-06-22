@@ -1,5 +1,5 @@
 // Control UI module implements cron status behavior.
-import type { CronJob, CronRunStatus } from "./types.ts";
+import type { CronJob, CronRunStatus } from "../ui/types.ts";
 
 export type CronJobLastRunStatus = CronRunStatus | "unknown";
 

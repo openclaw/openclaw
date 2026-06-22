@@ -1,10 +1,10 @@
 // Control UI tests cover cron behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
-import type { CronJob } from "../types.ts";
-import { createDefaultDraft, renderCronQuickCreate } from "./cron-quick-create.ts";
-import { renderCron, type CronProps } from "./cron.ts";
+import type { CronJob } from "../../ui/types.ts";
+import { DEFAULT_CRON_FORM } from "./data.ts";
+import { createDefaultDraft, renderCronQuickCreate } from "./quick-create.ts";
+import { renderCron, type CronProps } from "./view.ts";
 
 function createJob(id: string): CronJob {
   return {

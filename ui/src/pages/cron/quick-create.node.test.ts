@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { draftToCronFormPatch, type CronQuickCreateDraft } from "./cron-quick-create.ts";
+import { draftToCronFormPatch, type CronQuickCreateDraft } from "./quick-create.ts";
 
 function createDraft(overrides: Partial<CronQuickCreateDraft> = {}): CronQuickCreateDraft {
   return {

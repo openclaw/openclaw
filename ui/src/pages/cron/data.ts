@@ -1,11 +1,21 @@
-// Control UI controller manages cron gateway state.
+import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+// Cron page data, mutations, and loader.
 import { t } from "../../i18n/index.ts";
-import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
-import { getCronJobPayload, hasCronJobPayload } from "../cron-payload.ts";
-import { resolveCronJobLastRunStatus } from "../cron-status.ts";
-import { toNumber } from "../format.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
-import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
+import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
+import type { RouteHookOptions } from "../../router/types.ts";
+import {
+  controlUiNowMs,
+  recordControlUiPerformanceEvent,
+  roundedControlUiDurationMs,
+} from "../../ui/control-ui-performance.ts";
+import { loadChannels } from "../../ui/controllers/channels.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "../../ui/controllers/scope-errors.ts";
+import { toNumber } from "../../ui/format.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
+import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../ui/string-coerce.ts";
 import type {
   CronJob,
   CronDeliveryStatus,
@@ -20,13 +30,50 @@ import type {
   CronRunsStatusValue,
   CronSortDir,
   CronStatus,
-} from "../types.ts";
-import { CRON_CHANNEL_LAST } from "../ui-types.ts";
-import type { CronFormState } from "../ui-types.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "./scope-errors.ts";
+} from "../../ui/types.ts";
+import { CRON_CHANNEL_LAST } from "../../ui/ui-types.ts";
+import type { CronFormState } from "../../ui/ui-types.ts";
+import { getCronJobPayload, hasCronJobPayload } from "./payload.ts";
+
+export const DEFAULT_CRON_FORM: CronFormState = {
+  name: "",
+  description: "",
+  agentId: "",
+  sessionKey: "",
+  clearAgent: false,
+  enabled: true,
+  deleteAfterRun: true,
+  scheduleKind: "every",
+  scheduleAt: "",
+  everyAmount: "30",
+  everyUnit: "minutes",
+  cronExpr: "0 7 * * *",
+  cronTz: "",
+  scheduleExact: false,
+  staggerAmount: "",
+  staggerUnit: "seconds",
+  sessionTarget: "isolated",
+  wakeMode: "now",
+  payloadKind: "agentTurn",
+  payloadLocked: false,
+  payloadText: "",
+  payloadModel: "",
+  payloadThinking: "",
+  payloadLightContext: false,
+  deliveryMode: "announce",
+  deliveryChannel: "last",
+  deliveryTo: "",
+  deliveryAccountId: "",
+  deliveryBestEffort: false,
+  failureAlertMode: "inherit",
+  failureAlertAfter: "2",
+  failureAlertCooldownSeconds: "3600",
+  failureAlertChannel: "last",
+  failureAlertTo: "",
+  failureAlertDeliveryMode: "announce",
+  failureAlertAccountId: "",
+  timeoutSeconds: "",
+};
 
 export type CronFieldKey =
   | "name"
@@ -53,8 +100,8 @@ export type CronState = {
   connected: boolean;
   cronLoading: boolean;
   cronQuickCreateOpen: boolean;
-  cronQuickCreateStep: import("../views/cron-quick-create.ts").CronQuickCreateStep;
-  cronQuickCreateDraft: import("../views/cron-quick-create.ts").CronQuickCreateDraft | null;
+  cronQuickCreateStep: import("./quick-create.ts").CronQuickCreateStep;
+  cronQuickCreateDraft: import("./quick-create.ts").CronQuickCreateDraft | null;
   cronJobsLoadingMore: boolean;
   cronJobsReloadPending: boolean;
   cronJobsReloadPendingTableFilters: boolean;
@@ -96,6 +143,40 @@ export type CronModelSuggestionsState = {
   connected: boolean;
   cronModelSuggestions: string[];
 };
+
+export async function loadCronPage(host: SettingsHost, routeOptions?: RouteHookOptions) {
+  const app = host as SettingsAppHost;
+  const activeCronJobId = app.cronRunsScope === "job" ? app.cronRunsJobId : null;
+  const cronSeq = (host.controlUiCronRefreshSeq ?? 0) + 1;
+  host.controlUiCronRefreshSeq = cronSeq;
+  const isCurrentCronRefresh = () =>
+    host.controlUiCronRefreshSeq === cronSeq && !routeOptions?.signal.aborted;
+  const useTableFilters = routeOptions ? !routeOptions.signal.aborted : true;
+  const runsStartedAtMs = controlUiNowMs();
+  const runsRefresh = loadCronRuns(app, activeCronJobId)
+    .catch(() => "error" as const)
+    .then((status) => {
+      if (!isCurrentCronRefresh()) {
+        return;
+      }
+      recordControlUiPerformanceEvent(
+        app,
+        "control-ui.cron.runs",
+        {
+          phase: "end",
+          status,
+          durationMs: roundedControlUiDurationMs(controlUiNowMs() - runsStartedAtMs),
+        },
+        { console: false },
+      );
+    });
+  void runsRefresh;
+  await Promise.all([
+    loadChannels(app, false),
+    loadCronStatus(app),
+    loadCronJobsPage(app, { tableFilters: useTableFilters }),
+  ]);
+}
 
 function supportsAnnounceDelivery(
   form: Pick<CronFormState, "sessionTarget" | "payloadKind" | "payloadLocked">,

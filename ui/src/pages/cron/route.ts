@@ -3,16 +3,21 @@ import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
-import { DEFAULT_CRON_FORM } from "../../ui/app-defaults.ts";
 import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
+  resolveConfiguredCronModelSuggestions,
+  sortLocaleStrings,
+} from "../../ui/views/agents-utils.ts";
+import {
+  DEFAULT_CRON_FORM,
   addCronJob,
   cancelCronEdit,
   getVisibleCronJobs,
   hasCronFormErrors,
   loadCronJobsPage,
   loadCronRuns,
+  loadCronPage,
   loadMoreCronRuns,
   normalizeCronFormState,
   removeCronJob,
@@ -23,21 +28,12 @@ import {
   updateCronJobsFilter,
   updateCronRunsFilter,
   validateCronForm,
-} from "../../ui/controllers/cron.ts";
-import { getCronJobPayload } from "../../ui/cron-payload.ts";
-import {
-  resolveConfiguredCronModelSuggestions,
-  sortLocaleStrings,
-} from "../../ui/views/agents-utils.ts";
-import {
-  createDefaultDraft,
-  draftToCronFormPatch,
-  renderCronQuickCreate,
-} from "../../ui/views/cron-quick-create.ts";
-import { loadCronPage } from "../loaders.ts";
+} from "./data.ts";
+import { getCronJobPayload } from "./payload.ts";
+import { createDefaultDraft, draftToCronFormPatch, renderCronQuickCreate } from "./quick-create.ts";
 type CronLoadContext = { host: SettingsHost; app: SettingsAppHost };
 type CronRenderContext = RouteRenderContext;
-type CronModule = typeof import("../../ui/views/cron.ts");
+type CronModule = typeof import("./view.ts");
 
 const THINKING_SUGGESTIONS = ["off", "minimal", "low", "medium", "high"];
 const TIMEZONE_SUGGESTIONS = [
@@ -293,7 +289,7 @@ export const page = definePage({
   path: "/cron",
   loader: ({ host }: CronLoadContext, options) => loadCronPage(host, options),
   component: () =>
-    import("../../ui/views/cron.ts").then((module) => ({
+    import("./view.ts").then((module) => ({
       shell: "page" as const,
       header: true,
       render: ({ state, navigate }: CronRenderContext) => renderCronPage(state, module, navigate),

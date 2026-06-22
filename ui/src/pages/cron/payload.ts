@@ -1,5 +1,5 @@
 // Control UI module implements cron payload behavior.
-import type { CronJob, CronPayload } from "./types.ts";
+import type { CronJob, CronPayload } from "../../ui/types.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object");

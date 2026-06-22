@@ -1,6 +1,6 @@
 // Control UI module implements presenter behavior.
 import { t } from "../i18n/index.ts";
-import { resolveCronJobLastRunStatus } from "./cron-status.ts";
+import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
 import {
   formatDateMs,
   formatRelativeTimestamp,

@@ -18,7 +18,8 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "../pages/chat/data.ts";
-import { loadCron as loadCronPage } from "../pages/loaders.ts";
+import { loadCronPage } from "../pages/cron/data.ts";
+import { DEFAULT_CRON_FORM } from "../pages/cron/data.ts";
 import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../pages/logs/data.ts";
 import { loadOverview as loadOverviewPage } from "../pages/overview/data.ts";
 import { type SkillWorkshopState } from "../pages/skill-workshop/data.ts";
@@ -35,7 +36,7 @@ import {
   handleWhatsAppStart as handleWhatsAppStartInternal,
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "./app-channels.ts";
-import { DEFAULT_CRON_FORM, DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
+import { DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -600,9 +601,9 @@ export class OpenClawApp extends LitElement {
   @state() cronJobsLimit = 50;
   @state() cronJobsQuery = "";
   @state() cronJobsEnabledFilter: import("./types.js").CronJobsEnabledFilter = "all";
-  @state() cronJobsScheduleKindFilter: import("./controllers/cron.js").CronJobsScheduleKindFilter =
+  @state() cronJobsScheduleKindFilter: import("../pages/cron/data.js").CronJobsScheduleKindFilter =
     "all";
-  @state() cronJobsLastStatusFilter: import("./controllers/cron.js").CronJobsLastStatusFilter =
+  @state() cronJobsLastStatusFilter: import("../pages/cron/data.js").CronJobsLastStatusFilter =
     "all";
   @state() cronJobsSortBy: import("./types.js").CronJobsSortBy = "nextRunAtMs";
   @state() cronJobsSortDir: import("./types.js").CronSortDir = "asc";
@@ -610,7 +611,7 @@ export class OpenClawApp extends LitElement {
   @state() cronError: string | null = null;
   @state() cronForm: CronFormState = { ...DEFAULT_CRON_FORM };
   @state() cronFormCollapsed = true;
-  @state() cronFieldErrors: import("./controllers/cron.js").CronFieldErrors = {};
+  @state() cronFieldErrors: import("../pages/cron/data.js").CronFieldErrors = {};
   @state() cronEditingJobId: string | null = null;
   @state() cronRunsJobId: string | null = null;
   @state() cronRunsLoadingMore = false;

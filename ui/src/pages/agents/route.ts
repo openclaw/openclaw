@@ -20,7 +20,6 @@ import {
   saveAgentsConfig,
 } from "../../ui/controllers/agents.ts";
 import { loadChannels } from "../../ui/controllers/channels.ts";
-import { runCronJob } from "../../ui/controllers/cron.ts";
 import { parseAgentSessionKey } from "../../ui/session-key.ts";
 import { normalizeStringEntries } from "../../ui/string-coerce.ts";
 import {
@@ -35,6 +34,7 @@ import {
   updateConfigFormValue,
 } from "../config/data.ts";
 import { ensureAgentConfigEntry, findAgentConfigEntryIndex } from "../config/data.ts";
+import { runCronJob } from "../cron/data.ts";
 import { loadAgentsPage } from "../loaders.ts";
 
 type AgentsLoadContext = { host: SettingsHost; app: SettingsAppHost };

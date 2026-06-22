@@ -1,6 +1,7 @@
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "../pages/chat/data.ts";
+import type { CronModelSuggestionsState, CronState } from "../pages/cron/data.ts";
 import type { LogEntry, LogLevel } from "../pages/logs/data.ts";
 import type { SkillWorkshopState } from "../pages/skill-workshop/data.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -13,7 +14,6 @@ import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { ChatStreamSegment } from "./chat/stream-text.ts";
-import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList, DevicePairSetup } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";

@@ -1,17 +1,10 @@
 import type { SettingsAppHost, SettingsHost } from "../app/app-host.ts";
-import type { RouteHookOptions } from "../router/types.ts";
 import { scheduleChatScroll } from "../ui/app-scroll.ts";
-import {
-  controlUiNowMs,
-  recordControlUiPerformanceEvent,
-  roundedControlUiDurationMs,
-} from "../ui/control-ui-performance.ts";
 import { loadAgentFiles } from "../ui/controllers/agent-files.ts";
 import { loadAgentIdentities, loadAgentIdentity } from "../ui/controllers/agent-identity.ts";
 import { loadAgentSkills } from "../ui/controllers/agent-skills.ts";
 import { loadAgents } from "../ui/controllers/agents.ts";
 import { loadChannels } from "../ui/controllers/channels.ts";
-import { loadCronJobsPage, loadCronRuns, loadCronStatus } from "../ui/controllers/cron.ts";
 import {
   loadDreamDiary,
   loadDreamingStatus,
@@ -21,7 +14,6 @@ import {
 import { loadModelAuthStatusState } from "../ui/controllers/model-auth-status.ts";
 import { loadSkills, reconcileSkillsAgentId } from "../ui/controllers/skills.ts";
 import { loadUsage } from "../ui/controllers/usage.ts";
-import { resolveCronJobLastRunStatus } from "../ui/cron-status.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../ui/session-key.ts";
 import {
   createChatSessionsLoadOverrides,
@@ -85,44 +77,6 @@ export async function loadChatPage(host: SettingsHost, app: SettingsAppHost) {
 
 export async function loadChannelsPage(host: SettingsHost) {
   await loadChannelsRoute(host);
-}
-
-export async function loadCronPage(host: SettingsHost, routeOptions?: RouteHookOptions) {
-  await loadCron(host, routeOptions);
-}
-
-export async function loadCron(host: SettingsHost, routeOptions?: RouteHookOptions) {
-  const app = host as unknown as SettingsAppHost;
-  const activeCronJobId = app.cronRunsScope === "job" ? app.cronRunsJobId : null;
-  const cronSeq = (host.controlUiCronRefreshSeq ?? 0) + 1;
-  host.controlUiCronRefreshSeq = cronSeq;
-  const isCurrentCronRefresh = () =>
-    host.controlUiCronRefreshSeq === cronSeq && !routeOptions?.signal.aborted;
-  const useTableFilters = routeOptions ? !routeOptions.signal.aborted : true;
-  const runsStartedAtMs = controlUiNowMs();
-  const runsRefresh = loadCronRuns(app, activeCronJobId)
-    .catch(() => "error" as const)
-    .then((status) => {
-      if (!isCurrentCronRefresh()) {
-        return;
-      }
-      recordControlUiPerformanceEvent(
-        app,
-        "control-ui.cron.runs",
-        {
-          phase: "end",
-          status,
-          durationMs: roundedControlUiDurationMs(controlUiNowMs() - runsStartedAtMs),
-        },
-        { console: false },
-      );
-    });
-  void runsRefresh;
-  await Promise.all([
-    loadChannels(app, false),
-    loadCronStatus(app),
-    loadCronJobsPage(app, { tableFilters: useTableFilters }),
-  ]);
 }
 
 async function refreshAgentsPage(host: SettingsHost, app: SettingsAppHost) {

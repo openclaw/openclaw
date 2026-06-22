@@ -8,8 +8,8 @@
 
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { icons } from "../icons.ts";
-import type { CronFormState } from "../ui-types.ts";
+import { icons } from "../../ui/icons.ts";
+import type { CronFormState } from "../../ui/ui-types.ts";
 
 // ── Types ──
 
