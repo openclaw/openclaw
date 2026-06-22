@@ -1,8 +1,8 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import { resolveGatewayTokenForUrlEdit } from "../storage.ts";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { createStorageMock } from "../test-helpers/storage.ts";
+import { resolveGatewayTokenForUrlEdit } from "../ui/storage.ts";
 import {
   resolveAuthHintKind,
   resolvePairingHint,

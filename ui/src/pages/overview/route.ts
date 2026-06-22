@@ -6,8 +6,8 @@ import { definePage } from "../../router/index.ts";
 import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import { warnQueryToken } from "../../ui/app-settings.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { renderOverview } from "../../ui/views/overview.ts";
-import { loadOverview } from "../loaders.ts";
+import { loadOverview } from "./data.ts";
+import { renderOverview } from "./view.ts";
 
 type OverviewRenderContext = RouteRenderContext;
 type OverviewLoadContext = { host: SettingsHost };

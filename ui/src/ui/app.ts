@@ -17,7 +17,8 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "../pages/chat/data.ts";
-import { loadCron as loadCronPage, loadOverview as loadOverviewPage } from "../pages/loaders.ts";
+import { loadCron as loadCronPage } from "../pages/loaders.ts";
+import { loadOverview as loadOverviewPage } from "../pages/overview/data.ts";
 import { type SkillWorkshopState } from "../pages/skill-workshop/data.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import {

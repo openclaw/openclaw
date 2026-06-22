@@ -1,8 +1,8 @@
 // Control UI component implements the dashboard header element.
 import { LitElement, html, nothing } from "lit";
 import { property } from "lit/decorators.js";
-import { titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../../app-routes.ts";
+import { titleForRoute } from "../app-navigation.ts";
+import { pathForRoute, type RouteId } from "../app-routes.ts";
 
 export class DashboardHeader extends LitElement {
   override createRenderRoot() {

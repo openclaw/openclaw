@@ -33,7 +33,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { formatRelativeTimestamp } from "./format.ts";
 import { icons } from "./icons.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
-import "./components/dashboard-header.ts";
+import "../components/dashboard-header.ts";
 import {
   isSessionKeyTiedToAgent,
   normalizeAgentId,

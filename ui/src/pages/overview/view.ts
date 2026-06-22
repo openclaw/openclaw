@@ -2,13 +2,19 @@
 import { html, nothing } from "lit";
 import type { RouteId } from "../../app-routes.ts";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
-import type { EventLogEntry } from "../app-events.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
-import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
-import type { GatewayHelloOk } from "../gateway.ts";
-import { icons } from "../icons.ts";
-import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../storage.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import {
+  resolveAuthHintKind,
+  type PairingHint,
+  resolvePairingHint,
+  shouldShowInsecureContextHint,
+} from "../../lib/overview-hints.ts";
+import type { EventLogEntry } from "../../ui/app-events.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../ui/external-link.ts";
+import { formatRelativeTimestamp, formatDurationHuman } from "../../ui/format.ts";
+import type { GatewayHelloOk } from "../../ui/gateway.ts";
+import { icons } from "../../ui/icons.ts";
+import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../ui/storage.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
 import type {
   AttentionItem,
   CronJob,
@@ -17,18 +23,12 @@ import type {
   SessionsListResult,
   SessionsUsageResult,
   SkillStatusReport,
-} from "../types.ts";
-import { renderConnectCommand } from "./connect-command.ts";
-import { renderOverviewAttention } from "./overview-attention.ts";
-import { renderOverviewCards } from "./overview-cards.ts";
-import { renderOverviewEventLog } from "./overview-event-log.ts";
-import {
-  resolveAuthHintKind,
-  type PairingHint,
-  resolvePairingHint,
-  shouldShowInsecureContextHint,
-} from "./overview-hints.ts";
-import { renderOverviewLogTail } from "./overview-log-tail.ts";
+} from "../../ui/types.ts";
+import { renderConnectCommand } from "../../ui/views/connect-command.ts";
+import { renderOverviewAttention } from "./attention.ts";
+import { renderOverviewCards } from "./cards.ts";
+import { renderOverviewEventLog } from "./event-log.ts";
+import { renderOverviewLogTail } from "./log-tail.ts";
 
 export type OverviewProps = {
   connected: boolean;

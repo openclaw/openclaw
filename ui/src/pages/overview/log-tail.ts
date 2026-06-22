@@ -1,7 +1,7 @@
 // Control UI view renders overview log tail screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { icons } from "../icons.ts";
+import { icons } from "../../ui/icons.ts";
 
 const ESCAPE = String.fromCharCode(0x1b);
 const OSC8_LINK_RE = new RegExp(
