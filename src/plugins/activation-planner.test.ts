@@ -184,6 +184,38 @@ describe("activation planner", () => {
     ).toEqual([]);
   });
 
+  it("requires canonical ids for explicit manifest owner trust", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            allow: ["legacy-custom-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual([]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            allow: ["custom-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual(["custom-harness-plugin"]);
+  });
+
   it("keeps ids-only provider, agent harness, channel, and route planning stable", () => {
     expect(
       resolveManifestActivationPluginIds({

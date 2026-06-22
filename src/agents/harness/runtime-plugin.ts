@@ -4,12 +4,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
-import {
-  normalizePluginsConfig,
-  resolveEffectivePluginActivationState,
-} from "../../plugins/config-state.js";
+import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
-import { hasExplicitManifestOwnerTrust } from "../../plugins/manifest-owner-policy.js";
 import {
   loadPluginRegistrySnapshot,
   normalizePluginsConfigWithRegistry,
@@ -84,18 +80,9 @@ function resolveHarnessPluginIds(params: {
     trigger: { kind: "agentHarness", runtime: params.runtime },
     config: params.config,
     workspaceDir: params.workspaceDir,
+    requireExplicitManifestOwnerTrust: true,
   });
-  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
-  const harnessPluginIds = activationPlan.entries
-    .filter(
-      (entry) =>
-        entry.origin === "bundled" ||
-        hasExplicitManifestOwnerTrust({
-          plugin: { id: entry.pluginId },
-          normalizedConfig: normalizedPlugins,
-        }),
-    )
-    .map((entry) => entry.pluginId);
+  const harnessPluginIds = activationPlan.entries.map((entry) => entry.pluginId);
   if (harnessPluginIds.length === 0) {
     return [];
   }

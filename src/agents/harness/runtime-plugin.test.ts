@@ -183,6 +183,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       trigger: { kind: "agentHarness", runtime: "custom-harness" },
       config: expect.any(Object),
       workspaceDir: "/tmp/workspace",
+      requireExplicitManifestOwnerTrust: true,
     });
     expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -195,7 +196,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
 
   it("does not activate an untrusted workspace harness from manifest metadata alone", async () => {
     mocks.resolveManifestActivationPlan.mockReturnValueOnce({
-      entries: [{ pluginId: "custom-harness-plugin", origin: "workspace" }],
+      entries: [],
     });
 
     await ensureSelectedAgentHarnessPlugin({
@@ -205,6 +206,12 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
       workspaceDir: "/tmp/workspace",
     });
 
+    expect(mocks.resolveManifestActivationPlan).toHaveBeenCalledWith({
+      trigger: { kind: "agentHarness", runtime: "custom-harness" },
+      config: undefined,
+      workspaceDir: "/tmp/workspace",
+      requireExplicitManifestOwnerTrust: true,
+    });
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
   });
 
