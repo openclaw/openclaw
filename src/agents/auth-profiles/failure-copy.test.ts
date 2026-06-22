@@ -29,6 +29,7 @@ const REASONS_TRANSIENT: readonly FailoverReason[] = [
   "timeout",
   "server_error",
   "model_not_found",
+  "format",
 ];
 
 describe("formatAuthProfileFailureMessage", () => {
