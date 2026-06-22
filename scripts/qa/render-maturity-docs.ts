@@ -64,6 +64,11 @@ type RenderInputs = {
   scores: QaMaturityScores;
 };
 
+type DocsRouteIndex = {
+  routes: Set<string>;
+  redirects: Map<string, string>;
+};
+
 type RenderMaturityScorecardInputs = Pick<RenderInputs, "taxonomy" | "scores"> & {
   evidenceSummaries: EvidenceSummary[];
 };
@@ -171,7 +176,52 @@ function markdownSlug(value: string): string {
     .replace(/^-|-$/g, "");
 }
 
-function docsLink(docPath: string): string {
+function normalizeRoutePath(route: string): string {
+  return route.replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+function collectDocsRouteIndex(docsRoot: string): DocsRouteIndex {
+  const routes = new Set<string>();
+  const redirects = new Map<string, string>();
+  if (!fs.existsSync(docsRoot)) {
+    return { routes, redirects };
+  }
+  const visit = (dir: string): void => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "internal" && path.relative(docsRoot, fullPath) === "internal") {
+          continue;
+        }
+        visit(fullPath);
+      } else if (entry.isFile() && /\.(md|mdx)$/i.test(entry.name)) {
+        routes.add(
+          path
+            .relative(docsRoot, fullPath)
+            .replaceAll(path.sep, "/")
+            .replace(/\.(md|mdx)$/i, ""),
+        );
+      }
+    }
+  };
+  visit(docsRoot);
+
+  const docsJsonPath = path.join(docsRoot, "docs.json");
+  if (fs.existsSync(docsJsonPath)) {
+    const docsJson = JSON.parse(fs.readFileSync(docsJsonPath, "utf8")) as {
+      redirects?: Array<{ source?: string; destination?: string }>;
+    };
+    for (const redirect of docsJson.redirects ?? []) {
+      if (!redirect.source || !redirect.destination || redirect.destination.startsWith("http")) {
+        continue;
+      }
+      redirects.set(normalizeRoutePath(redirect.source), normalizeRoutePath(redirect.destination));
+    }
+  }
+  return { routes, redirects };
+}
+
+function docsLink(docPath: string, docsRouteIndex: DocsRouteIndex): string | undefined {
   const docsPrefix = "docs/";
   const trimmedPath = docPath.trim();
   const publicPath = trimmedPath.startsWith(docsPrefix)
@@ -181,7 +231,13 @@ function docsLink(docPath: string): string {
   const withoutExtension = pagePath.replace(/\.(md|mdx)$/i, "");
   const lastSegment = withoutExtension.split("/").at(-1) ?? withoutExtension;
   const title = familyTitle(anchor ?? lastSegment);
-  const publicHref = anchor ? `${withoutExtension}#${anchor}` : withoutExtension;
+  const publicRoute = docsRouteIndex.routes.has(withoutExtension)
+    ? withoutExtension
+    : docsRouteIndex.redirects.get(withoutExtension);
+  if (!publicRoute || !docsRouteIndex.routes.has(publicRoute)) {
+    return undefined;
+  }
+  const publicHref = anchor ? `${publicRoute}#${anchor}` : publicRoute;
   return `[${markdownEscape(title)}](/${markdownEscape(publicHref)})`;
 }
 
@@ -569,7 +625,11 @@ function renderMaturityScorecard({
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "scores">): string {
+function renderTaxonomy({
+  docsRouteIndex,
+  scores,
+  taxonomy,
+}: Pick<RenderInputs, "taxonomy" | "scores"> & { docsRouteIndex: DocsRouteIndex }): string {
   const levels = qaMaturityTaxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
   const surfaces = activeQaMaturityTaxonomySurfaces(taxonomy);
@@ -619,7 +679,10 @@ function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "s
       ];
       for (const category of surface.categories) {
         const featureNames = category.features.map((feature) => feature.name).join(", ");
-        const docs = (category.docs ?? []).map((doc) => docsLink(doc)).join(", ");
+        const docs = (category.docs ?? [])
+          .map((doc) => docsLink(doc, docsRouteIndex))
+          .filter((doc): doc is string => Boolean(doc))
+          .join(", ");
         const scoreCategory = categoryScores.get(category.name);
         categoryRows.push([
           markdownEscape(category.name),
@@ -698,7 +761,10 @@ function main(): void {
         evidenceSummaries,
       }),
     ],
-    ["maturity/taxonomy.md", renderTaxonomy({ taxonomy, scores })],
+    [
+      "maturity/taxonomy.md",
+      renderTaxonomy({ docsRouteIndex: collectDocsRouteIndex(outputDir), taxonomy, scores }),
+    ],
   ]);
   const changed: string[] = [];
   for (const [fileName, content] of outputs) {
