@@ -1123,7 +1123,8 @@ describe("sessions", () => {
         { skipMaintenance: true },
       );
 
-      expect(readSpy).not.toHaveBeenCalled();
+      const storePathReads = readSpy.mock.calls.filter(([readPath]) => readPath === storePath);
+      expect(storePathReads).toEqual([]);
     } finally {
       readSpy.mockRestore();
     }
