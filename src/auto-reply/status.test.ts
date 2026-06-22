@@ -859,6 +859,37 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("channel override");
   });
 
+  it("shows the effective channel override model when it differs from the default", () => {
+    const text = buildStatusMessage({
+      config: {
+        channels: {
+          modelByChannel: {
+            telegram: {
+              "group-123": "xai/grok-4.3",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "openai/gpt-5.5",
+      },
+      sessionEntry: {
+        sessionId: "abc",
+        updatedAt: 0,
+        channel: "telegram",
+        groupId: "group-123",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+    const normalized = normalizeTestText(text);
+
+    expect(normalized).toContain("Model: xai/grok-4.3");
+    expect(normalized).toContain("channel override");
+    expect(normalized).toContain("Session/default model: openai/gpt-5.5");
+  });
+
   it("uses the channel override model context window instead of stale persisted context", () => {
     const text = buildStatusMessage({
       config: {

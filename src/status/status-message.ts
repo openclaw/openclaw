@@ -492,13 +492,11 @@ const formatVoiceModeLine = (
   return parts.join(" · ");
 };
 
-function resolveChannelModelNote(params: {
+function resolveChannelModelRef(params: {
   config?: OpenClawConfig;
   entry?: SessionEntry;
-  selectedProvider: string;
-  selectedModel: string;
   parentSessionKey?: string;
-}): string | undefined {
+}): { provider: string; model: string; label: string } | undefined {
   if (!params.config || !params.entry) {
     return undefined;
   }
@@ -539,13 +537,13 @@ function resolveChannelModelNote(params: {
   if (!resolvedOverride) {
     return undefined;
   }
-  if (
-    resolvedOverride.ref.provider !== params.selectedProvider ||
-    resolvedOverride.ref.model !== params.selectedModel
-  ) {
-    return undefined;
-  }
-  return "channel override";
+  return {
+    provider: resolvedOverride.ref.provider,
+    model: resolvedOverride.ref.model,
+    label:
+      formatProviderModelRef(resolvedOverride.ref.provider, resolvedOverride.ref.model) ||
+      channelOverride.model,
+  };
 }
 
 function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
@@ -598,14 +596,20 @@ export function buildStatusMessage(args: StatusArgs): string {
     selectedModel,
     sessionEntry: entry,
   });
+  const channelModelRef = resolveChannelModelRef({
+    config: args.config,
+    entry,
+    parentSessionKey: args.parentSessionKey,
+  });
+  const initialActiveModelLabel = channelModelRef?.label ?? modelRefs.active.label ?? "unknown";
   const initialFallbackState = resolveActiveFallbackState({
     selectedModelRef: modelRefs.selected.label || "unknown",
-    activeModelRef: modelRefs.active.label || "unknown",
+    activeModelRef: initialActiveModelLabel,
     config: args.config,
     state: entry,
   });
-  let activeProvider = modelRefs.active.provider;
-  let activeModel = modelRefs.active.model;
+  let activeProvider = channelModelRef?.provider ?? modelRefs.active.provider;
+  let activeModel = channelModelRef?.model ?? modelRefs.active.model;
   let contextLookupProvider: string | undefined = activeProvider;
   let contextLookupModel = activeModel;
   const runtimeModelRaw = normalizeOptionalString(entry?.model) ?? "";
@@ -737,13 +741,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof resolvedActiveContextTokens === "number"
       ? Math.min(explicitRuntimeContextTokens, resolvedActiveContextTokens)
       : (explicitRuntimeContextTokens ?? resolvedActiveContextTokens);
-  const channelModelNote = resolveChannelModelNote({
-    config: args.config,
-    entry,
-    selectedProvider,
-    selectedModel,
-    parentSessionKey: args.parentSessionKey,
-  });
+  const channelModelNote = channelModelRef ? "channel override" : undefined;
   const persistedContextTokens =
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
@@ -1060,9 +1058,16 @@ export function buildStatusMessage(args: StatusArgs): string {
   const costLabel = hasUsage ? formatUsd(cost) : undefined;
 
   const selectedAuthLabel = selectedAuthLabelValue ? ` · 🔑 ${selectedAuthLabelValue}` : "";
+  const activeAuthLabel = activeAuthLabelValue ? ` · 🔑 ${activeAuthLabelValue}` : "";
   const modelNote = channelModelNote ? ` · ${channelModelNote}` : "";
   const configuredDefaultModelLabel = normalizeOptionalString(args.configuredDefaultModelLabel);
   const sessionHasPersistedModelSelection = hasUserPinnedModelSelection(entry);
+  const channelOverrideDiffersFromSelected =
+    channelModelRef !== undefined &&
+    channelModelRef.label !== selectedModelLabel &&
+    !areRuntimeModelRefsEquivalent(channelModelRef.label, selectedModelLabel, {
+      config: args.config,
+    });
   const configDefaultDiffersFromSession =
     sessionHasPersistedModelSelection &&
     configuredDefaultModelLabel &&
@@ -1079,7 +1084,12 @@ export function buildStatusMessage(args: StatusArgs): string {
         "↩️ Clear with: /model default",
         "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
       ]
-    : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
+    : channelOverrideDiffersFromSelected && channelModelRef
+      ? [
+          `🧠 Model: ${channelModelRef.label}${activeAuthLabel}${modelNote}`,
+          `📌 Session/default model: ${selectedModelLabel}${selectedAuthLabel}`,
+        ]
+      : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
 
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {
