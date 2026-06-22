@@ -2004,6 +2004,19 @@ export const dispatchTelegramMessage = async ({
                       return;
                     }
                     const effectivePayload = deduped;
+                    const terminalErrorPayload =
+                      info.kind === "final" &&
+                      effectivePayload.isError === true &&
+                      !isReplyPayloadNonTerminalToolErrorWarning(effectivePayload);
+                    if (terminalErrorPayload && deliveryState.hasTerminalErrorDelivered()) {
+                      logVerbose("telegram: duplicate terminal error reply suppressed");
+                      return;
+                    }
+                    const markTerminalErrorDelivered = (text?: string) => {
+                      if (terminalErrorPayload) {
+                        deliveryState.markTerminalErrorDelivered(text);
+                      }
+                    };
 
                     if (
                       shouldSuppressLocalTelegramExecApprovalPrompt({
@@ -2090,6 +2103,7 @@ export const dispatchTelegramMessage = async ({
                       });
                       if (result.kind !== "skipped") {
                         markProgressFinalDelivered();
+                        markTerminalErrorDelivered(finalText);
                       }
                       return result;
                     };
@@ -2295,6 +2309,7 @@ export const dispatchTelegramMessage = async ({
                       }
                       if (info.kind === "final" && delivered) {
                         markProgressFinalDelivered();
+                        markTerminalErrorDelivered(reply.text);
                       }
                       if (info.kind === "final") {
                         await flushBufferedFinalAnswer();
@@ -2321,6 +2336,7 @@ export const dispatchTelegramMessage = async ({
                     });
                     if (info.kind === "final" && delivered) {
                       markProgressFinalDelivered();
+                      markTerminalErrorDelivered(reply.text);
                     }
                     if (info.kind === "final") {
                       await flushBufferedFinalAnswer();
