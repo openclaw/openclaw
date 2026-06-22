@@ -38,6 +38,7 @@ import {
 } from "../pages/chat/data.ts";
 import { loadCronPage } from "../pages/cron/data.ts";
 import { DEFAULT_CRON_FORM } from "../pages/cron/data.ts";
+import type { DreamingStatus, WikiImportInsights, WikiMemoryPalace } from "../pages/dreams/data.ts";
 import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../pages/logs/data.ts";
 import type { DevicePairingList } from "../pages/nodes/devices.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../pages/nodes/exec-approvals.ts";
@@ -104,11 +105,6 @@ import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { ChatStreamSegment } from "./chat/stream-text.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
-import type {
-  DreamingStatus,
-  WikiImportInsights,
-  WikiMemoryPalace,
-} from "./controllers/dreaming.ts";
 import {
   dismissExecApprovalPrompt,
   isStaleApprovalResolutionError,

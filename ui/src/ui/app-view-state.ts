@@ -220,7 +220,7 @@ export type AppViewState = {
   selectedAgentId: string | null;
   dreamingStatusLoading: boolean;
   dreamingStatusError: string | null;
-  dreamingStatus: import("./controllers/dreaming.js").DreamingStatus | null;
+  dreamingStatus: import("../pages/dreams/data.js").DreamingStatus | null;
   dreamingModeSaving: boolean;
   dreamingRestartConfirmOpen: boolean;
   dreamingRestartConfirmLoading: boolean;
@@ -234,10 +234,10 @@ export type AppViewState = {
   dreamDiaryContent: string | null;
   wikiImportInsightsLoading: boolean;
   wikiImportInsightsError: string | null;
-  wikiImportInsights: import("./controllers/dreaming.js").WikiImportInsights | null;
+  wikiImportInsights: import("../pages/dreams/data.js").WikiImportInsights | null;
   wikiMemoryPalaceLoading: boolean;
   wikiMemoryPalaceError: string | null;
-  wikiMemoryPalace: import("./controllers/dreaming.js").WikiMemoryPalace | null;
+  wikiMemoryPalace: import("../pages/dreams/data.js").WikiMemoryPalace | null;
   configFormMode: "form" | "raw";
   configSettingsMode: "quick" | "advanced";
   configSearchQuery: string;

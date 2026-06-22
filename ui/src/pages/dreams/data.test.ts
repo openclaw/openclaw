@@ -14,7 +14,7 @@ import {
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
-} from "./dreaming.ts";
+} from "./data.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 

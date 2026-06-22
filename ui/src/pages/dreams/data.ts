@@ -1,8 +1,8 @@
-import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
+import { isGatewayMethodAdvertised } from "../../ui/gateway-methods.ts";
 // Control UI controller manages dreaming gateway state.
-import type { GatewayBrowserClient, GatewayHelloOk } from "../gateway.ts";
-import { isPluginEnabledInConfigSnapshot } from "../plugin-activation.ts";
-import type { ConfigSnapshot } from "../types.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../ui/gateway.ts";
+import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
+import type { ConfigSnapshot } from "../../ui/types.ts";
 
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
 const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";

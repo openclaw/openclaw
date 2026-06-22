@@ -9,6 +9,10 @@ import {
   resolveChatAgentFilterOptions,
   resolvePreferredSessionForAgent,
 } from "../../ui/chat/session-controls.ts";
+import { formatTimeMs } from "../../ui/format.ts";
+import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
+import { loadConfig, openConfigFile } from "../config/data.ts";
+import { loadDreamsPage } from "../loaders.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,
@@ -22,13 +26,9 @@ import {
   resetDreamDiary,
   resolveConfiguredDreaming,
   updateDreamingEnabled,
-} from "../../ui/controllers/dreaming.ts";
-import { formatTimeMs } from "../../ui/format.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
-import { renderDreamingRestartConfirmation } from "../../ui/views/dreaming-restart-confirmation.ts";
-import { renderDreaming } from "../../ui/views/dreaming.ts";
-import { loadConfig, openConfigFile } from "../config/data.ts";
-import { loadDreamsPage } from "../loaders.ts";
+} from "./data.ts";
+import { renderDreamingRestartConfirmation } from "./restart-confirmation.ts";
+import { renderDreaming } from "./view.ts";
 
 type DreamsLoadContext = { host: SettingsHost; app: SettingsAppHost };
 type DreamsRenderContext = { state: AppViewState };

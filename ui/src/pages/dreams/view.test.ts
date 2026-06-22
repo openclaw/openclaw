@@ -8,7 +8,7 @@ import {
   setDreamDiarySubTab,
   setDreamSubTab,
   type DreamingProps,
-} from "./dreaming.ts";
+} from "./view.ts";
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
   const props: DreamingProps = {
