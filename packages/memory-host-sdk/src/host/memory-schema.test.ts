@@ -1,4 +1,7 @@
 // Memory schema tests cover canonical table creation and shipped-name migration.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { ensureMemoryIndexSchema } from "./memory-schema.js";
@@ -84,6 +87,87 @@ describe("memory index schema", () => {
       ).toEqual([]);
     } finally {
       db.close();
+    }
+  });
+
+  it("imports a legacy sidecar memory database into a new agent database", () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-sidecar-"));
+    const legacyPath = path.join(rootDir, "memory", "main.sqlite");
+    const agentPath = path.join(rootDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+    const legacyDb = new DatabaseSync(legacyPath);
+    try {
+      legacyDb.exec(`
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE files (
+          path TEXT PRIMARY KEY,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL
+        );
+        CREATE TABLE chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE embedding_cache (
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          provider_key TEXT NOT NULL,
+          hash TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          dims INTEGER,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (provider, model, provider_key, hash)
+        );
+        INSERT INTO meta VALUES ('memory_index_meta_v1', '{"vectorDims":3}');
+        INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10, 20);
+        INSERT INTO chunks VALUES (
+          'chunk-1', 'MEMORY.md', 'memory', 1, 2, 'chunk-hash', 'embed-model',
+          'remember this', '[1,0,0]', 30
+        );
+        INSERT INTO embedding_cache VALUES (
+          'openai', 'embed-model', 'key', 'chunk-hash', '[1,0,0]', 3, 40
+        );
+      `);
+    } finally {
+      legacyDb.close();
+    }
+
+    const db = new DatabaseSync(agentPath);
+    try {
+      const result = ensureMemoryIndexSchema({
+        db,
+        cacheEnabled: true,
+        ftsEnabled: true,
+        legacySidecarDatabasePath: legacyPath,
+      });
+
+      expect(result.ftsAvailable).toBe(true);
+      expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([
+        { path: "MEMORY.md", source: "memory", hash: "file-hash", mtime: 10, size: 20 },
+      ]);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
+        { id: "chunk-1", text: "remember this" },
+      ]);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
+        { id: "chunk-1", text: "remember this" },
+      ]);
+      expect(db.prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([
+        { provider: "openai", hash: "chunk-hash" },
+      ]);
+    } finally {
+      db.close();
+      fs.rmSync(rootDir, { recursive: true, force: true });
     }
   });
 
