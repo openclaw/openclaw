@@ -27,7 +27,8 @@ export function resolveVercelAiGatewayModel(modelId: string) {
   const model = resolveVercelAiGatewayDynamicModel(modelId);
   const input: Array<"text" | "image"> = model.input.includes("image")
     ? ["text", "image"]
-    : VERCEL_AI_GATEWAY_IMAGE_MODEL_IDS.has(modelId)
+    : VERCEL_AI_GATEWAY_IMAGE_MODEL_IDS.has(modelId) ||
+        /^anthropic\/claude-(?:opus|sonnet|haiku)-/.test(modelId)
       ? ["text", "image"]
       : ["text"];
   return {

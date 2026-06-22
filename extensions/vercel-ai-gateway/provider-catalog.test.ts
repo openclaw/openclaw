@@ -116,6 +116,9 @@ describe("vercel ai gateway provider catalog", () => {
       reasoning: true,
       input: ["text", "image"],
     });
+    expect(resolveVercelAiGatewayModel("anthropic/claude-sonnet-4-6")).toMatchObject({
+      input: ["text", "image"],
+    });
   });
 
   it("falls back to the static catalog for malformed successful model list payloads", async () => {
