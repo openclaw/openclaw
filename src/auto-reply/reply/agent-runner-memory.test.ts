@@ -206,6 +206,19 @@ describe("runMemoryFlushIfNeeded", () => {
           );
         }
       }
+      if (typeof params.transcriptBytesCompactionBytes === "number") {
+        nextEntry.transcriptBytesCompactionBytes = params.transcriptBytesCompactionBytes;
+      }
+      if (typeof params.transcriptBytesCompactionThreshold === "number") {
+        nextEntry.transcriptBytesCompactionThreshold = params.transcriptBytesCompactionThreshold;
+      }
+      if (typeof params.transcriptBytesCompactionSessionFile === "string") {
+        nextEntry.transcriptBytesCompactionSessionFile =
+          params.transcriptBytesCompactionSessionFile;
+      }
+      if (typeof params.transcriptBytesCompactionAt === "number") {
+        nextEntry.transcriptBytesCompactionAt = params.transcriptBytesCompactionAt;
+      }
       params.sessionStore[sessionKey] = nextEntry;
       if (typeof params.storePath === "string") {
         await writeTestSessionStore(params.storePath, sessionKey, nextEntry);
@@ -2188,6 +2201,392 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.trigger).toBe("budget");
     expect(compactCall.currentTokenCount).toBe(12);
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
+    expect(incrementCompactionCountMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcriptBytesCompactionBytes: expect.any(Number),
+        transcriptBytesCompactionThreshold: 10,
+        transcriptBytesCompactionSessionFile: sessionFile,
+        transcriptBytesCompactionAt: 1_700_000_000_000,
+      }),
+    );
+    expect(entry?.transcriptBytesCompactionThreshold).toBe(10);
+    expect(entry?.transcriptBytesCompactionSessionFile).toBe(sessionFile);
+  });
+
+  it("suppresses repeat byte-threshold compaction until the transcript grows materially", async () => {
+    const sessionFile = path.join(rootDir, "large-session-retry.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const byteSize = (await fs.stat(sessionFile)).size;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 1,
+      transcriptBytesCompactionBytes: byteSize,
+      transcriptBytesCompactionThreshold: 10,
+      transcriptBytesCompactionSessionFile: sessionFile,
+      transcriptBytesCompactionAt: 1_700_000_000_000,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress byte-threshold compaction when the active session file changes", async () => {
+    const previousSessionFile = path.join(rootDir, "large-session-previous.jsonl");
+    const activeSessionFile = path.join(rootDir, "large-session-active.jsonl");
+    await fs.writeFile(
+      previousSessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      activeSessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "y".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const previousByteSize = (await fs.stat(previousSessionFile)).size;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: previousSessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 1,
+      transcriptBytesCompactionBytes: previousByteSize,
+      transcriptBytesCompactionThreshold: 10,
+      transcriptBytesCompactionSessionFile: previousSessionFile,
+      transcriptBytesCompactionAt: 1_700_000_000_000,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile: activeSessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+      preflightCompactionTrigger: "transcript_bytes",
+      sessionFile: activeSessionFile,
+    });
+  });
+
+  it("does not suppress byte-threshold compaction when the previous session file is missing", async () => {
+    const sessionFile = path.join(rootDir, "large-session-missing-previous-file.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const byteSize = (await fs.stat(sessionFile)).size;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 1,
+      transcriptBytesCompactionBytes: byteSize,
+      transcriptBytesCompactionThreshold: 10,
+      transcriptBytesCompactionAt: 1_700_000_000_000,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionFile, sessionKey: "main" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(requireCompactEmbeddedAgentSessionCall().preflightCompactionTrigger).toBe(
+      "transcript_bytes",
+    );
+  });
+
+  it("does not suppress byte-threshold compaction when the configured threshold changes", async () => {
+    const sessionFile = path.join(rootDir, "large-session-threshold-change.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const byteSize = (await fs.stat(sessionFile)).size;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 1,
+      transcriptBytesCompactionBytes: byteSize,
+      transcriptBytesCompactionThreshold: 20,
+      transcriptBytesCompactionSessionFile: sessionFile,
+      transcriptBytesCompactionAt: 1_700_000_000_000,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionFile, sessionKey: "main" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(requireCompactEmbeddedAgentSessionCall().preflightCompactionTrigger).toBe(
+      "transcript_bytes",
+    );
+  });
+
+  it("retries byte-threshold compaction after material transcript growth", async () => {
+    const sessionFile = path.join(rootDir, "large-session-material-growth.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(1_100_000) } })}\n`,
+      "utf8",
+    );
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 1,
+      transcriptBytesCompactionBytes: 100,
+      transcriptBytesCompactionThreshold: 10,
+      transcriptBytesCompactionSessionFile: sessionFile,
+      transcriptBytesCompactionAt: 1_700_000_000_000,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionFile, sessionKey: "main" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(requireCompactEmbeddedAgentSessionCall().preflightCompactionTrigger).toBe(
+      "transcript_bytes",
+    );
+  });
+
+  it("still runs token-triggered preflight compaction when byte retry is suppressed", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionFile = path.join(rootDir, "large-session-suppressed-byte-token-needed.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    const byteSize = (await fs.stat(sessionFile)).size;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 120,
+      totalTokensFresh: true,
+      compactionCount: 1,
+      transcriptBytesCompactionBytes: byteSize,
+      transcriptBytesCompactionThreshold: 10,
+      transcriptBytesCompactionSessionFile: sessionFile,
+      transcriptBytesCompactionAt: 1_700_000_000_000,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionFile, sessionKey: "main" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(requireCompactEmbeddedAgentSessionCall().preflightCompactionTrigger).toBe("tokens");
+  });
+
+  it("records the rotated successor transcript file and byte size after byte compaction", async () => {
+    const sessionFile = path.join(rootDir, "large-session-before-rotation.jsonl");
+    const successorFile = path.join(rootDir, "large-session-after-rotation.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      successorFile,
+      `${JSON.stringify({ message: { role: "assistant", content: "summary" } })}\n`,
+      "utf8",
+    );
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 42, sessionId: "successor", sessionFile: successorFile },
+    });
+    const successorByteSize = (await fs.stat(successorFile)).size;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              truncateAfterCompaction: true,
+              maxActiveTranscriptBytes: "10b",
+            },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({ sessionId: "session", sessionFile, sessionKey: "main" }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry?.sessionId).toBe("successor");
+    expect(entry?.sessionFile).toBe(successorFile);
+    expect(entry?.transcriptBytesCompactionBytes).toBe(successorByteSize);
+    expect(entry?.transcriptBytesCompactionThreshold).toBe(10);
+    expect(entry?.transcriptBytesCompactionSessionFile).toBe(successorFile);
+    expect(incrementCompactionCountMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        newSessionId: "successor",
+        newSessionFile: successorFile,
+        transcriptBytesCompactionBytes: successorByteSize,
+        transcriptBytesCompactionSessionFile: successorFile,
+      }),
+    );
   });
 
   it("emits preflight compaction notices around a successful budget compaction", async () => {

@@ -7,10 +7,7 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import {
-  normalizeOptionalString,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -385,6 +382,14 @@ export type SessionEntry = {
   contextTokens?: number;
   contextBudgetStatus?: SessionContextBudgetStatus;
   compactionCount?: number;
+  /** Last byte-triggered preflight compaction active transcript size, in bytes. */
+  transcriptBytesCompactionBytes?: number;
+  /** Byte threshold used for the last byte-triggered preflight compaction. */
+  transcriptBytesCompactionThreshold?: number;
+  /** Session file produced/kept by the last byte-triggered preflight compaction. */
+  transcriptBytesCompactionSessionFile?: string;
+  /** Timestamp (ms) of the last byte-triggered preflight compaction. */
+  transcriptBytesCompactionAt?: number;
   compactionCheckpoints?: SessionCompactionCheckpoint[];
   memoryFlushAt?: number;
   memoryFlushCompactionCount?: number;
