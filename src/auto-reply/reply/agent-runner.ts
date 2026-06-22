@@ -1742,6 +1742,7 @@ export async function runReplyAgent(params: {
         resolvedVerboseLevel,
         toolProgressDetail,
         replyMediaContext,
+        isRestartRecoveryArmed: () => trackedRestartRecoveryDeliveryContext,
       }),
     );
 
