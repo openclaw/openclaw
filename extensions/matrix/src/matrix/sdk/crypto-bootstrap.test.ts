@@ -40,6 +40,7 @@ function createBootstrapperDeps() {
   return {
     getUserId: vi.fn(async () => "@bot:example.org"),
     getPassword: vi.fn<() => string | undefined>(() => "super-secret-password"),
+    canUnlockSecretStorage: vi.fn(async () => true),
     getDeviceId: vi.fn(() => "DEVICE123"),
     verificationManager: {
       trackVerificationRequest: vi.fn(),
@@ -399,6 +400,29 @@ describe("MatrixCryptoBootstrapper", () => {
 
     expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
     expect(bootstrapCrossSigning).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects forced reset before mutation when the active recovery key is unavailable", async () => {
+    const deps = createBootstrapperDeps();
+    deps.canUnlockSecretStorage = vi.fn(async () => false);
+    const bootstrapCrossSigning = vi.fn(async () => {});
+    const crypto = createCryptoApi({ bootstrapCrossSigning });
+    const bootstrapper = new MatrixCryptoBootstrapper(
+      deps as unknown as MatrixCryptoBootstrapperDeps<MatrixRawEvent>,
+    );
+
+    await expect(
+      bootstrapper.bootstrap(crypto, {
+        strict: true,
+        forceResetCrossSigning: true,
+        allowSecretStorageRecreateWithoutRecoveryKey: true,
+      }),
+    ).rejects.toThrow(
+      "Forced cross-signing reset requires the active Matrix recovery key; provide it with --recovery-key-stdin before retrying",
+    );
+
+    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
+    expect(bootstrapCrossSigning).not.toHaveBeenCalled();
   });
 
   it("fails closed without recreating SSSS when forced reset cannot unlock it", async () => {

@@ -20,6 +20,7 @@ import { isMatrixDeviceOwnerVerified } from "./verification-status.js";
 export type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = {
   getUserId: () => Promise<string>;
   getPassword?: () => string | undefined;
+  canUnlockSecretStorage: () => Promise<boolean>;
   getDeviceId: () => string | null | undefined;
   verificationManager: MatrixVerificationManager;
   recoveryKeyStore: MatrixRecoveryKeyStore;
@@ -53,6 +54,11 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     const strict = options.strict === true;
     const forceReset = options.forceResetCrossSigning === true;
     const deferSecretStorageBootstrapUntilAfterCrossSigning = forceReset;
+    if (forceReset && !(await this.deps.canUnlockSecretStorage())) {
+      throw new Error(
+        "Forced cross-signing reset requires the active Matrix recovery key; provide it with --recovery-key-stdin before retrying",
+      );
+    }
     // Register verification listeners before expensive bootstrap work so incoming requests
     // are not missed during startup.
     this.registerVerificationRequestHandler(crypto);

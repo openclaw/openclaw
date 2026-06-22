@@ -66,39 +66,13 @@ export class MatrixRecoveryKeyStore {
         if (requestedKeyIds.length === 0) {
           return null;
         }
-
-        const staged = this.resolveStagedSecretStorageKey(requestedKeyIds);
-        if (staged) {
-          return staged;
-        }
-
         for (const keyId of requestedKeyIds) {
-          const cached = this.secretStorageKeyCache.get(keyId);
-          if (cached) {
-            return [keyId, new Uint8Array(cached.key)];
+          const candidate = this.getSecretStorageKeyCandidate(keyId);
+          if (candidate) {
+            return [keyId, candidate];
           }
         }
-
-        const stored = this.loadStoredRecoveryKey();
-        if (!stored?.privateKeyBase64) {
-          return null;
-        }
-        const privateKey = new Uint8Array(Buffer.from(stored.privateKeyBase64, "base64"));
-        if (privateKey.length === 0) {
-          return null;
-        }
-
-        if (stored.keyId && requestedKeyIds.includes(stored.keyId)) {
-          this.rememberSecretStorageKey(stored.keyId, privateKey, stored.keyInfo);
-          return [stored.keyId, privateKey];
-        }
-
-        const firstRequestedKeyId = requestedKeyIds[0];
-        if (!firstRequestedKeyId) {
-          return null;
-        }
-        this.rememberSecretStorageKey(firstRequestedKeyId, privateKey, stored.keyInfo);
-        return [firstRequestedKeyId, privateKey];
+        return null;
       },
       cacheSecretStorageKey: (keyId, keyInfo, key) => {
         const privateKey = new Uint8Array(key);
@@ -133,6 +107,31 @@ export class MatrixRecoveryKeyStore {
       keyId: stored.keyId,
       createdAt: stored.createdAt,
     };
+  }
+
+  getSecretStorageKeyCandidate(keyId: string): Uint8Array | null {
+    const normalizedKeyId = keyId.trim();
+    if (!normalizedKeyId) {
+      return null;
+    }
+    const staged = this.resolveStagedSecretStorageKey([normalizedKeyId]);
+    if (staged) {
+      return staged[1];
+    }
+    const cached = this.secretStorageKeyCache.get(normalizedKeyId);
+    if (cached) {
+      return new Uint8Array(cached.key);
+    }
+    const stored = this.loadStoredRecoveryKey();
+    if (!stored?.privateKeyBase64) {
+      return null;
+    }
+    const privateKey = new Uint8Array(Buffer.from(stored.privateKeyBase64, "base64"));
+    if (privateKey.length === 0) {
+      return null;
+    }
+    this.rememberSecretStorageKey(normalizedKeyId, privateKey, stored.keyInfo);
+    return privateKey;
   }
 
   private resolveEncodedRecoveryKeyInput(params: {

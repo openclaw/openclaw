@@ -148,6 +148,7 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
     expect(fs.existsSync(`${recoveryKeyPath}.migrated`)).toBe(true);
     const callbacks = store.buildCryptoCallbacks();
+    expect(store.getSecretStorageKeyCandidate("SSSS")).toEqual(new Uint8Array([1, 2, 3, 4]));
     const resolved = await callbacks.getSecretStorageKey?.(
       { keys: { SSSS: { name: "test" } } },
       "m.cross_signing.master",
