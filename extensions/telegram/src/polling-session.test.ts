@@ -1881,10 +1881,12 @@ describe("TelegramPollingSession", () => {
       const secondRunPromise = secondSession.runUntilAbort();
 
       await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([42]));
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
       await vi.waitFor(() =>
         expect(
-          log.mock.calls.some(([line]) => String(line).includes("timed out spooled update 42")),
+          log.mock.calls.some(([line]) =>
+            String(line).includes("timed out spooled update 42 did not stop"),
+          ),
         ).toBe(true),
       );
       expect(handleUpdate).toHaveBeenCalledTimes(1);
@@ -2818,7 +2820,7 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("releases a timed-out spooled handler for retry and restarts before draining later same-lane updates", async () => {
+  it("fails a timed-out spooled handler and restarts before draining later same-lane updates", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -2879,16 +2881,14 @@ describe("TelegramPollingSession", () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
       await vi.waitFor(() => expect(worker.createWorker).toHaveBeenCalledTimes(2));
-      // After timeout the claim is released back to pending, so the second bot
-      // retries update 42 instead of skipping to update 43.
-      await vi.waitFor(() => expect(events).toEqual(["first:42", "second:42"]));
+      await vi.waitFor(() => expect(events).toEqual(["first:42", "second:43"]));
       await runPromise;
 
       expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
       expect(firstBot.stop).toHaveBeenCalledTimes(1);
       expect(secondBot.stop).toHaveBeenCalledTimes(1);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
-      expect(await failedUpdateIds(tempDir)).toEqual([]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateIds(tempDir)).toEqual([42]);
       expectLogIncludes(log, "spool handler timed out behind update 42");
     } finally {
       abort.abort();
@@ -2949,8 +2949,8 @@ describe("TelegramPollingSession", () => {
 
       expect(worker.createWorker).toHaveBeenCalledTimes(1);
       expect(events).toEqual(["first:42"]);
-      expect(await failedUpdateIds(tempDir)).toEqual([]);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([42, 43]);
+      expect(await failedUpdateIds(tempDir)).toEqual([42]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
 
       releaseFirstTurn?.();
       abort.abort();
@@ -3103,13 +3103,11 @@ describe("TelegramPollingSession", () => {
 
       await vi.advanceTimersByTimeAsync(500);
       expect(events).toEqual(["first:42"]);
-      // The timed-out update 42 is released back to pending, so it remains
-      // in the queue alongside update 43.
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([42, 43]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
 
       releaseFirstWorker?.();
       await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
-      await vi.waitFor(() => expect(events).toEqual(["first:42", "second:42"]));
+      await vi.waitFor(() => expect(events).toEqual(["first:42", "second:43"]));
       await runPromise;
     } finally {
       abort.abort();
@@ -3120,7 +3118,7 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("keeps a timed-out lane guarded when its release for retry cannot be written", async () => {
+  it("keeps a timed-out lane guarded when its failed state cannot be written", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -3132,8 +3130,8 @@ describe("TelegramPollingSession", () => {
       releaseRegularTurn = resolve;
     });
     const spoolModule = await import("./telegram-ingress-spool.js");
-    const releaseSpy = vi
-      .spyOn(spoolModule, "releaseTelegramSpooledUpdateClaim")
+    const failSpy = vi
+      .spyOn(spoolModule, "failTelegramSpooledUpdateClaim")
       .mockRejectedValueOnce(new Error("disk full"));
     createTelegramBotMock.mockReturnValueOnce({
       api: {
@@ -3186,13 +3184,12 @@ describe("TelegramPollingSession", () => {
       const runPromise = session.runUntilAbort();
       await vi.waitFor(() => expect(events).toEqual(["handled:42"]));
       await vi.advanceTimersByTimeAsync(150);
-      await vi.waitFor(() => expectLogIncludes(log, "could not be released for retry: disk full"));
+      await vi.waitFor(() => expectLogIncludes(log, "could not be marked failed: disk full"));
 
       await vi.advanceTimersByTimeAsync(500);
       expect(createWorker).toHaveBeenCalledTimes(1);
       expect(events).toEqual(["handled:42"]);
       expect(await failedUpdateIds(tempDir)).toEqual([]);
-      // Release threw, so the claim stays claimed (not released back to pending).
       expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
       expect(
         (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
@@ -3216,7 +3213,7 @@ describe("TelegramPollingSession", () => {
       await vi.advanceTimersByTimeAsync(20_000);
       await runPromise;
     } finally {
-      releaseSpy.mockRestore();
+      failSpy.mockRestore();
       releaseRegularTurn?.();
       abort.abort();
       stopWorker?.();
@@ -3326,11 +3323,9 @@ describe("TelegramPollingSession", () => {
       // lone active handler on the same lane, hangs the same way, and is now also
       // recovered on timeout rather than stranded with no backlog behind it (#84158).
       // Each recovery restarts ingress, so the worker is created once more per
-      // recovered handler (initial + two restarts). The timed-out updates are
-      // released back to pending (not failed) so they can be retried. After
-      // restart the drain re-claims update 42, leaving only 43 pending.
-      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]));
-      expect(createWorker.mock.calls.length).toBeGreaterThanOrEqual(3);
+      // recovered handler (initial + two restarts).
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42, 43]));
+      expect(createWorker).toHaveBeenCalledTimes(3);
 
       abort.abort();
       await vi.advanceTimersByTimeAsync(20_000);

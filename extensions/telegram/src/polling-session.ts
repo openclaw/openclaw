@@ -886,19 +886,24 @@ export class TelegramPollingSession {
     }
     const age = formatDurationPrecise(timedOutHandler.ageMs);
     activeHandler.timedOutAt = Date.now();
-    const message = `Telegram isolated polling spool handler timed out behind update ${handler.updateId} on lane ${handler.laneKey} after ${age}; releasing the claim for retry, aborting active reply work, and restarting isolated ingress so later updates can drain.`;
+    const message = `Telegram isolated polling spool handler timed out behind update ${handler.updateId} on lane ${handler.laneKey} after ${age}; marking the update failed, aborting active reply work, and restarting isolated ingress so later updates can drain.`;
     activeHandler.timeoutMessage = message;
     try {
-      // Release the claim back to pending so the drain loop can retry it,
-      // instead of dead-lettering with a permanent failure. The attempts
-      // counter on the queue record is incremented on each release, so
-      // repeated timeouts are observable via SQLite diagnostics.
-      await releaseTelegramSpooledUpdateClaim(handler.update, {
-        lastError: message,
+      const failed = await failTelegramSpooledUpdateClaim({
+        update: handler.update,
+        reason: "handler-timeout",
+        message,
       });
+      if (!failed) {
+        this.opts.log(
+          `[telegram][diag] timed out spooled update ${handler.updateId} no longer had a processing marker to fail.`,
+        );
+        this.#status.notePollingError(message);
+        return { handlerKey: handler.handlerKey, restart: false };
+      }
     } catch (err) {
       this.opts.log(
-        `[telegram][diag] timed out spooled update ${handler.updateId} could not be released for retry: ${formatErrorMessage(err)}`,
+        `[telegram][diag] timed out spooled update ${handler.updateId} could not be marked failed: ${formatErrorMessage(err)}`,
       );
       this.#status.notePollingError(message);
       return { handlerKey: handler.handlerKey, restart: false };
