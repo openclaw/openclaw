@@ -24,6 +24,27 @@ function mockTool(params: {
   } as unknown as AnyAgentTool;
 }
 
+function mockToolWithUnreadableDisplayFields(
+  params: {
+    name: string;
+    label: string;
+    description: string;
+  },
+  fields: Array<"description" | "displaySummary" | "label">,
+): AnyAgentTool {
+  const entry = mockTool(params);
+  for (const field of fields) {
+    Object.defineProperty(entry, field, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        throw new Error(`${field} getter exploded`);
+      },
+    });
+  }
+  return entry;
+}
+
 const effectiveInventoryState = vi.hoisted(() => ({
   tools: [
     mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
@@ -64,11 +85,13 @@ vi.mock("../plugins/tools.js", () => ({
   getPluginToolMeta: (tool: { name: string }) => effectiveInventoryState.pluginMeta[tool.name],
   buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
     JSON.stringify([pluginId, toolName]),
+  copyPluginToolMeta: () => undefined,
 }));
 
 vi.mock("./channel-tools.js", () => ({
   getChannelAgentToolMeta: (tool: { name: string }) =>
     effectiveInventoryState.channelMeta[tool.name],
+  copyChannelAgentToolMeta: () => undefined,
 }));
 
 vi.mock("./agent-tools.policy.js", () => ({
@@ -110,6 +133,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 let resolveEffectiveToolInventory: typeof import("./tools-effective-inventory.js").resolveEffectiveToolInventory;
+let buildRuntimeCompatibleMcpToolInventory: typeof import("./tools-effective-mcp-inventory.js").buildRuntimeCompatibleMcpToolInventory;
 
 async function loadHarness(options?: {
   tools?: AnyAgentTool[];
@@ -143,6 +167,8 @@ async function loadHarness(options?: {
 describe("resolveEffectiveToolInventory", () => {
   beforeAll(async () => {
     ({ resolveEffectiveToolInventory } = await import("./tools-effective-inventory.js"));
+    ({ buildRuntimeCompatibleMcpToolInventory } =
+      await import("./tools-effective-mcp-inventory.js"));
   });
 
   beforeEach(() => {
@@ -410,6 +436,84 @@ describe("resolveEffectiveToolInventory", () => {
           'Tool "tool[0]" has an unsupported runtime input schema (tool[0] is unreadable) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
       },
     ]);
+  });
+
+  it("keeps effective inventory available when compatible plugin tool display fields throw", async () => {
+    const normalizeToolsMock = vi.fn((options: { tools: AnyAgentTool[] }) =>
+      options.tools.map((entry) => ({ ...entry }) as AnyAgentTool),
+    );
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal14 } =
+      await loadHarness({
+        tools: [
+          mockToolWithUnreadableDisplayFields(
+            {
+              name: "fuzzplugin_move_angles",
+              label: "Fuzzplugin Move Angles",
+              description: "Move fixture joints",
+            },
+            ["description", "displaySummary", "label"],
+          ),
+        ],
+        pluginMeta: { fuzzplugin_move_angles: { pluginId: "fuzzplugin" } },
+        normalizeToolsMock,
+      });
+
+    const result = resolveEffectiveToolInventoryLocal14({ cfg: {} });
+
+    expect(normalizeToolsMock).toHaveBeenCalled();
+    expect(result.groups).toEqual([
+      {
+        id: "plugin",
+        label: "Connected tools",
+        source: "plugin",
+        tools: [
+          {
+            id: "fuzzplugin_move_angles",
+            label: "Fuzzplugin Move Angles",
+            description: "Tool",
+            rawDescription: "Tool",
+            source: "plugin",
+            pluginId: "fuzzplugin",
+          },
+        ],
+      },
+    ]);
+    expect(result.notices).toBeUndefined();
+  });
+
+  it("keeps MCP tool inventory available when compatible tool display fields throw", async () => {
+    effectiveInventoryState.normalizeToolsMock = vi.fn((options: { tools: AnyAgentTool[] }) =>
+      options.tools.map((entry) => ({ ...entry }) as AnyAgentTool),
+    );
+
+    const result = buildRuntimeCompatibleMcpToolInventory({
+      tools: [
+        mockToolWithUnreadableDisplayFields(
+          {
+            name: "probe_mcp_tool",
+            label: "Probe MCP Tool",
+            description: "Probe MCP server",
+          },
+          ["description", "displaySummary", "label"],
+        ),
+      ],
+      cfg: {},
+    });
+
+    expect(effectiveInventoryState.normalizeToolsMock).toHaveBeenCalled();
+    expect(result).toEqual({
+      entries: [
+        {
+          id: "probe_mcp_tool",
+          label: "Probe Mcp Tool",
+          description: "Tool",
+          rawDescription: "Tool",
+          source: "mcp",
+          pluginId: "bundle-mcp",
+        },
+      ],
+      notices: [],
+    });
   });
 
   it("validates normalized runtime schemas before quarantining effective tools", async () => {
