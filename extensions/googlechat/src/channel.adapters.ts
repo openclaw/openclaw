@@ -195,9 +195,9 @@ export const googlechatOutboundAdapter = {
     chunker: chunkTextForOutbound,
     chunkerMode: "markdown" as const,
     textChunkLimit: 4000,
-    // Strip internal assistant trace lines (e.g. `⚠️ 🛠️ ... (agent) failed`
-    // banners from benign non-zero shell exits) before the plain-text pass, so
-    // they don't leak to users — mirrors Discord/WhatsApp outbound. See #90684.
+    // Google Chat's plain-text pass does not remove assistant scaffolding.
+    // Run the canonical delivery sanitizer first so internal tool traces are
+    // dropped before channel formatting.
     sanitizeText: ({ text }: { text: string }) =>
       sanitizeForPlainText(sanitizeAssistantVisibleText(text)),
     normalizePayload: ({ payload }: { payload: ReplyPayload }) =>
