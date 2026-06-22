@@ -381,7 +381,7 @@ export async function generateDependencyReleaseEvidence({
 
 function readOptionValue(argv, index, optionName, { allowEmpty = false } = {}) {
   const value = argv[index + 1];
-  if (value === undefined || value.startsWith("--") || (!allowEmpty && value === "")) {
+  if (value === undefined || value.startsWith("-") || (!allowEmpty && value === "")) {
     throw new Error(`Expected ${optionName} <value>.`);
   }
   return value;

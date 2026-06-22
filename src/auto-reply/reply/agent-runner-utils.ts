@@ -3,6 +3,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
@@ -22,6 +23,7 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -197,6 +199,36 @@ export const formatBunFetchSocketError = (message: string) => {
   ].join("\n");
 };
 
+/** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
+export function resolveRunFastModeForFallbackCandidate(params: {
+  run: FollowupRun["run"];
+  config: OpenClawConfig;
+  provider: string;
+  model: string;
+  sessionEntry?: Pick<SessionEntry, "fastMode">;
+}) {
+  const state = resolveFastModeState({
+    cfg: params.config,
+    provider: params.provider,
+    model: params.model,
+    agentId: params.run.agentId,
+    sessionEntry: params.sessionEntry,
+  });
+  if (params.run.fastModeOverride) {
+    return {
+      fastMode: params.run.fastMode,
+      fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
+        ? params.run.fastModeAutoOnSeconds
+        : state.fastAutoOnSeconds,
+    };
+  }
+  return {
+    fastMode: state.mode,
+    fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
+      ? params.run.fastModeAutoOnSeconds
+      : state.fastAutoOnSeconds,
+  };
+}
 /** Builds base embedded run params with auth and provider runtime hints. */
 export function buildEmbeddedRunBaseParams(
   params: Parameters<typeof buildEmbeddedRunBaseParamsCore>[0],
@@ -275,26 +307,6 @@ function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   };
 }
 
-/** Builds extra context payloads for embedded run execution. */
-export function buildEmbeddedRunContexts(params: {
-  run: FollowupRun["run"];
-  replyRoute?: EmbeddedReplyRoute;
-  sessionCtx: TemplateContext;
-  hasRepliedRef: { value: boolean } | undefined;
-  provider: string;
-}) {
-  return {
-    authProfile: resolveRunAuthProfile(params.run, params.provider),
-    embeddedContext: buildEmbeddedContextFromTemplate({
-      run: params.run,
-      replyRoute: params.replyRoute,
-      sessionCtx: params.sessionCtx,
-      hasRepliedRef: params.hasRepliedRef,
-    }),
-    senderContext: buildTemplateSenderContext(params.sessionCtx),
-  };
-}
-
 /** Builds execution-specific embedded run params for queued reply dispatch. */
 export function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
@@ -307,7 +319,14 @@ export function buildEmbeddedRunExecutionParams(params: {
   promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
-  const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
+  const authProfile = resolveRunAuthProfile(params.run, params.provider);
+  const embeddedContext = buildEmbeddedContextFromTemplate({
+    run: params.run,
+    replyRoute: params.replyRoute,
+    sessionCtx: params.sessionCtx,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+  const senderContext = buildTemplateSenderContext(params.sessionCtx);
   const runBaseParams = buildEmbeddedRunBaseParams({
     run: params.run,
     provider: params.provider,

@@ -149,6 +149,10 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
     join(repoRoot, "scripts", "lib", "docker-e2e-container.sh"),
     join(rootDir, "scripts", "lib", "docker-e2e-container.sh"),
   );
+  await copyFile(
+    join(repoRoot, "scripts", "lib", "host-timeout.sh"),
+    join(rootDir, "scripts", "lib", "host-timeout.sh"),
+  );
   await chmod(scriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");
   await writeFile(

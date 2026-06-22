@@ -203,6 +203,7 @@ export const tr: TranslationMap = {
     inherit: "devral",
     defaultOption: "Varsayılan ({value})",
     offExplicit: "kapalı (açıkça)",
+    auto: "auto",
     on: "açık",
     off: "kapalı",
     full: "tam",
@@ -1626,6 +1627,7 @@ export const tr: TranslationMap = {
       nextHeartbeat: "Sonraki heartbeat",
       wakeModeHelp: "Şimdi hemen tetikler. Sonraki heartbeat, bir sonraki döngüyü bekler.",
       payloadKind: "Ne çalıştırılsın?",
+      command: "Command",
       systemEvent: "Ana zaman çizelgesine mesaj gönder",
       agentTurn: "Asistan görevini çalıştır (yalıtılmış)",
       systemEventHelp:

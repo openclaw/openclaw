@@ -1,6 +1,7 @@
 // Qa Lab tests cover Windows system tool path resolution.
 import { describe, expect, it } from "vitest";
 import {
+  resolveQaWindowsPowerShellExePath,
   resolveQaWindowsSystem32ExePath,
   resolveQaWindowsSystemRoot,
 } from "./windows-system-tools.js";
@@ -10,6 +11,9 @@ describe("qa-lab windows system tools", () => {
     expect(resolveQaWindowsSystemRoot({ SystemRoot: "D:\\Windows\\" })).toBe("D:\\Windows");
     expect(resolveQaWindowsSystem32ExePath("taskkill.exe", { SystemRoot: "D:\\Windows\\" })).toBe(
       "D:\\Windows\\System32\\taskkill.exe",
+    );
+    expect(resolveQaWindowsPowerShellExePath({ SystemRoot: "D:\\Windows\\" })).toBe(
+      "D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
     );
   });
 

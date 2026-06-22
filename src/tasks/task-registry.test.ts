@@ -29,11 +29,10 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   cancelTaskById,
   createTaskRecord as createTaskRecordOrNull,
-  findLatestTaskForOwnerKey,
+  finalizeTaskRunByRunId,
   findLatestTaskForRelatedSessionKey,
   findTaskByRunId,
   getTaskById,
-  getTaskRegistrySummary,
   isParentFlowLinkError,
   listTasksForAgentId,
   listTasksForOwnerKey,
@@ -43,7 +42,6 @@ import {
   maybeDeliverTaskTerminalUpdate,
   markTaskRunningByRunId,
   markTaskTerminalById,
-  markTaskTerminalByRunId,
   recordTaskProgressByRunId,
   reloadTaskRegistryFromStore,
   resetTaskRegistryControlRuntimeForTests,
@@ -52,8 +50,6 @@ import {
   resolveTaskForLookupToken,
   setTaskRegistryControlRuntimeForTests,
   setTaskRegistryDeliveryRuntimeForTests,
-  setTaskProgressById,
-  setTaskTimingById,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
@@ -71,6 +67,7 @@ import {
   sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -601,7 +598,7 @@ describe("task-registry", () => {
           aborted: true,
         },
       });
-      markTaskTerminalByRunId({
+      finalizeTaskRunByRunId({
         runId: "run-timeout-then-success",
         runtime: "cli",
         status: "succeeded",
@@ -772,14 +769,14 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      markTaskTerminalByRunId({
+      finalizeTaskRunByRunId({
         runId: "run-fail-then-success",
         runtime: "cli",
         status: "failed",
         endedAt: 200,
         error: "delivery failed",
       });
-      markTaskTerminalByRunId({
+      finalizeTaskRunByRunId({
         runId: "run-fail-then-success",
         runtime: "cli",
         status: "succeeded",
@@ -819,7 +816,7 @@ describe("task-registry", () => {
           endedAt: 200,
         },
       });
-      markTaskTerminalByRunId({
+      finalizeTaskRunByRunId({
         runId: "run-success-then-fail",
         runtime: "cli",
         status: "failed",
@@ -867,7 +864,7 @@ describe("task-registry", () => {
         deliveryStatus: "session_queued",
       });
 
-      expect(getTaskRegistrySummary()).toEqual({
+      expect(summarizeTaskRecords(listTaskRecords())).toEqual({
         total: 3,
         active: 2,
         terminal: 1,
@@ -1726,8 +1723,8 @@ describe("task-registry", () => {
         startedAt: 100,
       });
 
-      setTaskProgressById({
-        taskId: findTaskByRunId("run-detail-leak")!.taskId,
+      recordTaskProgressByRunId({
+        runId: "run-detail-leak",
         progressSummary:
           "I am loading the local session context and checking helper command availability before writing the file.",
       });
@@ -2205,7 +2202,7 @@ describe("task-registry", () => {
       });
       nowSpy.mockRestore();
 
-      expect(findLatestTaskForOwnerKey("agent:main:main")?.taskId).toBe(latest.taskId);
+      expect(listTasksForOwnerKey("agent:main:main")[0]?.taskId).toBe(latest.taskId);
       expect(listTasksForOwnerKey("agent:main:main").map((task) => task.taskId)).toEqual([
         latest.taskId,
         older.taskId,
@@ -2273,9 +2270,6 @@ describe("task-registry", () => {
         task: "Missing child",
         status: "running",
         deliveryStatus: "pending",
-      });
-      setTaskTimingById({
-        taskId: task.taskId,
         lastEventAt: Date.now() - 10 * 60_000,
       });
 
@@ -2338,9 +2332,6 @@ describe("task-registry", () => {
         task: "Missing child",
         status: "running",
         deliveryStatus: "pending",
-      });
-      setTaskTimingById({
-        taskId: task.taskId,
         lastEventAt: now - 10 * 60_000,
       });
 
@@ -2382,9 +2373,6 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
-      });
-      setTaskTimingById({
-        taskId: task.taskId,
         lastEventAt: now - 10 * 60_000,
       });
 
@@ -2417,9 +2405,6 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
-      });
-      setTaskTimingById({
-        taskId: task.taskId,
         lastEventAt: now - 31 * 60_000,
       });
 
@@ -2452,9 +2437,6 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
-      });
-      setTaskTimingById({
-        taskId: task.taskId,
         lastEventAt: now - 31 * 60_000,
       });
 
@@ -2487,9 +2469,12 @@ describe("task-registry", () => {
         task: "Old ACP task",
         status: "succeeded",
         deliveryStatus: "delivered",
+        lastEventAt: now - 60_000,
       });
-      setTaskTimingById({
-        taskId: task.taskId,
+      finalizeTaskRunByRunId({
+        runId: "run-terminal-acp-oneshot",
+        runtime: "acp",
+        status: "succeeded",
         endedAt: now - 60_000,
         lastEventAt: now - 60_000,
       });
@@ -2637,9 +2622,12 @@ describe("task-registry", () => {
         task: "Old persistent ACP task",
         status: "failed",
         deliveryStatus: "failed",
+        lastEventAt: now - 60_000,
       });
-      setTaskTimingById({
-        taskId: task.taskId,
+      finalizeTaskRunByRunId({
+        runId: "run-terminal-acp-persistent",
+        runtime: "acp",
+        status: "failed",
         endedAt: now - 60_000,
         lastEventAt: now - 60_000,
       });
@@ -2689,9 +2677,12 @@ describe("task-registry", () => {
         task: "Thread-bound ACP session",
         status: "succeeded",
         deliveryStatus: "delivered",
+        lastEventAt: now - 60_000,
       });
-      setTaskTimingById({
-        taskId: task.taskId,
+      finalizeTaskRunByRunId({
+        runId: "run-terminal-acp-bound",
+        runtime: "acp",
+        status: "succeeded",
         endedAt: now - 60_000,
         lastEventAt: now - 60_000,
       });
@@ -2825,7 +2816,7 @@ describe("task-registry", () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
 
-      const task = createTaskRecord({
+      createTaskRecord({
         runtime: "cli",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -2835,9 +2826,12 @@ describe("task-registry", () => {
         status: "succeeded",
         deliveryStatus: "not_applicable",
         startedAt: Date.now() - 9 * 24 * 60 * 60_000,
+        lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
-      setTaskTimingById({
-        taskId: task.taskId,
+      finalizeTaskRunByRunId({
+        runId: "run-prune",
+        runtime: "cli",
+        status: "succeeded",
         endedAt: Date.now() - 8 * 24 * 60 * 60_000,
         lastEventAt: Date.now() - 8 * 24 * 60 * 60_000,
       });
@@ -2917,9 +2911,6 @@ describe("task-registry", () => {
         task: "Missing child",
         status: "running",
         deliveryStatus: "pending",
-      });
-      setTaskTimingById({
-        taskId: task.taskId,
         lastEventAt: now - 10 * 60_000,
       });
 
@@ -3148,8 +3139,8 @@ describe("task-registry", () => {
       });
 
       nowSpy.mockReturnValue(1_700_000_001_000);
-      setTaskTimingById({
-        taskId: task.taskId,
+      markTaskRunningByRunId({
+        runId: "run-backdated-update",
         startedAt: 1_699_999_998_000,
         lastEventAt: 1_699_999_998_500,
       });
@@ -3221,7 +3212,7 @@ describe("task-registry", () => {
         },
       });
 
-      const staleTask = createTaskRecord({
+      createTaskRecord({
         runtime: "cli",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -3231,13 +3222,10 @@ describe("task-registry", () => {
         status: "running",
         deliveryStatus: "pending",
         notifyPolicy: "silent",
-      });
-      setTaskTimingById({
-        taskId: staleTask.taskId,
         startedAt: now - 60_000,
         lastEventAt: now - 60_000,
       });
-      expect(getTaskRegistrySummary().active).toBe(1);
+      expect(summarizeTaskRecords(listTaskRecords()).active).toBe(1);
 
       durableTasks = new Map([
         [
@@ -3268,7 +3256,7 @@ describe("task-registry", () => {
         taskId: "task-durable",
         status: "cancelled",
       });
-      expect(getTaskRegistrySummary().active).toBe(0);
+      expect(summarizeTaskRecords(listTaskRecords()).active).toBe(0);
     });
   });
 

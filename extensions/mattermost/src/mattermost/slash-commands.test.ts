@@ -108,6 +108,15 @@ describe("slash-commands", () => {
     ).toEqual(["oc_model", "oc_models"]);
   });
 
+  it("registers the queue command mapped to the core /queue directive", () => {
+    const queueSpec = DEFAULT_COMMAND_SPECS.find((spec) => spec.trigger === "oc_queue");
+    expect(queueSpec?.originalName).toBe("queue");
+    const triggerMap = new Map<string, string>([["oc_queue", "queue"]]);
+    expect(resolveCommandText("oc_queue", " collect drop:summarize ", triggerMap)).toBe(
+      "/queue collect drop:summarize",
+    );
+  });
+
   it("normalizes callback path in slash config", () => {
     const config = resolveSlashCommandConfig({ callbackPath: "api/channels/mattermost/command" });
     expect(config.callbackPath).toBe("/api/channels/mattermost/command");
