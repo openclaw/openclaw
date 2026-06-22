@@ -28,7 +28,7 @@ import {
   prepareCompaction,
 } from "./compaction/compaction.js";
 import { convertToLlm } from "./messages.js";
-import { formatPromptTemplateInvocation } from "./prompt-templates.js";
+import { formatPromptTemplateInvocation } from "./prompt-template-arguments.js";
 import { formatSkillInvocation } from "./skills.js";
 import type {
   AbortResult,

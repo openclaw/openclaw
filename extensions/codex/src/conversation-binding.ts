@@ -511,7 +511,7 @@ async function writeThreadBindingFromResponse(
       sandbox: resolved.execPolicy?.touched
         ? resolved.runtime.sandbox
         : (params.sandbox ?? resolved.runtime.sandbox),
-      serviceTier: params.serviceTier ?? resolved.runtime.serviceTier,
+      serviceTier: params.serviceTier ?? resolved.runtime.serviceTier ?? undefined,
       networkProxyProfileName: resolved.runtime.networkProxy?.profileName,
       networkProxyConfigFingerprint: resolved.runtime.networkProxy?.configFingerprint,
     },
@@ -689,7 +689,7 @@ async function runBoundTurn(params: {
           }),
           approvalPolicy: typeof approvalPolicy === "string" ? approvalPolicy : undefined,
           sandbox,
-          serviceTier,
+          serviceTier: serviceTier ?? undefined,
           networkProxyProfileName: modelScopedRuntime.networkProxy?.profileName,
           networkProxyConfigFingerprint: modelScopedRuntime.networkProxy?.configFingerprint,
         },

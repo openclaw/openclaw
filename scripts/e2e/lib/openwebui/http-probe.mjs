@@ -2,11 +2,18 @@
 import { pathToFileURL } from "node:url";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+
 function parseExpectedStatus(raw) {
   if (!/^[1-5]\d\d$/u.test(raw)) {
     throw new Error(`expected status must be lt500 or a decimal HTTP status. Got: ${raw}`);
   }
   return Number(raw);
+}
+
+function resolveTimerTimeoutMs(valueMs, fallbackMs) {
+  const value = Number.isFinite(valueMs) ? valueMs : fallbackMs;
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
 }
 
 export async function probeHttpStatus({
@@ -20,8 +27,9 @@ export async function probeHttpStatus({
     throw new Error("usage: http-probe.mjs <url> [status|lt500]");
   }
   const expectedStatus = expectedRaw === "lt500" ? undefined : parseExpectedStatus(expectedRaw);
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 30_000);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), resolvedTimeoutMs);
   let res;
   const headers = {};
   if (bearer) {

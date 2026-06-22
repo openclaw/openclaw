@@ -34,6 +34,16 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("prints help after boolean options without consuming valued option slots", () => {
+    const result = runCli("--skip-visual-proof", "--help");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/qa/ux-matrix-evidence-producer.ts",
+    );
+    expect(result.stderr).toBe("");
+  });
+
   it("reports invalid args without a Node stack trace", () => {
     const result = runCli("--wat");
 
@@ -50,6 +60,20 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("--artifact-base requires a value");
     expectNoNodeStack(result.stderr);
+  });
+
+  it("reports short flag values without treating them as help", () => {
+    const artifactBaseResult = runCli("--artifact-base", "-h");
+    const repoRootResult = runCli("--artifact-base", "/tmp/openclaw-ux-test", "--repo-root", "-h");
+
+    expect(artifactBaseResult.status).toBe(1);
+    expect(artifactBaseResult.stdout).toBe("");
+    expect(artifactBaseResult.stderr.trim()).toBe("--artifact-base requires a value");
+    expectNoNodeStack(artifactBaseResult.stderr);
+    expect(repoRootResult.status).toBe(1);
+    expect(repoRootResult.stdout).toBe("");
+    expect(repoRootResult.stderr.trim()).toBe("--repo-root requires a value");
+    expectNoNodeStack(repoRootResult.stderr);
   });
 
   it("sanitizes local checkout paths from generated evidence artifacts", () => {

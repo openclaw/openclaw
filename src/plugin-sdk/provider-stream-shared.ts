@@ -411,6 +411,29 @@ export function isOpenAICompatibleThinkingEnabled(params: {
   return normalized !== "off" && normalized !== "none";
 }
 
+/** Applies Qwen chat-template thinking flags without discarding provider-specific kwargs. */
+export function setQwenChatTemplateThinking(
+  payload: Record<string, unknown>,
+  enabled: boolean,
+): void {
+  const existing = payload.chat_template_kwargs;
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    const next: Record<string, unknown> = {
+      ...(existing as Record<string, unknown>),
+      enable_thinking: enabled,
+    };
+    if (!Object.hasOwn(next, "preserve_thinking")) {
+      next.preserve_thinking = true;
+    }
+    payload.chat_template_kwargs = next;
+    return;
+  }
+  payload.chat_template_kwargs = {
+    enable_thinking: enabled,
+    preserve_thinking: true,
+  };
+}
+
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */

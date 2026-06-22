@@ -1,12 +1,14 @@
 // OpenClaw SDK tests cover package behavior.
-import { spawn, type SpawnOptionsWithoutStdio } from "node:child_process";
+import { spawn, spawnSync, type SpawnOptionsWithoutStdio } from "node:child_process";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveNpmRunner } from "../../../scripts/npm-runner.mjs";
 import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
+import { getWindowsSystem32ExePath } from "../../../src/infra/windows-install-roots.js";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 
 type CommandResult = {
@@ -89,8 +91,36 @@ function runCommand(
   });
 }
 
-function signalCommandProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function signalCommandProcess(
+  child: ReturnType<typeof spawn>,
+  signal: NodeJS.Signals,
+  runTaskkill: typeof spawnSync = spawnSync,
+): void {
+  if (process.platform === "win32") {
+    if (typeof child.pid === "number") {
+      const args = ["/PID", String(child.pid), "/T"];
+      if (signal === "SIGKILL") {
+        args.push("/F");
+      }
+      const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
+      const result = runTaskkill(taskkillPath, args, { stdio: "ignore", windowsHide: true });
+      if (!result.error && result.status === 0) {
+        return;
+      }
+      if (signal !== "SIGKILL") {
+        const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        if (!forceResult.error && forceResult.status === 0) {
+          return;
+        }
+      }
+    }
+    child.kill(signal);
+    return;
+  }
+  if (typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
@@ -133,6 +163,24 @@ function runPnpmCommand(
   });
 }
 
+function runNpmCommand(
+  args: string[],
+  options: { cwd: string; timeoutMs?: number },
+): Promise<CommandResult> {
+  const env = createCommandEnv();
+  const runner = resolveNpmRunner({
+    env,
+    npmArgs: args,
+  });
+  return runCommand(runner.command, runner.args, {
+    cwd: options.cwd,
+    env: runner.env ?? env,
+    shell: runner.shell,
+    timeoutMs: options.timeoutMs,
+    windowsVerbatimArguments: runner.windowsVerbatimArguments,
+  });
+}
+
 function normalizeWorkspaceDependencies(
   dependencies: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
@@ -169,7 +217,7 @@ async function createPackStagingRoot(
   const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
   await fs.mkdir(stagingRoot, { recursive: true });
   await fs.writeFile(path.join(stagingRoot, "package.json"), JSON.stringify(manifest, null, 2));
-  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const files: string[] = Array.isArray(manifest.files) ? (manifest.files as string[]) : [];
   for (const entry of files) {
     if (typeof entry !== "string") {
       continue;
@@ -260,6 +308,39 @@ describe("OpenClaw SDK package e2e", () => {
     );
   });
 
+  it("force-kills Windows package command process trees when graceful taskkill fails", () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const killMock = vi.fn();
+      const child = {
+        pid: 12345,
+        kill: killMock,
+      } as unknown as ReturnType<typeof spawn>;
+      const runTaskkill = vi
+        .fn()
+        .mockReturnValueOnce({ status: 1 })
+        .mockReturnValueOnce({ status: 0 });
+
+      signalCommandProcess(child, "SIGTERM", runTaskkill);
+
+      const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(killMock).not.toHaveBeenCalled();
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
+  });
+
   it("packs and imports from an external temp consumer", async () => {
     const repoRoot = process.cwd();
     const packageRoots = [
@@ -278,7 +359,7 @@ describe("OpenClaw SDK package e2e", () => {
     }
     for (const packageRoot of packageRoots) {
       const stagingRoot = await createPackStagingRoot(packageRoot, tempDir);
-      await runCommand("npm", ["pack", "--ignore-scripts", "--pack-destination", tempDir], {
+      await runNpmCommand(["pack", "--ignore-scripts", "--pack-destination", tempDir], {
         cwd: stagingRoot,
       });
     }
@@ -301,13 +382,9 @@ describe("OpenClaw SDK package e2e", () => {
     );
     await fs.writeFile(path.join(tempDir, ".npmrc"), `@openclaw:registry=${registry.registryUrl}`);
     try {
-      await runCommand(
-        "npm",
-        ["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball],
-        {
-          cwd: tempDir,
-        },
-      );
+      await runNpmCommand(["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball], {
+        cwd: tempDir,
+      });
     } finally {
       await registry.close();
     }
