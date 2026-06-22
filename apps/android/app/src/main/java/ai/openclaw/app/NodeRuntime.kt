@@ -57,6 +57,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,8 +74,52 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
+
+private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
+
+internal data class PendingNotificationNodeEvent(
+  val event: String,
+  val payloadJson: String?,
+)
+
+internal class NotificationNodeEventQueue(
+  private val capacity: Int,
+) {
+  private val lock = Any()
+  private val events = ArrayDeque<PendingNotificationNodeEvent>()
+
+  init {
+    require(capacity > 0) { "capacity must be positive" }
+  }
+
+  fun enqueue(event: PendingNotificationNodeEvent) {
+    synchronized(lock) {
+      if (events.size >= capacity) {
+        events.removeFirst()
+      }
+      events.addLast(event)
+    }
+  }
+
+  fun enqueueFirst(event: PendingNotificationNodeEvent) {
+    synchronized(lock) {
+      if (events.size >= capacity) {
+        events.removeLast()
+      }
+      events.addFirst(event)
+    }
+  }
+
+  fun poll(): PendingNotificationNodeEvent? =
+    synchronized(lock) {
+      if (events.isEmpty()) null else events.removeFirst()
+    }
+
+  fun isNotEmpty(): Boolean = synchronized(lock) { events.isNotEmpty() }
+}
 
 /**
  * Process runtime that owns gateway sessions, node command handlers, capture managers, and UI-facing state.
@@ -132,6 +177,10 @@ class NodeRuntime(
   private val identityStore = DeviceIdentityStore(appContext)
   private var connectedEndpoint: GatewayEndpoint? = null
   private var activeGatewayAuth: GatewayConnectAuth? = null
+  private val pendingNotificationEvents = NotificationNodeEventQueue(MAX_PENDING_NOTIFICATION_EVENTS)
+  private val notificationDeliveryLock = Any()
+  private var notificationDeliveryJob: Job? = null
+  private var notificationReconcileRequested = false
 
   private val cameraHandler: CameraHandler =
     CameraHandler(
@@ -514,6 +563,7 @@ class NodeRuntime(
         _canvasRehydrateErrorText.value = null
         updateStatus()
         showLocalCanvasOnConnect()
+        scheduleNotificationEventDelivery(reconcileActive = true)
         publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Connect)
         val endpoint = connectedEndpoint
         val auth = activeGatewayAuth
@@ -546,9 +596,89 @@ class NodeRuntime(
 
   init {
     DeviceNotificationListenerService.setNodeEventSink { event, payloadJson ->
-      scope.launch {
-        nodeSession.sendNodeEvent(event = event, payloadJson = payloadJson)
+      enqueueNotificationEvent(event = event, payloadJson = payloadJson)
+    }
+  }
+
+  private fun enqueueNotificationEvent(
+    event: String,
+    payloadJson: String?,
+  ) {
+    pendingNotificationEvents.enqueue(
+      PendingNotificationNodeEvent(event = event, payloadJson = payloadJson),
+    )
+    scheduleNotificationEventDelivery()
+  }
+
+  private fun scheduleNotificationEventDelivery(reconcileActive: Boolean = false) {
+    synchronized(notificationDeliveryLock) {
+      if (reconcileActive) {
+        notificationReconcileRequested = true
       }
+      if (notificationDeliveryJob?.isActive == true) {
+        return
+      }
+      startNotificationDeliveryJobLocked()
+    }
+  }
+
+  private fun startNotificationDeliveryJobLocked() {
+    var blocked = false
+    notificationDeliveryJob =
+      scope.launch {
+        try {
+          blocked = drainNotificationEvents()
+        } finally {
+          onNotificationDeliveryJobFinished(blocked)
+        }
+      }
+  }
+
+  private fun onNotificationDeliveryJobFinished(blocked: Boolean) {
+    synchronized(notificationDeliveryLock) {
+      notificationDeliveryJob = null
+      // A connect callback may request reconciliation while a pre-connect drain is
+      // finishing as blocked; restart once for that ready-connection signal.
+      if (
+        (!blocked || notificationReconcileRequested) &&
+          (notificationReconcileRequested || pendingNotificationEvents.isNotEmpty())
+      ) {
+        startNotificationDeliveryJobLocked()
+      }
+    }
+  }
+
+  private suspend fun drainNotificationEvents(): Boolean {
+    while (true) {
+      val blocked = drainQueuedNotificationEvents()
+      if (blocked) return true
+      val shouldReconcile =
+        synchronized(notificationDeliveryLock) {
+          val requested = notificationReconcileRequested
+          notificationReconcileRequested = false
+          requested
+        }
+      if (!shouldReconcile) return false
+      DeviceNotificationListenerService.reconcileActiveNotifications()
+    }
+  }
+
+  private suspend fun drainQueuedNotificationEvents(): Boolean {
+    while (true) {
+      val pending = pendingNotificationEvents.poll() ?: return false
+      val sent =
+        nodeSession.sendNodeEvent(
+          event = pending.event,
+          payloadJson = pending.payloadJson,
+        )
+      if (!sent) {
+        pendingNotificationEvents.enqueueFirst(pending)
+        return true
+      }
+      DeviceNotificationListenerService.markNotificationEventDelivered(
+        event = pending.event,
+        payloadJson = pending.payloadJson,
+      )
     }
   }
 

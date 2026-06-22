@@ -13,10 +13,12 @@ import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.core.content.edit
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonPrimitive
 
 private const val MAX_NOTIFICATION_TEXT_CHARS = 512
 private const val NOTIFICATIONS_CHANGED_EVENT = "notifications.changed"
@@ -102,9 +104,11 @@ internal fun actionRequiresClearableNotification(kind: NotificationActionKind): 
  * Process-local cache of active notifications mirrored from Android listener callbacks.
  */
 private object DeviceNotificationStore {
+  private const val deliveredPostedLimit = 256
   private val lock = Any()
   private var connected = false
   private val byKey = LinkedHashMap<String, DeviceNotificationEntry>()
+  private val deliveredPostedAtByKey = LinkedHashMap<String, Long>()
 
   fun replace(entries: List<DeviceNotificationEntry>) {
     synchronized(lock) {
@@ -112,6 +116,7 @@ private object DeviceNotificationStore {
       for (entry in entries) {
         byKey[entry.key] = entry
       }
+      deliveredPostedAtByKey.keys.retainAll(byKey.keys)
     }
   }
 
@@ -124,6 +129,7 @@ private object DeviceNotificationStore {
   fun remove(key: String) {
     synchronized(lock) {
       byKey.remove(key)
+      deliveredPostedAtByKey.remove(key)
     }
   }
 
@@ -148,6 +154,30 @@ private object DeviceNotificationStore {
       notifications = entries,
     )
   }
+
+  fun markPostedDelivered(
+    key: String,
+    postTimeMs: Long,
+  ) {
+    val normalizedKey = key.trim()
+    if (normalizedKey.isEmpty()) return
+    synchronized(lock) {
+      deliveredPostedAtByKey.remove(normalizedKey)
+      deliveredPostedAtByKey[normalizedKey] = postTimeMs
+      while (deliveredPostedAtByKey.size > deliveredPostedLimit) {
+        val oldest = deliveredPostedAtByKey.keys.firstOrNull() ?: break
+        deliveredPostedAtByKey.remove(oldest)
+      }
+    }
+  }
+
+  fun undeliveredPostedEntries(): List<DeviceNotificationEntry> =
+    synchronized(lock) {
+      byKey
+        .values
+        .filter { entry -> deliveredPostedAtByKey[entry.key] != entry.postTimeMs }
+        .sortedBy { it.postTimeMs }
+    }
 }
 
 /**
@@ -236,6 +266,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     postTimeMs: Long,
     isOngoing: Boolean,
     isClearable: Boolean,
+    consumeBurstLimit: Boolean = true,
   ): String? {
     val normalizedPackage = packageName.trim()
     if (normalizedPackage.isEmpty()) {
@@ -253,7 +284,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       return null
     }
     // Apply burst limits after package/quiet-hour filters so blocked notifications do not consume quota.
-    if (!forwardingLimiter.allow(nowEpochMs, policy.maxEventsPerMinute)) {
+    if (consumeBurstLimit && !forwardingLimiter.allow(nowEpochMs, policy.maxEventsPerMinute)) {
       return null
     }
     return buildJsonObject {
@@ -280,6 +311,26 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           ?: emptyList()
       }.getOrElse { emptyList() }
     DeviceNotificationStore.replace(entries)
+  }
+
+  private fun reconcileActiveNotificationsInternal() {
+    for (entry in DeviceNotificationStore.undeliveredPostedEntries()) {
+      if (entry.packageName == packageName) {
+        continue
+      }
+      val payload =
+        notificationChangedPayload(
+          entry = entry,
+          change = "posted",
+          key = entry.key,
+          packageName = entry.packageName,
+          postTimeMs = entry.postTimeMs,
+          isOngoing = entry.isOngoing,
+          isClearable = entry.isClearable,
+          consumeBurstLimit = false,
+        ) ?: continue
+      emitNotificationsChanged(payload)
+    }
   }
 
   private fun StatusBarNotification.toEntry(): DeviceNotificationEntry {
@@ -313,11 +364,39 @@ class DeviceNotificationListenerService : NotificationListenerService() {
 
     @Volatile private var nodeEventSink: ((event: String, payloadJson: String?) -> Unit)? = null
 
+    private val deliveryJson = Json { ignoreUnknownKeys = true }
+
     private fun serviceComponent(context: Context): ComponentName = ComponentName(context, DeviceNotificationListenerService::class.java)
 
     /** Installs the node event sink used to emit filtered notification change events. */
     fun setNodeEventSink(sink: ((event: String, payloadJson: String?) -> Unit)?) {
       nodeEventSink = sink
+    }
+
+    /** Replays active posted notifications that have not successfully reached the gateway. */
+    fun reconcileActiveNotifications() {
+      activeService?.reconcileActiveNotificationsInternal()
+    }
+
+    /** Records successful gateway delivery so reconnect reconciliation does not duplicate posts. */
+    fun markNotificationEventDelivered(
+      event: String,
+      payloadJson: String?,
+    ) {
+      if (event != NOTIFICATIONS_CHANGED_EVENT || payloadJson.isNullOrBlank()) return
+      val payload =
+        runCatching { deliveryJson.parseToJsonElement(payloadJson).asObjectOrNull() }
+          .getOrNull()
+          ?: return
+      if (payload["change"].asStringOrNull() != "posted") return
+      val key = payload["key"].asStringOrNull() ?: return
+      val postTimeMs =
+        payload["postTimeMs"]
+          ?.jsonPrimitive
+          ?.content
+          ?.toLongOrNull()
+          ?: return
+      DeviceNotificationStore.markPostedDelivered(key = key, postTimeMs = postTimeMs)
     }
 
     private fun recentPackagesPrefs(context: Context) = context.applicationContext.getSharedPreferences("openclaw.secure", Context.MODE_PRIVATE)
