@@ -297,6 +297,7 @@ describe("node exec events", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "exec:run-1",
+        quarantineInPrompt: true,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions("agent:main:main"));
@@ -380,6 +381,7 @@ describe("node exec events", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "exec:run-seq",
+        quarantineInPrompt: true,
       },
     );
     expect(enqueueSystemEventMock).toHaveBeenNthCalledWith(
@@ -388,6 +390,7 @@ describe("node exec events", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "exec:run-seq",
+        quarantineInPrompt: true,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenNthCalledWith(
@@ -429,6 +432,7 @@ describe("node exec events", () => {
       {
         sessionKey: "node-node-2",
         contextKey: "exec:run-2",
+        quarantineInPrompt: true,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions());
@@ -463,6 +467,7 @@ describe("node exec events", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "exec",
+        quarantineInPrompt: true,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions("agent:main:main"));
@@ -494,6 +499,7 @@ describe("node exec events", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "exec:run-dup-finished",
+        quarantineInPrompt: true,
       },
     );
   });
@@ -520,6 +526,7 @@ describe("node exec events", () => {
       {
         sessionKey: "agent:main:node-node-2",
         contextKey: "exec:run-2",
+        quarantineInPrompt: true,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith(
@@ -666,6 +673,7 @@ describe("node exec events", () => {
       {
         sessionKey: "agent:demo:main",
         contextKey: "exec:run-4",
+        quarantineInPrompt: true,
       },
     );
   });
@@ -940,6 +948,7 @@ describe("notifications changed events", () => {
       {
         sessionKey: "node-node-n1",
         contextKey: "notification:notif-1",
+        quarantineInPrompt: true,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -966,6 +975,7 @@ describe("notifications changed events", () => {
       {
         sessionKey: "node-node-n2",
         contextKey: "notification:notif-2",
+        quarantineInPrompt: true,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -1015,6 +1025,7 @@ describe("notifications changed events", () => {
       {
         sessionKey: "agent:main:node-node-n5",
         contextKey: "notification:notif-5",
+        quarantineInPrompt: true,
       },
     );
     expect(requestHeartbeatMock).toHaveBeenCalledWith({
@@ -1055,6 +1066,7 @@ describe("notifications changed events", () => {
       {
         sessionKey: "node-node-n8",
         contextKey: "notification:notif-8",
+        quarantineInPrompt: true,
       },
     );
   });
