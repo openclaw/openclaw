@@ -156,6 +156,8 @@ type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  deadlineAtMs?: number;
+  getDeadlineAtMs?: () => number | undefined;
 };
 
 /** Executes cron job core logic with the configured wall-clock timeout and watchdog cleanup. */
@@ -249,6 +251,7 @@ export async function executeJobCoreWithTimeout(
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
+      getDeadlineAtMs: watchdog.getDeadlineAtMs,
     });
     trackActiveCronTaskRunSettlement(corePromise);
     watchdog.start();
@@ -2135,6 +2138,8 @@ async function executeDetachedCronJob(
     onExecutionStarted: options?.onExecutionStarted,
     onExecutionPhase: options?.onExecutionPhase,
     onLaneWait: options?.onLaneWait,
+    deadlineAtMs: options?.deadlineAtMs,
+    getDeadlineAtMs: options?.getDeadlineAtMs,
   });
 
   if (abortSignal?.aborted) {

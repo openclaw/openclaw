@@ -135,6 +135,8 @@ export type CronServiceDeps = {
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
     onLaneWait?: (info?: { waiting?: boolean }) => void;
+    deadlineAtMs?: number;
+    getDeadlineAtMs?: () => number | undefined;
   }) => Promise<
     {
       summary?: string;

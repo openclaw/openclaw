@@ -3466,6 +3466,19 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes the explicit cron directory target to the cron lane", () => {
+    const plans = buildVitestRunPlans(["src/cron"], process.cwd());
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.cron.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/cron/**/*.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it("routes unit-fast light tests to the cache-friendly unit-fast lane", () => {
     const plans = buildVitestRunPlans(
       ["src/commands/status-overview-values.test.ts"],
