@@ -13,6 +13,7 @@ import type { PluginDiscoveryResult } from "./discovery.js";
 import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { hasRecoverableInstallRecordsMissingFromIndex } from "./installed-plugin-index-recovery.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -22,7 +23,6 @@ import {
 } from "./installed-plugin-index-store.js";
 import {
   getInstalledPluginRecord,
-  extractPluginInstallRecordsFromInstalledPluginIndex,
   hasMissingConfigPathActivationMetadata,
   isInstalledPluginEnabled,
   listInstalledPluginRecords,
@@ -464,28 +464,6 @@ function loadSnapshotInstallRecords(params: LoadPluginRegistryParams, env: NodeJ
   });
 }
 
-function hasRecoveredInstallRecordsMissingFromPersistedIndex(
-  index: InstalledPluginIndex,
-  installRecords: ReturnType<typeof loadInstalledPluginIndexInstallRecordsSync>,
-  env: NodeJS.ProcessEnv,
-): boolean {
-  const persistedRecords = extractPluginInstallRecordsFromInstalledPluginIndex(index);
-  const persistedPluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
-  return Object.entries(installRecords).some(([pluginId, record]) => {
-    if (persistedRecords[pluginId] && persistedPluginIds.has(pluginId)) {
-      return false;
-    }
-    const installPaths = [record.installPath, record.sourcePath].filter(
-      (candidate): candidate is string =>
-        typeof candidate === "string" && candidate.trim().length > 0,
-    );
-    if (installPaths.length === 0) {
-      return true;
-    }
-    return installPaths.some((installPath) => fs.existsSync(resolveUserPath(installPath, env)));
-  });
-}
-
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
@@ -562,10 +540,18 @@ export function loadPluginRegistrySnapshotWithMetadata(
             "Persisted plugin registry metadata no longer matches plugin manifest or package files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else if (
-        hasRecoveredInstallRecordsMissingFromPersistedIndex(
+        hasRecoverableInstallRecordsMissingFromIndex(
           persistedIndex,
           loadSnapshotInstallRecords(params, env),
           env,
+          {
+            configLoadPaths: params.config?.plugins?.load?.paths,
+            recoveryCandidates: [
+              ...(params.candidates ?? []),
+              ...(params.discovery?.candidates ?? []),
+            ],
+            ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          },
         )
       ) {
         diagnostics.push({

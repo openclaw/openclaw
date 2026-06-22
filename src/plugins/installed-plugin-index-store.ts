@@ -13,6 +13,7 @@ import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
+import { hasRecoverableInstallRecordsMissingFromIndex } from "./installed-plugin-index-recovery.js";
 import {
   resolveInstalledPluginIndexStateDatabaseOptions,
   resolveInstalledPluginIndexStorePath,
@@ -429,6 +430,17 @@ function canRefreshPersistedPolicyState(
   if (
     params.installRecords &&
     hashJson(params.installRecords) !== hashJson(persisted.installRecords ?? {})
+  ) {
+    return false;
+  }
+  const installRecords =
+    params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted);
+  if (
+    hasRecoverableInstallRecordsMissingFromIndex(persisted, installRecords, env, {
+      configLoadPaths: params.config?.plugins?.load?.paths,
+      recoveryCandidates: [...(params.candidates ?? []), ...(params.discovery?.candidates ?? [])],
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    })
   ) {
     return false;
   }

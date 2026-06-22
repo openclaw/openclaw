@@ -437,6 +437,53 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(whatsappPlugin.origin).toBe("global");
   });
 
+  it("recovers managed npm install records even when runtime discovery fails", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {};
+    const brokenDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/broken-runtime",
+      pluginId: "broken-runtime",
+      version: "2026.5.2",
+    });
+    fs.unlinkSync(path.join(brokenDir, "dist", "index.js"));
+    const staleIndex = loadInstalledPluginIndex({
+      config,
+      env,
+      stateDir,
+      installRecords: {},
+    });
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("broken-runtime");
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+
+    expect(result.source).toBe("derived");
+    expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).not.toContain(
+      "broken-runtime",
+    );
+    expect(result.snapshot.installRecords["broken-runtime"]).toEqual({
+      source: "npm",
+      spec: "@openclaw/broken-runtime@2026.5.2",
+      installPath: brokenDir,
+      version: "2026.5.2",
+      resolvedName: "@openclaw/broken-runtime",
+      resolvedVersion: "2026.5.2",
+      resolvedSpec: "@openclaw/broken-runtime@2026.5.2",
+    });
+  });
+
   it("keeps vanished recovered install records on the persisted fast path", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");

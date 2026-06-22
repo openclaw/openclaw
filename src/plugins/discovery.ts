@@ -431,6 +431,11 @@ type InstalledPluginRecordPath = {
   requireBuiltRuntimeEntry: boolean;
 };
 
+type InstalledPluginRecordProbePath = {
+  path: string;
+  requireBuiltRuntimeEntry?: boolean;
+};
+
 function isLinkedLocalPluginRecord(params: {
   record: PluginInstallRecord;
   env: NodeJS.ProcessEnv;
@@ -484,6 +489,72 @@ function collectInstalledPluginRecordPaths(
   return paths;
 }
 
+function collectInstalledPluginRecordProbePaths(params: {
+  record: PluginInstallRecord;
+  env: NodeJS.ProcessEnv;
+  realpathCache: Map<string, string>;
+  configLoadPaths?: unknown;
+  workspaceDir?: string;
+}): InstalledPluginRecordProbePath[] {
+  const paths: InstalledPluginRecordProbePath[] = [];
+  const seen = new Set<string>();
+  const isLinkedLocal = isLinkedLocalPluginRecord({
+    record: params.record,
+    env: params.env,
+    realpathCache: params.realpathCache,
+  });
+  const installPath =
+    typeof params.record.installPath === "string" && params.record.installPath.trim()
+      ? params.record.installPath
+      : undefined;
+  const sourcePath =
+    typeof params.record.sourcePath === "string" && params.record.sourcePath.trim()
+      ? params.record.sourcePath
+      : undefined;
+  const candidates: Array<{ rawPath: string; requireBuiltRuntimeEntry?: boolean }> = [];
+  if (installPath) {
+    candidates.push({
+      rawPath: installPath,
+      requireBuiltRuntimeEntry: !isLinkedLocal,
+    });
+  }
+  const sourcePathReachable =
+    sourcePath &&
+    (!installPath ||
+      isLinkedLocal ||
+      isPathReachableFromDefaultDiscoveryRoots({
+        targetPath: sourcePath,
+        env: params.env,
+        realpathCache: params.realpathCache,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      }) ||
+      isPathReachableFromConfigLoadPaths({
+        targetPath: sourcePath,
+        configLoadPaths: params.configLoadPaths,
+        env: params.env,
+        realpathCache: params.realpathCache,
+      }));
+  if (sourcePathReachable) {
+    // Full discovery can recover sourcePath through normal scan roots after the
+    // install ledger's primary path fails, so probe only reachable source paths.
+    candidates.push({ rawPath: sourcePath });
+  }
+  for (const candidate of candidates) {
+    const resolved = resolveUserPath(candidate.rawPath, params.env);
+    if (seen.has(resolved) || !fs.existsSync(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    paths.push({
+      path: resolved,
+      ...(candidate.requireBuiltRuntimeEntry !== undefined
+        ? { requireBuiltRuntimeEntry: candidate.requireBuiltRuntimeEntry }
+        : {}),
+    });
+  }
+  return paths;
+}
+
 // Discovery follows the install ledger's primary path choice; managed
 // classification needs every recorded path so a sourcePath under the global
 // extensions root does not get rescanned as an untracked local plugin.
@@ -507,6 +578,253 @@ function collectManagedPluginRecordPaths(
     }
   }
   return paths;
+}
+
+function isPathReachableFromConfigLoadPaths(params: {
+  targetPath: string;
+  configLoadPaths: unknown;
+  env: NodeJS.ProcessEnv;
+  realpathCache: Map<string, string>;
+}): boolean {
+  const targetResolved = path.resolve(params.targetPath);
+  const targetRealPath = safeRealpathSync(params.targetPath, params.realpathCache);
+  const targetComparablePath = targetRealPath ?? targetResolved;
+  const configLoadPaths = Array.isArray(params.configLoadPaths) ? params.configLoadPaths : [];
+  for (const rawLoadPath of configLoadPaths) {
+    const loadPath = normalizeOptionalString(rawLoadPath);
+    if (!loadPath) {
+      continue;
+    }
+    const resolvedLoadPath = resolveUserPath(loadPath, params.env);
+    const loadRealPath = safeRealpathSync(resolvedLoadPath, params.realpathCache);
+    const loadComparablePath = loadRealPath ?? path.resolve(resolvedLoadPath);
+    if (
+      targetComparablePath === loadComparablePath ||
+      isPathInside(loadComparablePath, targetComparablePath) ||
+      isPathInside(targetComparablePath, loadComparablePath)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isPathReachableFromDefaultDiscoveryRoots(params: {
+  targetPath: string;
+  env: NodeJS.ProcessEnv;
+  realpathCache: Map<string, string>;
+  workspaceDir?: string;
+}): boolean {
+  const workspaceRoot = params.workspaceDir
+    ? resolveUserPath(params.workspaceDir, params.env)
+    : undefined;
+  const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env: params.env });
+  const targetRealPath = safeRealpathSync(params.targetPath, params.realpathCache);
+  const targetComparablePath = targetRealPath ?? path.resolve(params.targetPath);
+  return [roots.stock, roots.global, roots.workspace].some((root): root is string => {
+    if (!root) {
+      return false;
+    }
+    const rootRealPath = safeRealpathSync(root, params.realpathCache);
+    const rootComparablePath = rootRealPath ?? path.resolve(root);
+    return (
+      targetComparablePath === rootComparablePath ||
+      isPathInside(rootComparablePath, targetComparablePath)
+    );
+  });
+}
+
+function candidateMatchesPluginId(params: {
+  candidate: PluginCandidate;
+  pluginId: string;
+  realpathCache: Map<string, string>;
+}): boolean {
+  const pluginId = normalizeOptionalString(params.pluginId);
+  if (!pluginId) {
+    return false;
+  }
+  const directIds = [
+    params.candidate.idHint,
+    params.candidate.bundledManifestId,
+    params.candidate.bundledManifest?.id,
+  ];
+  if (directIds.some((id) => normalizeOptionalString(id) === pluginId)) {
+    return true;
+  }
+  const rootRealPath = safeRealpathSync(params.candidate.rootDir, params.realpathCache);
+  const candidateManifest = resolveCandidateManifest(
+    params.candidate.rootDir,
+    false,
+    rootRealPath ?? undefined,
+  );
+  return normalizeOptionalString(candidateManifest?.manifest.id) === pluginId;
+}
+
+function hasMatchingPluginCandidate(params: {
+  pluginId: string;
+  candidates: readonly PluginCandidate[] | undefined;
+  realpathCache: Map<string, string>;
+}): boolean {
+  return (params.candidates ?? []).some((candidate) =>
+    candidateMatchesPluginId({
+      candidate,
+      pluginId: params.pluginId,
+      realpathCache: params.realpathCache,
+    }),
+  );
+}
+
+export function hasDiscoverablePluginRecoveryInput(params: {
+  pluginId: string;
+  candidates?: readonly PluginCandidate[];
+  configLoadPaths?: unknown;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const env = params.env ?? process.env;
+  const realpathCache = new Map<string, string>();
+  const packageManifestCache = new Map<string, PackageManifest | null>();
+  if (
+    hasMatchingPluginCandidate({
+      pluginId: params.pluginId,
+      candidates: params.candidates,
+      realpathCache,
+    })
+  ) {
+    return true;
+  }
+  const configLoadPaths = Array.isArray(params.configLoadPaths) ? params.configLoadPaths : [];
+  for (const rawLoadPath of configLoadPaths) {
+    const loadPath = normalizeOptionalString(rawLoadPath);
+    if (!loadPath) {
+      continue;
+    }
+    const result = createDiscoveryResult();
+    discoverFromPath({
+      rawPath: loadPath,
+      origin: "config",
+      env,
+      candidates: result.candidates,
+      diagnostics: result.diagnostics,
+      seen: new Set<string>(),
+      realpathCache,
+      packageManifestCache,
+    });
+    if (
+      hasMatchingPluginCandidate({
+        pluginId: params.pluginId,
+        candidates: result.candidates,
+        realpathCache,
+      })
+    ) {
+      return true;
+    }
+  }
+  const workspaceDir = normalizeOptionalString(params.workspaceDir);
+  if (!workspaceDir) {
+    return false;
+  }
+  const workspaceRoot = resolveUserPath(workspaceDir, env);
+  const roots = resolvePluginSourceRoots({ workspaceDir: workspaceRoot, env });
+  const workspaceMatchesBundledRoot = resolvesToSameDirectory(
+    workspaceRoot,
+    roots.stock,
+    realpathCache,
+  );
+  if (!roots.workspace || workspaceMatchesBundledRoot) {
+    return false;
+  }
+  const result = createDiscoveryResult();
+  discoverInDirectory({
+    dir: roots.workspace,
+    origin: "workspace",
+    env,
+    workspaceDir,
+    candidates: result.candidates,
+    diagnostics: result.diagnostics,
+    seen: new Set<string>(),
+    realpathCache,
+    packageManifestCache,
+  });
+  return hasMatchingPluginCandidate({
+    pluginId: params.pluginId,
+    candidates: result.candidates,
+    realpathCache,
+  });
+}
+
+export function hasDiscoverableInstalledPluginRecordPath(params: {
+  record: PluginInstallRecord;
+  env?: NodeJS.ProcessEnv;
+  configLoadPaths?: unknown;
+  workspaceDir?: string;
+}): boolean {
+  const env = params.env ?? process.env;
+  const realpathCache = new Map<string, string>();
+  const packageManifestCache = new Map<string, PackageManifest | null>();
+  const installRecords = { __installRecordProbe: params.record };
+  const installedPaths = collectInstalledPluginRecordProbePaths({
+    record: params.record,
+    env,
+    realpathCache,
+    configLoadPaths: params.configLoadPaths,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+  if (installedPaths.length === 0) {
+    return false;
+  }
+  const managedPluginDirs = collectManagedPluginDirKeys(
+    collectManagedPluginRecordPaths(installRecords, env),
+    realpathCache,
+  );
+  return installedPaths.some((installedPath) => {
+    const globalResult = createDiscoveryResult();
+    discoverFromPath({
+      rawPath: installedPath.path,
+      origin: "global",
+      managedPluginDirs,
+      scanFiles: true,
+      env,
+      candidates: globalResult.candidates,
+      diagnostics: globalResult.diagnostics,
+      seen: new Set<string>(),
+      realpathCache,
+      packageManifestCache,
+      ...(installedPath.requireBuiltRuntimeEntry !== undefined
+        ? { requireBuiltRuntimeEntry: installedPath.requireBuiltRuntimeEntry }
+        : {}),
+    });
+    if (globalResult.candidates.length > 0) {
+      return true;
+    }
+    if (params.record.source !== "path") {
+      return false;
+    }
+    if (
+      !isPathReachableFromConfigLoadPaths({
+        targetPath: installedPath.path,
+        configLoadPaths: params.configLoadPaths,
+        env,
+        realpathCache,
+      })
+    ) {
+      return false;
+    }
+    // Path installs may be config-loaded source packages; config origin keeps
+    // TypeScript entries recoverable without treating npm installs as source.
+    const configResult = createDiscoveryResult();
+    discoverFromPath({
+      rawPath: installedPath.path,
+      origin: "config",
+      env,
+      candidates: configResult.candidates,
+      diagnostics: configResult.diagnostics,
+      seen: new Set<string>(),
+      realpathCache,
+      packageManifestCache,
+    });
+    return configResult.candidates.length > 0;
+  });
 }
 
 function resolveManagedPluginDirKey(
