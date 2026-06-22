@@ -66,6 +66,12 @@ export type ExecPolicyScopeSnapshot = {
   allowedDecisions: readonly ExecApprovalDecision[];
 };
 
+export function isExecPolicySecurityClampedByHost(snapshot: {
+  security: Pick<ExecPolicyFieldSummary<ExecSecurity>, "requested" | "effective">;
+}): boolean {
+  return snapshot.security.effective !== snapshot.security.requested;
+}
+
 type ExecPolicyRequestedField = "security" | "ask";
 
 function resolveRequestedHost(params: {
@@ -392,10 +398,14 @@ export function resolveExecPolicyScopeSnapshot(params: {
         sourceSuffix: resolved.agentSources.security,
       }),
       effective: effectiveSecurity,
-      note:
-        effectiveSecurity === requestedPolicy.security
-          ? "requested security applies"
-          : "stricter host security wins",
+      note: isExecPolicySecurityClampedByHost({
+        security: {
+          requested: requestedPolicy.security,
+          effective: effectiveSecurity,
+        },
+      })
+        ? "stricter host security wins"
+        : "requested security applies",
     },
     ask: {
       requested: requestedPolicy.ask,
