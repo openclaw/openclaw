@@ -10,6 +10,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
@@ -37,7 +38,7 @@ function usage() {
 
 function readFlagValue(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value.`);
   }
   return value;
@@ -301,13 +302,20 @@ export function signalGatewayProcess(
     }
   }
   if (platform === "win32" && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
     const args = ["/PID", String(child.pid), "/T"];
     if (signal === "SIGKILL") {
       args.push("/F");
     }
-    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
     if (!result?.error && result?.status === 0) {
       return true;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return true;
+      }
     }
   }
   try {

@@ -13,7 +13,7 @@ import {
 
 function readPackageArgValue(argv, index) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error("missing value for --package");
   }
   return value;

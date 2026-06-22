@@ -1163,6 +1163,37 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("keeps the fast mode cutoff timestamp across live model switch retries", async () => {
+    let invocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      invocation++;
+      const result = await params.run(params.provider, params.model);
+      if (invocation === 1) {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+        });
+      }
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    const firstAttempt = mockCallArg(state.runAgentAttemptMock, 0) as {
+      fastModeStartedAtMs?: number;
+    };
+    const secondAttempt = mockCallArg(state.runAgentAttemptMock, 1) as {
+      fastModeStartedAtMs?: number;
+    };
+    expect(firstAttempt.fastModeStartedAtMs).toBe(secondAttempt.fastModeStartedAtMs);
+  });
+
   it("uses an embedded queue rebound generation for terminal lifecycle and cleanup", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {

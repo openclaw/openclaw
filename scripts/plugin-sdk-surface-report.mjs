@@ -77,7 +77,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-reply-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 415,
+  "config-types": 416,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -167,7 +167,7 @@ try {
     publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5187),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3245,
+      3246,
     ),
     publicWildcardReexports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
@@ -203,9 +203,25 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
+const generatedLlmCoreValidatorExports = new Set(["validateToolArguments", "validateToolCall"]);
+
+function isGeneratedLlmCoreValidatorDeclaration(exportName, declaration) {
+  if (!generatedLlmCoreValidatorExports.has(exportName)) {
+    return false;
+  }
+  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
+  const relativePath = relative.split(path.sep).join(path.posix.sep);
+  // Build artifacts can make agent-core's package-name validator reexports look
+  // newly callable. Keep this source report independent of generated dist state.
+  return relativePath.includes("llm-core/dist/validation.d.");
+}
+
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
+  if (isGeneratedLlmCoreValidatorDeclaration(symbol.getName(), declaration)) {
+    return false;
+  }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);
   return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0;
 }

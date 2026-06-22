@@ -95,6 +95,7 @@ type ProcessGatewayAllowlistParams = {
   /** Session-store template, so the direct/denied followup can detect a rebind. */
   sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
+  approvalReviewerDeviceId?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -695,6 +696,9 @@ export async function processGatewayAllowlist(
           agentId: params.agentId,
           sessionKey: params.sessionKey,
         }),
+        approvalReviewerDeviceIds: params.approvalReviewerDeviceId
+          ? [params.approvalReviewerDeviceId]
+          : undefined,
         resolvedPath: resolveApprovalAuditTrustPath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,

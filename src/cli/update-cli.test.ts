@@ -366,6 +366,7 @@ const { updateCommand, updateFinalizeCommand, updateStatusCommand, updateWizardC
 const updateCliShared = await import("./update-cli/shared.js");
 const { ensureGitCheckout, resolveGitInstallDir } = updateCliShared;
 const { spawnSync } = await import("node:child_process");
+const { readRestartSentinel } = await import("../infra/restart-sentinel.js");
 
 function requireValue<T>(value: T | undefined, label: string): T {
   if (value === undefined) {
@@ -5891,23 +5892,17 @@ describe("update-cli", () => {
       },
     );
 
-    const raw = await fs.readFile(path.join(stateDir, "restart-sentinel.json"), "utf-8");
-    const sentinel = JSON.parse(raw) as {
-      payload?: {
-        status?: string;
-        message?: string | null;
-        continuation?: { kind?: string; message?: string };
-        stats?: { mode?: string; after?: { version?: string | null } };
-      };
-    };
-    expect(sentinel.payload?.status).toBe("ok");
-    expect(sentinel.payload?.message).toBe("Update requested from the agent.");
-    expect(sentinel.payload?.continuation).toEqual({
+    const sentinel = await readRestartSentinel({
+      OPENCLAW_STATE_DIR: stateDir,
+    } as NodeJS.ProcessEnv);
+    expect(sentinel?.payload.status).toBe("ok");
+    expect(sentinel?.payload.message).toBe("Update requested from the agent.");
+    expect(sentinel?.payload.continuation).toEqual({
       kind: "agentTurn",
       message: "Check the running version and finish the update report.",
     });
-    expect(sentinel.payload?.stats?.mode).toBe("npm");
-    expect(sentinel.payload?.stats?.after?.version).toBe("2026.4.24");
+    expect(sentinel?.payload.stats?.mode).toBe("npm");
+    expect(sentinel?.payload.stats?.after?.version).toBe("2026.4.24");
   });
 
   it("marks the control-plane update sentinel failed when restart health verification fails", async () => {
@@ -5966,17 +5961,12 @@ describe("update-cli", () => {
       },
     );
 
-    const raw = await fs.readFile(path.join(stateDir, "restart-sentinel.json"), "utf-8");
-    const sentinel = JSON.parse(raw) as {
-      payload?: {
-        status?: string;
-        continuation?: unknown;
-        stats?: { reason?: string | null };
-      };
-    };
-    expect(sentinel.payload?.status).toBe("error");
-    expect(sentinel.payload?.stats?.reason).toBe("restart-unhealthy");
-    expect(sentinel.payload?.continuation).toBeUndefined();
+    const sentinel = await readRestartSentinel({
+      OPENCLAW_STATE_DIR: stateDir,
+    } as NodeJS.ProcessEnv);
+    expect(sentinel?.payload.status).toBe("error");
+    expect(sentinel?.payload.stats?.reason).toBe("restart-unhealthy");
+    expect(sentinel?.payload.continuation).toBeUndefined();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 

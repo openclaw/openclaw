@@ -23,10 +23,13 @@ describe("report-cli-helpers", () => {
     expect(() => parseReportCliArgs(["--root", "--json", "report.json"])).toThrow(
       "Expected --root <value>.",
     );
+    expect(() => parseReportCliArgs(["--root", "-h"])).toThrow("Expected --root <value>.");
     expect(() => parseReportCliArgs(["--json"])).toThrow("Expected --json <value>.");
     expect(() => parseReportCliArgs(["--json", "--markdown", "report.md"])).toThrow(
       "Expected --json <value>.",
     );
+    expect(() => parseReportCliArgs(["--json", "-h"])).toThrow("Expected --json <value>.");
     expect(() => parseReportCliArgs(["--markdown", ""])).toThrow("Expected --markdown <value>.");
+    expect(() => parseReportCliArgs(["--markdown", "-h"])).toThrow("Expected --markdown <value>.");
   });
 });

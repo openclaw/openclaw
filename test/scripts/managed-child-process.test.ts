@@ -15,6 +15,28 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 const posixIt = process.platform === "win32" ? it.skip : it;
+const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
+
+function restoreEnvValue(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+    return;
+  }
+  process.env[key] = value;
+}
+
+function withDefaultWindowsSystemRoot(run: () => void): void {
+  const originalSystemRoot = process.env.SystemRoot;
+  const originalWindir = process.env.WINDIR;
+  try {
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
+    run();
+  } finally {
+    restoreEnvValue("SystemRoot", originalSystemRoot);
+    restoreEnvValue("WINDIR", originalWindir);
+  }
+}
 
 function expectProcessPid(pid: number | undefined): number {
   if (pid == null) {
@@ -112,28 +134,56 @@ describe("managed-child-process", () => {
   });
 
   it("signals Windows managed process trees with taskkill", () => {
-    const child = {
-      kill: vi.fn(),
-      pid: 12345,
-    };
-    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+    withDefaultWindowsSystemRoot(() => {
+      const child = {
+        kill: vi.fn(),
+        pid: 12345,
+      };
+      const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
 
-    terminateManagedChild(child, "SIGTERM", {
-      platform: "win32",
-      runTaskkill,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
+      terminateManagedChild(child, "SIGTERM", {
+        platform: "win32",
+        runTaskkill,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+      });
 
-    terminateManagedChild(child, "SIGKILL", {
-      platform: "win32",
-      runTaskkill,
+      terminateManagedChild(child, "SIGKILL", {
+        platform: "win32",
+        runTaskkill,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
+  });
+
+  it("force-kills Windows managed process trees when graceful taskkill fails", () => {
+    withDefaultWindowsSystemRoot(() => {
+      const child = {
+        kill: vi.fn(),
+        pid: 12345,
+      };
+      const runTaskkill = vi
+        .fn()
+        .mockReturnValueOnce({ error: undefined, status: 1 })
+        .mockReturnValueOnce({ error: undefined, status: 0 });
+
+      terminateManagedChild(child, "SIGTERM", {
+        platform: "win32",
+        runTaskkill,
+      });
+
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+      });
+      expect(child.kill).not.toHaveBeenCalled();
     });
-    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("shares process signal listeners across parallel managed commands", async () => {

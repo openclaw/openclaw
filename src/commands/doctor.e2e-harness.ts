@@ -242,6 +242,27 @@ function createLegacyStateMigrationDetectionResult(params?: {
       sessionPath: "/tmp/state/session-delivery-queue",
       hasLegacy: false,
     },
+    voiceWake: {
+      triggersPath: "/tmp/state/settings/voicewake.json",
+      routingPath: "/tmp/state/settings/voicewake-routing.json",
+      hasLegacy: false,
+    },
+    updateCheck: {
+      sourcePath: "/tmp/state/update-check.json",
+      hasLegacy: false,
+    },
+    configHealth: {
+      sourcePath: "/tmp/state/logs/config-health.json",
+      hasLegacy: false,
+    },
+    pluginBindingApprovals: {
+      sourcePath: "/tmp/state/plugin-binding-approvals.json",
+      hasLegacy: false,
+    },
+    currentConversationBindings: {
+      sourcePath: "/tmp/state/bindings/current-conversations.json",
+      hasLegacy: false,
+    },
     execApprovals: {
       sourcePath: "/tmp/state/exec-approvals.legacy.json",
       targetPath: "/tmp/state/exec-approvals.json",

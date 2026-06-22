@@ -107,8 +107,10 @@ describe("check-cli-startup-memory", () => {
     for (const args of [
       ["--json"],
       ["--json", "--summary"],
+      ["--json", "-h"],
       ["--summary"],
       ["--summary", "--json"],
+      ["--summary", "-h"],
     ]) {
       expect(() => testing.parseArgs(args)).toThrow(/--(?:json|summary) requires a path/u);
     }
