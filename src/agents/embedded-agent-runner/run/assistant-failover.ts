@@ -27,7 +27,7 @@ type AssistantFailoverOutcome =
       action: "retry";
       overloadProfileRotations: number;
       lastRetryFailoverReason: FailoverReason | null;
-      retryKind?: "same_model_idle_timeout" | "same_model_rate_limit";
+      retryKind?: "same_model_timeout" | "same_model_rate_limit";
     }
   | {
       action: "throw";
@@ -130,7 +130,7 @@ export async function handleAssistantFailover(params: {
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
-  allowSameModelIdleTimeoutRetry: boolean;
+  allowSameModelTimeoutRetry: boolean;
   allowSameModelRateLimitRetry: boolean;
   assistantProfileFailureReason: AuthProfileFailureReason | null;
   lastProfileId?: string;
@@ -171,14 +171,26 @@ export async function handleAssistantFailover(params: {
 }): Promise<AssistantFailoverOutcome> {
   let overloadProfileRotations = params.overloadProfileRotations;
   let decision = params.initialDecision;
-  const sameModelIdleTimeoutRetry = (): AssistantFailoverOutcome => {
+  const timeoutFailure = params.timedOut || params.idleTimedOut;
+  const isOrdinaryTimeoutFailure = ({
+    failoverReason,
+    profileFailureReason,
+  }: {
+    failoverReason: FailoverReason | null;
+    profileFailureReason: AuthProfileFailureReason | null;
+  }) =>
+    timeoutFailure &&
+    (failoverReason == null || failoverReason === "timeout") &&
+    (profileFailureReason == null || profileFailureReason === "timeout");
+  const sameModelTimeoutRetry = (): AssistantFailoverOutcome => {
+    const timeoutLabel = params.idleTimedOut ? "idle watchdog" : "request timeout";
     params.warn(
-      `[llm-idle-timeout] ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} produced no reply before the idle watchdog; retrying same model`,
+      `[llm-timeout] ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} hit ${timeoutLabel}; retrying same profile before auth-profile rotation`,
     );
     return {
       action: "retry",
       overloadProfileRotations,
-      retryKind: "same_model_idle_timeout",
+      retryKind: "same_model_timeout",
       lastRetryFailoverReason: mergeRetryFailoverReason({
         previous: params.previousRetryFailoverReason,
         failoverReason: params.failoverReason,
@@ -199,8 +211,16 @@ export async function handleAssistantFailover(params: {
 
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
-    const timeoutFailure = params.timedOut || params.idleTimedOut;
     const failureReason = params.assistantProfileFailureReason;
+    if (
+      params.allowSameModelTimeoutRetry &&
+      isOrdinaryTimeoutFailure({
+        failoverReason: params.failoverReason,
+        profileFailureReason: failureReason,
+      })
+    ) {
+      return sameModelTimeoutRetry();
+    }
     const markFailedProfile = async () => {
       if (!failedProfileId || !failureReason) {
         return;
@@ -293,8 +313,14 @@ export async function handleAssistantFailover(params: {
       };
     }
     await markFailedProfilePromise;
-    if (params.idleTimedOut && params.allowSameModelIdleTimeoutRetry) {
-      return sameModelIdleTimeoutRetry();
+    if (
+      params.allowSameModelTimeoutRetry &&
+      isOrdinaryTimeoutFailure({
+        failoverReason: params.failoverReason,
+        profileFailureReason: params.assistantProfileFailureReason,
+      })
+    ) {
+      return sameModelTimeoutRetry();
     }
 
     decision = resolveRunFailoverDecision({
@@ -342,8 +368,15 @@ export async function handleAssistantFailover(params: {
   }
 
   if (decision.action === "surface_error") {
-    if (!params.externalAbort && params.idleTimedOut && params.allowSameModelIdleTimeoutRetry) {
-      return sameModelIdleTimeoutRetry();
+    if (
+      !params.externalAbort &&
+      params.allowSameModelTimeoutRetry &&
+      isOrdinaryTimeoutFailure({
+        failoverReason: params.failoverReason,
+        profileFailureReason: params.assistantProfileFailureReason,
+      })
+    ) {
+      return sameModelTimeoutRetry();
     }
     params.logAssistantFailoverDecision("surface_error");
     // Only current provider failures throw here. External aborts, timeout

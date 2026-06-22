@@ -23,7 +23,7 @@ function makeParams(overrides: Partial<Params> = {}): Params {
     idleTimedOut: false,
     timedOutDuringCompaction: false,
     timedOutDuringToolExecution: false,
-    allowSameModelIdleTimeoutRetry: false,
+    allowSameModelTimeoutRetry: false,
     allowSameModelRateLimitRetry: true,
     assistantProfileFailureReason: null,
     lastProfileId: undefined,
@@ -107,6 +107,111 @@ describe("handleAssistantFailover", () => {
       await markSettled;
       await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
       expect(events).toEqual(["advance", "mark-start", "mark-finish"]);
+    });
+
+    it("retries the same profile on the first ordinary assistant timeout without marking profile failure", async () => {
+      const advanceAuthProfile = vi.fn(async () => true);
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {});
+      const warn = vi.fn();
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "timeout" },
+          failoverReason: "timeout",
+          timedOut: true,
+          idleTimedOut: false,
+          allowSameModelTimeoutRetry: true,
+          assistantProfileFailureReason: "timeout",
+          lastProfileId: "openai:p1",
+          billingFailure: false,
+          maybeMarkAuthProfileFailure,
+          advanceAuthProfile,
+          warn,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBe("same_model_timeout");
+      expect(outcome.lastRetryFailoverReason).toBe("timeout");
+      expect(advanceAuthProfile).not.toHaveBeenCalled();
+      expect(maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(
+        "[llm-timeout] Anthropic/claude-haiku-4-5-20251001 hit request timeout; retrying same profile before auth-profile rotation",
+      );
+    });
+
+    it("rotates on a repeated ordinary assistant timeout once the same-profile retry budget is exhausted", async () => {
+      const advanceAuthProfile = vi.fn(async () => true);
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {});
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "timeout" },
+          failoverReason: "timeout",
+          timedOut: true,
+          idleTimedOut: false,
+          allowSameModelTimeoutRetry: false,
+          assistantProfileFailureReason: "timeout",
+          lastProfileId: "openai:p1",
+          billingFailure: false,
+          maybeMarkAuthProfileFailure,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBeUndefined();
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+      expect(maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
+        profileId: "openai:p1",
+        reason: "timeout",
+        modelId: "claude-haiku-4-5-20251001",
+      });
+    });
+
+    it("does not treat rate-limit profile rotation as an ordinary timeout retry", async () => {
+      const maybeRetrySameModelRateLimit = vi.fn(async () => false);
+      const maybeEscalateRateLimitProfileFallback = vi.fn();
+      const advanceAuthProfile = vi.fn(async () => true);
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {});
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          timedOut: true,
+          idleTimedOut: false,
+          allowSameModelTimeoutRetry: true,
+          allowSameModelRateLimitRetry: false,
+          assistantProfileFailureReason: "rate_limit",
+          lastProfileId: "openai:p1",
+          billingFailure: false,
+          maybeRetrySameModelRateLimit,
+          maybeEscalateRateLimitProfileFallback,
+          maybeMarkAuthProfileFailure,
+          advanceAuthProfile,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      if (outcome.action !== "retry") {
+        return;
+      }
+      expect(outcome.retryKind).toBeUndefined();
+      expect(maybeRetrySameModelRateLimit).not.toHaveBeenCalled();
+      expect(maybeEscalateRateLimitProfileFallback).toHaveBeenCalledTimes(1);
+      expect(advanceAuthProfile).toHaveBeenCalledTimes(1);
+      expect(maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
+        profileId: "openai:p1",
+        reason: "rate_limit",
+        modelId: "claude-haiku-4-5-20251001",
+      });
     });
 
     it("retries the same model before spending a rate-limit profile rotation", async () => {
@@ -647,14 +752,14 @@ describe("handleAssistantFailover", () => {
       expect(outcome.action).toBe("continue_normal");
     });
 
-    it("retries the same model when an idle-timeout retry is allowed", async () => {
+    it("retries the same model when a timeout retry is allowed", async () => {
       const outcome = await handleAssistantFailover(
         makeParams({
           initialDecision: { action: "surface_error", reason: null },
           failoverReason: null,
           timedOut: true,
           idleTimedOut: true,
-          allowSameModelIdleTimeoutRetry: true,
+          allowSameModelTimeoutRetry: true,
           billingFailure: false,
         }),
       );
@@ -663,7 +768,7 @@ describe("handleAssistantFailover", () => {
       if (outcome.action !== "retry") {
         return;
       }
-      expect(outcome.retryKind).toBe("same_model_idle_timeout");
+      expect(outcome.retryKind).toBe("same_model_timeout");
     });
   });
 
