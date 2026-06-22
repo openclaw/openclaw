@@ -37,7 +37,8 @@ vi.mock("../logging.js", () => ({
   })),
 }));
 
-const { sendFailureNotificationAnnounce } = await import("./delivery.js");
+const { sendCronAnnouncePayloadStrict, sendFailureNotificationAnnounce } =
+  await import("./delivery.js");
 
 type DeliveryRequest = {
   abortSignal?: unknown;
@@ -123,6 +124,35 @@ describe("sendFailureNotificationAnnounce", () => {
     expect(deliveryRequest.bestEffort).toBe(false);
     expect(deliveryRequest.deps).toEqual({ kind: "deps" });
     expect(deliveryRequest.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("redacts secrets and device authorization prompts before primary announce delivery", async () => {
+    await sendCronAnnouncePayloadStrict({
+      deps: {} as never,
+      cfg: {} as never,
+      agentId: "main",
+      jobId: "job-1",
+      target: { channel: "telegram", to: "123" },
+      message: [
+        "stdout:",
+        "Open https://microsoft.com/devicelogin and enter code ABCD-EFGH",
+        "OPENAI_API_KEY=sk-1234567890abcdef",
+        "ordinary status",
+      ].join("\n"),
+      abortSignal: new AbortController().signal,
+    });
+
+    const deliveryRequest = firstDeliveryRequest();
+    expect(deliveryRequest.payloads).toEqual([
+      {
+        text: [
+          "stdout:",
+          "[redacted device authorization output]",
+          "OPENAI_API_KEY=sk-123…cdef",
+          "ordinary status",
+        ].join("\n"),
+      },
+    ]);
   });
 
   it("uses sessionKey for delivery-target resolution and outbound context", async () => {

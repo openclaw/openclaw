@@ -584,6 +584,60 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("redacts command cron summaries before webhook delivery without changing stored run state", async () => {
+    const cfg = createCronConfig("server-cron-command-webhook-redaction");
+    loadConfigMock.mockReturnValue(cfg);
+    fetchWithSsrFGuardMock.mockResolvedValue({ release: vi.fn(async () => {}) });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "redacted-command-webhook",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [
+            process.execPath,
+            "-e",
+            [
+              "process.stdout.write('Open https://microsoft.com/devicelogin and enter code ABCD-EFGH\\n')",
+              "process.stdout.write('OPENAI_API_KEY=sk-1234567890abcdef\\n')",
+            ].join(";"),
+          ],
+        },
+        delivery: {
+          mode: "webhook",
+          to: "https://example.invalid/cron-finished",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      const request = requireRecord(
+        callArg(fetchWithSsrFGuardMock, 0, 0, "webhook request"),
+        "webhook request",
+      );
+      const init = requireRecord(request.init, "webhook init");
+      const payload = JSON.parse(String(init.body)) as { summary?: string };
+      expect(payload.summary).toContain("[redacted device authorization output]");
+      expect(payload.summary).toContain("OPENAI_API_KEY=sk-123…cdef");
+      expect(payload.summary).not.toContain("ABCD-EFGH");
+      expect(payload.summary).not.toContain("sk-1234567890abcdef");
+      expect(state.cron.getJob(job.id)?.state.lastDiagnosticSummary).toContain("ABCD-EFGH");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("routes global-scope main cron jobs through the global queue for queued wakes", async () => {
     const cfg = {
       ...createCronConfig("server-cron-global-queued"),

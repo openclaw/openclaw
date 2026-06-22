@@ -14,6 +14,7 @@ import {
   type CronDeliveryPlan,
   resolveCronDeliveryPlan,
 } from "./delivery-plan.js";
+import { redactCronDeliveryText } from "./delivery-redaction.js";
 import {
   resolveDeliveryTarget,
   type DeliveryTargetResolution,
@@ -114,7 +115,7 @@ async function deliverCronAnnouncePayload(params: {
     to: params.delivery.resolvedTarget.to,
     accountId: params.delivery.resolvedTarget.accountId,
     threadId: params.delivery.resolvedTarget.threadId,
-    payloads: [{ text: params.message }],
+    payloads: [{ text: redactCronDeliveryText(params.message) }],
     session: params.delivery.session,
     identity: params.delivery.identity,
     bestEffort: false,

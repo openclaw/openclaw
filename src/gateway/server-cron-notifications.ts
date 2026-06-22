@@ -7,6 +7,7 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { redactCronDeliveryText } from "../cron/delivery-redaction.js";
 import {
   resolveCronDeliveryPlan,
   resolveFailureDestination,
@@ -89,6 +90,12 @@ function buildCronWebhookHeaders(webhookToken?: string): Record<string, string> 
     headers.Authorization = `Bearer ${webhookToken}`;
   }
   return headers;
+}
+
+function buildCronDeliveryWebhookPayload(evt: CronEvent): CronEvent {
+  return typeof evt.summary === "string"
+    ? { ...evt, summary: redactCronDeliveryText(evt.summary) }
+    : evt;
 }
 
 /** Posts a cron webhook without throwing back into scheduler completion flow. */
@@ -267,7 +274,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
         await postCronWebhook({
           webhookUrl: webhookTarget.url,
           webhookToken,
-          payload: params.evt,
+          payload: buildCronDeliveryWebhookPayload(params.evt),
           logContext: { jobId: params.evt.jobId, source: webhookTarget.source },
           blockedLog: "cron: webhook delivery blocked by SSRF guard",
           failedLog: "cron: webhook delivery failed",
