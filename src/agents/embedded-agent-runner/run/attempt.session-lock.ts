@@ -14,6 +14,7 @@ import {
   type OwnedSessionTranscriptCacheSnapshot,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { toErrorObject } from "../../../infra/errors.js";
 import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
@@ -891,7 +892,7 @@ function waitForSessionFileOwnerRelease(params: {
 }): Promise<void> {
   if (params.signal?.aborted) {
     return Promise.reject(
-      toLintErrorObject(abortOwnerWaitReason(params.signal), "Non-Error rejection"),
+      toErrorObject(abortOwnerWaitReason(params.signal), "Non-Error rejection"),
     );
   }
   return new Promise<void>((resolve, reject) => {
@@ -915,21 +916,15 @@ function waitForSessionFileOwnerRelease(params: {
     };
     waiter.reject = (error) => {
       cleanup();
-      reject(toLintErrorObject(error, "Non-Error rejection"));
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
     const timeoutMs = resolveSessionFileOwnerWaitTimeoutMs(params.timeoutMs);
     if (timeoutMs !== undefined) {
-      waiter.timer = setTimeout(
-        () => {
-          waiter.reject(
-            new EmbeddedAttemptSessionFileOwnerTimeoutError(
-              params.sessionFile,
-              timeoutMs,
-            ),
-          );
-        },
-        timeoutMs,
-      );
+      waiter.timer = setTimeout(() => {
+        waiter.reject(
+          new EmbeddedAttemptSessionFileOwnerTimeoutError(params.sessionFile, timeoutMs),
+        );
+      }, timeoutMs);
       waiter.timer.unref?.();
     }
     if (params.signal) {
@@ -2083,18 +2078,4 @@ export function installPromptSubmissionLockRelease(params: {
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

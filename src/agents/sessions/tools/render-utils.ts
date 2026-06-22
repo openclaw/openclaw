@@ -5,9 +5,11 @@
  */
 import * as os from "node:os";
 import { getCapabilities, getImageDimensions, imageFallback } from "@earendil-works/pi-tui";
+import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { sanitizeBinaryOutput } from "../../shell-utils.js";
 import { stripAnsi } from "../../utils/ansi.js";
+import type { ToolRenderResultOptions } from "../extensions/types.js";
 
 /** Shortens paths under the current home directory for display. */
 export function shortenPath(path: unknown): string {
@@ -77,6 +79,30 @@ export function getTextOutput(
   }
 
   return output;
+}
+
+/** Renders bounded text output with the shared TUI expansion hint. */
+export function formatSessionToolOutput(
+  result: { content: Array<{ type: string; text?: string; data?: string; mimeType?: string }> },
+  options: ToolRenderResultOptions,
+  theme: Pick<Theme, "fg">,
+  showImages: boolean,
+  collapsedLineLimit: number,
+): string {
+  const output = getTextOutput(result, showImages).trim();
+  if (!output) {
+    return "";
+  }
+
+  const lines = output.split("\n");
+  const maxLines = options.expanded ? lines.length : collapsedLineLimit;
+  const displayLines = lines.slice(0, maxLines);
+  const remaining = lines.length - maxLines;
+  let text = `\n${displayLines.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
+  if (remaining > 0) {
+    text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
+  }
+  return text;
 }
 
 /** Formats the invalid-argument marker with the active theme. */
