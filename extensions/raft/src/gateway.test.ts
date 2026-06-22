@@ -221,6 +221,29 @@ describe("Raft wake gateway", () => {
         body: JSON.stringify({ eventId: "wake-1", timestamp: 1 }),
       }),
     ).resolves.toMatchObject({ status: 202 });
+    await expect(
+      fetch(wakeEndpoint.replace("/wake", "/activity/drain?max=50")),
+    ).resolves.toMatchObject({ status: 401 });
+    await expect(
+      fetch(wakeEndpoint.replace("/wake", "/activity/drain?max=50"), {
+        headers: {
+          "x-raft-bridge-token": bridgeToken,
+        },
+      }),
+    ).resolves.toMatchObject({
+      status: 200,
+    });
+    await expect(
+      fetch(wakeEndpoint.replace("/wake", "/activity/drain?max=50"), {
+        headers: {
+          "x-raft-bridge-token": bridgeToken,
+        },
+      }).then((response) => response.json()),
+    ).resolves.toEqual({
+      dropped: 0,
+      events: [],
+      schema: "raft-activity-drain.v1",
+    });
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     await expect(
       fetch(wakeEndpoint, {
@@ -260,6 +283,43 @@ describe("Raft wake gateway", () => {
     controller.abort();
     await start;
     expect(bridge.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("returns the Raft bridge runtime session for accepted wakes", async () => {
+    const { ctx, controller, wakeDedupe } = createContext();
+    Object.defineProperty(ctx, "abortSignal", { value: controller.signal });
+    const bridge = new FakeBridge();
+    let endpoint: string | undefined;
+    let token: string | undefined;
+    const start = startRaftGatewayAccount(ctx, {
+      spawnBridge: (params) => {
+        endpoint = params.endpoint;
+        token = params.token;
+        return bridge;
+      },
+      wakeDedupe,
+    });
+
+    const wakeEndpoint = await waitFor(() => endpoint);
+    const bridgeToken = await waitFor(() => token);
+    try {
+      const response = await fetch(wakeEndpoint, {
+        method: "POST",
+        headers: {
+          "x-raft-bridge-token": bridgeToken,
+        },
+        body: JSON.stringify({ eventId: "wake-runtime-session" }),
+      });
+      await expect(response).toMatchObject({ status: 202 });
+      await expect(response.json()).resolves.toMatchObject({
+        accepted: true,
+        ok: true,
+        runtimeSession: expect.any(String),
+      });
+    } finally {
+      controller.abort();
+      await start;
+    }
   });
 
   it("rejects oversized payloads before queueing a wake", async () => {

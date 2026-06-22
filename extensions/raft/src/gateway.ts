@@ -1,6 +1,6 @@
 // Raft gateway lifecycle owns the loopback-only wake endpoint and bridge child process.
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import type { EventEmitter } from "node:events";
 import {
   createServer,
@@ -23,9 +23,11 @@ import { RAFT_CHANNEL_ID, type ResolvedRaftAccount } from "./accounts.js";
 import { dispatchRaftWake } from "./inbound.js";
 
 const BRIDGE_HOST = "127.0.0.1";
+const ACTIVITY_DRAIN_PATH = "/activity/drain";
 const HEALTH_PATH = "/health";
 const WAKE_PATH = "/wake";
 const WAKE_TOKEN_HEADER = "x-raft-bridge-token";
+const RAFT_ACTIVITY_DRAIN_SCHEMA = "raft-activity-drain.v1";
 const MAX_WAKE_BODY_BYTES = 16 * 1024;
 const WAKE_DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
 const WAKE_DEDUPE_MEMORY_MAX_SIZE = 1_000;
@@ -245,8 +247,9 @@ export async function startRaftGatewayAccount(
       onDiskError: (error) => {
         ctx.log?.warn?.(`Raft wake dedupe storage failed: ${String(error)}`);
       },
-    });
+  });
   const token = (deps.createToken ?? createToken)();
+  const runtimeSession = randomUUID();
   const sockets = new Set<Socket>();
   let stopped = false;
   let bridgeExited: Error | undefined;
@@ -254,6 +257,24 @@ export async function startRaftGatewayAccount(
     void (async () => {
       if (request.method === "GET" && request.url === HEALTH_PATH) {
         sendJson(response, 200, { ok: true });
+        return;
+      }
+      if (
+        request.method === "GET" &&
+        new URL(request.url ?? "/", `http://${BRIDGE_HOST}`).pathname === ACTIVITY_DRAIN_PATH
+      ) {
+        if (!hasMatchingToken(request, token)) {
+          sendJson(response, 401, { error: "unauthorized" });
+          return;
+        }
+        // Raft drains runtime activity after each wake pass. OpenClaw has no
+        // portable Raft activity events to export, but must acknowledge an
+        // empty batch so the bridge's current protocol remains healthy.
+        sendJson(response, 200, {
+          schema: RAFT_ACTIVITY_DRAIN_SCHEMA,
+          events: [],
+          dropped: 0,
+        });
         return;
       }
       if (request.method !== "POST" || request.url !== WAKE_PATH) {
@@ -304,7 +325,12 @@ export async function startRaftGatewayAccount(
         await wakeDedupe.commit(dedupeKey, { namespace: ctx.accountId });
         return true;
       });
-      sendJson(response, 202, { accepted: true, ...(dispatched ? {} : { duplicate: true }) });
+      sendJson(response, 202, {
+        ok: true,
+        accepted: true,
+        runtimeSession,
+        ...(dispatched ? {} : { duplicate: true }),
+      });
     })().catch((error: unknown) => {
       const statusCode = error instanceof WakeRequestError ? error.statusCode : 500;
       const message = error instanceof WakeRequestError ? error.message : "Internal server error.";

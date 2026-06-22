@@ -89,7 +89,8 @@ When the Gateway starts, the plugin:
 3. Accepts only authenticated, content-free wake hints with a replay identity from the local bridge.
 4. Requires one of `eventId`, `attemptId`, `messageId`, `delivery_id`, `wake_id`, or `id`.
 5. Deduplicates recent retried wake deliveries by bridge event id, including across Gateway restarts.
-6. Starts one serialized OpenClaw agent turn for each accepted wake.
+6. Returns a stable runtime session for the current bridge and an empty activity-drain batch for the Raft CLI protocol.
+7. Starts one serialized OpenClaw agent turn for each accepted wake.
 
 The bridge owns Raft delivery retries and reconnects. The OpenClaw turn receives
 only a wake notice, not a copied Raft message body. It uses the CLI to read
