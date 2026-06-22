@@ -58,7 +58,7 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.policy_mode == 'legacy' && (inputs.npm_dist_tag || 'beta') || inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.policy_mode == 'legacy' && (inputs.npm_dist_tag || 'beta') || inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
 
 env:
@@ -78,6 +78,7 @@ jobs:
       actions: read
       contents: read
     outputs:
+      npm_dist_tag: ${{ steps.policy.outputs.npm_dist_tag }}
       publish_eligible: ${{ steps.policy.outputs.publish_eligible }}
       release_policy: ${{ steps.policy.outputs.release_policy }}
       release_policy_sha256: ${{ steps.policy.outputs.release_policy_sha256 }}
@@ -112,6 +113,9 @@ jobs:
               ;;
           esac
           npm_dist_tag="$(printf '%s' "$RELEASE_NPM_DIST_TAG" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [[ "$POLICY_MODE" == "legacy" && -z "$npm_dist_tag" ]]; then
+            npm_dist_tag="beta"
+          fi
           descriptor_values=(
             "$PUBLISH_MANIFEST_RUN_ID"
             "$PUBLISH_MANIFEST_RUN_ATTEMPT"
@@ -566,6 +570,7 @@ jobs:
           fi
 
           {
+            echo "npm_dist_tag=$npm_dist_tag"
             echo "release_tag=$release_tag"
             echo "release_version=$release_version"
             echo "verifier_operation=$verifier_operation"
@@ -598,7 +603,7 @@ jobs:
         env:
           RELEASE_REF: ${{ inputs.tag }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_REF}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]] && [[ ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
@@ -704,7 +709,7 @@ jobs:
           RELEASE_REF: ${{ inputs.tag }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
           WORKFLOW_REF_NAME: ${{ github.ref_name }}
-          OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
+          OPENCLAW_NPM_PUBLISH_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           RELEASE_SHA=$(git rev-parse HEAD)
@@ -740,7 +745,7 @@ jobs:
         id: dependency_evidence
         env:
           RELEASE_REF: ${{ inputs.tag }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           node scripts/generate-dependency-release-evidence.mjs \
@@ -755,7 +760,7 @@ jobs:
         env:
           OPENCLAW_PREPACK_PREPARED: "1"
           RELEASE_REF: ${{ inputs.tag }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
           DEPENDENCY_EVIDENCE_DIR: ${{ steps.dependency_evidence.outputs.dir }}
           POLICY_MODE: ${{ inputs.policy_mode }}
           RELEASE_POLICY: ${{ needs.release_policy.outputs.release_policy }}
@@ -969,7 +974,7 @@ jobs:
       - name: Require trusted workflow ref for publish
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
@@ -985,7 +990,7 @@ jobs:
       - name: Require preflight artifact promotion on real publish
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
@@ -1046,7 +1051,7 @@ jobs:
       - name: Validate tag input format
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$ ]]; then
@@ -1209,7 +1214,7 @@ jobs:
       - name: Verify prepared tarball provenance
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -1300,7 +1305,7 @@ jobs:
       - name: Publish
         env:
           OPENCLAW_PREPACK_PREPARED: "1"
-          OPENCLAW_NPM_PUBLISH_TAG: ${{ inputs.npm_dist_tag }}
+          OPENCLAW_NPM_PUBLISH_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
           PUBLISH_TARBALL_PATH: ${{ steps.publish_tarball.outputs.path }}
         run: |
           set -euo pipefail

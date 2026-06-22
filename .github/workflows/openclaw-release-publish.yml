@@ -96,6 +96,7 @@ jobs:
       actions: read
       contents: read
     outputs:
+      npm_dist_tag: ${{ steps.policy.outputs.npm_dist_tag }}
       release_class: ${{ steps.policy.outputs.release_class }}
       release_version: ${{ steps.policy.outputs.release_version }}
     steps:
@@ -122,6 +123,9 @@ jobs:
           fi
           release_version="${RELEASE_TAG#v}"
           npm_dist_tag="$(printf '%s' "$RELEASE_NPM_DIST_TAG" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [[ "$POLICY_MODE" == "legacy" && -z "$npm_dist_tag" ]]; then
+            npm_dist_tag="beta"
+          fi
 
           policy_root="$RUNNER_TEMP/openclaw-release-policy-main"
           rm -rf "$policy_root"
@@ -202,6 +206,7 @@ jobs:
           fi
 
           {
+            echo "npm_dist_tag=$npm_dist_tag"
             echo "release_class=$release_class"
             echo "release_version=$release_version"
           } >> "$GITHUB_OUTPUT"
@@ -234,7 +239,7 @@ jobs:
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
           POLICY_MODE: ${{ inputs.policy_mode }}
           RELEASE_CLASS: ${{ needs.release_policy.outputs.release_class }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -464,7 +469,7 @@ jobs:
         if: ${{ inputs.publish_openclaw_npm }}
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
         run: |
           set -euo pipefail
@@ -566,7 +571,7 @@ jobs:
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_SELECTOR: ${{ inputs.release_selector }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
         run: |
           set -euo pipefail
@@ -990,7 +995,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          RELEASE_NPM_DIST_TAG: ${{ needs.release_policy.outputs.npm_dist_tag }}
           POLICY_MODE: ${{ inputs.policy_mode }}
           RELEASE_CLASS: ${{ needs.release_policy.outputs.release_class }}
           RELEASE_SELECTOR: ${{ inputs.release_selector }}
