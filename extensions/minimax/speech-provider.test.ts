@@ -408,7 +408,7 @@ describe("buildMinimaxSpeechProvider", () => {
       return JSON.parse(init.body) as Record<string, unknown>;
     }
 
-    it("makes correct API call and decodes hex response", async () => {
+    it("requests non-streaming hex audio and decodes the hex response", async () => {
       const hexAudio = Buffer.from("fake-audio-data").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
