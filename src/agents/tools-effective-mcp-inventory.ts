@@ -25,8 +25,50 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 const BUNDLE_MCP_PLUGIN_ID = "bundle-mcp";
 
-function resolveMcpToolLabel(tool: AnyAgentTool): string {
-  const rawLabel = normalizeOptionalString(tool.label) ?? "";
+type McpInventoryTool = {
+  name: string;
+  label?: string;
+  description?: string;
+  displaySummary?: string;
+};
+
+function readMcpInventoryToolField<TField extends keyof AnyAgentTool>(
+  tool: AnyAgentTool,
+  field: TField,
+): { ok: true; value: AnyAgentTool[TField] } | { ok: false } {
+  try {
+    return { ok: true, value: tool[field] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readMcpInventoryToolString<TField extends keyof AnyAgentTool>(
+  tool: AnyAgentTool,
+  field: TField,
+): string | undefined {
+  const fieldRead = readMcpInventoryToolField(tool, field);
+  return fieldRead.ok ? normalizeOptionalString(fieldRead.value) : undefined;
+}
+
+function materializeMcpInventoryTool(tool: AnyAgentTool): McpInventoryTool | undefined {
+  const name = readMcpInventoryToolString(tool, "name");
+  if (!name) {
+    return undefined;
+  }
+  const label = readMcpInventoryToolString(tool, "label");
+  const description = readMcpInventoryToolString(tool, "description");
+  const displaySummary = readMcpInventoryToolString(tool, "displaySummary");
+  return {
+    name,
+    ...(label ? { label } : {}),
+    ...(description ? { description } : {}),
+    ...(displaySummary ? { displaySummary } : {}),
+  };
+}
+
+function resolveMcpToolLabel(tool: McpInventoryTool): string {
+  const rawLabel = tool.label ?? "";
   if (
     rawLabel &&
     normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(tool.name)
@@ -36,11 +78,11 @@ function resolveMcpToolLabel(tool: AnyAgentTool): string {
   return resolveToolDisplay({ name: tool.name }).title;
 }
 
-function resolveRawToolDescription(tool: AnyAgentTool): string {
-  return normalizeOptionalString(tool.description) ?? "";
+function resolveRawToolDescription(tool: McpInventoryTool): string {
+  return tool.description ?? "";
 }
 
-function summarizeToolDescription(tool: AnyAgentTool): string {
+function summarizeToolDescription(tool: McpInventoryTool): string {
   return summarizeToolDescriptionText({
     rawDescription: resolveRawToolDescription(tool),
     displaySummary: tool.displaySummary,
@@ -79,17 +121,23 @@ function buildMcpToolInventoryEntries(
 ): EffectiveToolInventoryEntry[] {
   return disambiguateLabels(
     tools
-      .map(
-        (tool) =>
-          ({
-            id: tool.name,
-            label: resolveMcpToolLabel(tool),
-            description: summarizeToolDescription(tool),
-            rawDescription: resolveRawToolDescription(tool) || summarizeToolDescription(tool),
+      .flatMap((tool) => {
+        const materializedTool = materializeMcpInventoryTool(tool);
+        if (!materializedTool) {
+          return [];
+        }
+        const summary = summarizeToolDescription(materializedTool);
+        return [
+          {
+            id: materializedTool.name,
+            label: resolveMcpToolLabel(materializedTool),
+            description: summary,
+            rawDescription: resolveRawToolDescription(materializedTool) || summary,
             source: "mcp",
             pluginId: BUNDLE_MCP_PLUGIN_ID,
-          }) satisfies EffectiveToolInventoryEntry,
-      )
+          } satisfies EffectiveToolInventoryEntry,
+        ];
+      })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );
 }

@@ -263,6 +263,52 @@ describe("resolveEffectiveToolInventory", () => {
     ]);
   });
 
+  it("keeps bundled MCP inventory readable when optional display metadata is unreadable", async () => {
+    const { buildRuntimeCompatibleMcpToolInventory } =
+      await import("./tools-effective-mcp-inventory.js");
+    const tool = mockTool({
+      name: "reproProbe__probe_tool",
+      label: "Probe",
+      description: "Probe MCP",
+    });
+    Object.defineProperties(tool, {
+      label: {
+        get() {
+          throw new Error("label exploded");
+        },
+      },
+      description: {
+        get() {
+          throw new Error("description exploded");
+        },
+      },
+      displaySummary: {
+        get() {
+          throw new Error("display summary exploded");
+        },
+      },
+    });
+
+    const result = buildRuntimeCompatibleMcpToolInventory({
+      tools: [tool],
+      cfg: {},
+    });
+
+    expect(result).toEqual({
+      entries: [
+        {
+          id: "reproProbe__probe_tool",
+          label: "ReproProbe Probe Tool",
+          description: "Tool",
+          rawDescription: "Tool",
+          source: "mcp",
+          pluginId: "bundle-mcp",
+        },
+      ],
+      notices: [],
+    });
+  });
+
   it("disambiguates duplicate labels with source ids", async () => {
     const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryLocal9 } =
       await loadHarness({
