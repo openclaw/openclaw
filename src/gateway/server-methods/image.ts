@@ -5,6 +5,7 @@ import {
   formatValidationErrors,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
+import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 // Gateway RPC handlers for image generation provider inventory.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listImageGenerationProviders } from "../../image-generation/provider-registry.js";
@@ -22,22 +23,21 @@ function hasOwnKeys(value: unknown): boolean {
 }
 
 /**
- * Check if a provider has generic config (auth profile, model config, plugin config, TTS config, or env vars).
- * This function mirrors src/cli/capability-cli.ts providerHasGenericConfig exactly.
- * Used as fallback when provider.isConfigured is not available.
+ * Check if a provider has generic config (auth profile, model config, plugin config, TTS config).
+ * Uses canonical loadAuthProfileStoreForRuntime for auth profile lookup.
+ * Mirrors src/cli/capability-cli.ts providerHasGenericConfig.
  */
 function providerHasGenericConfig(params: {
   cfg: OpenClawConfig;
   providerId: string;
   agentDir: string;
-  envVars?: string[];
 }): boolean {
   const modelsProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
   const pluginEntries = (params.cfg.plugins?.entries ?? {}) as Record<string, { config?: unknown }>;
   const ttsProviders = (params.cfg.messages?.tts?.providers ?? {}) as Record<string, unknown>;
-  const envConfigured = (params.envVars ?? []).some((envVar) =>
-    Boolean(process.env[envVar]?.trim()),
-  );
+
+  // Use canonical auth profile store loader
+  const authStore = loadAuthProfileStoreForRuntime(params.agentDir);
 
   // Use delimiter matching to avoid prefix collision (e.g., openai vs openai-azure)
   const matchesProvider = (key: string): boolean =>
@@ -45,38 +45,16 @@ function providerHasGenericConfig(params: {
     key.startsWith(params.providerId + ":") ||
     key.startsWith(params.providerId + "/");
 
-  // Check for auth profile (load from disk via agentDir)
-  const authProfiles = loadAuthProfileStore(params.agentDir);
-  const hasAuthProfile = authProfiles
-    ? Object.keys(authProfiles.profiles ?? {}).some(
-        (profileId) =>
-          profileId.startsWith(params.providerId + ":") ||
-          profileId.startsWith(params.providerId + "/"),
-      )
+  const hasAuthProfile = authStore
+    ? Object.keys(authStore.profiles ?? {}).some(matchesProvider)
     : false;
 
   return (
     hasAuthProfile ||
     hasOwnKeys(modelsProviders[params.providerId]) ||
     hasOwnKeys(pluginEntries[params.providerId]?.config) ||
-    hasOwnKeys(ttsProviders[params.providerId]) ||
-    envConfigured
+    hasOwnKeys(ttsProviders[params.providerId])
   );
-}
-
-/**
- * Load auth profile store from disk for runtime.
- */
-function loadAuthProfileStore(agentDir: string): { profiles: Record<string, unknown> } | null {
-  try {
-    const { readFile } = require("node:fs/promises");
-    const path = require("node:path");
-    const authStorePath = path.join(agentDir, "agent", "auth-profiles.json");
-    const content = require("node:fs").readFileSync(authStorePath, "utf-8");
-    return JSON.parse(content);
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -113,7 +91,7 @@ export const imageHandlers: GatewayRequestHandlers = {
 
       const providers = listImageGenerationProviders(cfg).map((provider) => {
         // Use provider's isConfigured with agentDir, fallback to generic config check
-        // that mirrors CLI exactly
+        // that uses canonical loadAuthProfileStoreForRuntime
         const providerConfigured = provider.isConfigured?.({ cfg, agentDir });
         const isConfigured =
           providerConfigured ??
@@ -121,8 +99,6 @@ export const imageHandlers: GatewayRequestHandlers = {
             cfg,
             providerId: provider.id,
             agentDir,
-            // Common env vars per provider
-            envVars: getProviderEnvVars(provider.id),
           });
         return {
           id: provider.id,
@@ -168,27 +144,3 @@ export const imageHandlers: GatewayRequestHandlers = {
     }
   },
 };
-
-/**
- * Get common environment variable names for a provider.
- * Used for fallback configured check.
- */
-function getProviderEnvVars(providerId: string): string[] {
-  const envVarMap: Record<string, string[]> = {
-    openai: ["OPENAI_API_KEY"],
-    anthropic: ["ANTHROPIC_API_KEY"],
-    stability: ["STABILITY_API_KEY"],
-    stabilityai: ["STABILITY_API_KEY"],
-    cohere: ["COHERE_API_KEY"],
-    google: ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
-    replicate: ["REPLICATE_API_KEY"],
-    azure: ["AZURE_OPENAI_API_KEY"],
-    "azure-openai": ["AZURE_OPENAI_API_KEY"],
-    mistral: ["MISTRAL_API_KEY"],
-    fireworks: ["FIREWORKS_API_KEY"],
-    novita: ["NOVITA_API_KEY"],
-    deepinfra: ["DEEPINFRA_API_KEY"],
-    skyship: ["SKYSHIP_API_KEY"],
-  };
-  return envVarMap[providerId.toLowerCase()] ?? [];
-}

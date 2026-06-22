@@ -8,7 +8,7 @@ import { imageHandlers } from "./image.js";
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   listImageGenerationProviders: vi.fn(() => []),
-  readFileSync: vi.fn(),
+  loadAuthProfileStoreForRuntime: vi.fn(() => ({ profiles: {} })),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -21,10 +21,9 @@ vi.mock("../../image-generation/provider-registry.js", () => ({
     mocks.listImageGenerationProviders as typeof import("../../image-generation/provider-registry.js").listImageGenerationProviders,
 }));
 
-vi.mock("node:fs", () => ({
-  default: {
-    readFileSync: mocks.readFileSync,
-  },
+vi.mock("../../agents/auth-profiles/store.js", () => ({
+  loadAuthProfileStoreForRuntime:
+    mocks.loadAuthProfileStoreForRuntime as typeof import("../../agents/auth-profiles/store.js").loadAuthProfileStoreForRuntime,
 }));
 
 describe("imageHandlers", () => {
@@ -191,7 +190,7 @@ describe("imageHandlers", () => {
 
   // ========== Regression Tests (per ClawSweeper P2 requirement) ==========
 
-  // Test 5: lazy provider (no isConfigured) - uses fallback config check
+  // Test 5: lazy provider (no isConfigured) - uses canonical auth profile store
   it("marks lazy provider as configured when has model config (no isConfigured implemented)", async () => {
     const mockRespond = vi.fn();
     const mockProvider = {
@@ -217,9 +216,7 @@ describe("imageHandlers", () => {
     };
 
     mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
-    mocks.readFileSync.mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {} });
 
     await imageHandlers["image.providers"]({
       respond: mockRespond,
@@ -244,7 +241,7 @@ describe("imageHandlers", () => {
       label: "OpenAI",
       defaultModel: "dall-e-3",
       models: ["dall-e-3"],
-      capabilities: { generate: { enabled: true } },
+      capabilities: { generate: { enabled: true }, edit: { enabled: false } },
       isConfigured: undefined,
     };
     const mockContext = {
@@ -257,10 +254,7 @@ describe("imageHandlers", () => {
     };
 
     mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
-    // Simulate no auth profiles (file read returns empty)
-    mocks.readFileSync.mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {} });
 
     await imageHandlers["image.providers"]({
       respond: mockRespond,
@@ -285,7 +279,7 @@ describe("imageHandlers", () => {
       label: "OpenAI",
       defaultModel: "dall-e-3",
       models: ["dall-e-3"],
-      capabilities: { generate: { enabled: true } },
+      capabilities: { generate: { enabled: true }, edit: { enabled: false } },
       isConfigured: undefined,
     };
     const mockContext = {
@@ -302,9 +296,7 @@ describe("imageHandlers", () => {
     };
 
     mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
-    mocks.readFileSync.mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {} });
 
     await imageHandlers["image.providers"]({
       respond: mockRespond,
@@ -329,7 +321,7 @@ describe("imageHandlers", () => {
       label: "ComfyUI",
       defaultModel: "workflow",
       models: ["workflow"],
-      capabilities: { generate: { enabled: true } },
+      capabilities: { generate: { enabled: true }, edit: { enabled: false } },
       isConfigured: undefined,
     };
     const mockContext = {
@@ -346,9 +338,7 @@ describe("imageHandlers", () => {
     };
 
     mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
-    mocks.readFileSync.mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {} });
 
     await imageHandlers["image.providers"]({
       respond: mockRespond,
@@ -373,7 +363,7 @@ describe("imageHandlers", () => {
       label: "OpenAI",
       defaultModel: "dall-e-3",
       models: ["dall-e-3"],
-      capabilities: { generate: { enabled: true } },
+      capabilities: { generate: { enabled: true }, edit: { enabled: false } },
       isConfigured: undefined,
     };
     const mockContext = {
@@ -393,8 +383,49 @@ describe("imageHandlers", () => {
     };
 
     mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
-    mocks.readFileSync.mockImplementation(() => {
-      throw new Error("ENOENT");
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({ profiles: {} });
+
+    await imageHandlers["image.providers"]({
+      respond: mockRespond,
+      context: mockContext as never,
+    });
+
+    expect(mockRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ id: "openai", configured: true }),
+        ]),
+      }),
+    );
+  });
+
+  // Test 10: auth profile - configured when has auth profile (canonical store)
+  it("marks provider as configured when has auth profile (canonical store)", async () => {
+    const mockRespond = vi.fn();
+    const mockProvider = {
+      id: "openai",
+      label: "OpenAI",
+      defaultModel: "dall-e-3",
+      models: ["dall-e-3"],
+      capabilities: { generate: { enabled: true }, edit: { enabled: false } },
+      isConfigured: undefined,
+    };
+    const mockContext = {
+      getRuntimeConfig: () => ({
+        models: { providers: {} },
+        plugins: { entries: {} },
+        auth: { profiles: {} },
+        agents: { defaults: {} },
+      }),
+    };
+
+    mocks.listImageGenerationProviders.mockReturnValue([mockProvider]);
+    // Canonical store has auth profile for openai
+    mocks.loadAuthProfileStoreForRuntime.mockReturnValue({
+      profiles: {
+        "openai:default": { apiKey: "sk-..." },
+      },
     });
 
     await imageHandlers["image.providers"]({
