@@ -22,9 +22,22 @@ enum OpenClawAppModelRegistry {
 
 @MainActor
 final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrency UNUserNotificationCenterDelegate {
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "Push")
-    private let backgroundWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "BackgroundWake")
-    private static let wakeRefreshTaskIdentifier = "ai.openclaw.ios.bgrefresh"
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "Push")
+    private let backgroundWakeLogger = Logger(subsystem: "ai.openclawfoundation.app", category: "BackgroundWake")
+    private static var wakeRefreshTaskIdentifier: String {
+        "\(appBundleIdentifier).bgrefresh"
+    }
+
+    private static var appBundleIdentifier: String {
+        guard let bundleId = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bundleId.isEmpty
+        else {
+            return "ai.openclawfoundation.app"
+        }
+
+        return bundleId
+    }
+
     private var backgroundWakeTask: Task<Bool, Never>?
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
@@ -91,6 +104,10 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     #if DEBUG
     func _test_resolvedAppModel() -> NodeAppModel? {
         self.resolvedAppModel()
+    }
+
+    func _test_wakeRefreshTaskIdentifier() -> String {
+        Self.wakeRefreshTaskIdentifier
     }
     #endif
 
@@ -392,7 +409,7 @@ enum WatchPromptNotificationBridge {
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty || !body.isEmpty else { return }
-        guard await self.requestNotificationAuthorizationIfNeeded() else { return }
+        guard await self.isNotificationAuthorizationAllowed() else { return }
 
         let normalizedActions = (params.actions ?? []).compactMap { action -> OpenClawWatchAction? in
             let id = action.id.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -499,29 +516,10 @@ enum WatchPromptNotificationBridge {
         }
     }
 
-    private static func requestNotificationAuthorizationIfNeeded() async -> Bool {
+    private static func isNotificationAuthorizationAllowed() async -> Bool {
         let center = UNUserNotificationCenter.current()
         let status = await self.notificationAuthorizationStatus(center: center)
-        switch status {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        case .notDetermined:
-            let granted = await (try? center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-            if !granted { return false }
-            let updatedStatus = await self.notificationAuthorizationStatus(center: center)
-            if self.isAuthorizationStatusAllowed(updatedStatus) {
-                // Refresh APNs registration immediately after the first permission grant so the
-                // gateway can receive a push registration without requiring an app relaunch.
-                await MainActor.run {
-                    UIApplication.shared.registerForRemoteNotifications()
-                }
-            }
-            return self.isAuthorizationStatusAllowed(updatedStatus)
-        case .denied:
-            return false
-        @unknown default:
-            return false
-        }
+        return self.isAuthorizationStatusAllowed(status)
     }
 
     private static func isAuthorizationStatusAllowed(_ status: UNAuthorizationStatus) -> Bool {
@@ -611,9 +609,24 @@ struct OpenClawApp: App {
         Self.installUncaughtExceptionLogger()
         GatewaySettingsStore.bootstrapPersistence()
         let appModel = NodeAppModel()
+        #if DEBUG
+        if Self.screenshotModeEnabled {
+            UIView.setAnimationsEnabled(false)
+            UserDefaults.standard.set(true, forKey: "gateway.onboardingComplete")
+            UserDefaults.standard.set(true, forKey: "gateway.hasConnectedOnce")
+            UserDefaults.standard.set(true, forKey: "onboarding.quickSetupDismissed")
+            appModel.enterScreenshotFixtureMode()
+            if Self.screenshotNotificationGuidanceEnabled {
+                appModel._debug_presentNotificationPermissionGuidancePromptForScreenshot()
+            }
+        }
+        #endif
         OpenClawAppModelRegistry.appModel = appModel
         _appModel = State(initialValue: appModel)
-        _gatewayController = State(initialValue: GatewayConnectionController(appModel: appModel))
+        _gatewayController = State(
+            initialValue: GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: !Self.screenshotModeEnabled))
     }
 
     var body: some Scene {
@@ -647,6 +660,22 @@ struct OpenClawApp: App {
         AppAppearancePreference.launchArgumentPreference
             ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
             ?? .system
+    }
+
+    private static var screenshotModeEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")
+        #else
+        false
+        #endif
+    }
+
+    private static var screenshotNotificationGuidanceEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-notification-guidance")
+        #else
+        false
+        #endif
     }
 
     @MainActor

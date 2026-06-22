@@ -19,6 +19,7 @@ import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
   loadConfig: vi.fn(() => ({})),
+  resetConfigRuntimeState: () => undefined,
 }));
 
 function jsonRoundTrip<T>(value: T): T {

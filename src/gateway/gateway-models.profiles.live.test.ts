@@ -58,7 +58,7 @@ import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
-import { containsFinalTag, stripFinalTags } from "../shared/text/final-tags.js";
+import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import {
@@ -67,9 +67,10 @@ import {
   isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
-} from "./live-tool-probe-utils.js";
+} from "./live-tool-probe.test-helpers.js";
 import { startGatewayServer } from "./server.impl.js";
-import { loadSessionEntry, readSessionMessagesAsync } from "./session-utils.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
@@ -343,7 +344,11 @@ function isGatewayLiveProbeTimeout(error: string): boolean {
 }
 
 function isGatewayLiveModelTimeout(error: string): boolean {
-  return /model timeout after \d+ms/i.test(error);
+  return (
+    /model timeout after \d+ms/i.test(error) ||
+    (/\bagent\.wait timeout for runId=/i.test(error) &&
+      /\btimeoutPhase=(?:preflight|provider|post_turn)\b/i.test(error))
+  );
 }
 
 function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
@@ -597,7 +602,7 @@ function assertNoReasoningTags(params: {
   if (!params.text) {
     return;
   }
-  if (THINKING_TAG_RE.test(params.text) || containsFinalTag(params.text)) {
+  if (THINKING_TAG_RE.test(params.text) || findFinalTagMatches(params.text).length > 0) {
     const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
       `[${params.label}] reasoning tag leak (${params.model} / ${params.phase}): ${snippet}`,
@@ -888,6 +893,24 @@ describe("resolveGatewayLiveAgentWaitTimeoutMs", () => {
 describe("resolveGatewayLiveProviderTimeoutSeconds", () => {
   it("matches provider timeout config to the harness model budget", () => {
     expect(resolveGatewayLiveProviderTimeoutSeconds(180_001)).toBe(181);
+  });
+});
+
+describe("isGatewayLiveModelTimeout", () => {
+  it("matches provider-attributed agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=provider, providerStarted=true, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match wait-layer agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=queue, providerStarted=false, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(false);
   });
 });
 
@@ -2124,10 +2147,18 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   if (!entry?.sessionId) {
     return [];
   }
-  const messages = await readSessionMessagesAsync(entry.sessionId, storePath, entry.sessionFile, {
-    mode: "full",
-    reason: "live model assistant text verification",
-  });
+  const messages = await readSessionMessagesAsync(
+    {
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey,
+      storePath,
+    },
+    {
+      mode: "full",
+      reason: "live model assistant text verification",
+    },
+  );
   const assistantTexts: string[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {

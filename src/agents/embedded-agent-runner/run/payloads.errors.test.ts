@@ -199,6 +199,26 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "LLM request rejected");
   });
 
+  it("uses structured provider details for model-not-found reply payloads", () => {
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "400 Param Incorrect",
+        errorCode: "400",
+        errorBody:
+          '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+        content: [],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "The selected model was not found by the provider. Check the model id or choose a different model.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "some-model-id");
+    expectNoPayloadTextContaining(payloads, "Param Incorrect");
+  });
+
   it("suppresses escaped structured provider error messages in user-facing reply payloads", () => {
     const rawError =
       '{"type":"error","error":{"type":"invalid_request_error","message":"SECRET\\nCANARY_69737"}}';

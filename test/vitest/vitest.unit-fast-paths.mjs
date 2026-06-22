@@ -102,9 +102,7 @@ export const forcedUnitFastTestFiles = [
   "src/crestodian/rescue-policy.test.ts",
   "src/crestodian/rescue-message.test.ts",
   "src/crestodian/tui-backend.test.ts",
-  "src/flows/channel-setup.test.ts",
   "src/flows/channel-setup.status.test.ts",
-  "src/flows/doctor-health-contributions.test.ts",
   "src/flows/provider-flow.test.ts",
   "src/context-engine/context-engine.test.ts",
   "extensions/canvas/src/host/server.state-dir.test.ts",
@@ -127,7 +125,6 @@ export const forcedUnitFastTestFiles = [
   "src/install-sh-version.test.ts",
   "src/logger.test.ts",
   "src/library.test.ts",
-  "src/memory-host-sdk/host/backend-config.test.ts",
   "src/media-generation/provider-capabilities.contract.test.ts",
   "src/music-generation/runtime.test.ts",
   "src/mcp/channel-server.shutdown-unhandled-rejection.test.ts",
@@ -262,7 +259,7 @@ const disqualifyingPatterns = [
   },
   {
     code: "module-mocking-helper",
-    pattern: /(?:runtime-module-mocks|plugins-cli-test-helpers|manager\.test-helpers)/u,
+    pattern: /(?:plugins-cli-test-helpers|manager\.test-helpers)/u,
   },
   {
     code: "vitest-mock-api",

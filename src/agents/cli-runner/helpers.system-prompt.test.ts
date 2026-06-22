@@ -91,4 +91,50 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("CLI-only command guidance.");
     expect(prompt).not.toContain("OpenClaw-only command guidance.");
   });
+
+  it("includes session identity in runtime when provided", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "test/model",
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:peer",
+      sessionId: "session-123",
+    });
+
+    expect(prompt).toContain("agent=main");
+    expect(prompt).toContain("session=agent:main:telegram:direct:peer");
+    expect(prompt).toContain("sessionId=session-123");
+  });
+
+  it("includes Telegram rich text guidance for CLI final replies", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [],
+      modelDisplay: "anthropic/claude-opus-4-8",
+      runtimeChannel: "telegram",
+      runtimeChatType: "direct",
+      runtimeCapabilities: ["richText"],
+    });
+
+    expect(prompt).toContain("Telegram rich text is available");
+    expect(prompt).toContain("headings, tables");
+    expect(prompt).toContain("Media tags are blocks, not inline prose");
+    expect(prompt).toContain("This is not legacy MarkdownV2/parse_mode");
+    expect(prompt).toContain("channel=telegram");
+    expect(prompt).not.toContain("### message tool");
+  });
+
+  it("requires an explicit message target when the CLI turn policy requires one", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [{ name: "message" } as never],
+      modelDisplay: "test/model",
+      sourceReplyDeliveryMode: "message_tool_only",
+      requireExplicitMessageTarget: true,
+    });
+
+    expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
+    expect(prompt).not.toContain("The target defaults to the current source channel");
+  });
 });

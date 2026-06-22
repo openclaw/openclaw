@@ -8,7 +8,12 @@ import type { HistoryEntry, HistoryMediaEntry } from "../../auto-reply/reply/his
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { ReplyDispatcherWithTypingOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.types.js";
-import type { FinalizedMsgContext, MsgContext } from "../../auto-reply/templating.js";
+import type {
+  FinalizedMsgContext,
+  InboundSourceModality,
+  MentionSource,
+  MsgContext,
+} from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -179,6 +184,10 @@ export type AccessFacts = {
     canDetectMention: boolean;
     wasMentioned: boolean;
     hasAnyMention?: boolean;
+    explicitlyMentionedBot?: boolean;
+    mentionedUserIds?: string[];
+    mentionedSubteamIds?: string[];
+    mentionSource?: MentionSource;
     implicitMentionKinds?: Array<
       "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native"
     >;
@@ -199,6 +208,7 @@ export type MessageFacts = {
   senderLabel?: string;
   preview?: string;
   inboundHistory?: HistoryEntry[];
+  sourceModality?: InboundSourceModality;
 };
 
 /** Parsed command facts for command-like channel turns. */
@@ -377,6 +387,7 @@ export type AssembledChannelTurn = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  afterRecord?: () => void | Promise<void>;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   delivery: ChannelEventDeliveryAdapter;
   replyPipeline?: ChannelTurnReplyPipelineOptions;
@@ -400,6 +411,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  afterRecord?: () => void | Promise<void>;
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;

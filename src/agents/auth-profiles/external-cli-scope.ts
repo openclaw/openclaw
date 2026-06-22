@@ -61,6 +61,7 @@ function addExternalCliRuntimeScope(out: Set<string>, value: string | undefined)
     normalized === "codex" ||
     normalized === "codex-cli" ||
     normalized === "codex-app-server" ||
+    normalized === "google-gemini-cli" ||
     normalized === "openai" ||
     normalized === "minimax" ||
     normalized === "minimax-cli" ||

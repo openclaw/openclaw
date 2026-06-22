@@ -122,7 +122,7 @@ function explicitSessionsSpawnPrompt(token: string) {
   return [
     "Use sessions_spawn for this QA check.",
     `task="${threadSubagentTask(token)}"`,
-    "label=qa-thread-subagent thread=true mode=session runTimeoutSeconds=30",
+    "label=qa-thread-subagent thread=true mode=session",
   ].join(" ");
 }
 
@@ -217,6 +217,27 @@ describe("qa mock openai server", () => {
     );
     expect(String(debugPayload.allInputText)).toContain("ok do it.");
     expect(debugPayload.plannedToolName).toBe("read");
+  });
+
+  it("returns a substantive private final fixture for the message-tool warning scenario", async () => {
+    const server = await startMockServer();
+
+    const body = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: [
+        makeUserInput(
+          "qa private final reply warning check. Reply to me directly in two complete sentences with `QA-STRANDED-85714` in the first sentence and a short explanation in the second sentence. Do NOT call any tool. Do NOT use the message tool.",
+        ),
+      ],
+    });
+
+    const text = body.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text).toContain("QA-STRANDED-85714");
+    expect(text.length).toBeGreaterThanOrEqual(120);
+    expect(text.match(/[.!?]+(?:\s|$)/g)).toHaveLength(2);
   });
 
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
@@ -640,6 +661,62 @@ describe("qa mock openai server", () => {
       'Please inspect "message_id" metadata first, then read `./QA_KICKOFF_TASK.md`.',
     );
     expect(debugPayload.plannedToolName).toBe("read");
+  });
+
+  it("reads unquoted fixture paths and honors exact replies after tool output", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Read large-cache-fixture.txt, verify it contains CACHE-FIXTURE-1600, then reply exactly QA-LARGE-CACHE-WARMUP-OK.";
+
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      input: [makeUserInput(prompt)],
+    });
+    expect(toolPlan).toContain('"name":"read"');
+    expect(toolPlan).toContain('"arguments":"{\\"path\\":\\"large-cache-fixture.txt\\"}"');
+
+    const completion = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: "CACHE-FIXTURE-1600 stable tool-result evidence.",
+        },
+      ],
+    });
+
+    expect(outputText(completion)).toBe("QA-LARGE-CACHE-WARMUP-OK");
+  });
+
+  it("preserves unquoted repo-scoped read targets", async () => {
+    const server = await startMockServer();
+    const toolPlan = await expectResponsesText(server, {
+      stream: true,
+      input: [makeUserInput("Read repo/qa/scenarios/index.yaml before continuing.")],
+    });
+
+    expect(toolPlan).toContain('"name":"read"');
+    expect(toolPlan).toContain('"arguments":"{\\"path\\":\\"repo/qa/scenarios/index.yaml\\"}"');
+  });
+
+  it("does not treat natural reply-exactly-with phrasing as a marker token", async () => {
+    const server = await startMockServer();
+    const response = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "Use qa-visible-skill now. Reply exactly with the visible skill marker and nothing else.",
+        ),
+      ],
+    });
+
+    expect(outputText(response)).toBe("VISIBLE-SKILL-OK");
   });
 
   it("drives the Lobster Invaders write flow and memory recall responses", async () => {
@@ -1560,6 +1637,7 @@ describe("qa mock openai server", () => {
     expect(spawnArgs.label).toBe("qa-direct-fallback-worker");
     expect(spawnArgs.thread).toBe(false);
     expect(spawnArgs.mode).toBe("run");
+    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
 
     const body = await expectResponsesText(server, {
       stream: true,
@@ -1626,7 +1704,6 @@ describe("qa mock openai server", () => {
             label: "qa-thread-subagent",
             thread: true,
             mode: "session",
-            runTimeoutSeconds: 30,
           }),
         },
         {
@@ -1663,7 +1740,6 @@ describe("qa mock openai server", () => {
             label: "qa-thread-subagent",
             thread: true,
             mode: "session",
-            runTimeoutSeconds: 30,
           }),
         },
         {
@@ -2490,7 +2566,7 @@ describe("qa mock openai server", () => {
           {
             type: "function_call_output",
             output:
-              "repo/qa/scenarios/index.md includes scenario: subagent-handoff and repo/extensions/qa-lab/src/suite.ts.",
+              "repo/qa/scenarios/index.yaml includes scenario: subagent-handoff and repo/extensions/qa-lab/src/suite.ts.",
           },
           makeUserInput("Continue."),
         ],
@@ -3144,6 +3220,47 @@ describe("qa mock openai server", () => {
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("session_status");
     expect(String(toolPlanOutput.arguments)).toContain("current");
+  });
+
+  it("summarizes QA tool-search bridge outputs with the nested plugin result marker", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_tool_search_code_1",
+          output: JSON.stringify({
+            ok: true,
+            value: {
+              tool: {
+                id: `openclaw:tool-search-e2e-fixture:${targetTool}`,
+                source: "openclaw",
+                sourceName: "tool-search-e2e-fixture",
+                name: targetTool,
+                description: "x".repeat(260),
+              },
+              result: {
+                content: [
+                  {
+                    type: "text",
+                    text: `FAKE_PLUGIN_OK ${targetTool} {"marker":"code"}`,
+                  },
+                ],
+              },
+            },
+          }),
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
   });
 
   it("plans QA tool-search failure calls with denied-input args", async () => {
@@ -3825,7 +3942,7 @@ describe("qa mock openai server", () => {
     expect(toolUseBlock?.input.label).toBe("qa-thread-subagent");
     expect(toolUseBlock?.input.thread).toBe(true);
     expect(toolUseBlock?.input.mode).toBe("session");
-    expect(toolUseBlock?.input.runTimeoutSeconds).toBe(30);
+    expect(toolUseBlock?.input).not.toHaveProperty("runTimeoutSeconds");
 
     const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
     expect(debugResponse.status).toBe(200);
@@ -4240,7 +4357,7 @@ describe("qa mock openai server", () => {
     expect(body).not.toContain("HEARTBEAT_OK");
   });
 
-  it("rejects malformed Anthropic /v1/messages JSON with an invalid_request_error", async () => {
+  it("rejects malformed or non-object Anthropic /v1/messages JSON", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
       port: 0,
@@ -4249,20 +4366,55 @@ describe("qa mock openai server", () => {
       await server.stop();
     });
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: '{"model":"claude-opus-4-8","messages":[',
+    for (const rawBody of ['{"model":"claude-opus-4-8","messages":[', "null", "[]", '"text"']) {
+      const response = await fetch(`${server.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: rawBody,
+      });
+
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as {
+        type: string;
+        error: { type: string; message: string };
+      };
+      expect(body.type).toBe("error");
+      expect(body.error.type).toBe("invalid_request_error");
+      expect(body.error.message).toContain("Malformed JSON body");
+    }
+
+    const health = await fetch(`${server.baseUrl}/healthz`);
+    expect(health.status).toBe(200);
+  });
+
+  it("rejects malformed OpenAI-compatible JSON without crashing the mock server", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
     });
 
-    expect(response.status).toBe(400);
-    const body = (await response.json()) as {
-      type: string;
-      error: { type: string; message: string };
-    };
-    expect(body.type).toBe("error");
-    expect(body.error.type).toBe("invalid_request_error");
-    expect(body.error.message).toContain("Malformed JSON body");
+    for (const path of ["/v1/responses", "/v1/embeddings", "/v1/images/generations"]) {
+      for (const rawBody of ["{bad", "[]", '"text"']) {
+        const response = await fetch(`${server.baseUrl}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: rawBody,
+        });
+
+        expect(response.status).toBe(400);
+        const body = (await response.json()) as {
+          error: { type: string; message: string };
+        };
+        expect(body.error.type).toBe("invalid_request_error");
+        expect(body.error.message).toContain("Malformed JSON body");
+      }
+    }
+
+    const health = await fetch(`${server.baseUrl}/healthz`);
+    expect(health.status).toBe(200);
   });
 
   it("defaults empty-string Anthropic /v1/messages model to claude-opus-4-8", async () => {
@@ -4593,7 +4745,7 @@ describe("qa mock openai server provider variant tagging", () => {
       stream: false,
       input: [makeUserInput(sourcePrompt)],
     });
-    expect(outputToolArgs(openaiSource)).toEqual({ path: "repo/qa/scenarios/index.md" });
+    expect(outputToolArgs(openaiSource)).toEqual({ path: "repo/qa/scenarios/index.yaml" });
 
     const anthropicSourceServer = await startMockServer();
     const anthropicSource = await expectResponsesJson(anthropicSourceServer, {

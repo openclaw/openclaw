@@ -30,7 +30,21 @@ const manifest = JSON.parse(
   setup?: {
     providers?: Array<{ id: string }>;
   };
-  providerEndpoints?: Array<{ endpointClass?: string; hosts?: string[] }>;
+  modelCatalog?: {
+    suppressions?: Array<{
+      provider?: string;
+      model?: string;
+      when?: {
+        baseUrlHosts?: string[];
+        providerConfigApiIn?: string[];
+      };
+    }>;
+  };
+  providerEndpoints?: Array<{
+    endpointClass?: string;
+    hosts?: string[];
+    hostSuffixes?: string[];
+  }>;
   providerAuthAliases?: Record<string, string>;
   legacyPluginIds?: string[];
 };
@@ -119,6 +133,14 @@ describe("OpenAI plugin manifest", () => {
     expect(chatGptEndpoint?.endpointClass).toBe("openai");
   });
 
+  it("classifies regional API hosts as public OpenAI endpoints", () => {
+    const publicEndpoint = manifest.providerEndpoints?.find((endpoint) =>
+      endpoint.hosts?.includes("api.openai.com"),
+    );
+    expect(publicEndpoint?.endpointClass).toBe("openai-public");
+    expect(publicEndpoint?.hostSuffixes).toContain(".api.openai.com");
+  });
+
   it("keeps OpenAI media-understanding manifest metadata aligned with runtime audio support", () => {
     const metadata = manifest.mediaUnderstandingProviderMetadata?.openai;
     expect(metadata?.capabilities).toEqual(["image", "audio"]);
@@ -160,6 +182,17 @@ describe("OpenAI plugin manifest", () => {
     );
     expect(choices.map((choice) => choice.groupHint)).not.toContain("Codex OAuth + API key");
     expect(choices.map((choice) => choice.groupHint)).not.toContain("API key or Codex sign-in");
+  });
+
+  it("keeps Spark suppression conditional on direct OpenAI API rows", () => {
+    const sparkSuppression = manifest.modelCatalog?.suppressions?.find(
+      (suppression) =>
+        suppression.provider === "openai" && suppression.model === "gpt-5.3-codex-spark",
+    );
+
+    expect(sparkSuppression?.when).toEqual({
+      baseUrlHosts: ["api.openai.com"],
+    });
   });
 
   it("keeps auth choice copy aligned with provider wizard metadata", () => {

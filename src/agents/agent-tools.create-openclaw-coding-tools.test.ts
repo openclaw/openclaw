@@ -7,7 +7,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
@@ -21,15 +20,18 @@ import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { expectReadWriteEditTools } from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
+import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -72,7 +74,11 @@ async function writeSessionStore(
   agentId: string,
   entries: Record<string, unknown>,
 ) {
-  await writeSessionStoreForTestAsync(storeTemplate.replaceAll("{agentId}", agentId), entries);
+  await fs.writeFile(
+    storeTemplate.replaceAll("{agentId}", agentId),
+    JSON.stringify(entries, null, 2),
+    "utf-8",
+  );
 }
 
 function createToolsForStoredSession(storeTemplate: string, sessionKey: string) {
@@ -150,6 +156,12 @@ function expectListIncludes(
   }
 }
 
+function cronCreatorToolNames(
+  list: OpenClawToolsOptions["cronCreatorToolAllowlist"] | undefined,
+): string[] | undefined {
+  return list?.map((entry) => (typeof entry === "string" ? entry : entry.name));
+}
+
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
@@ -208,6 +220,36 @@ describe("createOpenClawCodingTools", () => {
     expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({ channelId: "-100123" }),
     );
+  });
+
+  it("re-wraps existing before_tool_call hooks once with the current context", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const wrapped = wrapToolWithBeforeToolCallHook(
+      {
+        name: "already_wrapped",
+        label: "Already wrapped",
+        description: "Already wrapped tool",
+        parameters: {},
+        execute,
+      },
+      { agentId: "main", sessionId: "session-original" },
+    );
+    vi.mocked(createOpenClawTools).mockReturnValueOnce([wrapped as never]);
+
+    const tools = createOpenClawCodingTools({ agentId: "main", sessionId: "session-new" });
+    const tool = requireTool(tools, "already_wrapped");
+    await requireToolExecute(tool)("call-wrapped", {});
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ agentId: "main", sessionId: "session-new" }),
+    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(tool.parameters).toEqual({ type: "object", properties: {} });
   });
 
   it("adds Tool Search control tools when explicitly requested", () => {
@@ -705,6 +747,88 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedAllow?.includes("process")).toBe(false);
   });
 
+  it("passes group-restricted tool surface to cron-created agent turns", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      sessionKey: "agent:main:whatsapp:group:restricted-room",
+      config: {
+        tools: { allow: ["read", "exec", "process", "cron"] },
+        channels: {
+          whatsapp: {
+            groups: {
+              "restricted-room": {
+                tools: { allow: ["read", "cron"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
+    const cronAllowNames = cronCreatorToolNames(cronAllow);
+    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expect(cronAllowNames?.includes("exec")).toBe(false);
+    expect(cronAllowNames?.includes("process")).toBe(false);
+  });
+
+  it("lets embedded attempts refresh a caller-owned cron creator tool surface", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const cronCreatorToolAllowlistRef: NonNullable<
+      OpenClawToolsOptions["cronCreatorToolAllowlist"]
+    > = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { allow: ["read", "cron"] } },
+      cronCreatorToolAllowlistRef,
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
+    expect(cronAllow).toBe(cronCreatorToolAllowlistRef);
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron"]);
+
+    replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlistRef, [
+      stubTool("read"),
+      stubTool("cron"),
+      stubTool("bundle_mcp_search"),
+    ]);
+
+    expect(cronCreatorToolNames(cronAllow)).toEqual(["read", "cron", "bundle_mcp_search"]);
+  });
+
+  it("passes deny-restricted tool surface to cron-created agent turns", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      sessionKey: "agent:main:whatsapp:group:restricted-room",
+      config: {
+        tools: { allow: ["read", "exec", "process", "cron"] },
+        channels: {
+          whatsapp: {
+            groups: {
+              "restricted-room": {
+                tools: { deny: ["exec", "process"] },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
+    const cronAllow = latestCreateOpenClawToolsOptions().cronCreatorToolAllowlist;
+    const cronAllowNames = cronCreatorToolNames(cronAllow);
+    expectListIncludes(cronAllowNames, ["read", "cron"]);
+    expect(cronAllowNames?.includes("exec")).toBe(false);
+    expect(cronAllowNames?.includes("process")).toBe(false);
+  });
+
   it("records core tool-prep stages for hot-path diagnostics", () => {
     const stages: string[] = [];
 
@@ -861,6 +985,28 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("slack")).toBe(false);
     expect(names.has("telegram")).toBe(false);
     expect(names.has("whatsapp")).toBe(false);
+  });
+
+  it("separates the canonical message provider from transport tool policy", () => {
+    vi.mocked(createOpenClawTools).mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolsBySender: {
+            "channel:discord:speaker-1": { deny: ["exec"] },
+          },
+        },
+      },
+      messageProvider: "discord",
+      toolPolicyMessageProvider: "discord-voice",
+      senderId: "speaker-1",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("tts")).toBe(false);
+    expect(latestCreateOpenClawToolsOptions().agentChannel).toBe("discord");
   });
 
   it("filters session tools for sub-agent sessions by default", () => {

@@ -54,6 +54,7 @@ vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => 
     nextStreamFn = actual.createCodexNativeWebSearchWrapper(nextStreamFn, {
       config: ctx.config,
       agentDir: ctx.agentDir,
+      agentId: ctx.agentId,
     });
     return actual.createOpenAIResponsesContextManagementWrapper(
       actual.createOpenAIReasoningCompatibilityWrapper(nextStreamFn),
@@ -80,6 +81,8 @@ function runWrappedPayloadCase(params: {
     | Model<"azure-openai-responses">;
   extraParams?: Record<string, unknown>;
   cfg?: Record<string, unknown>;
+  agentId?: string;
+  nativeWebSearchAllowedByToolPolicy?: boolean;
   payload?: Record<string, unknown>;
 }) {
   const payload = params.payload ?? { store: false };
@@ -96,6 +99,8 @@ function runWrappedPayloadCase(params: {
     extraParams: params.extraParams,
     config: params.cfg as never,
     agentDir: "/tmp/openai-provider-test",
+    agentId: params.agentId,
+    nativeWebSearchAllowedByToolPolicy: params.nativeWebSearchAllowedByToolPolicy,
     streamFn: baseStreamFn,
   } as never);
 
@@ -160,6 +165,16 @@ describe("buildOpenAIProvider", () => {
 
   it("marks the OpenAI manifest catalog as runtime-discovered", () => {
     expect(manifest.modelCatalog.discovery.openai).toBe("runtime");
+  });
+
+  it("does not hardcode chatgpt-responses transport on gpt-5.3-codex catalog entry (#91710)", () => {
+    const openaiModels = manifest.modelCatalog.providers.openai.models as Array<
+      Record<string, unknown>
+    >;
+    const codexEntry = openaiModels.find((m) => m.id === "gpt-5.3-codex");
+    expect(codexEntry).toBeDefined();
+    expect(codexEntry?.api).toBeUndefined();
+    expect(codexEntry?.baseUrl).toBeUndefined();
   });
 
   it("keeps a network-free OpenAI static catalog", async () => {
@@ -314,8 +329,6 @@ describe("buildOpenAIProvider", () => {
     expect(provider.apiKey).toBe("sk-custom-openai-compatible");
     const apiModel = provider.models.find((model) => model.api !== "openai-chatgpt-responses");
     expect(apiModel?.baseUrl).toBe(customBaseUrl);
-    const codexModel = provider.models.find((model) => model.api === "openai-chatgpt-responses");
-    expect(codexModel?.baseUrl).toBe("https://chatgpt.com/backend-api");
   });
 
   it("uses the Codex backend catalog for OpenAI OAuth discovery", async () => {
@@ -818,6 +831,69 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("restores gpt-5.3-codex-spark only through ChatGPT/Codex OAuth routing", () => {
+    const provider = buildOpenAIProvider();
+
+    const oauthModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      modelRegistry: { find: () => null },
+      authProfileId: "openai:work",
+      authProfileMode: "oauth",
+    } as never);
+    const apiKeyModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      modelRegistry: { find: () => null },
+      providerConfig: {
+        auth: "api-key",
+      },
+    } as never);
+    const runtimeModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      modelRegistry: { find: () => null },
+      agentRuntimeId: "codex",
+    } as never);
+    const apiKeyRuntimeModel = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      modelRegistry: { find: () => null },
+      agentRuntimeId: "codex",
+      authProfileId: "openai:api-key",
+      authProfileMode: "api_key",
+    } as never);
+    const unknownModelHint = provider.buildUnknownModelHint?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+    } as never);
+
+    expectFields(oauthModel, {
+      provider: "openai",
+      id: "gpt-5.3-codex-spark",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      input: ["text"],
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+      maxTokens: 128_000,
+    });
+    expectFields(runtimeModel, {
+      provider: "openai",
+      id: "gpt-5.3-codex-spark",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      input: ["text"],
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+      maxTokens: 128_000,
+    });
+    expect(apiKeyModel).toBeUndefined();
+    expect(apiKeyRuntimeModel).toBeUndefined();
+    expect(unknownModelHint).toContain("ChatGPT/Codex OAuth");
+    expect(unknownModelHint).toContain("OpenAI API-key auth cannot use this model");
+  });
+
   it("resolves chat-latest as an explicit direct API model override", () => {
     const provider = buildOpenAIProvider();
 
@@ -1046,6 +1122,12 @@ describe("buildOpenAIProvider", () => {
     expect(
       codexProvider.isModernModelRef?.({
         provider: "openai",
+        modelId: "gpt-5.3-codex-spark",
+      } as never),
+    ).toBe(true);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai",
         modelId: "gpt-5.4",
       } as never),
     ).toBe(true);
@@ -1215,6 +1297,50 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.tools).toEqual([
       { type: "function", name: "read" },
       { type: "web_search" },
+    ]);
+  });
+
+  it("keeps managed OpenAI web_search when agent policy denies native web search", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentId: "main",
+      nativeWebSearchAllowedByToolPolicy: false,
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: { deny: ["web_search"] },
+            },
+          ],
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [
+          { type: "function", name: "read" },
+          { type: "function", name: "web_search" },
+        ],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([
+      { type: "function", name: "read" },
+      { type: "function", name: "web_search" },
     ]);
   });
 

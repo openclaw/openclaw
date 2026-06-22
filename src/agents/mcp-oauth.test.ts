@@ -2,7 +2,18 @@
 import fs from "node:fs/promises";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { clearMcpOAuthCredentials, createMcpOAuthClientProvider } from "./mcp-oauth.js";
+import { vi } from "vitest";
+import {
+  clearMcpOAuthCredentials,
+  createMcpOAuthClientProvider,
+  runMcpOAuthLogin,
+} from "./mcp-oauth.js";
+
+const authMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@modelcontextprotocol/sdk/client/auth.js", () => ({
+  auth: authMock,
+}));
 
 describe("MCP OAuth provider", () => {
   it("stores token state under the OpenClaw state directory with restricted permissions", async () => {
@@ -57,6 +68,128 @@ describe("MCP OAuth provider", () => {
       },
       {
         prefix: "openclaw-mcp-oauth-url-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("keeps the legacy loopback redirect as the default for upgrade compatibility", () => {
+    const provider = createMcpOAuthClientProvider({
+      serverName: "Calendly",
+      serverUrl: "https://mcp.calendly.com/",
+    });
+
+    expect(provider.clientMetadata.redirect_uris).toEqual(["http://127.0.0.1:8989/oauth/callback"]);
+    expect(provider.redirectUrl).toBe("http://127.0.0.1:8989/oauth/callback");
+  });
+
+  it("retries MCP OAuth login with localhost after redirect registration rejection", async () => {
+    authMock.mockReset();
+    authMock
+      .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
+      .mockResolvedValueOnce("AUTHORIZED");
+
+    await expect(
+      runMcpOAuthLogin({
+        serverName: "Calendly",
+        serverUrl: "https://mcp.calendly.com/",
+      }),
+    ).resolves.toBe("authorized");
+
+    expect(authMock).toHaveBeenCalledTimes(2);
+    expect(authMock.mock.calls[1]?.[0]?.clientMetadata.redirect_uris).toEqual([
+      "http://localhost:8989/oauth/callback",
+    ]);
+  });
+
+  it("does not retry a code exchange redirect mismatch", async () => {
+    authMock.mockReset();
+    authMock.mockRejectedValueOnce(new Error("invalid_grant: redirect_uri mismatch"));
+
+    await expect(
+      runMcpOAuthLogin({
+        serverName: "Calendly",
+        serverUrl: "https://mcp.calendly.com/",
+        authorizationCode: "code-123",
+      }),
+    ).rejects.toThrow("redirect_uri mismatch");
+
+    expect(authMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not persist localhost when the fallback attempt fails", async () => {
+    await withTempHome(
+      async (home) => {
+        authMock.mockReset();
+        authMock
+          .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
+          .mockRejectedValueOnce(new Error("localhost redirect also rejected"));
+
+        await expect(
+          runMcpOAuthLogin({
+            serverName: "Calendly",
+            serverUrl: "https://mcp.calendly.com/",
+          }),
+        ).rejects.toThrow("localhost redirect also rejected");
+
+        await expect(fs.readdir(`${home}/.openclaw/mcp-oauth`)).rejects.toThrow();
+      },
+      {
+        prefix: "openclaw-mcp-oauth-localhost-failure-",
+        skipSessionCleanup: true,
+        env: {
+          OPENCLAW_CONFIG_PATH: undefined,
+          OPENCLAW_STATE_DIR: undefined,
+        },
+      },
+    );
+  });
+
+  it("persists localhost redirect for a later code exchange login", async () => {
+    await withTempHome(
+      async (home) => {
+        authMock.mockReset();
+        authMock
+          .mockRejectedValueOnce(new Error("invalid_client_metadata: redirect_uri rejected"))
+          .mockImplementationOnce(async (provider) => {
+            await provider.saveCodeVerifier?.("verifier");
+            return "REDIRECT";
+          });
+
+        await expect(
+          runMcpOAuthLogin({
+            serverName: "Calendly",
+            serverUrl: "https://mcp.calendly.com/",
+            onAuthorizationUrl: () => {},
+          }),
+        ).resolves.toBe("redirect");
+
+        const tokenDir = `${home}/.openclaw/mcp-oauth`;
+        const entries = await fs.readdir(tokenDir);
+        const store = JSON.parse(await fs.readFile(`${tokenDir}/${entries[0]}`, "utf-8")) as {
+          codeVerifier?: string;
+          redirectUrl?: string;
+        };
+        expect(store.redirectUrl).toBe("http://localhost:8989/oauth/callback");
+        expect(store.codeVerifier).toBe("verifier");
+
+        authMock.mockReset();
+        authMock.mockResolvedValueOnce("AUTHORIZED");
+        await runMcpOAuthLogin({
+          serverName: "Calendly",
+          serverUrl: "https://mcp.calendly.com/",
+          authorizationCode: "code-123",
+        });
+        expect(authMock.mock.calls[0]?.[0]?.clientMetadata.redirect_uris).toEqual([
+          "http://localhost:8989/oauth/callback",
+        ]);
+      },
+      {
+        prefix: "openclaw-mcp-oauth-localhost-persist-",
         skipSessionCleanup: true,
         env: {
           OPENCLAW_CONFIG_PATH: undefined,

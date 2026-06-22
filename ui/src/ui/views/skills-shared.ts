@@ -19,7 +19,14 @@ export function computeSkillReasons(skill: SkillStatusEntry): string[] {
   if (skill.blockedByAllowlist) {
     reasons.push("blocked by allowlist");
   }
+  if (skill.blockedByAgentFilter) {
+    reasons.push("blocked by agent filter");
+  }
   return reasons;
+}
+
+export function isSkillAvailable(skill: SkillStatusEntry): boolean {
+  return skill.eligible && !skill.blockedByAgentFilter;
 }
 
 export function renderSkillStatusChips(params: {
@@ -27,13 +34,14 @@ export function renderSkillStatusChips(params: {
   showBundledBadge?: boolean;
 }) {
   const skill = params.skill;
+  const available = isSkillAvailable(skill);
   const showBundledBadge = Boolean(params.showBundledBadge);
   return html`
     <div class="chip-row" style="margin-top: 6px;">
       <span class="chip">${skill.source}</span>
       ${showBundledBadge ? html` <span class="chip">bundled</span> ` : nothing}
-      <span class="chip ${skill.eligible ? "chip-ok" : "chip-warn"}">
-        ${skill.eligible ? "eligible" : "blocked"}
+      <span class="chip ${available ? "chip-ok" : "chip-warn"}">
+        ${available ? "eligible" : "blocked"}
       </span>
       ${skill.disabled ? html` <span class="chip chip-warn">disabled</span> ` : nothing}
     </div>

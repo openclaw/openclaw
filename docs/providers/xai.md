@@ -504,9 +504,10 @@ Legacy aliases still normalize to the canonical bundled ids:
       sign-in URL. xAI decides which accounts can receive OAuth API tokens, and
       the consent page may show Grok Build even though OpenClaw does not require
       the Grok Build app.
-    - `grok-4.20-multi-agent-experimental-beta-0304` is not supported on the
-      normal xAI provider path because it requires a different upstream API
-      surface than the standard OpenClaw xAI transport.
+    - OpenClaw does not currently expose the xAI multi-agent model family. xAI
+      serves these models through the Responses API, but they do not accept the
+      client-side or custom tools used by OpenClaw's shared agent loop. See the
+      [xAI multi-agent limitations](https://docs.x.ai/developers/model-capabilities/text/multi-agent#limitations).
     - xAI Realtime voice is not registered as an OpenClaw provider yet. It
       needs a different bidirectional voice session contract than batch STT or
       streaming transcription.

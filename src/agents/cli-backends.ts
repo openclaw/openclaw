@@ -19,6 +19,7 @@ import type {
   CliBundleMcpMode,
   CliBackendPlugin,
   CliBackendNativeToolMode,
+  CliBackendSideQuestionToolMode,
   PluginTextTransforms,
 } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
@@ -54,6 +55,7 @@ export type ResolvedCliBackend = {
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
+  sideQuestionToolMode?: CliBackendSideQuestionToolMode;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -89,6 +91,7 @@ type FallbackCliBackendPolicy = {
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
+  sideQuestionToolMode?: CliBackendSideQuestionToolMode;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -130,6 +133,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
     nativeToolMode: entry.backend.nativeToolMode,
+    sideQuestionToolMode: entry.backend.sideQuestionToolMode,
   };
 }
 
@@ -430,6 +434,7 @@ export function resolveCliBackendConfig(
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
       nativeToolMode: registered.nativeToolMode,
+      sideQuestionToolMode: registered.sideQuestionToolMode,
     };
   }
 
@@ -463,6 +468,7 @@ export function resolveCliBackendConfig(
       prepareExecution: fallbackPolicy.prepareExecution,
       resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
       nativeToolMode: fallbackPolicy.nativeToolMode,
+      sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
@@ -493,6 +499,7 @@ export function resolveCliBackendConfig(
     prepareExecution: fallbackPolicy?.prepareExecution,
     resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
     nativeToolMode: fallbackPolicy?.nativeToolMode,
+    sideQuestionToolMode: fallbackPolicy?.sideQuestionToolMode,
   };
 }
 

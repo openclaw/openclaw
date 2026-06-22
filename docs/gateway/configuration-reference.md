@@ -200,6 +200,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
       nodeManager: "npm", // npm | pnpm | yarn | bun
       allowUploadedArchives: false,
     },
+    workshop: {
+      allowSymlinkTargetWrites: false,
+    },
     entries: {
       "image-lab": {
         apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
@@ -216,6 +219,8 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `load.extraDirs`: extra shared skill roots (lowest precedence).
 - `load.allowSymlinkTargets`: trusted real target roots that skill symlinks may
   resolve into when the link lives outside its configured source root.
+- `workshop.allowSymlinkTargetWrites`: allows Skill Workshop apply to write
+  through already-trusted symlink targets (default: false).
 - `install.preferBrew`: when true, prefer Homebrew installers when `brew` is
   available before falling back to other installer kinds.
 - `install.nodeManager`: node installer preference for `metadata.openclaw.install`
@@ -335,7 +340,7 @@ session establishment, not on every turn; use `/new`, `/reset`, or a gateway
 restart after changing native plugin config.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
-  - `apiKey`: Firecrawl API key (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
+  - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey`, legacy `tools.web.fetch.firecrawl.apiKey`, or `FIRECRAWL_API_KEY` env var.
   - `baseUrl`: Firecrawl API base URL (default: `https://api.firecrawl.dev`; self-hosted overrides must target private/internal endpoints).
   - `onlyMainContent`: extract only the main content from pages (default: `true`).
   - `maxAgeMs`: maximum cache age in milliseconds (default: `172800000` / 2 days).
@@ -442,12 +447,17 @@ See [Inferred commitments](/concepts/commitments).
   the selected host or through a connected browser node.
 - `existing-session` profiles can set `userDataDir` to target a specific
   Chromium-based browser profile such as Brave or Edge.
+- `existing-session` profiles can set `cdpUrl` when Chrome is already running
+  behind a DevTools HTTP(S) discovery endpoint or direct WS(S) endpoint. In that
+  mode OpenClaw passes the endpoint to Chrome MCP instead of using auto-connect;
+  `userDataDir` is ignored for Chrome MCP launch arguments.
 - `existing-session` profiles keep the current Chrome MCP route limits:
   snapshot/ref-driven actions instead of CSS-selector targeting, one-file upload
   hooks, no dialog timeout overrides, no `wait --load networkidle`, and no
   `responsebody`, PDF export, download interception, or batch actions.
-- Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; only
-  set `cdpUrl` explicitly for remote CDP.
+- Local managed `openclaw` profiles auto-assign `cdpPort` and `cdpUrl`; set
+  `cdpUrl` explicitly only for remote CDP profiles or existing-session endpoint
+  attach.
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.
@@ -1086,6 +1096,7 @@ Notes:
       traces: true,
       metrics: true,
       logs: false,
+      logsExporter: "otlp",
       sampleRate: 1.0,
       flushIntervalMs: 5000,
       captureContent: {
@@ -1122,6 +1133,7 @@ Notes:
 - `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
 - `otel.serviceName`: service name for resource attributes.
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
+- `otel.logsExporter`: log export sink: `"otlp"` (default), `"stdout"` for one JSON object per stdout line, or `"both"`.
 - `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, `systemPrompt`, and `toolDefinitions` explicitly.

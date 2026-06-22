@@ -43,7 +43,7 @@ export type PostCoreConvergenceResult = {
   installRecords: Record<string, PluginInstallRecord>;
 };
 
-const REPAIR_GUIDANCE = "Run `openclaw doctor --fix` to retry plugin repair.";
+const REPAIR_GUIDANCE = "Run `openclaw update repair` to retry plugin repair.";
 const inspectGuidance = (pluginId: string) =>
   `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`;
 

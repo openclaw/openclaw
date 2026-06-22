@@ -1531,7 +1531,7 @@ async function tryTerminateExecutionViaCdp(opts: {
       id?: string;
       webSocketDebuggerUrl?: string;
     }>
-  >(listUrl, 2000).catch(() => null);
+  >(listUrl, 2000, undefined, opts.ssrfPolicy).catch(() => null);
   if (!pages || pages.length === 0) {
     return;
   }
@@ -1543,6 +1543,7 @@ async function tryTerminateExecutionViaCdp(opts: {
     return;
   }
   const wsUrl = normalizeCdpWsUrl(wsUrlRaw, cdpHttpBase);
+  await assertCdpEndpointAllowed(wsUrl, opts.ssrfPolicy);
   const needsAttach = cdpSocketNeedsAttach(wsUrl);
 
   const runWithTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {

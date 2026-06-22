@@ -1,3 +1,7 @@
+import {
+  type NativeWebSearchToolPolicyParams,
+  isNativeWebSearchAllowedByToolPolicy,
+} from "../../agents/codex-native-web-search-core.js";
 /**
  * Resolves model extra parameters and transport overrides for embedded agents.
  */
@@ -162,7 +166,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   seed?: number;
   stop?: string[];
 };
-export type SupportedTransport = AgentRuntimeTransport;
+type SupportedTransport = AgentRuntimeTransport;
 
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
@@ -280,7 +284,10 @@ export function resolvePreparedExtraParams(params: {
     canonicalizeOpenRouterResponseCacheParams(merged, [resolvedExtraParams, override]);
   }
   const cfg = params.cfg;
-  const cacheKey = cfg ? resolvePreparedExtraParamsCacheKey(params) : undefined;
+  const cacheKey =
+    cfg && !hasFunctionExtraParamValue(params.extraParamsOverride)
+      ? resolvePreparedExtraParamsCacheKey(params)
+      : undefined;
   if (cacheKey) {
     const cached = preparedExtraParamsCache.get(cfg!)?.get(cacheKey);
     if (cached) {
@@ -367,6 +374,10 @@ function hasRequestScopedExtraParams(value: Record<string, unknown> | undefined)
     return false;
   }
   return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
+}
+
+function hasFunctionExtraParamValue(value: Record<string, unknown> | undefined): boolean {
+  return Boolean(value && Object.values(value).some((item) => typeof item === "function"));
 }
 function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
   provider: string;
@@ -1043,7 +1054,10 @@ export function applyExtraParamsToAgent(
   model?: ProviderRuntimeModel,
   agentDir?: string,
   resolvedTransport?: SupportedTransport,
-  options?: { preparedExtraParams?: Record<string, unknown> },
+  options?: {
+    preparedExtraParams?: Record<string, unknown>;
+    nativeWebSearchPolicyContext?: NativeWebSearchToolPolicyParams;
+  },
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -1089,6 +1103,15 @@ export function applyExtraParamsToAgent(
   };
 
   const providerStreamBase = agent.streamFn;
+  const nativeWebSearchAllowedByToolPolicy = options?.nativeWebSearchPolicyContext
+    ? isNativeWebSearchAllowedByToolPolicy({
+        config: cfg,
+        modelProvider: model?.provider,
+        modelId: model?.id,
+        agentId,
+        ...options.nativeWebSearchPolicyContext,
+      })
+    : undefined;
   const pluginWrappedStreamFn = providerRuntimeDeps.wrapProviderStreamFn({
     provider,
     config: cfg,
@@ -1096,6 +1119,8 @@ export function applyExtraParamsToAgent(
       config: cfg,
       agentDir,
       workspaceDir,
+      agentId,
+      nativeWebSearchAllowedByToolPolicy,
       provider,
       modelId,
       extraParams: effectiveExtraParams,
@@ -1117,4 +1142,3 @@ export function applyExtraParamsToAgent(
 
   return { effectiveExtraParams };
 }
-export { testing as __testing };

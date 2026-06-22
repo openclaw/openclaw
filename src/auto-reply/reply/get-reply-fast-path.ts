@@ -178,6 +178,7 @@ export function buildFastReplyCommandContext(params: {
     surface,
     channel,
     channelId: normalizeAnyChannelId(channel) ?? normalizeAnyChannelId(surface) ?? undefined,
+    accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: [],
     senderIsOwner: false,
     isAuthorizedSender: commandAuthorized,

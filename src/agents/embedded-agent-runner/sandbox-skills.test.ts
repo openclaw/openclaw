@@ -96,7 +96,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
   });
 
   it("rebuilds sandbox prompts from materialized skill paths", async () => {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
     try {
       const effectiveWorkspace = path.join(root, "workspace");
       const materializedWorkspace = path.join(root, "state", "sandbox-skills");
@@ -160,7 +160,9 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       });
 
       expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
-      expect(prompt.replaceAll("\\", "/")).not.toContain(materializedWorkspace.replaceAll("\\", "/"));
+      expect(prompt.replaceAll("\\", "/")).not.toContain(
+        materializedWorkspace.replaceAll("\\", "/"),
+      );
       expect(prompt).not.toContain(hostSkillPath);
       expect(prompt).not.toContain("plugin-skills");
       expect(prompt.replaceAll("\\", "/")).not.toContain("/skills/canvas/SKILL.md");

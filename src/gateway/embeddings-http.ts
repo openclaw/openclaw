@@ -24,11 +24,13 @@ import type {
 } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson } from "./http-common.js";
+import { sendJson, sendMissingScopeForbidden } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   OPENCLAW_MODEL_ID,
+  authorizeOpenAiCompatibleHttpModelOverride,
   getHeader,
+  isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveAgentIdFromModel,
   resolveOpenAiCompatibleHttpOperatorScopes,
@@ -252,6 +254,11 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   if (!handled) {
     return true;
   }
+  const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
+  if (!modelOverrideAuth.allowed) {
+    sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
+    return true;
+  }
 
   const payload = coerceRequest(handled.body);
   const requestModel = normalizeOptionalString(payload.model) ?? "";
@@ -291,7 +298,18 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const agentId = resolveAgentIdForRequest({ req, model: requestModel });
+  let agentId: string;
+  try {
+    agentId = resolveAgentIdForRequest({ req, model: requestModel });
+  } catch (err) {
+    if (isUnknownGatewayAgentError(err)) {
+      sendJson(res, 400, {
+        error: { message: err.message, type: "invalid_request_error" },
+      });
+      return true;
+    }
+    throw err;
+  }
   const agentDir = resolveAgentDir(cfg, agentId);
   const memorySearch = resolveMemorySearchConfig(cfg, agentId);
   const configuredProvider = memorySearch?.provider ?? "openai";

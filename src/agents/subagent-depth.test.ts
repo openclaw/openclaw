@@ -5,9 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
+import { resolveAgentTimeoutMs } from "./timeout.js";
 
 describe("getSubagentDepthFromSessionStore", () => {
   it("uses spawnDepth from the session store when available", () => {
@@ -77,13 +76,48 @@ describe("getSubagentDepthFromSessionStore", () => {
     const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
     const prefixedKey = "agent:main:subagent:flat";
     const storePath = storeTemplate.replaceAll("{agentId}", "main");
-    writeSessionStoreForTest(storePath, {
-      [prefixedKey]: {
-        sessionId: "subagent-flat",
-        updatedAt: Date.now(),
-        spawnDepth: 2,
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          [prefixedKey]: {
+            sessionId: "subagent-flat",
+            updatedAt: Date.now(),
+            spawnDepth: 2,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const depth = getSubagentDepthFromSessionStore("subagent:flat", {
+      cfg: {
+        session: {
+          store: storeTemplate,
+        },
       },
     });
+
+    expect(depth).toBe(2);
+  });
+
+  it("accepts JSON5 syntax in the on-disk depth store for backward compatibility", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-depth-json5-"));
+    const storeTemplate = path.join(tmpDir, "sessions-{agentId}.json");
+    const storePath = storeTemplate.replaceAll("{agentId}", "main");
+    fs.writeFileSync(
+      storePath,
+      `{
+        // hand-edited legacy store
+        "agent:main:subagent:flat": {
+          sessionId: "subagent-flat",
+          spawnDepth: 2,
+        },
+      }`,
+      "utf-8",
+    );
 
     const depth = getSubagentDepthFromSessionStore("subagent:flat", {
       cfg: {
@@ -109,7 +143,6 @@ describe("getSubagentDepthFromSessionStore", () => {
 
 describe("resolveAgentTimeoutMs", () => {
   it("defaults to 48 hours when config does not override the timeout", () => {
-    expect(resolveAgentTimeoutSeconds()).toBe(48 * 60 * 60);
     expect(resolveAgentTimeoutMs({})).toBe(48 * 60 * 60 * 1000);
   });
 

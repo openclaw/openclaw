@@ -2,14 +2,10 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
+  DEFAULT_GROUP_PROMPT,
   resolveGroupConfig,
-  resolveGroupName,
-  resolveGroupPrompt,
   resolveGroupSettings,
-  resolveHistoryLimit,
-  resolveIgnoreOtherMentions,
   resolveMentionPatterns,
-  resolveRequireMention,
 } from "./group.js";
 
 describe("engine/config/group", () => {
@@ -70,7 +66,7 @@ describe("engine/config/group", () => {
           qqbot: { appId: "1", groups: { "*": { historyLimit: -3.7 } } },
         },
       };
-      expect(resolveHistoryLimit(cfg, "G")).toBe(0);
+      expect(resolveGroupConfig(cfg, "G").historyLimit).toBe(0);
     });
 
     it("non-finite historyLimit falls back to default", () => {
@@ -79,7 +75,63 @@ describe("engine/config/group", () => {
           qqbot: { appId: "1", groups: { "*": { historyLimit: "not a number" } } },
         },
       };
-      expect(resolveHistoryLimit(cfg, "G")).toBe(DEFAULT_GROUP_HISTORY_LIMIT);
+      expect(resolveGroupConfig(cfg, "G").historyLimit).toBe(DEFAULT_GROUP_HISTORY_LIMIT);
+    });
+
+    describe("account-level defaultRequireMention layer", () => {
+      it("uses hardcoded true when nothing configured (default account)", () => {
+        const cfg = { channels: { qqbot: { appId: "1" } } };
+        expect(resolveGroupConfig(cfg, "G1").requireMention).toBe(true);
+      });
+
+      it("reads defaultRequireMention from top-level qqbot (default account)", () => {
+        const cfg = {
+          channels: { qqbot: { appId: "1", defaultRequireMention: false } },
+        };
+        expect(resolveGroupConfig(cfg, "G1").requireMention).toBe(false);
+      });
+
+      it("reads defaultRequireMention from named account config", () => {
+        const cfg = {
+          channels: {
+            qqbot: {
+              accounts: { bot2: { appId: "9", defaultRequireMention: false } },
+            },
+          },
+        };
+        expect(resolveGroupConfig(cfg, "G1", "bot2").requireMention).toBe(false);
+      });
+
+      it("wildcard overrides account-level defaultRequireMention", () => {
+        const cfg = {
+          channels: {
+            qqbot: {
+              appId: "1",
+              defaultRequireMention: false,
+              groups: { "*": { requireMention: true } },
+            },
+          },
+        };
+        // wildcard requireMention=true wins over account-level defaultRequireMention=false
+        expect(resolveGroupConfig(cfg, "G1").requireMention).toBe(true);
+      });
+
+      it("specific group config has highest priority", () => {
+        const cfg = {
+          channels: {
+            qqbot: {
+              appId: "1",
+              defaultRequireMention: false,
+              groups: {
+                "*": { requireMention: true },
+                SPECIAL_GROUP: { requireMention: false },
+              },
+            },
+          },
+        };
+        expect(resolveGroupConfig(cfg, "SPECIAL_GROUP").requireMention).toBe(false);
+        expect(resolveGroupConfig(cfg, "OTHER_GROUP").requireMention).toBe(true); // wildcard
+      });
     });
   });
 
@@ -97,27 +149,28 @@ describe("engine/config/group", () => {
           },
         },
       };
-      expect(resolveRequireMention(cfg, "G", "bot2")).toBe(false);
-      expect(resolveHistoryLimit(cfg, "G", "bot2")).toBe(7);
+      const resolved = resolveGroupConfig(cfg, "G", "bot2");
+      expect(resolved.requireMention).toBe(false);
+      expect(resolved.historyLimit).toBe(7);
     });
   });
 
-  describe("resolveGroupName", () => {
+  describe("resolveGroupSettings name", () => {
     it("uses the first 8 chars of openid when name is unset", () => {
-      expect(resolveGroupName({}, "ABCDEFGH1234")).toBe("ABCDEFGH");
+      expect(resolveGroupSettings({ cfg: {}, groupOpenid: "ABCDEFGH1234" }).name).toBe("ABCDEFGH");
     });
 
     it("prefers the configured name", () => {
       const cfg = {
         channels: { qqbot: { appId: "1", groups: { ABCDEFGH1234: { name: "Foo" } } } },
       };
-      expect(resolveGroupName(cfg, "ABCDEFGH1234")).toBe("Foo");
+      expect(resolveGroupSettings({ cfg, groupOpenid: "ABCDEFGH1234" }).name).toBe("Foo");
     });
   });
 
-  describe("resolveGroupPrompt", () => {
+  describe("resolveGroupConfig prompt", () => {
     it("returns the default prompt when nothing configured", () => {
-      expect(resolveGroupPrompt({}, "G")).toContain("bot");
+      expect(resolveGroupConfig({}, "G").prompt ?? DEFAULT_GROUP_PROMPT).toContain("bot");
     });
 
     it("prefers specific over wildcard", () => {
@@ -129,21 +182,21 @@ describe("engine/config/group", () => {
           },
         },
       };
-      expect(resolveGroupPrompt(cfg, "G1")).toBe("SPEC");
-      expect(resolveGroupPrompt(cfg, "G2")).toBe("WILD");
+      expect(resolveGroupConfig(cfg, "G1").prompt).toBe("SPEC");
+      expect(resolveGroupConfig(cfg, "G2").prompt).toBe("WILD");
     });
   });
 
-  describe("resolveIgnoreOtherMentions", () => {
+  describe("resolveGroupConfig ignoreOtherMentions", () => {
     it("defaults to false", () => {
-      expect(resolveIgnoreOtherMentions({}, "G")).toBe(false);
+      expect(resolveGroupConfig({}, "G").ignoreOtherMentions).toBe(false);
     });
 
     it("honours wildcard override", () => {
       const cfg = {
         channels: { qqbot: { appId: "1", groups: { "*": { ignoreOtherMentions: true } } } },
       };
-      expect(resolveIgnoreOtherMentions(cfg, "G")).toBe(true);
+      expect(resolveGroupConfig(cfg, "G").ignoreOtherMentions).toBe(true);
     });
   });
 

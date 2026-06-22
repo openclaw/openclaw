@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
+import { requestFeishuApi } from "./comment-shared.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -295,32 +296,44 @@ export class FeishuStreamingSession {
     const sendOptions = options ?? {};
     const sendMode = resolveStreamingCardSendMode(sendOptions);
     if (sendMode === "reply") {
-      sendRes = await this.client.im.message.reply({
-        path: { message_id: sendOptions.replyToMessageId! },
-        data: {
-          msg_type: "interactive",
-          content: cardContent,
-          ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
-        },
-      });
+      sendRes = await requestFeishuApi(
+        () =>
+          this.client.im.message.reply({
+            path: { message_id: sendOptions.replyToMessageId! },
+            data: {
+              msg_type: "interactive",
+              content: cardContent,
+              ...(sendOptions.replyInThread ? { reply_in_thread: true } : {}),
+            },
+          }),
+        "Send card failed",
+      );
     } else if (sendMode === "root_create") {
       // root_id is undeclared in the SDK types but accepted at runtime
-      sendRes = await this.client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: Object.assign(
-          { receive_id: receiveId, msg_type: "interactive", content: cardContent },
-          { root_id: sendOptions.rootId },
-        ),
-      });
+      sendRes = await requestFeishuApi(
+        () =>
+          this.client.im.message.create({
+            params: { receive_id_type: receiveIdType },
+            data: Object.assign(
+              { receive_id: receiveId, msg_type: "interactive", content: cardContent },
+              { root_id: sendOptions.rootId },
+            ),
+          }),
+        "Send card failed",
+      );
     } else {
-      sendRes = await this.client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          msg_type: "interactive",
-          content: cardContent,
-        },
-      });
+      sendRes = await requestFeishuApi(
+        () =>
+          this.client.im.message.create({
+            params: { receive_id_type: receiveIdType },
+            data: {
+              receive_id: receiveId,
+              msg_type: "interactive",
+              content: cardContent,
+            },
+          }),
+        "Send card failed",
+      );
     }
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
       throw new Error(`Send card failed: ${sendRes.msg}`);

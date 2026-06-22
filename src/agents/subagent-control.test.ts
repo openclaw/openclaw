@@ -4,10 +4,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTest,
-} from "../config/sessions/test-helpers.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
@@ -128,9 +124,9 @@ function setSubagentControlDepsForTest(
       storePath: string,
       mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
     ) => {
-      const store = readSessionStoreForTest(storePath);
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, SessionEntry>;
       const result = await mutator(store);
-      writeSessionStoreForTest(storePath, store);
+      fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
       return result;
     },
     ...overrides,
@@ -161,7 +157,7 @@ function cfgWithSessionStore(storePath = nextSessionStorePath("sessions")): Open
 
 function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
   const storePath = nextSessionStorePath(label);
-  writeSessionStoreForTest(storePath, store);
+  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
   return storePath;
 }
 
@@ -715,7 +711,10 @@ describe("killControlledSubagentRun", () => {
       label: "stale task",
       text: "stale task is already finished.",
     });
-    const persisted = readSessionStoreForTest<{ abortedLastRun?: boolean }>(storePath);
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+      string,
+      { abortedLastRun?: boolean }
+    >;
     expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current");
   });
@@ -963,7 +962,10 @@ describe("killAllControlledSubagentRuns", () => {
       killed: 0,
       labels: [],
     });
-    const persisted = readSessionStoreForTest<{ abortedLastRun?: boolean }>(storePath);
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
+      string,
+      { abortedLastRun?: boolean }
+    >;
     expect(persisted[childSessionKey]?.abortedLastRun).toBeUndefined();
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current-bulk");
   });

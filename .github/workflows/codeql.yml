@@ -32,8 +32,8 @@ on:
     - cron: "0 6 * * *"
 
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -101,12 +101,12 @@ jobs:
             .github/codeql
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
+        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           languages: ${{ matrix.language }}
           config-file: ${{ matrix.config_file }}
 
       - name: Analyze
-        uses: github/codeql-action/analyze@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4
+        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
         with:
           category: "/codeql-security-high/${{ matrix.category }}"

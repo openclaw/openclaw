@@ -93,24 +93,21 @@ describe("listThinkingLevels", () => {
 
   it("includes xhigh for provider-advertised models", () => {
     providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      (provider === "openai" && ["gpt-5.4", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
       (provider === "openai" &&
         ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
-      (provider === "github-copilot" && ["gpt-5.4", "gpt-5.4"].includes(context.modelId))
+      (provider === "github-copilot" && context.modelId === "gpt-5.4")
         ? true
         : undefined,
     );
 
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.3-codex-spark")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
-    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
+    for (const [provider, model] of [
+      ["openai", "gpt-5.4"],
+      ["openai", "gpt-5.4-pro"],
+      ["openai", "gpt-5.3-codex-spark"],
+      ["github-copilot", "gpt-5.4"],
+    ] as const) {
+      expect(listThinkingLevels(provider, model)).toContain("xhigh");
+    }
   });
 
   it("excludes xhigh for non-codex models", () => {
@@ -285,6 +282,241 @@ describe("listThinkingLevels", () => {
     ).toBe("low");
   });
 
+  it("uses canonical Fable params when no provider thinking profile exists", () => {
+    const catalog = [
+      {
+        provider: "microsoft-foundry",
+        id: "company-fable",
+        api: "anthropic-messages",
+        reasoning: false,
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    ];
+
+    expect(listThinkingLevels("microsoft-foundry", "company-fable", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "adaptive",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "microsoft-foundry",
+        model: "company-fable",
+        catalog,
+      }),
+    ).toBe("high");
+  });
+
+  it("exposes Claude Opus xhigh on custom anthropic-messages providers without a plugin profile", () => {
+    // Regression for openclaw#91975: a renamed provider serving Claude Opus over
+    // anthropic-messages used to fall back to a base profile (no xhigh) and silently
+    // clamp `--thinking xhigh` to `off`.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-opus-4.7-hq",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-opus-4.7-hq", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "adaptive",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "jdcloud-anthropic",
+        model: "claude-opus-4.7-hq",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "jdcloud-anthropic",
+        model: "claude-opus-4.7-hq",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe("xhigh");
+  });
+
+  it("does not invent xhigh for non-Claude models on anthropic-messages routes", () => {
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "some-non-claude-model",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "some-non-claude-model", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("intentionally suppresses compat-driven xhigh for non-Claude anthropic-messages rows", () => {
+    // Even when the catalog explicitly advertises xhigh via compat, a non-Claude
+    // model on the anthropic-messages transport stays on the Claude base set.
+    // The transport itself doesn't carry a generic xhigh contract — only Claude
+    // families do — so the catalog signal is intentionally suppressed here.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "some-non-claude-model",
+        api: "anthropic-messages",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "some-non-claude-model", catalog)).not.toContain(
+      "xhigh",
+    );
+  });
+
+  it("does not infer the Claude profile without an anthropic-messages catalog row", () => {
+    // Same provider id, but the catalog row says openai-completions — must NOT
+    // grant Claude levels to a non-Anthropic transport.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-opus-4.7-hq",
+        api: "openai-completions",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-opus-4.7-hq", catalog)).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+    ]);
+  });
+
+  it("matches native Anthropic max parity for adaptive Claude on custom anthropic-messages providers", () => {
+    // Adaptive Claude families (e.g. claude-sonnet-4-6) take the adaptive-default
+    // branch in resolveClaudeThinkingProfile, which only exposes `max` when
+    // includeNativeMax is set. The fallback must pass the same option the
+    // bundled anthropic plugin uses, otherwise custom providers silently lose
+    // `max` parity with the native Anthropic policy.
+    const catalog = [
+      {
+        provider: "jdcloud-anthropic",
+        id: "claude-sonnet-4-6",
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+    ];
+
+    expect(listThinkingLevels("jdcloud-anthropic", "claude-sonnet-4-6", catalog)).toContain("max");
+    expect(
+      isThinkingLevelSupported({
+        provider: "jdcloud-anthropic",
+        model: "claude-sonnet-4-6",
+        level: "max",
+        catalog,
+      }),
+    ).toBe(true);
+  });
+
+  it("preserves provider-specific profiles for Fable Messages routes", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }],
+      defaultLevel: "off",
+    });
+
+    expect(
+      listThinkingLevels("proxy", "company-fable", [
+        {
+          provider: "proxy",
+          id: "company-fable",
+          api: "anthropic-messages",
+          reasoning: true,
+          params: { canonicalModelId: "claude-fable-5" },
+        },
+      ]),
+    ).toEqual(["off", "low"]);
+  });
+
+  it("does not infer the Fable contract without an Anthropic Messages catalog row", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }],
+      defaultLevel: "off",
+    });
+
+    expect(listThinkingLevels("openrouter", "anthropic/claude-fable-5")).toEqual(["off", "low"]);
+  });
+
+  it("does not apply the Fable profile to OpenAI-compatible catalog rows", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "high" }],
+      defaultLevel: "off",
+    });
+
+    expect(
+      listThinkingLevels("openrouter", "anthropic/claude-fable-5", [
+        {
+          provider: "openrouter",
+          id: "anthropic/claude-fable-5",
+          api: "openai-completions",
+          reasoning: true,
+        },
+      ]),
+    ).toEqual(["off", "low", "high"]);
+  });
+
+  it("preserves explicit provider opt-outs for canonical Fable aliases", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }],
+      defaultLevel: "off",
+    });
+    const catalog = [
+      {
+        provider: "claude-cli",
+        id: "company-fable",
+        api: "anthropic-messages",
+        reasoning: true,
+        params: { canonicalModelId: "claude-fable-5" },
+      },
+    ];
+
+    expect(listThinkingLevels("claude-cli", "company-fable", catalog)).toEqual(["off"]);
+  });
+
+  it("uses generic thinking levels when a provider has no custom profile", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(null);
+
+    expect(
+      listThinkingLevels("vllm", "reasoning-model", [
+        {
+          provider: "vllm",
+          id: "reasoning-model",
+          reasoning: true,
+        },
+      ]),
+    ).toEqual(["off", "minimal", "low", "medium", "high"]);
+  });
+
   it("matches provider-qualified catalog ids for provider thinking profiles", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
       context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
@@ -364,6 +596,32 @@ describe("listThinkingLevels", () => {
         provider: "demo",
         model: "demo-model",
         level: "max",
+      }),
+    ).toBe("high");
+  });
+
+  it("maps xhigh to high for provider profiles with max but no xhigh", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "anthropic"
+        ? {
+            levels: [
+              { id: "off" },
+              { id: "minimal" },
+              { id: "low" },
+              { id: "medium" },
+              { id: "high" },
+              { id: "adaptive" },
+              { id: "max" },
+            ],
+          }
+        : undefined,
+    );
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        level: "xhigh",
       }),
     ).toBe("high");
   });
@@ -507,6 +765,27 @@ describe("resolveThinkingDefaultForModel", () => {
         provider: "openai",
         model: "gpt-4.1-mini",
         catalog: [{ provider: "openai", id: "gpt-4.1-mini", reasoning: false }],
+      }),
+    ).toBe("off");
+  });
+
+  it("respects provider-declared 'off' default for reasoning-capable models", () => {
+    // Providers like Ollama declare defaultLevel:"off" even for reasoning=true models
+    // because thinking must be explicitly opted in, not activated by the global default.
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "ollama"
+        ? {
+            levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+            defaultLevel: "off",
+          }
+        : undefined,
+    );
+
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "ollama",
+        model: "gemma4",
+        catalog: [{ provider: "ollama", id: "gemma4", reasoning: true }],
       }),
     ).toBe("off");
   });

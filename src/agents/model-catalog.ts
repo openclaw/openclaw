@@ -3,6 +3,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveClaudeFable5ModelIdentity } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -24,6 +25,11 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
+import {
+  buildAgentModelCatalogCacheKey,
+  readCachedAgentModelCatalog,
+  writeCachedAgentModelCatalog,
+} from "./model-catalog-state-cache.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { resolveModelWorkspaceDir } from "./model-discovery-context.js";
 import {
@@ -35,7 +41,10 @@ import {
   buildConfiguredModelCatalog,
   hasConfiguredProviderModelRows,
 } from "./model-selection-shared.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import {
+  buildModelsJsonSourceFingerprint,
+  prepareOpenClawModelsJsonSource,
+} from "./models-config.js";
 import {
   filterGeneratedPluginModelCatalogProviders,
   listPluginModelCatalogFiles,
@@ -56,16 +65,22 @@ type DiscoveredModel = {
   id: string;
   name?: string;
   provider: string;
+  api?: ModelCatalogEntry["api"];
   contextWindow?: number;
   contextTokens?: number;
   reasoning?: boolean;
   input?: ModelInputType[];
+  params?: ModelCatalogEntry["params"];
   compat?: ModelCatalogEntry["compat"];
+  baseUrl?: string;
 };
 
 type AgentDiscoveryModule = typeof import("./agent-model-discovery.js");
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
+let loadedModelCatalogSnapshot: ModelCatalogEntry[] | undefined;
+let loadedModelCatalogGeneration = -1;
+let modelCatalogGeneration = 0;
 let hasLoggedModelCatalogError = false;
 let hasLoggedReadOnlyStaticCatalogError = false;
 type ManifestModelCatalogCacheEntry = {
@@ -73,6 +88,25 @@ type ManifestModelCatalogCacheEntry = {
   rows: ModelCatalogEntry[];
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
+
+function buildLoadModelCatalogStateCacheKey(params: {
+  agentDir: string;
+  config: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  sourceFingerprint: string;
+  workspaceDir?: string;
+}): string {
+  return buildAgentModelCatalogCacheKey({
+    agentDir: params.agentDir,
+    cacheScope: {
+      source: "load-model-catalog",
+      sourceFingerprint: params.sourceFingerprint,
+    },
+    config: params.config,
+    metadataSnapshot: params.metadataSnapshot,
+    workspaceDir: params.workspaceDir,
+  });
+}
 const defaultImportAgentDiscovery = () => import("./agent-model-discovery.js");
 let importAgentDiscovery = defaultImportAgentDiscovery;
 const modelSuppressionLoader = createLazyImportLoader(
@@ -96,6 +130,7 @@ function loadProviderApiKeyResolver() {
 
 export function resetModelCatalogCache() {
   modelCatalogPromise = null;
+  modelCatalogGeneration += 1;
   manifestModelCatalogCache = new WeakMap();
   hasLoggedModelCatalogError = false;
   hasLoggedReadOnlyStaticCatalogError = false;
@@ -103,6 +138,8 @@ export function resetModelCatalogCache() {
 
 export function resetModelCatalogCacheForTest() {
   resetModelCatalogCache();
+  loadedModelCatalogSnapshot = undefined;
+  loadedModelCatalogGeneration = -1;
   importAgentDiscovery = defaultImportAgentDiscovery;
 }
 
@@ -132,18 +169,44 @@ function mergeCatalogCompat(
   return { ...base, ...override };
 }
 
+function mergeCatalogParams(
+  base: ModelCatalogEntry["params"] | undefined,
+  override: ModelCatalogEntry["params"] | undefined,
+): ModelCatalogEntry["params"] | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  return { ...base, ...override };
+}
+
 function overlayCatalogMetadata(
   base: ModelCatalogEntry,
   overlay: ModelCatalogEntry,
 ): ModelCatalogEntry {
+  const params = mergeCatalogParams(base.params, overlay.params);
   return {
     ...base,
+    ...(overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
+    ...(params ? { params } : {}),
     compat: mergeCatalogCompat(base.compat, overlay.compat),
   };
+}
+
+function normalizeCatalogEntryContract(entry: ModelCatalogEntry): ModelCatalogEntry {
+  if (
+    entry.api === "anthropic-messages" &&
+    resolveClaudeFable5ModelIdentity({ id: entry.id, params: entry.params })
+  ) {
+    return { ...entry, reasoning: true };
+  }
+  return entry;
 }
 
 function mergeCatalogEntries(models: ModelCatalogEntry[], entries: ModelCatalogEntry[]): void {
@@ -233,7 +296,7 @@ export function loadManifestModelCatalog(params: {
 }
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return entries.toSorted((a, b) => {
+  return entries.map(normalizeCatalogEntryContract).toSorted((a, b) => {
     const p = a.provider.localeCompare(b.provider);
     if (p !== 0) {
       return p;
@@ -246,6 +309,7 @@ function normalizePersistedModelCatalogEntry(
   providerRaw: string,
   entry: Record<string, unknown>,
   defaults?: {
+    api?: ModelCatalogEntry["api"];
     contextWindow?: number;
     contextTokens?: number;
   },
@@ -276,6 +340,8 @@ function normalizePersistedModelCatalogEntry(
         ? defaults.contextTokens
         : undefined;
   const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : false;
+  const api =
+    typeof entry?.api === "string" ? (entry.api as ModelCatalogEntry["api"]) : defaults?.api;
   const parsedInput = Array.isArray(entry?.input)
     ? entry.input.filter((value): value is ModelInputType =>
         ["text", "image", "audio", "video", "document"].includes(String(value)),
@@ -286,14 +352,20 @@ function normalizePersistedModelCatalogEntry(
     entry?.compat && typeof entry.compat === "object"
       ? (entry.compat as ModelCatalogEntry["compat"])
       : undefined;
+  const modelParams =
+    entry?.params && typeof entry.params === "object"
+      ? (entry.params as ModelCatalogEntry["params"])
+      : undefined;
   return {
     id,
     name,
     provider,
+    ...(api ? { api } : {}),
     contextWindow,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     reasoning,
     input,
+    ...(modelParams ? { params: modelParams } : {}),
     compat,
   };
 }
@@ -375,11 +447,16 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
       typeof providerConfig?.contextTokens === "number" && providerConfig.contextTokens > 0
         ? providerConfig.contextTokens
         : undefined;
+    const providerApi =
+      typeof providerConfig?.api === "string"
+        ? (providerConfig.api as ModelCatalogEntry["api"])
+        : undefined;
     for (const entry of providerConfig.models as Record<string, unknown>[]) {
       const normalized = normalizePersistedModelCatalogEntry(
         providerRaw,
         entry,
         {
+          api: providerApi,
           contextWindow: providerContextWindow,
           contextTokens: providerContextTokens,
         },
@@ -471,9 +548,15 @@ function loadReadOnlyStaticModelCatalog(params?: {
 export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
+  cacheOnly?: boolean;
   readOnly?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogEntry[]> {
+  if (params?.cacheOnly === true) {
+    return loadedModelCatalogGeneration === modelCatalogGeneration
+      ? (loadedModelCatalogSnapshot ?? [])
+      : [];
+  }
   const readOnly = params?.readOnly === true;
   if (readOnly) {
     try {
@@ -486,6 +569,7 @@ export async function loadModelCatalog(params?: {
   }
   if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
+    modelCatalogGeneration += 1;
   }
   const useSharedCache = !readOnly && !params?.metadataSnapshot;
   if (useSharedCache && modelCatalogPromise) {
@@ -523,15 +607,57 @@ export async function loadModelCatalog(params?: {
         manifestPlugins ??= getManifestMetadataSnapshot().plugins;
         return manifestPlugins;
       };
+      const agentDir = resolveDefaultAgentDir(cfg);
+      const sourceFingerprint = await buildModelsJsonSourceFingerprint(cfg, agentDir, {
+        pluginMetadataSnapshot: params?.metadataSnapshot,
+        workspaceDir,
+      });
+      let catalogKey = buildLoadModelCatalogStateCacheKey({
+        agentDir,
+        config: cfg,
+        metadataSnapshot: params?.metadataSnapshot,
+        sourceFingerprint: sourceFingerprint.fingerprint,
+        workspaceDir,
+      });
+      if (!readOnly && params?.useCache !== false) {
+        const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
+          | ModelCatalogEntry[]
+          | undefined;
+        if (cached?.length) {
+          logStage("state-cache-hit", `entries=${cached.length}`);
+          return cached;
+        }
+      }
       if (!readOnly) {
-        await ensureOpenClawModelsJson(cfg);
+        const preparedSource = await prepareOpenClawModelsJsonSource(cfg, agentDir, {
+          pluginMetadataSnapshot: params?.metadataSnapshot,
+          workspaceDir,
+        });
+        const preparedCatalogKey = buildLoadModelCatalogStateCacheKey({
+          agentDir,
+          config: cfg,
+          metadataSnapshot: params?.metadataSnapshot,
+          sourceFingerprint: preparedSource.fingerprint,
+          workspaceDir: preparedSource.workspaceDir ?? workspaceDir,
+        });
         logStage("models-json-ready");
+        if (preparedCatalogKey !== catalogKey) {
+          catalogKey = preparedCatalogKey;
+          if (params?.useCache !== false) {
+            const cached = readCachedAgentModelCatalog({ agentDir, catalogKey }) as
+              | ModelCatalogEntry[]
+              | undefined;
+            if (cached?.length) {
+              logStage("state-cache-hit", `entries=${cached.length}`);
+              return cached;
+            }
+          }
+        }
       }
       // Keep discovery inside try/catch so transient filesystem/config failures do not poison
       // the shared catalog cache until restart.
       const agentDiscovery = await importAgentDiscovery();
       logStage("agent-discovery-imported");
-      const agentDir = resolveDefaultAgentDir(cfg);
       const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
       const authStorage = agentDiscovery.discoverAuthStorage(
@@ -562,7 +688,8 @@ export async function loadModelCatalog(params?: {
         const id = normalizeConfiguredProviderCatalogModelId(provider, rawId, {
           manifestPlugins: getManifestPlugins(),
         });
-        if (shouldSuppressBuiltInModel({ provider, id })) {
+        const baseUrl = normalizeOptionalString(entry?.baseUrl);
+        if (shouldSuppressBuiltInModel({ provider, id, baseUrl })) {
           continue;
         }
         const name = normalizeOptionalString(entry?.name ?? id) || id;
@@ -575,16 +702,21 @@ export async function loadModelCatalog(params?: {
             ? entry.contextTokens
             : undefined;
         const reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
+        const api = typeof entry?.api === "string" ? entry.api : undefined;
         const input = Array.isArray(entry?.input) ? entry.input : undefined;
+        const modelParams =
+          entry?.params && typeof entry.params === "object" ? entry.params : undefined;
         const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
         models.push({
           id,
           name,
           provider,
+          ...(api ? { api } : {}),
           contextWindow,
           ...(contextTokens !== undefined ? { contextTokens } : {}),
           reasoning,
           input,
+          ...(modelParams ? { params: modelParams } : {}),
           compat,
         });
       }
@@ -663,6 +795,13 @@ export async function loadModelCatalog(params?: {
       }
 
       const sorted = sortModels(models);
+      if (!readOnly) {
+        writeCachedAgentModelCatalog({
+          agentDir,
+          catalogKey,
+          entries: sorted,
+        });
+      }
       logStage("complete", `entries=${sorted.length}`);
       return sorted;
     } catch (error) {
@@ -685,8 +824,20 @@ export async function loadModelCatalog(params?: {
     return loadCatalog();
   }
 
-  modelCatalogPromise = loadCatalog();
-  return modelCatalogPromise;
+  const loadGeneration = modelCatalogGeneration;
+  const publishedPromise = loadCatalog().then((catalog) => {
+    if (
+      catalog.length > 0 &&
+      modelCatalogGeneration === loadGeneration &&
+      modelCatalogPromise === publishedPromise
+    ) {
+      loadedModelCatalogSnapshot = catalog;
+      loadedModelCatalogGeneration = loadGeneration;
+    }
+    return catalog;
+  });
+  modelCatalogPromise = publishedPromise;
+  return publishedPromise;
 }
 
 /**

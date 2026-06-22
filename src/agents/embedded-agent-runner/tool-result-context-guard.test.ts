@@ -2,13 +2,15 @@
 // prechecks, and context-engine loop hooks for oversized tool outputs.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
-import type { ContextEngine } from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineRuntimeSettings } from "../../context-engine/types.js";
 import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
-import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
   CONTEXT_LIMIT_TRUNCATION_NOTICE,
   formatContextLimitTruncationNotice,
+} from "./context-truncation-notice.js";
+import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
+import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
   markTranscriptPromptText,
@@ -672,6 +674,29 @@ describe("installContextEngineLoopHook", () => {
         lastCacheTouchAt: 123,
       },
     });
+  });
+
+  it("passes runtimeSettings through loop-hook afterTurn and assemble calls", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const runtimeSettings = { schemaVersion: 1 } as ContextEngineRuntimeSettings;
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      getPrePromptMessageCount: () => 1,
+      runtimeSettings,
+    });
+
+    const messages = [makeUser("first"), makeToolResult("call_1", "result")];
+    await callTransform(agent, messages);
+
+    expect(recordMockArg(engine.afterTurn).runtimeSettings).toBe(runtimeSettings);
+    expect(recordMockArg(engine.assemble).runtimeSettings).toBe(runtimeSettings);
   });
 
   it("passes loop messages and the prompt fence into the runtimeContext callback", async () => {

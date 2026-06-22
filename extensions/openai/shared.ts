@@ -88,6 +88,8 @@ const wrapOpenAIResponsesProviderStreamFn: NonNullable<
 > = (ctx) =>
   createOpenAINativeWebSearchWrapper(wrapOpenAIResponsesStreamFn?.(ctx) ?? ctx.streamFn, {
     config: ctx.config,
+    agentId: ctx.agentId,
+    nativeWebSearchAllowedByToolPolicy: ctx.nativeWebSearchAllowedByToolPolicy,
   });
 
 export function buildOpenAIResponsesProviderHooks(options?: {

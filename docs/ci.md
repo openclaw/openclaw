@@ -47,33 +47,21 @@ Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings
 
 For pull request runs, the terminal timing-summary job runs the helper from the trusted base revision before passing `GH_TOKEN` to `gh run view`. That keeps the tokened query out of branch-controlled code while still summarizing the pull request's current CI run.
 
-## Real behavior proof
+## PR context and evidence
 
-External contributor PRs run a `Real behavior proof` gate from
+External contributor PRs run a PR context and evidence gate from
 `.github/workflows/real-behavior-proof.yml`. The workflow checks out the trusted
 base commit and evaluates the PR body only; it does not execute code from the
 contributor branch.
 
 The gate applies to PR authors who are not repository owners, members,
-collaborators, or bots. It passes when the PR body contains a
-`Real behavior proof` section with filled values for:
-
-- `Behavior or issue addressed`
-- `Real environment tested`
-- `Exact steps or command run after this patch`
-- `Evidence after fix`
-- `Observed result after fix`
-- `What was not tested`
-
-The evidence must show the changed behavior after the patch in a real OpenClaw
-setup. Screenshots, recordings, terminal captures, console output, copied live
-output, redacted runtime logs, and linked artifacts all count. Unit tests, mocks,
-snapshots, lint, typechecks, and CI results are useful supporting verification,
-but they do not satisfy this gate by themselves.
+collaborators, or bots. It passes when the PR body contains authored
+`What Problem This Solves` and `Evidence` sections. Evidence can be a focused
+test, CI result, screenshot, recording, terminal output, live observation,
+redacted log, or artifact link. The body provides intent and useful validation;
+reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
-Maintainers can apply `proof: override` only when the proof gate should not
-apply to that PR.
 
 ## Scope and routing
 
@@ -86,7 +74,7 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 - **CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits** use a fast Node-only manifest path: `preflight`, security, and a single `checks-fast-core` task. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the change is limited to the routing or helper surfaces the fast task exercises directly.
 - **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes.
 
-The slowest Node test families are split or balanced so each job stays small without over-reserving runners: plugin contracts and channel contracts each run as two weighted Blacksmith-backed shards with the standard GitHub runner fallback, core unit fast/support lanes run separately, core runtime infra is split between state, process/config, shared, and three cron domain shards, auto-reply runs as balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/server configs are split across chat/auth/model/http-plugin/runtime/startup lanes instead of waiting on built artifacts. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional-*` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard list is striped into one prompt-heavy shard and one combined shard for the remaining guard stripes, each running selected independent guards concurrently and printing per-check timings. The expensive Codex happy-path prompt snapshot drift check runs as its own additional job for manual CI and for prompt-affecting changes only, so normal unrelated Node changes do not wait behind cold prompt snapshot generation and the boundary shards stay balanced while prompt drift is still pinned to the PR that caused it; the same flag skips prompt snapshot Vitest generation inside the built-artifact core support-boundary shard. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
+The slowest Node test families are split or balanced so each job stays small without over-reserving runners: plugin contracts and channel contracts each run as two weighted Blacksmith-backed shards with the standard GitHub runner fallback, core unit fast/support lanes run separately, core runtime infra is split between state, process/config, shared, and three cron domain shards, auto-reply runs as balanced workers (with the reply subtree split into agent-runner, dispatch, and commands/state-routing shards), and agentic gateway/server configs are split across chat/auth/model/http-plugin/runtime/startup lanes instead of waiting on built artifacts. Normal CI then packs only isolated infra include-pattern shards into deterministic bundles of at most 64 test files, reducing the Node matrix without merging non-isolated command/cron, stateful agents-core, or gateway/server suites; heavy fixed suites stay on 8 vCPU while the bundled and lower-weight lanes use 4 vCPU. Broad browser, QA, media, and miscellaneous plugin tests use their dedicated Vitest configs instead of the shared plugin catch-all. Include-pattern shards record timing entries using the CI shard name, so `.artifacts/vitest-shard-timings.json` can distinguish a whole config from a filtered shard. `check-additional-*` keeps package-boundary compile/canary work together and separates runtime topology architecture from gateway watch coverage; the boundary guard list is striped into one prompt-heavy shard and one combined shard for the remaining guard stripes, each running selected independent guards concurrently and printing per-check timings. The expensive Codex happy-path prompt snapshot drift check runs as its own additional job for manual CI and for prompt-affecting changes only, so normal unrelated Node changes do not wait behind cold prompt snapshot generation and the boundary shards stay balanced while prompt drift is still pinned to the PR that caused it; the same flag skips prompt snapshot Vitest generation inside the built-artifact core support-boundary shard. Gateway watch, channel tests, and the core support-boundary shard run concurrently inside `build-artifacts` after `dist/` and `dist-runtime/` are already built.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 
@@ -123,15 +111,15 @@ gh workflow run full-release-validation.yml --ref main -f ref=<branch-or-sha>
 
 ## Runners
 
-| Runner                           | Jobs                                                                                                                                                                                                                                |
-| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ubuntu-24.04`                   | Manual CI dispatch and non-canonical repository fallbacks, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                               |
-| `blacksmith-4vcpu-ubuntu-2404`   | `CodeQL Critical Quality`, `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, `checks-node-compat-node22`, `check-guards`, `check-prod-types`, and `check-test-types` |
-| `blacksmith-8vcpu-ubuntu-2404`   | Linux Node test shards, bundled plugin test shards, `check-additional-*` shards, `check-dependencies`, and `android`                                                                                                                |
-| `blacksmith-16vcpu-ubuntu-2404`  | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                              |
-| `blacksmith-16vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                    |
-| `blacksmith-6vcpu-macos-15`      | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                  |
-| `blacksmith-12vcpu-macos-26`     | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                 |
+| Runner                          | Jobs                                                                                                                                                                                                                                                                                                            |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ubuntu-24.04`                  | Manual CI dispatch and non-canonical repository fallbacks, workflow-sanity, labeler, auto-response, docs workflows outside CI, and install-smoke preflight so the Blacksmith matrix can queue earlier                                                                                                           |
+| `blacksmith-4vcpu-ubuntu-2404`  | `CodeQL Critical Quality`, `preflight`, `security-fast`, lower-weight extension shards, `checks-fast-core`, plugin/channel contract shards, most bundled/lower-weight Linux Node shards, `check-guards`, `check-prod-types`, `check-test-types`, selected `check-additional-*` shards, and `check-dependencies` |
+| `blacksmith-8vcpu-ubuntu-2404`  | Retained heavy Linux Node suites, boundary/extension-heavy `check-additional-*` shards, and `android`                                                                                                                                                                                                           |
+| `blacksmith-16vcpu-ubuntu-2404` | `build-artifacts`, `check-lint` (CPU-sensitive enough that 8 vCPU cost more than they saved); install-smoke Docker builds (32-vCPU queue time cost more than it saved)                                                                                                                                          |
+| `blacksmith-8vcpu-windows-2025` | `checks-windows`                                                                                                                                                                                                                                                                                                |
+| `blacksmith-6vcpu-macos-15`     | `macos-node` on `openclaw/openclaw`; forks fall back to `macos-15`                                                                                                                                                                                                                                              |
+| `blacksmith-12vcpu-macos-26`    | `macos-swift` on `openclaw/openclaw`; forks fall back to `macos-26`                                                                                                                                                                                                                                             |
 
 Canonical-repo CI keeps Blacksmith as the default runner path for normal push and pull-request runs. `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners, but normal canonical runs do not currently probe Blacksmith queue health or automatically fall back to GitHub-hosted labels when Blacksmith is unavailable.
 
@@ -183,13 +171,13 @@ The workflow installs OCM from a pinned release and Kova from `openclaw/Kova` at
 - `mock-deep-profile`: CPU/heap/trace profiling for startup, gateway, and agent-turn hotspots.
 - `live-openai-candidate`: a real OpenAI `openai/gpt-5.5` agent turn, skipped when `OPENAI_API_KEY` is unavailable.
 
-The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, and CLI startup commands against the booted gateway. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
+The mock-provider lane also runs OpenClaw-native source probes after the Kova pass: gateway boot timing and memory across default, hook, and 50-plugin startup cases; bundled plugin import RSS, repeated mock-OpenAI `channel-chat-baseline` hello loops, CLI startup commands against the booted gateway, and the SQLite state smoke performance probe. When the previous published mock-provider source report is available for the tested ref, the source summary compares current RSS and heap values against that baseline and marks large RSS increases as `watch`. The source probe Markdown summary lives at `source/index.md` in the report bundle, with raw JSON beside it.
 
 Every lane uploads GitHub artifacts. When `CLAWGRIT_REPORTS_TOKEN` is configured, the workflow also commits `report.json`, `report.md`, bundles, `index.md`, and source-probe artifacts into `openclaw/clawgrit-reports` under `openclaw-performance/<tested-ref>/<run-id>-<attempt>/<lane>/`. The current tested-ref pointer is written as `openclaw-performance/<tested-ref>/latest-<lane>.json`.
 
 ## Full Release Validation
 
-`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable/default runs keep exhaustive live/E2E and Docker release-path coverage behind `run_release_soak=true`; `release_profile=full` forces that soak coverage on so broad advisory validation remains broad. With `rerun_group=all` and `release_profile=full`, it also runs `NPM Telegram Beta E2E` against the `release-package-under-test` artifact from release checks. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only when Telegram must prove a different package. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs.
+`Full Release Validation` is the manual umbrella workflow for "run everything before release." It accepts a branch, tag, or full commit SHA, dispatches the manual `CI` workflow with that target, dispatches `Plugin Prerelease` for release-only plugin/package/static/Docker proof, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full profiles always include exhaustive live/E2E and Docker release-path soak coverage; the beta profile can opt in with `run_release_soak=true`. The canonical package Telegram E2E runs inside Package Acceptance, so a full candidate does not start a duplicate live poller. After publishing, pass `release_package_spec` to reuse the shipped npm package across release checks, Package Acceptance, Docker, cross-OS, and Telegram without rebuilding. Use `npm_telegram_package_spec` only for a focused published-package Telegram rerun. The Codex plugin live package lane uses the same selected state by default: published `release_package_spec=openclaw@<tag>` derives `codex_plugin_spec=npm:@openclaw/codex@<tag>`, while SHA/artifact runs pack `extensions/codex` from the selected ref. Set `codex_plugin_spec` explicitly for custom plugin sources such as `npm:`, `npm-pack:`, or `git:` specs.
 
 See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
@@ -200,13 +188,19 @@ from `release/YYYY.M.PATCH` or `main` after the release tag exists and after the
 OpenClaw npm preflight has succeeded. It verifies `pnpm plugins:sync:check`,
 dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
 `Plugin ClawHub Release` for the same release SHA, and only then dispatches
-`OpenClaw NPM Release` with the saved `preflight_run_id`.
+`OpenClaw NPM Release` with the saved `preflight_run_id`. Stable publish also
+requires an exact `windows_node_tag`; the workflow verifies the Windows source
+release and compares its x64/ARM64 installers with the candidate-approved
+`windows_node_installer_digests` input before any publish child, then promotes
+and verifies those same pinned installer digests plus the exact companion asset
+and checksum contract before publishing the GitHub release draft.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
   --ref release/YYYY.M.PATCH \
   -f tag=vYYYY.M.PATCH-beta.N \
   -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f full_release_validation_run_id=<successful-full-release-validation-run-id> \
   -f npm_dist_tag=beta
 ```
 
@@ -226,9 +220,9 @@ different SHA.
 
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you
-intentionally want the broad advisory provider/media matrix. `run_release_soak`
-controls whether stable/default release checks run the exhaustive live/E2E and
-Docker release-path soak; `full` forces soak on.
+intentionally want the broad advisory provider/media matrix. Stable and full
+release checks always run the exhaustive live/E2E and Docker release-path soak;
+the beta profile can opt in with `run_release_soak=true`.
 
 - `minimum` keeps the fastest OpenAI/core release-critical lanes.
 - `stable` adds the stable provider/backend set.

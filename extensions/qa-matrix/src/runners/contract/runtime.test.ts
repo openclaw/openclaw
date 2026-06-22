@@ -93,6 +93,28 @@ describe("matrix live qa runtime", () => {
     }
   });
 
+  it("summarizes relevant gateway stderr lines for Matrix QA failures", () => {
+    const summary = liveTesting.summarizeMatrixQaGatewayStderrLog(
+      [
+        "normal gateway progress",
+        "Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+        "[agent/embedded] embedded run failover decision: stage=prompt decision=surface_error reason=auth",
+        "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+      ].join("\n"),
+    );
+
+    expect(summary).toContain("gateway stderr tail:");
+    expect(summary).toContain("Authorization: Bearer");
+    expect(summary).toContain("reason=auth");
+    expect(summary).toContain("unexpected status 401 Unauthorized");
+    expect(summary).not.toContain("normal gateway progress");
+    expect(summary).not.toContain("abcdefghijklmnopqrstuvwxyz");
+  });
+
+  it("skips empty gateway stderr summaries", () => {
+    expect(liveTesting.summarizeMatrixQaGatewayStderrLog("\n\n")).toBeUndefined();
+  });
+
   it("normalizes the Matrix QA hard timeout env", () => {
     const previous = process.env.OPENCLAW_QA_MATRIX_TIMEOUT_MS;
     try {
@@ -613,6 +635,7 @@ describe("matrix live qa runtime", () => {
     await liveTesting.patchMatrixQaGatewayConfig({
       gateway: gateway as never,
       patch,
+      replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
       restartDelayMs: 250,
     });
 
@@ -623,6 +646,7 @@ describe("matrix live qa runtime", () => {
       {
         baseHash: "hash-old",
         raw: JSON.stringify(patch, null, 2),
+        replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
         restartDelayMs: 250,
       },
       { timeoutMs: 60_000 },
@@ -634,6 +658,7 @@ describe("matrix live qa runtime", () => {
       {
         baseHash: "hash-fresh",
         raw: JSON.stringify(patch, null, 2),
+        replacePaths: ["channels.matrix.accounts.sut.groupAllowFrom"],
         restartDelayMs: 250,
       },
       { timeoutMs: 60_000 },

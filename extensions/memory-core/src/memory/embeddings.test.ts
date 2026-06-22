@@ -212,6 +212,12 @@ describe("createEmbeddingProvider", () => {
     await expect(result.provider?.embedQuery("hello")).resolves.toEqual([0]);
   });
 
+  it("reports the llama.cpp plugin install command when local is unregistered", async () => {
+    await expect(createEmbeddingProvider(createOptions("local"))).rejects.toThrow(
+      "openclaw plugins install @openclaw/llama-cpp-provider",
+    );
+  });
+
   it("does not auto-select generic providers by priority policy", async () => {
     registerMemoryEmbeddingProvider({
       id: "openai-compatible",

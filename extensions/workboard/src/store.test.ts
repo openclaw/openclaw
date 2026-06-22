@@ -36,6 +36,18 @@ function createMemoryStore<T = PersistedWorkboardCard>(options?: {
   };
 }
 
+function statfsFixture(type: number): ReturnType<typeof fs.statfsSync> {
+  return {
+    type,
+    bsize: 1024,
+    blocks: 1,
+    bfree: 1,
+    bavail: 1,
+    files: 0,
+    ffree: 0,
+  };
+}
+
 describe("WorkboardStore", () => {
   it("persists boards, cards, subscriptions, and attachment blobs in sqlite", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-"));
@@ -90,7 +102,7 @@ describe("WorkboardStore", () => {
       if (process.platform !== "win32") {
         expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
         expect(fs.statSync(dbPath).mode & 0o777).toBe(0o600);
-        for (const sidecarPath of [`${dbPath}-wal`, `${dbPath}-shm`]) {
+        for (const sidecarPath of [`${dbPath}-wal`, `${dbPath}-shm`, `${dbPath}-journal`]) {
           if (fs.existsSync(sidecarPath)) {
             expect(fs.statSync(sidecarPath).mode & 0o777).toBe(0o600);
           }
@@ -140,6 +152,27 @@ describe("WorkboardStore", () => {
       });
       reopenedStores.close();
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses rollback journaling on network-backed volumes", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-sqlite-network-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const statfs = vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0xff534d42));
+    try {
+      const stores = createWorkboardSqliteStores({ dbPath });
+      stores.close();
+
+      const rawDb = new DatabaseSync(dbPath);
+      expect(rawDb.prepare("PRAGMA journal_mode").get()).toMatchObject({
+        journal_mode: "delete",
+      });
+      rawDb.close();
+      expect(fs.existsSync(`${dbPath}-wal`)).toBe(false);
+      expect(fs.existsSync(`${dbPath}-shm`)).toBe(false);
+    } finally {
+      statfs.mockRestore();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -2417,6 +2450,35 @@ describe("WorkboardStore", () => {
     expect(dispatch.orchestrated.map((card) => card.id).toSorted()).toEqual(
       [ops.id, product.id].toSorted(),
     );
+  });
+
+  it("scopes dispatch mutations by board", async () => {
+    const boards = createMemoryStore<PersistedWorkboardBoard>();
+    const store = new WorkboardStore(createMemoryStore(), { boards });
+    await store.upsertBoard({
+      id: "ops",
+      orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
+    });
+    await store.upsertBoard({
+      id: "product",
+      orchestration: { autoDecompose: true, autoDecomposePerDispatch: 1 },
+    });
+    const ops = await store.create({ title: "Ops rough", status: "triage", boardId: "ops" });
+    const product = await store.create({
+      title: "Product rough",
+      status: "triage",
+      boardId: "product",
+    });
+
+    const dispatch = await store.dispatch({ now: 10, boardId: "ops" });
+
+    expect(dispatch.orchestrated.map((card) => card.id)).toEqual([ops.id]);
+    await expect(store.get(ops.id)).resolves.toMatchObject({
+      metadata: { workerProtocol: expect.any(Object) },
+    });
+    await expect(store.get(product.id)).resolves.not.toMatchObject({
+      metadata: { workerProtocol: expect.any(Object) },
+    });
   });
 
   it("deletes board notification subscriptions with empty board metadata", async () => {

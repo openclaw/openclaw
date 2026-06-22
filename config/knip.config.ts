@@ -128,18 +128,9 @@ const config = {
     "**/*.test-utils.ts",
     "test/helpers/live-image-probe.ts",
     "src/secrets/credential-matrix.ts",
-    "src/agents/claude-cli-runner.ts",
-    "src/agents/agent-auth-json.ts",
-    "src/agents/tool-policy.conformance.ts",
-    "src/auto-reply/reply/audio-tags.ts",
-    "src/gateway/live-tool-probe-utils.ts",
-    "src/gateway/server.auth.shared.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/bot/reply-threading.ts"),
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
-    bundledPluginFile("msteams", "src/conversation-store-memory.ts"),
-    bundledPluginFile("msteams", "src/polls-store-memory.ts"),
-    bundledPluginFile("voice-call", "src/providers/index.ts"),
   ],
   ignore: ["packages/*/dist/**"],
   workspaces: {
@@ -216,6 +207,16 @@ const config = {
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],
       project: ["index.js!", "scripts/**/*.js!"],
+    },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
+      entry: bundledPluginEntries,
+      project: ["index.ts!", "src/**/*.{js,mjs,ts}!"],
+      ignoreDependencies: [
+        // The provider resolves node-llama-cpp from its own package at runtime
+        // so local embeddings use the plugin-owned native dependency.
+        "node-llama-cpp",
+        ...bundledPluginIgnoredRuntimeDependencies,
+      ],
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in

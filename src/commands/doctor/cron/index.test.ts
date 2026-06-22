@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { readCronRunLogEntriesSync } from "../../../cron/run-log.js";
 import {
+  loadCronJobsStoreWithConfigJobs,
   loadCronQuarantineFile,
   loadCronStore,
   resolveCronQuarantinePath,
@@ -578,6 +579,27 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Cron run logs migrated to SQLite", "Doctor changes");
   });
 
+  it("does not claim legacy store detected when only non-legacy issues exist (#92683)", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [
+      createCurrentCronJob({
+        id: "notify-job",
+        name: "Notify job",
+        notify: true,
+      }),
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expectNoNoteContaining("Legacy cron job storage detected", "Cron");
+    expectNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining("1 job still uses legacy", "Cron");
+  });
+
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [
@@ -820,10 +842,78 @@ describe("maybeRepairLegacyCronStore", () => {
     const job = requirePersistedJob(jobs, 0);
     expect(job.notify).toBeUndefined();
     expect(job.delivery).toBeUndefined();
+    const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const persisted = reloaded.configJobs as unknown as Array<Record<string, unknown>>;
+    expect(persisted[0]?.notify).toBe(true);
     expectNoteContaining(
       "cron.webhook is not a valid HTTP(S) URL so doctor cannot migrate it automatically",
       "Doctor warnings",
     );
+  });
+
+  it("removes inert legacy notify:true for delivery.mode none when cron.webhook is unset and stops looping (#44460)", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createCurrentCronJob({
+        id: "notify-none-unset",
+        name: "Notify none unset",
+        notify: true,
+        delivery: { mode: "none" },
+      }),
+    ]);
+
+    const cfg = { cron: { store: storePath } } as OpenClawConfig;
+    await maybeRepairLegacyCronStore({
+      cfg,
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const persisted = reloaded.configJobs as unknown as Array<Record<string, unknown>>;
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.notify).toBeUndefined();
+    expect(requireRecord(persisted[0]?.delivery, "cron delivery").mode).toBe("none");
+    expectNoNoteContaining(
+      "cron.webhook is unset so doctor cannot migrate it automatically",
+      "Doctor warnings",
+    );
+
+    noteMock.mockClear();
+    await maybeRepairLegacyCronStore({
+      cfg,
+      options: {},
+      prompter: makePrompter(true),
+    });
+    expectNoNoteContaining("still uses legacy `notify: true`", "Cron");
+  });
+
+  it("drops inert legacy notify alongside existing announce delivery without changing it when cron.webhook is unset (#44460)", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      createCurrentCronJob({
+        id: "notify-announce-unset",
+        name: "Notify announce unset",
+        notify: true,
+        payload: { kind: "agentTurn", message: "Status" },
+        delivery: { mode: "announce", to: "telegram:123" },
+      }),
+    ]);
+
+    const cfg = { cron: { store: storePath } } as OpenClawConfig;
+    await maybeRepairLegacyCronStore({
+      cfg,
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const persisted = reloaded.configJobs as unknown as Array<Record<string, unknown>>;
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.notify).toBeUndefined();
+    const delivery = requireRecord(persisted[0]?.delivery, "cron delivery");
+    expect(delivery.mode).toBe("announce");
+    expect(delivery.to).toBe("telegram:123");
   });
 
   it("quarantines invalid legacy rows before saving the repaired store", async () => {

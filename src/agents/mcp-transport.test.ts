@@ -8,10 +8,16 @@ type StreamableTransportOptions = {
   authProvider?: unknown;
 };
 
-const { lookupMock, runtimeFetchMock, streamableTransportConstructorMock } = vi.hoisted(() => ({
+const {
+  lookupMock,
+  runtimeFetchMock,
+  streamableTransportConstructorMock,
+  sseTransportConstructorMock,
+} = vi.hoisted(() => ({
   lookupMock: vi.fn(),
   runtimeFetchMock: vi.fn(),
   streamableTransportConstructorMock: vi.fn(),
+  sseTransportConstructorMock: vi.fn(),
 }));
 
 vi.mock("node:dns/promises", () => ({
@@ -34,6 +40,20 @@ vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
     options?: StreamableTransportOptions,
   ) {
     streamableTransportConstructorMock(url, options);
+  },
+}));
+
+type SseTransportOptions = {
+  eventSourceInit?: { fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> };
+};
+
+vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
+  SSEClientTransport: function MockSSEClientTransport(
+    this: unknown,
+    url: URL,
+    options?: SseTransportOptions,
+  ) {
+    sseTransportConstructorMock(url, options);
   },
 }));
 
@@ -69,6 +89,18 @@ function latestStreamableFetch() {
   return fetch;
 }
 
+function latestSseEventSourceFetch() {
+  const latestCall = sseTransportConstructorMock.mock.calls[
+    sseTransportConstructorMock.mock.calls.length - 1
+  ] as unknown[] | undefined;
+  const options = latestCall?.[1] as SseTransportOptions | undefined;
+  const fetch = options?.eventSourceInit?.fetch;
+  if (typeof fetch !== "function") {
+    throw new Error("Expected SSE event-source fetch");
+  }
+  return fetch;
+}
+
 function runtimeFetchCall(index: number): [RequestInfo | URL, RequestInit | undefined] {
   const call = runtimeFetchMock.mock.calls[index] as
     | [RequestInfo | URL, RequestInit | undefined]
@@ -85,6 +117,7 @@ describe("resolveMcpTransport", () => {
     lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     runtimeFetchMock.mockReset();
     streamableTransportConstructorMock.mockClear();
+    sseTransportConstructorMock.mockClear();
   });
 
   it("scrubs custom headers when streamable HTTP follows a cross-origin redirect", async () => {
@@ -298,5 +331,31 @@ describe("resolveMcpTransport", () => {
 
     expect(new Headers(runtimeFetchCall(0)?.[1]?.headers).get("x-tenant")).toBe("docs");
     expect(new Headers(runtimeFetchCall(1)?.[1]?.headers).get("x-tenant")).toBeNull();
+  });
+
+  it("merges SSE event-source headers case-insensitively so auth is not duplicated", async () => {
+    // The SDK's EventSource can supply lowercase `authorization` while operator
+    // config uses `Authorization`; the runtime fetch should see one header.
+    runtimeFetchMock.mockResolvedValue(new Response("ok"));
+
+    resolveMcpTransport("probe", {
+      url: "https://mcp.example.com/sse",
+      transport: "sse",
+      headers: {
+        Authorization: "Bearer operator",
+      },
+    });
+
+    const sseFetch = latestSseEventSourceFetch();
+    await sseFetch("https://mcp.example.com/sse", {
+      headers: { authorization: "Bearer sdk" },
+    });
+
+    const sentHeaders = runtimeFetchCall(0)?.[1]?.headers as Record<string, string>;
+    const authKeys = Object.keys(sentHeaders).filter(
+      (key) => key.toLowerCase() === "authorization",
+    );
+    expect(authKeys).toEqual(["authorization"]);
+    expect(sentHeaders.authorization).toBe("Bearer operator");
   });
 });

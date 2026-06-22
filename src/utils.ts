@@ -211,8 +211,14 @@ export function displayString(input: string): string {
   return shortenHomeInString(input);
 }
 
-// Configuration root; can be overridden via OPENCLAW_STATE_DIR.
-export const CONFIG_DIR = resolveConfigDir();
+// Gateway startup re-pins this live binding after config/state selection converges so modules
+// imported during early CLI bootstrap cannot keep using the superseded configuration root.
+export let CONFIG_DIR = resolveConfigDir();
+
+export function pinConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  CONFIG_DIR = resolveConfigDir(env);
+  return CONFIG_DIR;
+}
 /**
  * Check if a file or directory exists at the given path.
  */

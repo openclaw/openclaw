@@ -22,6 +22,24 @@ describe("redactSensitiveUrl", () => {
     );
   });
 
+  it("redacts encoded and invisible-spliced sensitive query param names", () => {
+    expect(
+      redactSensitiveUrl("https://example.com/mcp?client%5Fse%E2%80%8Bcret=secret&safe=value"),
+    ).toBe("https://example.com/mcp?client_se%E2%80%8Bcret=***&safe=value");
+  });
+
+  it("redacts encoded sensitive query names with decoded whitespace and control separators", () => {
+    expect(
+      redactSensitiveUrl("https://example.com/mcp?client%5Fse%20cret=space&client%5Fse%00cret=nul"),
+    ).toBe("https://example.com/mcp?client_se+cret=***&client_se%00cret=***");
+  });
+
+  it("redacts query names with plus-encoded separators", () => {
+    expect(redactSensitiveUrl("https://example.com/mcp?client_se+cret=secret&safe=value")).toBe(
+      "https://example.com/mcp?client_se+cret=***&safe=value",
+    );
+  });
+
   it("keeps non-sensitive URLs unchanged", () => {
     expect(redactSensitiveUrl("https://example.com/mcp?safe=value")).toBe(
       "https://example.com/mcp?safe=value",
@@ -33,6 +51,26 @@ describe("redactSensitiveUrlLikeString", () => {
   it("redacts invalid URL-like strings", () => {
     expect(redactSensitiveUrlLikeString("//user:pass@example.com/mcp?client_secret=secret")).toBe(
       "//***:***@example.com/mcp?client_secret=***",
+    );
+  });
+
+  it("redacts encoded and invisible-spliced query names in invalid URL-like strings", () => {
+    expect(
+      redactSensitiveUrlLikeString("//example.com/mcp?client%5Fse%E2%80%8Bcret=secret&safe=value"),
+    ).toBe("//example.com/mcp?client%5Fse%E2%80%8Bcret=***&safe=value");
+  });
+
+  it("redacts encoded query names with decoded whitespace and control separators in invalid URL-like strings", () => {
+    expect(
+      redactSensitiveUrlLikeString(
+        "//example.com/mcp?client%5Fse%20cret=space&client%5Fse%00cret=nul",
+      ),
+    ).toBe("//example.com/mcp?client%5Fse%20cret=***&client%5Fse%00cret=***");
+  });
+
+  it("redacts plus-spliced query names in invalid URL-like strings", () => {
+    expect(redactSensitiveUrlLikeString("//example.com/mcp?client_se+cret=secret&safe=value")).toBe(
+      "//example.com/mcp?client_se+cret=***&safe=value",
     );
   });
 
@@ -61,6 +99,17 @@ describe("isSensitiveUrlQueryParamName", () => {
     expect(isSensitiveUrlQueryParamName("hook-token")).toBe(true);
     expect(isSensitiveUrlQueryParamName("passwd")).toBe(true);
     expect(isSensitiveUrlQueryParamName("signature")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("code")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("x-amz-signature")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("X-Amz-Security-Token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("id_token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("app_secret")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("client%5Fse\u200Bcret")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("client%5Fse%20cret")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("client%5Fse%00cret")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("client_se+cret")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("client_se\u3164cret")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("credential")).toBe(true);
     expect(isSensitiveUrlQueryParamName("safe")).toBe(false);
   });
 });

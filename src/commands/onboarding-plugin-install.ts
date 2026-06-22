@@ -20,7 +20,10 @@ import {
 } from "../plugins/bundled-sources.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
-import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
+import {
+  enableExplicitlySelectedPluginInConfig,
+  type PluginEnableResult,
+} from "../plugins/enable.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
@@ -69,7 +72,7 @@ export type OnboardingPluginInstallEntry = {
 export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
 
 /** Config and status returned after attempting an onboarding plugin install. */
-export type OnboardingPluginInstallResult = {
+type OnboardingPluginInstallResult = {
   cfg: OpenClawConfig;
   installed: boolean;
   pluginId: string;
@@ -518,7 +521,7 @@ async function applyPluginEnablement(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
 }): Promise<PluginEnableResult> {
-  const enableResult = enablePluginInConfig(params.cfg, params.pluginId);
+  const enableResult = enableExplicitlySelectedPluginInConfig(params.cfg, params.pluginId);
   if (enableResult.enabled) {
     return enableResult;
   }
@@ -657,6 +660,7 @@ function logInstallWarningWithSpacing(runtime: RuntimeEnv, message: string): voi
 }
 
 async function installPluginFromNpmSpecWithProgress(params: {
+  cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   npmSpec: string;
   prompter: WizardPrompter;
@@ -686,6 +690,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
       installPluginFromNpmSpec({
         spec: params.npmSpec,
         mode: "update",
+        config: params.cfg,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
         expectedPluginId: params.entry.pluginId,
         expectedIntegrity: params.entry.install.expectedIntegrity,
@@ -732,6 +737,7 @@ async function installPluginFromNpmSpecWithProgress(params: {
 }
 
 async function installPluginFromNpmPackArchiveWithProgress(params: {
+  cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   archivePath: string;
   prompter: WizardPrompter;
@@ -760,6 +766,7 @@ async function installPluginFromNpmPackArchiveWithProgress(params: {
       installPluginFromNpmPackArchive({
         archivePath: params.archivePath,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
+        config: params.cfg,
         expectedPluginId: params.entry.pluginId,
         expectedIntegrity: params.entry.install.expectedIntegrity,
         extensionsDir: resolveDefaultPluginExtensionsDir(),
@@ -807,6 +814,7 @@ async function installPluginFromOverride(params: {
   const installOutcome =
     params.override.kind === "npm"
       ? await installPluginFromNpmSpecWithProgress({
+          cfg: params.cfg,
           entry,
           npmSpec: params.override.spec,
           prompter,
@@ -814,6 +822,7 @@ async function installPluginFromOverride(params: {
           trustedSourceLinkedOfficialInstall: false,
         })
       : await installPluginFromNpmPackArchiveWithProgress({
+          cfg: params.cfg,
           entry,
           archivePath: params.override.archivePath,
           prompter,
@@ -915,6 +924,7 @@ async function installPluginFromOverride(params: {
 }
 
 async function installPluginFromClawHubSpecWithProgress(params: {
+  cfg: OpenClawConfig;
   entry: OnboardingPluginInstallEntry;
   clawhubSpec: string;
   prompter: WizardPrompter;
@@ -944,6 +954,7 @@ async function installPluginFromClawHubSpecWithProgress(params: {
       installPluginFromClawHub({
         spec: params.clawhubSpec,
         timeoutMs: ONBOARDING_PLUGIN_INSTALL_TIMEOUT_MS,
+        config: params.cfg,
         extensionsDir: resolveDefaultPluginExtensionsDir(),
         expectedPluginId: params.entry.pluginId,
         mode: "install",
@@ -1113,6 +1124,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   let shouldTryNpm = choice === "npm";
   if (choice === "clawhub" && clawhubInstallSpec) {
     const installOutcome = await installPluginFromClawHubSpecWithProgress({
+      cfg: next,
       entry,
       clawhubSpec: clawhubInstallSpec,
       prompter,
@@ -1226,6 +1238,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   }
 
   const installOutcome = await installPluginFromNpmSpecWithProgress({
+    cfg: next,
     entry,
     npmSpec: npmInstallSpec,
     prompter,

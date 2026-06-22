@@ -206,58 +206,44 @@ export function pruneStaleEntries(
 export const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
 
-export interface QuotaSuspensionMaintenanceResult {
-  /** Suspensions whose state was advanced from "suspended" to "resuming" so the next attempt injects a handoff. */
-  resumed: Array<{ sessionKey: string; laneId?: string }>;
-  /** Entries whose `quotaSuspension` field was removed entirely (already-resumed records past 2x TTL). */
-  cleared: number;
-}
+export type QuotaSuspensionEntryMaintenanceResult = {
+  /** Patch to apply to the entry, or null when no TTL transition is due. */
+  patch: Partial<SessionEntry> | null;
+  /** Present when the entry transitioned from suspended to resuming. */
+  resumed?: { laneId?: string };
+  /** True when the quota-suspension marker should be removed. */
+  cleared: boolean;
+};
 
 /**
- * Two-stage TTL maintenance for `quotaSuspension` records:
- *  1. After `ttlMs`, transition `state: "suspended" → "resuming"` so the next
- *     attempt for that session sees the resume marker and injects a handoff.
- *  2. After `2 * ttlMs`, drop the field entirely (the record has done its job).
- *
- * Mutates `store` in-place. The caller is responsible for translating the
- * returned `resumed[]` into in-process lane-concurrency restoration calls,
- * which keeps this module free of `process/*` dependencies.
+ * Resolves the TTL maintenance patch for one session entry without reading or
+ * mutating the whole store. Attempt hot paths use this before entry-scoped
+ * accessor writes so unrelated sessions stay out of the request path.
  */
-export function pruneQuotaSuspensions(params: {
-  store: Record<string, SessionEntry>;
+export function resolveQuotaSuspensionEntryMaintenance(params: {
+  entry: SessionEntry;
   now: number;
   ttlMs?: number;
-  log?: boolean;
-}): QuotaSuspensionMaintenanceResult {
+}): QuotaSuspensionEntryMaintenanceResult {
+  const suspension = params.entry.quotaSuspension;
+  if (!suspension) {
+    return { patch: null, cleared: false };
+  }
   const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
   const cleanupAfterResumeMs = ttlMs * (QUOTA_SUSPENSION_CLEANUP_FACTOR - 1);
-  const resumed: Array<{ sessionKey: string; laneId?: string }> = [];
-  let cleared = 0;
-  for (const [sessionKey, entry] of Object.entries(params.store)) {
-    const suspension = entry.quotaSuspension;
-    if (!suspension) {
-      continue;
-    }
-    const resumeAtMs = suspension.expectedResumeBy ?? suspension.suspendedAt + ttlMs;
-    const cleanupAtMs = resumeAtMs + cleanupAfterResumeMs;
-    if (params.now >= cleanupAtMs) {
-      delete entry.quotaSuspension;
-      cleared++;
-      continue;
-    }
-    if (suspension.state === "suspended" && params.now >= resumeAtMs) {
-      entry.quotaSuspension = { ...suspension, state: "resuming" };
-      resumed.push({ sessionKey, laneId: suspension.laneId });
-    }
+  const resumeAtMs = suspension.expectedResumeBy ?? suspension.suspendedAt + ttlMs;
+  const cleanupAtMs = resumeAtMs + cleanupAfterResumeMs;
+  if (params.now >= cleanupAtMs) {
+    return { patch: { quotaSuspension: undefined }, cleared: true };
   }
-  if ((resumed.length > 0 || cleared > 0) && params.log !== false) {
-    log.info("processed quota-suspension TTLs", {
-      resumed: resumed.length,
-      cleared,
-      ttlMs,
-    });
+  if (suspension.state === "suspended" && params.now >= resumeAtMs) {
+    return {
+      patch: { quotaSuspension: { ...suspension, state: "resuming" } },
+      resumed: { laneId: suspension.laneId },
+      cleared: false,
+    };
   }
-  return { resumed, cleared };
+  return { patch: null, cleared: false };
 }
 
 function getEntryUpdatedAt(entry?: SessionEntry): number {
@@ -267,10 +253,12 @@ function getEntryUpdatedAt(entry?: SessionEntry): number {
 function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  // ACP bridge sessions use normal model dispatch, but remain synthetic and disposable.
   return (
     isSubagentSessionKey(sessionKey) ||
     isAcpSessionKey(sessionKey) ||
     isCronSessionKey(sessionKey) ||
+    rest.startsWith("acp-bridge:") ||
     rest.startsWith("hook:") ||
     rest.startsWith("node:") ||
     rest === "heartbeat" ||

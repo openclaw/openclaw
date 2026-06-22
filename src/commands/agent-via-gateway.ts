@@ -131,15 +131,6 @@ function loadEmbeddedAgentCommand(): Promise<EmbeddedAgentCommandModule["agentCo
   return embeddedAgentCommandPromise;
 }
 
-async function loadMigratedEmbeddedAgentCommand(): Promise<
-  EmbeddedAgentCommandModule["agentCommand"]
-> {
-  const cfg = await loadRuntimeConfig();
-  const { ensureSessionStateMigratedForCommand } = await import("./session-state-migration.js");
-  await ensureSessionStateMigratedForCommand(cfg);
-  return await loadEmbeddedAgentCommand();
-}
-
 function loadAgentSessionModule(): Promise<AgentSessionModule> {
   agentSessionModulePromise ??= agentSessionModuleLoader();
   return agentSessionModulePromise;
@@ -240,9 +231,8 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
-function isControlCommandThatMustNotFallback(opts: Pick<AgentCliOpts, "message">): boolean {
-  const normalized = opts.message.trim().toLowerCase();
-  return normalized === "/compact" || normalized.startsWith("/compact ");
+function isCompactControlCommand(message: string): boolean {
+  return /^\/compact(?:\s|:|$)/iu.test(message.trim());
 }
 
 function isSessionResetCommand(message: string): boolean {
@@ -299,6 +289,14 @@ function validateExplicitSessionKeyForDispatch(
 
 async function normalizeSessionKeyOptsForDispatch(opts: AgentCliOpts): Promise<AgentCliOpts> {
   const rawSessionKey = opts.sessionKey?.trim();
+  const rawTo = opts.to?.trim();
+  if (!rawSessionKey && !opts.sessionId?.trim() && classifySessionKeyShape(rawTo) === "agent") {
+    return {
+      ...opts,
+      to: undefined,
+      sessionKey: rawTo,
+    };
+  }
   const isLegacySessionKey =
     rawSessionKey && classifySessionKeyShape(rawSessionKey) === "legacy_or_alias";
   const agentIdRaw = opts.agent?.trim();
@@ -713,6 +711,7 @@ async function agentViaGatewayCommand(
             timeout: timeoutSeconds,
             lane: opts.lane,
             extraSystemPrompt: opts.extraSystemPrompt,
+            cleanupBundleMcpOnRunEnd: true,
             idempotencyKey,
           },
           expectFinal: true,
@@ -839,6 +838,17 @@ export async function agentCliCommand(
   deps?: AgentCliDeps,
 ) {
   protectJsonStdout(opts);
+  // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
+  // rejects CLI-originated senders, so the message would fall through to a
+  // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
+  // Fail loudly and point at the first-class command instead of no-opping.
+  if (isCompactControlCommand(opts.message)) {
+    runtime.error?.(
+      "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
+    );
+    runtime.exit(1);
+    return undefined;
+  }
   const dispatchOpts = await normalizeSessionKeyOptsForDispatch(opts);
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
@@ -851,11 +861,12 @@ export async function agentCliCommand(
     replyAccountId: gatewayDispatchOpts.replyAccount,
     cleanupBundleMcpOnRunEnd: true,
     cleanupCliLiveSessionOnRunEnd: true,
+    oneShotCliRun: dispatchOpts.local === true,
     abortSignal: signalBridge.signal,
   };
   try {
     if (dispatchOpts.local === true) {
-      const agentCommand = await loadMigratedEmbeddedAgentCommand();
+      const agentCommand = await loadEmbeddedAgentCommand();
       const result = await agentCommand(localOpts, runtime, deps);
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     }
@@ -875,15 +886,12 @@ export async function agentCliCommand(
         throw err;
       }
       if (isGatewayAgentTimeoutError(err)) {
-        if (isControlCommandThatMustNotFallback(dispatchOpts)) {
-          throw err;
-        }
         const fallbackAgentId = await resolveAgentIdForGatewayTimeoutFallback(dispatchOpts);
         const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
         runtime.error?.(
           `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
         );
-        const agentCommand = await loadMigratedEmbeddedAgentCommand();
+        const agentCommand = await loadEmbeddedAgentCommand();
         const result = await agentCommand(
           {
             ...localOpts,
@@ -910,7 +918,7 @@ export async function agentCliCommand(
       runtime.error?.(
         `EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: ${String(err)}`,
       );
-      const agentCommand = await loadMigratedEmbeddedAgentCommand();
+      const agentCommand = await loadEmbeddedAgentCommand();
       const result = await agentCommand(
         {
           ...localOpts,

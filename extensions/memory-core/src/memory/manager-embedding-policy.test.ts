@@ -75,6 +75,30 @@ describe("memory embedding policy", () => {
     expect(waits).toEqual([500, 1000]);
   });
 
+  it("stops retrying after the caller signal aborts, even for retryable-looking errors", async () => {
+    const controller = new AbortController();
+    const run = vi.fn(async () => {
+      controller.abort(new Error("memory_search timed out after 15s"));
+      // "timed out" matches the retryable transport pattern; abort must still win.
+      throw new Error("memory embeddings query timed out after 60s");
+    });
+    const waitForRetry = vi.fn(async () => {});
+
+    await expect(
+      runMemoryEmbeddingRetryLoop({
+        run,
+        isRetryable: isRetryableMemoryEmbeddingError,
+        waitForRetry,
+        maxAttempts: 3,
+        baseDelayMs: 500,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("memory embeddings query timed out after 60s");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(waitForRetry).not.toHaveBeenCalled();
+  });
+
   it("retries transient socket/network embedding errors", () => {
     const splittableMessages = [
       "TypeError: fetch failed | other side closed",
@@ -100,6 +124,35 @@ describe("memory embedding policy", () => {
     );
     expect(isRetryableMemoryEmbeddingTransportError("worker terminated by user")).toBe(false);
     expect(isRetryableMemoryEmbeddingTransportError("embedding validation failed")).toBe(false);
+  });
+
+  it("splits OpenAI 431 oversized embedding batches without retrying the same request", async () => {
+    const run = vi.fn(async (items: string[]) => {
+      if (items.length > 1) {
+        throw new Error(
+          "openai embeddings failed: 431 request_headers_too_large: Request Header Fields Too Large",
+        );
+      }
+      return items.map((item) => [item.charCodeAt(0)]);
+    });
+
+    const result = await runMemoryEmbeddingBatchRetryWithSplit({
+      items: ["a", "b", "c", "d"],
+      run,
+      isRetryable: isRetryableMemoryEmbeddingError,
+      isSplittable: isSplittableMemoryEmbeddingTransportError,
+      waitForRetry: async () => {},
+      maxAttempts: 3,
+      baseDelayMs: 500,
+    });
+
+    expect(result).toEqual([[97], [98], [99], [100]]);
+    expect(run.mock.calls.map(([items]) => items.length)).toEqual([4, 2, 1, 1, 2, 1, 1]);
+    expect(isRetryableMemoryEmbeddingError("431 request_headers_too_large")).toBe(false);
+    expect(isSplittableMemoryEmbeddingTransportError("431 request_headers_too_large")).toBe(true);
+    expect(
+      isSplittableMemoryEmbeddingTransportError("embedding validation failed at item 4312"),
+    ).toBe(false);
   });
 
   it("retries too-many-tokens-per-day errors", async () => {

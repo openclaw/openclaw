@@ -500,8 +500,8 @@ describe("exec approvals CLI", () => {
       requireRecord(toolsScope.askFallback, "tools.exec askFallback"),
       "tools.exec askFallback",
       {
-        effective: "full",
-        source: "OpenClaw default (full)",
+        effective: "deny",
+        source: "OpenClaw default (deny)",
       },
     );
 
@@ -517,8 +517,8 @@ describe("exec approvals CLI", () => {
       effective: "always",
     });
     expectFields(requireRecord(agentScope.askFallback, "agent askFallback"), "agent askFallback", {
-      effective: "allowlist",
-      source: "OpenClaw default (full)",
+      effective: "deny",
+      source: "OpenClaw default (deny)",
     });
   });
 

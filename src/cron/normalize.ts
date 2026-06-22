@@ -79,6 +79,18 @@ function normalizeCommandArgv(value: unknown): string[] | undefined {
   return [...value];
 }
 
+function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
+  return (
+    "model" in payload ||
+    "fallbacks" in payload ||
+    "thinking" in payload ||
+    "timeoutSeconds" in payload ||
+    "toolsAllow" in payload ||
+    typeof payload.lightContext === "boolean" ||
+    typeof payload.allowUnsafeExternalContent === "boolean"
+  );
+}
+
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
@@ -170,11 +182,15 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("model" in next) {
-    const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
-    if (model !== undefined) {
-      next.model = model;
+    if (next.model === null) {
+      next.model = null;
     } else {
-      delete next.model;
+      const model = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.model);
+      if (model !== undefined) {
+        next.model = model;
+      } else {
+        delete next.model;
+      }
     }
   }
   if ("thinking" in next) {
@@ -260,6 +276,10 @@ function coercePayload(payload: UnknownRecord) {
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if (!("kind" in next) && typeof next.text === "string" && hasAgentTurnOnlyPayloadHint(next)) {
+    next.kind = "agentTurn";
+    next.message = next.text;
   }
   if (next.kind === "systemEvent") {
     delete next.message;

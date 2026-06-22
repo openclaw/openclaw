@@ -5,7 +5,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { writeSessionStoreForTestAsync } from "../../config/sessions/test-helpers.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { initSessionState } from "./session.js";
 
@@ -71,7 +70,8 @@ async function writeStore(
   storePath: string,
   store: Record<string, SessionEntry | Record<string, unknown>>,
 ): Promise<void> {
-  await writeSessionStoreForTestAsync(storePath, store as Record<string, SessionEntry>);
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 }
 
 async function writeTranscript(

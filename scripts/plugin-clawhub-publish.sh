@@ -2,19 +2,42 @@
 
 set -euo pipefail
 
+usage() {
+  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>"
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
+fi
+
 mode="${1:-}"
-package_dir="${2:-}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 invocation_root="$(pwd)"
 
-if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish] <package-dir>" >&2
+if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" && "${mode}" != "--pack" ]]; then
+  usage >&2
   exit 2
 fi
+shift
 
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+package_dir=""
+if [[ "$#" -gt 0 ]]; then
+  case "$1" in
+    -*) echo "unexpected plugin ClawHub package-dir option: $1" >&2; exit 2 ;;
+    *) package_dir="$1"; shift ;;
+  esac
+fi
 if [[ -z "${package_dir}" ]]; then
   echo "missing package dir" >&2
+  exit 2
+fi
+if [[ "$#" -gt 0 ]]; then
+  echo "unexpected plugin ClawHub publish argument: $1" >&2
   exit 2
 fi
 
@@ -42,6 +65,7 @@ source_repo="${SOURCE_REPO:-${GITHUB_REPOSITORY:-openclaw/openclaw}}"
 source_commit="${SOURCE_COMMIT:-$(git -C "${invocation_root}" rev-parse HEAD)}"
 source_ref="${SOURCE_REF:-$(git -C "${invocation_root}" symbolic-ref -q HEAD || true)}"
 clawhub_workdir="${CLAWDHUB_WORKDIR:-${CLAWHUB_WORKDIR:-${invocation_root}}}"
+manual_override_reason="${OPENCLAW_CLAWHUB_MANUAL_OVERRIDE_REASON:-}"
 
 pack_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-clawhub-pack.XXXXXX")"
 cleanup() {
@@ -119,6 +143,21 @@ if [[ ! -f "${pack_path}" ]]; then
   exit 1
 fi
 
+echo "Resolved ClawPack: ${pack_path}"
+
+if [[ "${mode}" == "--pack" ]]; then
+  output_dir="${OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR:-}"
+  if [[ -z "${output_dir}" ]]; then
+    echo "OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR is required for --pack" >&2
+    exit 2
+  fi
+  mkdir -p "${output_dir}"
+  output_path="${output_dir}/$(basename "${pack_path}")"
+  cp "${pack_path}" "${output_path}"
+  echo "Packed ClawPack: ${output_path}"
+  exit 0
+fi
+
 publish_cmd=(
   clawhub
   --workdir
@@ -143,7 +182,12 @@ if [[ -n "${source_ref}" ]]; then
   )
 fi
 
-echo "Resolved ClawPack: ${pack_path}"
+if [[ -n "${manual_override_reason}" ]]; then
+  publish_cmd+=(
+    --manual-override-reason
+    "${manual_override_reason}"
+  )
+fi
 
 printf 'Publish command: CLAWHUB_WORKDIR=%q' "${clawhub_workdir}"
 printf ' %q' "${publish_cmd[@]}"

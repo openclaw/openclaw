@@ -36,7 +36,7 @@ import type {
 } from "./types.js";
 
 /** Legacy auth.json store shape before auth-profiles.json/SQLite. */
-export type LegacyAuthStore = Record<string, AuthProfileCredential>;
+type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
 type LoadPersistedAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
@@ -592,6 +592,7 @@ export function mergeAuthProfileStores(
     !override.order &&
     !override.lastGood &&
     !override.usageStats &&
+    override.runtimePersistedProfileIds === undefined &&
     override.runtimeExternalProfileIds === undefined &&
     override.runtimeExternalProfileIdsAuthoritative !== true
   ) {
@@ -651,6 +652,14 @@ export function mergeAuthProfileStores(
     lastGood,
     usageStats,
   };
+  const runtimePersistedProfileIds = [
+    ...(base.runtimePersistedProfileIds ?? []).filter(
+      (profileId) => !overrideProfileIds.has(profileId),
+    ),
+    ...(override.runtimePersistedProfileIds ?? []),
+  ]
+    .filter((profileId) => merged.profiles[profileId])
+    .toSorted();
   const baseRuntimeExternalProfileIds =
     override.runtimeExternalProfileIdsAuthoritative === true &&
     options?.preserveBaseRuntimeExternalProfiles !== true
@@ -681,6 +690,9 @@ export function mergeAuthProfileStores(
     override,
     merged: {
       ...merged,
+      ...(runtimePersistedProfileIds.length > 0
+        ? { runtimePersistedProfileIds: [...new Set(runtimePersistedProfileIds)] }
+        : {}),
       ...runtimeExternalProfileMetadata,
     },
   });

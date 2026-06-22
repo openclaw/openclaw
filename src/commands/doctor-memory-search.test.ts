@@ -1,5 +1,3 @@
-// Doctor memory-search tests cover QMD availability, memory config, and doctor prompt behavior.
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "../memory-host-sdk/engine-qmd.js";
@@ -98,7 +96,7 @@ vi.mock("./doctor-workspace.js", async (importOriginal) => {
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-search.js";
-import { detectLegacyWorkspaceDirs, formatRootMemoryFilesWarning } from "./doctor-workspace.js";
+import { formatRootMemoryFilesWarning } from "./doctor-workspace.js";
 
 function resetMemoryRecallMocks() {
   auditShortTermPromotionArtifacts.mockReset();
@@ -193,7 +191,7 @@ describe("noteMemorySearchHealth", () => {
     resetMemoryRecallMocks();
   });
 
-  it("does not warn when local provider is set with no explicit modelPath (default model fallback)", async () => {
+  it("warns when local provider is set but readiness was not confirmed", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: {},
@@ -202,7 +200,10 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg, {});
 
-    expect(note).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = firstNoteMessage();
+    expect(message).toContain('Memory search provider is set to "local"');
+    expect(message).toContain("openclaw plugins install @openclaw/llama-cpp-provider");
   });
 
   it("warns when local provider with default model but gateway probe reports not ready", async () => {
@@ -218,7 +219,7 @@ describe("noteMemorySearchHealth", () => {
 
     expect(note).toHaveBeenCalledTimes(1);
     const message = firstNoteMessage();
-    expect(message).toContain("gateway reports local embeddings are not ready");
+    expect(message).toContain("local embeddings are not confirmed ready");
     expect(message).toContain("node-llama-cpp not installed");
   });
 
@@ -236,7 +237,7 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("does not treat an inconclusive gateway timeout as local embeddings not ready", async () => {
+  it("warns when local provider readiness probe is inconclusive", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: {},
@@ -251,10 +252,13 @@ describe("noteMemorySearchHealth", () => {
       },
     });
 
-    expect(note).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = firstNoteMessage();
+    expect(message).toContain("local embeddings are not confirmed ready");
+    expect(message).toContain("gateway timeout after 8000ms");
   });
 
-  it("does not warn when local provider has an explicit hf: modelPath", async () => {
+  it("warns when local provider has an explicit hf: modelPath but readiness was not confirmed", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: { modelPath: "hf:some-org/some-model-GGUF/model.gguf" },
@@ -263,7 +267,8 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg, {});
 
-    expect(note).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain("a local model path is configured");
   });
 
   it("does not emit provider guidance when no memory runtime is active", async () => {
@@ -1104,15 +1109,6 @@ describe("memory recall doctor integration", () => {
     expect(message).toContain("Dreaming artifacts repaired:");
     expect(message).toContain("archived session corpus");
     expect(message).toContain("archived session-ingestion state");
-  });
-});
-
-describe("detectLegacyWorkspaceDirs", () => {
-  it("returns active workspace and no legacy dirs", () => {
-    const workspaceDir = "/home/user/openclaw";
-    const detection = detectLegacyWorkspaceDirs({ workspaceDir });
-    expect(detection.activeWorkspace).toBe(path.resolve(workspaceDir));
-    expect(detection.legacyDirs).toStrictEqual([]);
   });
 });
 

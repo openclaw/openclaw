@@ -32,7 +32,8 @@ For multi-endpoint setups with memory-specific providers, `provider` can also
 be a custom `models.providers.<id>` entry, such as `ollama-5080`, when that
 provider sets `api: "ollama"` or another memory embedding adapter owner.
 
-For local embeddings with no API key, set `provider: "local"`. Source checkouts
+For local embeddings with no API key, install
+`@openclaw/llama-cpp-provider` and set `provider: "local"`. Source checkouts
 may still require native build approval: `pnpm approve-builds` then
 `pnpm rebuild node-llama-cpp`.
 

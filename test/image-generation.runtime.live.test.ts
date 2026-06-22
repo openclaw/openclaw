@@ -42,6 +42,7 @@ type LiveProviderCase = {
   pluginId: string;
   pluginName: string;
   providerId: string;
+  defaultEditEnabled?: boolean;
 };
 
 type LiveImageCase = {
@@ -88,6 +89,12 @@ const PROVIDER_CASES: LiveProviderCase[] = [
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
+  },
+  {
+    pluginId: "microsoft-foundry",
+    pluginName: "Microsoft Foundry Provider",
+    providerId: "microsoft-foundry",
+    defaultEditEnabled: false,
   },
   {
     pluginId: "openai",
@@ -277,7 +284,8 @@ describeLive("image generation live (provider sweep)", () => {
         const liveCases = buildLiveCases({
           providerId: providerCase.providerId,
           modelRef,
-          editEnabled: provider.capabilities.edit?.enabled ?? false,
+          editEnabled:
+            providerCase.defaultEditEnabled ?? provider.capabilities.edit?.enabled ?? false,
         }).filter((entry) => (caseFilter ? caseFilter.has(entry.id.toLowerCase()) : true));
 
         for (const testCase of liveCases) {

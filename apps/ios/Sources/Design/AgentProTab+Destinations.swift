@@ -6,10 +6,12 @@ extension AgentProTab {
     @ViewBuilder
     func destination(for route: AgentRoute) -> some View {
         switch route {
+        case .agents:
+            self.agentsDestination
         case .skills:
             self.skillsDestination
-        case .nodes:
-            self.nodesDestination
+        case .instances:
+            self.instancesDestination
         case .cron:
             self.cronDestination
         case .usage:
@@ -17,6 +19,26 @@ extension AgentProTab {
         case .dreaming:
             self.dreamingDestination
         }
+    }
+
+    var agentsDestination: some View {
+        ZStack {
+            OpenClawProBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    self.rosterHeader
+                    self.agentFilters
+                    self.agentsSection
+                }
+                .padding(.vertical, 18)
+            }
+            .refreshable {
+                await self.refreshOverview(force: true)
+            }
+            .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
+        }
+        .navigationTitle("Agents")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
     var skillsDestination: some View {
@@ -46,8 +68,9 @@ extension AgentProTab {
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    var nodesDestination: some View {
+    var instancesDestination: some View {
         AgentProNodesDestination(
+            headerLeadingAction: self.directHeaderLeadingAction(for: .instances),
             overview: self.overview,
             gatewayConnected: self.gatewayConnected,
             agentCount: self.appModel.gatewayAgents.count,
@@ -64,6 +87,10 @@ extension AgentProTab {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    self.directHeader(
+                        for: .cron,
+                        title: "Cron Jobs",
+                        subtitle: self.cronDetail)
                     self.detailSummaryCard(
                         icon: "clock.arrow.circlepath",
                         title: "Cron Jobs",
@@ -89,6 +116,10 @@ extension AgentProTab {
             OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    self.directHeader(
+                        for: .usage,
+                        title: "Usage",
+                        subtitle: self.usageDetail)
                     self.detailSummaryCard(
                         icon: "chart.line.uptrend.xyaxis",
                         title: "Usage",
@@ -111,6 +142,7 @@ extension AgentProTab {
 
     var dreamingDestination: some View {
         AgentProDreamingDestination(
+            headerLeadingAction: self.directHeaderLeadingAction(for: .dreaming),
             overview: self.overview,
             gatewayConnected: self.gatewayConnected,
             overviewLoading: self.overviewLoading,
@@ -120,6 +152,27 @@ extension AgentProTab {
             refresh: {
                 await self.refreshOverview(force: true)
             })
+    }
+
+    @ViewBuilder
+    func directHeader(for route: AgentRoute, title: String, subtitle: String) -> some View {
+        if let headerLeadingAction = self.directHeaderLeadingAction(for: route) {
+            OpenClawAdaptiveHeaderRow(
+                title: title,
+                subtitle: subtitle,
+                titleFont: .title3.weight(.semibold),
+                subtitleFont: .callout)
+            {
+                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+            } accessory: {
+                EmptyView()
+            }
+            .padding(.horizontal, OpenClawProMetric.pagePadding)
+        }
+    }
+
+    func directHeaderLeadingAction(for route: AgentRoute) -> OpenClawSidebarHeaderAction? {
+        self.directRoute == route ? self.headerLeadingAction : nil
     }
 
     func detailSummaryCard(

@@ -7,6 +7,10 @@
 
 import type { Server } from "node:http";
 import {
+  generateOAuthState,
+  generatePKCE,
+  oauthErrorHtml,
+  oauthSuccessHtml,
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";
@@ -16,8 +20,6 @@ import {
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
 } from "./abort.js";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
-import { generateOAuthState, generatePKCE } from "./pkce.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,

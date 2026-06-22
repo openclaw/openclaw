@@ -6,13 +6,11 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
-import { writeSessionStoreForTestAsync } from "../config/sessions/test-helpers.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
   onceMessage,
   agentDiscoveryMock,
-  readSessionStore,
   rpcReq,
   startConnectedServerWithClient,
   testState,
@@ -31,6 +29,26 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 
 type CheckpointFixture = Awaited<ReturnType<typeof createCheckpointFixture>>;
+
+function buildSessionTranscriptLines(sessionId: string, totalLines: number): string[] {
+  const header = JSON.stringify({
+    type: "session",
+    version: 3,
+    id: sessionId,
+    timestamp: "2026-06-19T12:00:00.000Z",
+    cwd: "/tmp",
+  });
+  const entries = Array.from({ length: Math.max(0, totalLines - 1) }, (_, index) =>
+    JSON.stringify({
+      type: "message",
+      id: `entry-${index}`,
+      parentId: index === 0 ? null : `entry-${index - 1}`,
+      timestamp: `2026-06-19T12:00:${String(index % 60).padStart(2, "0")}.000Z`,
+      message: { role: "user", content: `line-${index}`, timestamp: index },
+    }),
+  );
+  return [header, ...entries];
+}
 
 function compactionCheckpointEntry(
   fixture: CheckpointFixture,
@@ -228,7 +246,14 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       ),
   ).toBe(false);
 
-  const storeAfterBranch = readSessionStore(storePath);
+  const storeAfterBranch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      parentSessionKey?: string;
+      compactionCheckpoints?: unknown[];
+      sessionId?: string;
+    }
+  >;
   const branchedEntry = storeAfterBranch[branched.payload!.key];
   expect(branchedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(branchedEntry?.compactionCheckpoints).toBeUndefined();
@@ -293,7 +318,10 @@ test("sessions.compaction.* lists checkpoints and branches or restores from comp
       ),
   ).toBe(false);
 
-  const storeAfterRestore = readSessionStore(storePath);
+  const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { compactionCheckpoints?: unknown[]; sessionId?: string }
+  >;
   expect(storeAfterRestore["agent:main:main"]?.sessionId).toBe(restored.payload?.sessionId);
   expect(storeAfterRestore["agent:main:main"]?.compactionCheckpoints).toHaveLength(1);
 
@@ -316,15 +344,27 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
     reason: "manual",
     summary: "work checkpoint",
   });
-  await writeSessionStoreForTestAsync(mainStorePath, {
-    global: sessionStoreEntry("sess-main-global", { sessionFile: mainSessionFile }),
-  });
-  await writeSessionStoreForTestAsync(workStorePath, {
-    global: sessionStoreEntry(fixture.sessionId, {
-      sessionFile: fixture.sessionFile,
-      compactionCheckpoints: [checkpointEntry],
-    }),
-  });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify(
+      { global: sessionStoreEntry("sess-main-global", { sessionFile: mainSessionFile }) },
+      null,
+      2,
+    ),
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify(
+      {
+        global: sessionStoreEntry(fixture.sessionId, {
+          sessionFile: fixture.sessionFile,
+          compactionCheckpoints: [checkpointEntry],
+        }),
+      },
+      null,
+      2,
+    ),
+  );
 
   const listed = await directSessionReq<{
     checkpoints: Array<{ checkpointId: string; summary?: string }>;
@@ -350,8 +390,14 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
   );
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("global");
-  const mainStore = readSessionStore(mainStorePath);
-  const workStore = readSessionStore(workStorePath);
+  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
+  const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as Record<
+    string,
+    { sessionId?: string }
+  >;
   expect(mainStore.global?.sessionId).toBe("sess-main-global");
   expect(workStore.global?.sessionId).toBe(restored.payload?.sessionId);
   testState.sessionStorePath = undefined;
@@ -487,7 +533,15 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   });
   expect(compactionCall.trigger).toBe("manual");
 
-  const store = readSessionStore(storePath);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      contextBudgetStatus?: unknown;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
   expect(store["agent:main:main"]?.compactionCount).toBe(1);
   expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
   expect(store["agent:main:main"]?.totalTokens).toBe(80);
@@ -557,7 +611,14 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
     completed: false,
   });
 
-  const store = readSessionStore(storePath);
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      compactionCount?: number;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
+  >;
   expect(store["agent:main:main"]?.compactionCount).toBe(2);
   expect(store["agent:main:main"]?.totalTokens).toBe(54_321);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
@@ -565,12 +626,182 @@ test("sessions.compact treats Codex native compaction start as pending, not comp
   ws.close();
 });
 
+test("sessions.compact maxLines truncates the transcript on disk and archives the original to .bak", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-main", 500);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq<{
+    ok: true;
+    key: string;
+    compacted: boolean;
+    kept?: number;
+    archived?: string;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+
+  // Active transcript stays reopenable: header + 49 newest entries.
+  const truncated = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(truncated).toHaveLength(50);
+  expect(JSON.parse(truncated[0] ?? "{}")).toMatchObject({ type: "session", id: "sess-main" });
+  expect(JSON.parse(truncated[1] ?? "{}")).toMatchObject({ id: "entry-450", parentId: null });
+  expect(JSON.parse(truncated.at(-1) ?? "{}")).toMatchObject({
+    id: "entry-498",
+    message: { content: "line-498" },
+  });
+
+  // Original 500 lines preserved verbatim in the .bak archive.
+  const archivedPath = compacted.payload?.archived;
+  if (!archivedPath) {
+    throw new Error("expected archived transcript path");
+  }
+  const archived = (await fs.readFile(archivedPath, "utf-8")).trim().split("\n");
+  expect(archived).toHaveLength(500);
+  expect(JSON.parse(archived[0] ?? "{}")).toMatchObject({ type: "session", id: "sess-main" });
+
+  // No active run present, so the interrupt guard short-circuits without aborting.
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines interrupts an active run before truncating, matching the LLM compact path", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-main", 500);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  // Simulate an embedded agent run actively appending to this session transcript.
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  // Regression for the ClawSweeper finding: the maxLines truncate branch must
+  // run the same active-run interrupt guard as the LLM-summarize branch *before*
+  // archiving and overwriting the transcript, so an active runner cannot keep
+  // appending to the file being truncated (the data-loss mode tracked by #72765).
+  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
+  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+
+  // The guard ran first; truncation still completed deterministically afterwards.
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(true);
+  expect(compacted.payload?.kept).toBe(50);
+  const truncated = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(truncated).toHaveLength(50);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines does not interrupt an active run when truncation is a no-op", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = buildSessionTranscriptLines("sess-main", 10);
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    kept?: number;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.kept).toBe(10);
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines does not interrupt an active run when no transcript exists", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", true);
+
+  const compacted = await rpcReq<{
+    ok: true;
+    compacted: boolean;
+    reason?: string;
+  }>(ws, "sessions.compact", { key: "main", maxLines: 50 });
+
+  expect(compacted.ok).toBe(true);
+  expect(compacted.payload?.compacted).toBe(false);
+  expect(compacted.payload?.reason).toBe("no transcript");
+  expect(embeddedRunMock.abortCalls).toEqual([]);
+  expect(embeddedRunMock.waitCalls).toEqual([]);
+
+  ws.close();
+});
+
+test("sessions.compact maxLines aborts without truncating when an active run cannot be interrupted", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "sess-main.jsonl");
+  const originalLines = Array.from({ length: 500 }, (_, index) =>
+    JSON.stringify({ role: "user", content: `line-${index}` }),
+  );
+  await fs.writeFile(transcriptPath, `${originalLines.join("\n")}\n`, "utf-8");
+  await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
+
+  const { ws } = await openClient();
+  // Active embedded run that fails to end within the interrupt window.
+  embeddedRunMock.activeIds.add("sess-main");
+  embeddedRunMock.waitResults.set("sess-main", false);
+
+  const compacted = await rpcReq<{ ok: boolean }>(ws, "sessions.compact", {
+    key: "main",
+    maxLines: 50,
+  });
+
+  // Order proof: the guard ran first and failed, so the RPC errors out *before*
+  // any archive/truncate. If the guard ran after truncation, the transcript
+  // would already be 50 lines here. It is still 500 with no .bak, proving the
+  // interrupt happens before the destructive tail-read/archive/write.
+  expect(compacted.ok).toBe(false);
+  expect(embeddedRunMock.abortCalls).toEqual(["sess-main"]);
+  expect(embeddedRunMock.waitCalls).toEqual(["sess-main"]);
+
+  const untouched = (await fs.readFile(transcriptPath, "utf-8")).trim().split("\n");
+  expect(untouched).toHaveLength(500);
+  const dirEntries = await fs.readdir(dir);
+  expect(dirEntries.some((name) => name.includes(".bak"))).toBe(false);
+  expect(storePath).toBeTruthy();
+
+  ws.close();
+});
+
 test("sessions.patch preserves nested model ids under provider overrides", async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
   const storePath = path.join(dir, "sessions.json");
-  await writeSessionStoreForTestAsync(storePath, {
-    "agent:main:main": sessionStoreEntry("sess-main"),
-  });
+  await fs.writeFile(
+    storePath,
+    JSON.stringify({
+      "agent:main:main": sessionStoreEntry("sess-main"),
+    }),
+    "utf-8",
+  );
 
   await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
     const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();

@@ -130,6 +130,17 @@ describe("command palette", () => {
     expect(prose?.label).toBe("/prose");
   });
 
+  it("requests slash command hydration when the palette opens", async () => {
+    const onOpen = vi.fn();
+
+    await renderPalette({ onOpen });
+    expect(onOpen).toHaveBeenCalledTimes(1);
+
+    render(renderCommandPalette(createProps({ onOpen, query: "overview" })), container);
+    await nextFrame();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
   it("matches localized base item labels and descriptions", async () => {
     await i18n.setLocale("zh-CN");
 

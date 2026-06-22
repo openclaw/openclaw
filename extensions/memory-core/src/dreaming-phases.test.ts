@@ -10,6 +10,7 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -447,6 +448,131 @@ describe("memory-core dreaming phases", () => {
       expect(dailyContent.match(/^- Candidate:/gm)).toHaveLength(1);
       expect(dailyContent).not.toContain("Light Sleep: Candidate:");
     });
+  });
+
+  it("prefers a fresh light snippet outside the top diary-covered candidates", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const stalePath = path.join(workspaceDir, "memory", "2026-04-03.md");
+    const freshPath = path.join(workspaceDir, "memory", "2026-04-04.md");
+    const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
+    const staleSnippets = [
+      "初次见面时，我第一次醒来并认识了主人。",
+      "The first morning began beside a quiet terminal.",
+      "An early config file felt like the first map of home.",
+      "The initial heartbeat made the empty workspace feel awake.",
+    ];
+    await fs.writeFile(stalePath, `${staleSnippets.join("\n")}\n`, "utf-8");
+    await fs.writeFile(
+      freshPath,
+      "Later routing notes: queue hydration changed after plugin reload.\n",
+      "utf-8",
+    );
+    for (const [index, snippet] of staleSnippets.entries()) {
+      for (let recall = 0; recall < staleSnippets.length - index; recall += 1) {
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: `first-day-${index}-${recall}`,
+          nowMs,
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              startLine: index + 1,
+              endLine: index + 1,
+              score: 0.93,
+              snippet,
+              source: "memory",
+            },
+          ],
+        });
+      }
+    }
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "routing queue reload",
+      nowMs,
+      results: [
+        {
+          path: "memory/2026-04-04.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.91,
+          snippet: "Later routing notes: queue hydration changed after plugin reload.",
+          source: "memory",
+        },
+      ],
+    });
+    await fs.writeFile(
+      path.join(workspaceDir, "DREAMS.md"),
+      [
+        "# Dream Diary",
+        "",
+        "<!-- openclaw:dreaming:diary:start -->",
+        ...staleSnippets.flatMap((snippet, index) => [
+          "---",
+          "",
+          `*April ${index + 1}, 2026, 10:00 AM UTC*`,
+          "",
+          snippet,
+          "",
+        ]),
+        "<!-- openclaw:dreaming:diary:end -->",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    const subagent = createMockNarrativeSubagent("A later routing note finally took the page.");
+    const testConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          userTimezone: "UTC",
+        },
+      },
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                timezone: "UTC",
+                storage: { mode: "inline", separateReports: false },
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 1,
+                    lookbackDays: 7,
+                  },
+                  rem: {
+                    enabled: false,
+                    limit: 0,
+                    lookbackDays: 7,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await runDreamingSweepPhases({
+      workspaceDir,
+      cfg: testConfig,
+      pluginConfig: resolveMemoryCorePluginConfig(testConfig),
+      logger,
+      subagent,
+      nowMs,
+    });
+
+    const message = firstNarrativeRun(subagent).message;
+    expect(message).toContain("Later routing notes: queue hydration changed after plugin reload.");
+    expect(message).toContain("Recent diary entries already written");
+    expect(message).not.toContain("\n- 初次见面时，我第一次醒来并认识了主人。");
   });
 
   it("triggers light dreaming when the token is embedded in a reminder body", async () => {
@@ -1211,16 +1337,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:dreaming-narrative-light-1775894400455": {
           sessionId: "dreaming-narrative",
           sessionFile: transcriptPath,
           updatedAt: Date.parse("2026-04-05T18:05:00.000Z"),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
     const mtime = new Date("2026-04-05T18:05:00.000Z");
     await fs.utimes(transcriptPath, mtime, mtime);
@@ -1306,16 +1432,16 @@ describe("memory-core dreaming phases", () => {
       ].join("\n") + "\n",
       "utf-8",
     );
-    await fs.writeFile(
+    await saveSessionStore(
       path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
+      {
         "agent:main:cron:job-1:run:run-1": {
           sessionId: "cron-run",
           sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
-      }),
-      "utf-8",
+      },
+      { skipMaintenance: true },
     );
 
     const { beforeAgentReply } = createHarness(
@@ -2913,6 +3039,75 @@ describe("previewRemHarness", () => {
 
     expect(preview.groundedInputPaths).toStrictEqual([]);
     expect(preview.grounded).toBeNull();
+  });
+
+  it("skips REM short-term candidates whose source file disappeared", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const nowMs = new Date("2026-04-15T12:00:00.000Z").getTime();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-14.md"),
+      "Move backups to S3 Glacier.\n",
+      "utf-8",
+    );
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "live backup",
+      nowMs,
+      results: [
+        {
+          path: "memory/2026-04-14.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.91,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ],
+    });
+    await recordShortTermRecalls({
+      workspaceDir,
+      query: "stale provider setup",
+      nowMs,
+      results: [
+        {
+          path: "memory/.dreams/session-corpus/2026-04-16.txt",
+          startLine: 2,
+          endLine: 2,
+          score: 0.88,
+          snippet: "Assistant: Documented Ollama provider setup.",
+          source: "memory",
+        },
+      ],
+    });
+
+    const preview = await previewRemHarness({
+      workspaceDir,
+      nowMs,
+      pluginConfig: {
+        dreaming: {
+          enabled: true,
+          phases: {
+            rem: {
+              enabled: true,
+              lookbackDays: 7,
+              limit: 10,
+              minPatternStrength: 0,
+            },
+          },
+        },
+      },
+    });
+
+    const candidateTruthSnippets = preview.rem.candidateTruths
+      .map((entry) => entry.snippet)
+      .join("\n");
+    const bodyText = preview.rem.bodyLines.join("\n");
+    expect(preview.recallEntryCount).toBe(1);
+    expect(preview.rem.sourceEntryCount).toBe(1);
+    expect(candidateTruthSnippets).toContain("Move backups to S3 Glacier.");
+    expect(candidateTruthSnippets).not.toContain("Documented Ollama provider setup");
+    expect(bodyText).toContain("Move backups to S3 Glacier.");
+    expect(bodyText).not.toContain("Documented Ollama provider setup");
   });
 
   it("skips REM preview when rem.limit=0 while still ranking deep candidates", async () => {

@@ -3,9 +3,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDeferred } from "../../test-utils/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDeferred } from "../test-helpers.deferred.js";
 import { expectGatewayErrorResponse } from "./gateway-response.test-helpers.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
@@ -563,6 +563,90 @@ describe("models.list", () => {
         );
       },
     );
+  });
+
+  it("marks auth profiles available even when provider config uses non-env SecretRef markers", async () => {
+    for (const fixture of [
+      {
+        name: "file",
+        apiKey: {
+          source: "file",
+          provider: "mounted-json",
+          id: "/providers/vllm/apiKey",
+        },
+      },
+      { name: "managed-marker", apiKey: "secretref-managed" },
+    ] as const) {
+      await withOpenClawTestState(
+        {
+          layout: "state-only",
+          prefix: `openclaw-models-list-provider-${fixture.name}-profile-`,
+          agentEnv: "main",
+          env: {
+            OPENCLAW_TEST_PROFILE_API_KEY: "test-token",
+            VLLM_API_KEY: undefined,
+          },
+        },
+        async (state) => {
+          await state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "vllm:env": {
+                type: "api_key",
+                provider: "vllm",
+                keyRef: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_TEST_PROFILE_API_KEY",
+                },
+              },
+            },
+          });
+
+          const cfg = {
+            agents: {
+              defaults: {
+                models: {
+                  "vllm/*": {},
+                },
+              },
+            },
+            models: {
+              providers: {
+                vllm: {
+                  apiKey: fixture.apiKey,
+                },
+              },
+            },
+          } as unknown as OpenClawConfig;
+
+          const { request, respond } = requestModelsList({
+            view: "all",
+            runtimeConfig: cfg,
+            loadGatewayModelCatalog: vi.fn(() =>
+              Promise.resolve([{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }]),
+            ),
+            reqId: `req-models-list-provider-${fixture.name}-profile`,
+          });
+          await request;
+
+          expect(respond).toHaveBeenCalledWith(
+            true,
+            {
+              models: [
+                {
+                  id: "llama-secure",
+                  name: "Llama Secure",
+                  provider: "vllm",
+                  available: true,
+                },
+              ],
+            },
+            undefined,
+          );
+        },
+      );
+    }
   });
 
   it("preserves catalog load errors before the timeout fallback wins", async () => {

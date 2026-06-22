@@ -120,6 +120,7 @@ describe("canvas host", () => {
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
   let startCanvasHost: typeof import("./server.js").startCanvasHost;
+  let canvasLiveReloadMaxInboundMessageBytes = 0;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -162,7 +163,10 @@ describe("canvas host", () => {
       };
     });
     vi.resetModules();
-    ({ createCanvasHostHandler, startCanvasHost } = await import("./server.js"));
+    const serverModule = await import("./server.js");
+    ({ createCanvasHostHandler, startCanvasHost } = serverModule);
+    canvasLiveReloadMaxInboundMessageBytes =
+      serverModule.CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES;
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -216,6 +220,54 @@ describe("canvas host", () => {
 
       const wsResponse = await captureHandlerResponse(handler, CANVAS_WS_PATH);
       expect(wsResponse.status).toBe(404);
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it("caps live reload WebSocket inbound payloads", async () => {
+    const dir = await createCaseDir();
+    const constructorOptions: unknown[] = [];
+    let connectionHandler: ((socket: TrackingWebSocket) => void) | undefined;
+    class CapturingWebSocketServer {
+      on(event: string, cb: (socket: TrackingWebSocket) => void) {
+        if (event === "connection") {
+          connectionHandler = cb;
+        }
+        return this;
+      }
+
+      close(cb?: () => void) {
+        cb?.();
+      }
+
+      constructor(options: unknown) {
+        constructorOptions.push(options);
+      }
+    }
+
+    const handler = await createTestCanvasHostHandler(dir, {
+      webSocketServerClass:
+        CapturingWebSocketServer as unknown as typeof import("ws").WebSocketServer,
+    });
+
+    try {
+      expect(constructorOptions[0]).toMatchObject({
+        noServer: true,
+        maxPayload: canvasLiveReloadMaxInboundMessageBytes,
+      });
+      const socketHandlers: string[] = [];
+      const socket: TrackingWebSocket = {
+        sent: [],
+        on: (event) => {
+          socketHandlers.push(event);
+          return socket;
+        },
+        send: vi.fn(),
+      };
+      expect(connectionHandler).toBeDefined();
+      connectionHandler?.(socket);
+      expect(socketHandlers).toEqual(expect.arrayContaining(["error", "close"]));
     } finally {
       await handler.close();
     }
@@ -413,19 +465,6 @@ describe("canvas host", () => {
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
-      const expectedPngSignature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-      for (const assetPath of [
-        "assets/providers/google.png",
-        "assets/providers/x.png",
-        "granola.png",
-      ]) {
-        const assetRes = await captureA2uiResponse(`${A2UI_PATH}/${assetPath}`);
-        expect(assetRes.status).toBe(200);
-        expect(assetRes.headers["content-type"]).toBe("image/png");
-        expect(assetRes.bodyBytes.subarray(0, expectedPngSignature.length)).toEqual(
-          expectedPngSignature,
-        );
-      }
       const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");

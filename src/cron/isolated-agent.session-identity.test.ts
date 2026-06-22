@@ -1,12 +1,10 @@
 // Isolated agent session identity tests cover stable session ids for cron runs.
 import "./isolated-agent.mocks.js";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../config/sessions/test-helpers.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -185,9 +183,10 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         },
       });
       updateSessionStoreMock.mockImplementation(async (targetStorePath, update) => {
-        const store = readSessionStoreForTest(targetStorePath);
+        const raw = await fs.readFile(targetStorePath, "utf-8");
+        const store = JSON.parse(raw) as Record<string, SessionEntry>;
         update(store);
-        await writeSessionStoreForTestAsync(targetStorePath, store);
+        await fs.writeFile(targetStorePath, JSON.stringify(store, null, 2), "utf-8");
       });
       const currentBoundJob = normalizeCronJobCreate(
         {
@@ -300,19 +299,14 @@ describe("runCronIsolatedAgentTurn session identity", () => {
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
-      await writeSessionStoreEntries(home, {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now(),
-          lastProvider: "webchat",
-          lastTo: "",
-        },
-        "agent:main:cron:job-1": {
-          sessionId: "old",
-          updatedAt: Date.now(),
-          label: "Nightly digest",
-        },
-      });
+      const raw = await fs.readFile(storePath, "utf-8");
+      const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
+      store["agent:main:cron:job-1"] = {
+        sessionId: "old",
+        updatedAt: Date.now(),
+        label: "Nightly digest",
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
 
       await runCronTurn(home, {
         jobPayload: { kind: "agentTurn", message: "ping" },

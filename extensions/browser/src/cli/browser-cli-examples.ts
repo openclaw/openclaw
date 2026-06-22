@@ -37,6 +37,7 @@ export const browserActionExamples = [
   "openclaw browser dialog --accept",
   'openclaw browser wait --text "Done"',
   "openclaw browser evaluate --fn '(el) => el.textContent' --ref 7",
+  "openclaw browser evaluate --fn 'const title = document.title; return title;'",
   "openclaw browser console --level error",
   "openclaw browser pdf",
 ];

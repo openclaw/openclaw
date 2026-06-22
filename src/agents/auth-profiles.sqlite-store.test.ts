@@ -3,9 +3,11 @@
  * Verifies secrets/state persistence, runtime overlays, and legacy JSON
  * migration boundaries in temporary agent directories.
  */
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -144,6 +146,68 @@ describe("auth profile sqlite store", () => {
 
       expect(loaded?.profiles["openai:default"]).toMatchObject({ key: "sk-test" });
       expect(fs.existsSync(stateDbPath)).toBe(false);
+    });
+  });
+
+  it("waits for brief rollback-journal contention before reading persisted auth", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-contention-", async (agentDir) => {
+      saveAuthProfileStore(apiKeyStore("sk-test"), agentDir);
+      closeOpenClawAgentDatabasesForTest();
+
+      const databasePath = resolveAuthProfileDatabasePath(agentDir);
+      const setup = new DatabaseSync(databasePath);
+      setup.exec("PRAGMA journal_mode = DELETE;");
+      setup.close();
+
+      const child = spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+            const { DatabaseSync } = require("node:sqlite");
+            const db = new DatabaseSync(process.argv[1]);
+            db.exec("PRAGMA journal_mode = DELETE; BEGIN EXCLUSIVE;");
+            db.prepare(
+              "UPDATE auth_profile_store SET updated_at = updated_at + 1 WHERE store_key = ?",
+            ).run("primary");
+            process.stdout.write("locked\\n");
+            setTimeout(() => {
+              db.exec("ROLLBACK;");
+              db.close();
+            }, 250);
+          `,
+          databasePath,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      const childExit = new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`contention child exited with code ${code}`));
+          }
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        let locked = false;
+        child.stdout.once("data", () => {
+          locked = true;
+          resolve();
+        });
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (!locked) {
+            reject(new Error(`contention child exited before locking with code ${code}`));
+          }
+        });
+      });
+
+      const loaded = loadPersistedAuthProfileStore(agentDir);
+
+      await childExit;
+      expect(loaded?.profiles["openai:default"]).toMatchObject({ key: "sk-test" });
     });
   });
 

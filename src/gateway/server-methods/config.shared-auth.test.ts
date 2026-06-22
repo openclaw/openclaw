@@ -21,9 +21,7 @@ const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({
   coalesced: false,
 }));
 const restartSentinelMocks = vi.hoisted(() => ({
-  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => {
-    return "/tmp/restart-sentinel.json";
-  }),
+  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -149,7 +147,7 @@ function mockPreviousConfig(config: OpenClawConfig): void {
 
 async function runConfigPatch(
   raw: unknown,
-  params: { sessionKey?: string; restartDelayMs?: number } = {},
+  params: { sessionKey?: string; restartDelayMs?: number; replacePaths?: string[] } = {},
 ) {
   const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
     method: "config.patch",
@@ -158,6 +156,7 @@ async function runConfigPatch(
       raw: typeof raw === "string" ? raw : JSON.stringify(raw),
       restartDelayMs: params.restartDelayMs ?? 1_000,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      ...(params.replacePaths ? { replacePaths: params.replacePaths } : {}),
     },
   });
 
@@ -284,16 +283,19 @@ describe("config shared auth disconnects", () => {
       }),
     );
 
-    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch({
-      gateway: {
-        auth: {
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            allowUsers: ["bob@example.com"],
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+      {
+        gateway: {
+          auth: {
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              allowUsers: ["bob@example.com"],
+            },
           },
         },
       },
-    });
+      { replacePaths: ["gateway.auth.trustedProxy.allowUsers"] },
+    );
 
     expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
@@ -306,11 +308,14 @@ describe("config shared auth disconnects", () => {
       }),
     );
 
-    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch({
-      gateway: {
-        trustedProxies: ["10.0.0.10"],
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+      {
+        gateway: {
+          trustedProxies: ["10.0.0.10"],
+        },
       },
-    });
+      { replacePaths: ["gateway.trustedProxies"] },
+    );
 
     expectNoDirectRestart();
     expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);

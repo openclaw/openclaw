@@ -40,13 +40,22 @@ function stripAgentSessionKeyPrefix(key?: string): string | undefined {
   return key;
 }
 
+const CHANNEL_SESSION_KEY_PEER_KINDS = new Set(["group", "channel", "direct", "dm"]);
+
 function deriveChannelFromKey(key?: string) {
   const normalizedKey = stripAgentSessionKeyPrefix(key);
   if (!normalizedKey) {
     return undefined;
   }
   const parts = normalizedKey.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+  // Key layout is <channel>:[<accountId>:]<peerKind>:<peerId>; parts[0] is the
+  // channel for account-scoped DM keys too, so channel-scoped rules also fire
+  // for per-account-channel-peer sessions, not just 3-part direct/group keys.
+  const hasChannelPeerShape =
+    parts.length >= 3 && CHANNEL_SESSION_KEY_PEER_KINDS.has(parts[1] ?? "");
+  const hasAccountScopedPeerShape =
+    parts.length >= 4 && CHANNEL_SESSION_KEY_PEER_KINDS.has(parts[2] ?? "");
+  if (hasChannelPeerShape || hasAccountScopedPeerShape) {
     return normalizeMatchValue(parts[0]);
   }
   return undefined;

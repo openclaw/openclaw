@@ -51,6 +51,7 @@ type ParentState = {
 type ChildState = {
   childThreadId: string;
   parentThreadId: string;
+  assistantMessagesByTurn: Map<string, ChildAssistantMessages>;
   transcriptPath?: string;
   transcriptPollAttempt: number;
   transcriptPollTimer?: ReturnType<typeof setTimeout>;
@@ -61,6 +62,13 @@ type ChildState = {
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
   deliveringCompletionKey?: string;
   noFinalCompletionFallbackTimer?: ReturnType<typeof setTimeout>;
+};
+
+type ChildAssistantMessages = {
+  texts: Map<string, string>;
+  order: string[];
+  commentaryIds: Set<string>;
+  finalMessageIds: Set<string>;
 };
 
 type TranscriptCompletion = CodexNativeSubagentCompletion & {
@@ -211,6 +219,8 @@ export class CodexNativeSubagentMonitor {
         });
       }
     }
+    this.captureChildAssistantMessage(notification);
+    await this.handleChildTurnCompletion(notification);
     await this.handleCompletionNotification(notification);
   }
 
@@ -292,7 +302,11 @@ export class CodexNativeSubagentMonitor {
         nativeCompletion.agentPath,
       );
       const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
-      if (!childState || childState.parentThreadId !== state.parentThreadId) {
+      if (
+        !childState ||
+        childState.parentThreadId !== state.parentThreadId ||
+        childState.transcriptTerminal
+      ) {
         embeddedAgentLog.warn(
           "Ignoring Codex native subagent completion for unknown child thread",
           {
@@ -303,19 +317,149 @@ export class CodexNativeSubagentMonitor {
         continue;
       }
       const completion = toThreadCompletion(nativeCompletion, childState.childThreadId);
-      if (shouldWaitForTranscriptCompletion(completion, this.codexHome)) {
-        // Codex can notify `completed: null` before the child transcript exposes
-        // its final assistant message; poll briefly before delivering the no-final fallback.
-        const eventAt = Date.now();
-        const reconciled = await this.reconcileChildTranscript(childState.childThreadId);
-        if (!reconciled) {
-          this.scheduleTranscriptPoll(childState);
-          this.scheduleNoFinalCompletionFallback(state, childState, completion, eventAt);
-        }
-        continue;
-      }
-      await this.processCompletion(state, completion);
+      await this.processChildCompletion(state, childState, completion);
     }
+  }
+
+  private captureChildAssistantMessage(notification: CodexServerNotification): void {
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const childThreadId = readString(params, "threadId")?.trim();
+    const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+    if (!childState || childState.transcriptTerminal) {
+      return;
+    }
+    if (notification.method === "item/agentMessage/delta") {
+      const turnId = readString(params, "turnId");
+      const itemId = readString(params, "itemId");
+      const delta = readString(params, "delta");
+      if (turnId && itemId && delta) {
+        this.recordChildAssistantMessage(childState, turnId, itemId, delta);
+      }
+      return;
+    }
+    if (notification.method !== "item/started" && notification.method !== "item/completed") {
+      return;
+    }
+    const turnId = readString(params, "turnId");
+    const item = isJsonObject(params?.item) ? params.item : undefined;
+    this.captureChildAssistantMessageItem(childState, turnId, item);
+  }
+
+  private captureChildAssistantMessageItem(
+    childState: ChildState,
+    turnId: string | undefined,
+    item: JsonObject | undefined,
+  ): void {
+    if (readString(item, "type") !== "agentMessage") {
+      return;
+    }
+    const itemId = readString(item, "id");
+    if (!turnId || !itemId) {
+      return;
+    }
+    const assistantMessages = this.getChildAssistantMessages(childState, turnId);
+    const phase = readString(item, "phase");
+    if (phase === "commentary") {
+      assistantMessages.commentaryIds.add(itemId);
+    } else {
+      assistantMessages.finalMessageIds.add(itemId);
+    }
+    const text = readString(item, "text");
+    if (text) {
+      this.recordChildAssistantMessage(childState, turnId, itemId, text, { replace: true });
+    }
+  }
+
+  private captureChildTurnAssistantMessages(childState: ChildState, turn: JsonObject): void {
+    const turnId = readString(turn, "id");
+    if (!turnId || !Array.isArray(turn.items)) {
+      return;
+    }
+    for (const item of turn.items) {
+      this.captureChildAssistantMessageItem(
+        childState,
+        turnId,
+        isJsonObject(item) ? item : undefined,
+      );
+    }
+  }
+
+  private recordChildAssistantMessage(
+    childState: ChildState,
+    turnId: string,
+    itemId: string,
+    text: string,
+    options: { replace?: boolean } = {},
+  ): void {
+    const assistantMessages = this.getChildAssistantMessages(childState, turnId);
+    if (!assistantMessages.texts.has(itemId)) {
+      assistantMessages.order.push(itemId);
+    }
+    const existing = assistantMessages.texts.get(itemId) ?? "";
+    assistantMessages.texts.set(itemId, options.replace ? text : `${existing}${text}`);
+  }
+
+  private getChildAssistantMessages(
+    childState: ChildState,
+    turnId: string,
+  ): ChildAssistantMessages {
+    const existing = childState.assistantMessagesByTurn.get(turnId);
+    if (existing) {
+      return existing;
+    }
+    const assistantMessages: ChildAssistantMessages = {
+      texts: new Map<string, string>(),
+      order: [],
+      commentaryIds: new Set<string>(),
+      finalMessageIds: new Set<string>(),
+    };
+    childState.assistantMessagesByTurn.set(turnId, assistantMessages);
+    return assistantMessages;
+  }
+
+  private async handleChildTurnCompletion(notification: CodexServerNotification): Promise<void> {
+    if (notification.method !== "turn/completed") {
+      return;
+    }
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const childThreadId = readString(params, "threadId")?.trim();
+    const childState = childThreadId ? this.childStates.get(childThreadId) : undefined;
+    const state = childState ? this.parentStates.get(childState.parentThreadId) : undefined;
+    const turn = isJsonObject(params?.turn) ? params.turn : undefined;
+    if (childState && turn && readString(turn, "status") === "interrupted") {
+      const turnId = readString(turn, "id");
+      if (turnId) {
+        childState.assistantMessagesByTurn.delete(turnId);
+      }
+      return;
+    }
+    if (childState && turn) {
+      this.captureChildTurnAssistantMessages(childState, turn);
+    }
+    const completion = childState && turn ? toChildTurnCompletion(childState, turn) : undefined;
+    if (!state || !childState || childState.transcriptTerminal || !completion) {
+      return;
+    }
+    await this.processChildCompletion(state, childState, completion);
+  }
+
+  private async processChildCompletion(
+    state: ParentState,
+    childState: ChildState,
+    completion: CodexNativeSubagentCompletion,
+  ): Promise<void> {
+    if (shouldWaitForTranscriptCompletion(completion, this.codexHome)) {
+      // Codex can notify `completed: null` before the child transcript exposes
+      // its final assistant message; poll briefly before delivering the no-final fallback.
+      const eventAt = Date.now();
+      const reconciled = await this.reconcileChildTranscript(childState.childThreadId);
+      if (!reconciled) {
+        this.scheduleTranscriptPoll(childState);
+        this.scheduleNoFinalCompletionFallback(state, childState, completion, eventAt);
+      }
+      return;
+    }
+    await this.processCompletion(state, completion);
   }
 
   async reconcileChildTranscript(
@@ -493,6 +637,9 @@ export class CodexNativeSubagentMonitor {
     if (!taskRuntime) {
       return;
     }
+    this.getMirrorForChild(completion.childThreadId)?.markAuthoritativeCompletion(
+      completion.childThreadId,
+    );
     taskRuntime.finalizeTaskRunByRunId({
       runId: codexNativeSubagentRunId(completion.childThreadId),
       status: completion.status,
@@ -508,6 +655,12 @@ export class CodexNativeSubagentMonitor {
     const childState = this.childStates.get(childThreadId.trim());
     const state = childState ? this.parentStates.get(childState.parentThreadId) : undefined;
     return state?.taskRuntime;
+  }
+
+  private getMirrorForChild(childThreadId: string): CodexNativeSubagentTaskMirror | undefined {
+    const childState = this.childStates.get(childThreadId.trim());
+    const state = childState ? this.parentStates.get(childState.parentThreadId) : undefined;
+    return state?.mirror;
   }
 
   private registerChildThread(
@@ -526,6 +679,10 @@ export class CodexNativeSubagentMonitor {
       normalizedChildThreadId,
     );
     const agentPath = normalizeOptionalString(options.agentPath);
+    const state = this.parentStates.get(normalizedParentThreadId);
+    if (state?.mirror && (this.codexHome || agentPath)) {
+      state.mirror.markAuthoritativeCompletionExpected(normalizedChildThreadId);
+    }
     if (agentPath) {
       this.childThreadIdsByAgentPath.set(
         buildParentAgentPathKey(normalizedParentThreadId, agentPath),
@@ -537,6 +694,7 @@ export class CodexNativeSubagentMonitor {
       childState = {
         childThreadId: normalizedChildThreadId,
         parentThreadId: normalizedParentThreadId,
+        assistantMessagesByTurn: new Map<string, ChildAssistantMessages>(),
         transcriptPollAttempt: 0,
         transcriptTerminal: false,
         completionDeliveryAttempt: 0,
@@ -606,21 +764,29 @@ export class CodexNativeSubagentMonitor {
     const delayMs = noFinalCompletionFallbackDelayMs(this.transcriptPollDelaysMs);
     childState.noFinalCompletionFallbackTimer = setTimeout(() => {
       childState.noFinalCompletionFallbackTimer = undefined;
-      void this.reconcileChildTranscript(childState.childThreadId)
-        .catch((error: unknown) => {
-          embeddedAgentLog.warn("Failed to reconcile Codex native subagent transcript", {
-            childThreadId: childState.childThreadId,
-            error: formatErrorMessage(error),
-          });
-          return false;
-        })
-        .then((reconciled) => {
-          if (!reconciled && !childState.transcriptTerminal) {
-            void this.processCompletion(state, completion, eventAt);
-          }
-        });
+      void this.deliverNoFinalCompletionFallback(state, childState, completion, eventAt);
     }, delayMs);
     unrefTimer(childState.noFinalCompletionFallbackTimer);
+  }
+
+  private async deliverNoFinalCompletionFallback(
+    state: ParentState,
+    childState: ChildState,
+    completion: CodexNativeSubagentCompletion,
+    eventAt: number,
+  ): Promise<void> {
+    const reconciled = await this.reconcileChildTranscript(childState.childThreadId).catch(
+      (error: unknown): false => {
+        embeddedAgentLog.warn("Failed to reconcile Codex native subagent transcript", {
+          childThreadId: childState.childThreadId,
+          error: formatErrorMessage(error),
+        });
+        return false;
+      },
+    );
+    if (!reconciled && !childState.transcriptTerminal) {
+      await this.processCompletion(state, completion, eventAt);
+    }
   }
 
   private clearTimers(): void {
@@ -861,6 +1027,62 @@ function buildCompletionDedupeKey(
 ): string {
   const hash = createHash("sha256").update(completion.result).digest("hex").slice(0, 16);
   return `${parentThreadId}:${completion.childThreadId}:${completion.status}:${hash}`;
+}
+
+function toChildTurnCompletion(
+  childState: ChildState,
+  turn: JsonObject,
+): CodexNativeSubagentCompletion | undefined {
+  const status = readString(turn, "status");
+  if (status === "completed") {
+    const turnId = readString(turn, "id");
+    const result = turnId ? lastChildAssistantMessage(childState, turnId) : undefined;
+    return {
+      childThreadId: childState.childThreadId,
+      status: "succeeded",
+      statusLabel: result ? "turn_completed" : "completed_without_final_message",
+      result: result ?? "Codex native subagent completed without a final assistant message.",
+    };
+  }
+  if (status === "failed") {
+    return {
+      childThreadId: childState.childThreadId,
+      status: "failed",
+      statusLabel: "turn_failed",
+      result: readTurnErrorMessage(turn) ?? "Codex native subagent failed.",
+    };
+  }
+  return undefined;
+}
+
+function lastChildAssistantMessage(childState: ChildState, turnId: string): string | undefined {
+  const assistantMessages = childState.assistantMessagesByTurn.get(turnId);
+  if (!assistantMessages) {
+    return undefined;
+  }
+  for (let index = assistantMessages.order.length - 1; index >= 0; index -= 1) {
+    const itemId = assistantMessages.order[index];
+    if (
+      assistantMessages.finalMessageIds.has(itemId) &&
+      !assistantMessages.commentaryIds.has(itemId)
+    ) {
+      const text = normalizeOptionalString(assistantMessages.texts.get(itemId));
+      if (text) {
+        return text;
+      }
+    }
+  }
+  return undefined;
+}
+
+function readTurnErrorMessage(turn: JsonObject): string | undefined {
+  const error = isJsonObject(turn.error) ? turn.error : undefined;
+  return (
+    normalizeOptionalString(readString(error, "message")) ??
+    normalizeOptionalString(
+      isJsonObject(error?.codexErrorInfo) ? readString(error.codexErrorInfo, "message") : undefined,
+    )
+  );
 }
 
 function buildParentAgentPathKey(parentThreadId: string, agentPath: string): string {

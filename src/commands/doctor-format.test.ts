@@ -3,6 +3,20 @@ import { describe, expect, it } from "vitest";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 
 describe("buildGatewayRuntimeHints", () => {
+  it("prioritizes macOS GUI-session failures over generic missing supervision", () => {
+    const hints = buildGatewayRuntimeHints(
+      {
+        status: "unknown",
+        missingSupervision: true,
+        missingGuiSession: true,
+      },
+      { platform: "darwin", env: {} },
+    );
+
+    expect(hints.join("\n")).toContain("logged-in macOS GUI session");
+    expect(hints.join("\n")).not.toContain("LaunchAgent installed but not loaded");
+  });
+
   it("surfaces suspicious systemd cgroup hygiene with inspection commands", () => {
     expect(
       buildGatewayRuntimeHints(
@@ -25,6 +39,23 @@ describe("buildGatewayRuntimeHints", () => {
       "Run: systemd-cgls --user-unit openclaw-gateway.service",
       "After reviewing service settings, run: openclaw gateway restart",
     ]);
+  });
+
+  it("uses the provided env when rendering WSL systemd recovery hints", () => {
+    const hints = buildGatewayRuntimeHints(
+      {
+        status: "unknown",
+        detail: "System has not been booted with systemd as init system",
+      },
+      { platform: "linux", env: { WSL_DISTRO_NAME: "Ubuntu" } },
+    );
+
+    expect(hints).toContain(
+      "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
+    );
+    expect(hints).toContain("Then run: wsl --shutdown (from PowerShell) and reopen your distro.");
+    expect(hints).toContain("Verify: systemctl --user status");
+    expect(hints.join("\n")).not.toContain("systemd user services are unavailable");
   });
 
   it("does not warn for normal systemd cgroup metrics", () => {

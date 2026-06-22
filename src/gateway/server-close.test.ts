@@ -2,6 +2,7 @@
  * Gateway server close lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
@@ -69,7 +70,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
-const { createChatRunState } = await import("./server-chat-state.js");
+const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
 const {
   finishGatewayRestartTrace,
   recordGatewayRestartTraceSpan,
@@ -78,6 +79,9 @@ const {
 } = await import("./restart-trace.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
+type MarkMainSessionsAbortedForRestart = NonNullable<
+  GatewayCloseHandlerParams["markMainSessionsAbortedForRestart"]
+>;
 type DrainActiveSessionsForShutdown = NonNullable<
   GatewayCloseHandlerParams["drainActiveSessionsForShutdown"]
 >;
@@ -118,6 +122,7 @@ function createGatewayCloseTestDeps(
     lifecycleUnsub: null,
     chatRunState: createTestChatRunState(),
     chatAbortControllers: new Map(),
+    restartRecoveryCandidates: new Map(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
     nodeSendToSession: vi.fn(),
@@ -543,7 +548,12 @@ describe("createGatewayCloseHandler", () => {
         nodeSendToSession,
         chatRunState,
         chatAbortControllers,
-        removeChatRun: vi.fn(() => ({ sessionKey: "session-1", clientRunId: "run-1" })),
+        removeChatRun: vi.fn(() => ({
+          sessionKey: "session-1",
+          clientRunId: "run-1",
+          registeredAtMs: 1_000,
+          registeredSequence: 1,
+        })),
       }),
     );
 
@@ -661,10 +671,488 @@ describe("createGatewayCloseHandler", () => {
 
     expect(result.warnings).toContain("restart-reply-drain");
     expect(controller.signal.aborted).toBe(true);
+    expect(isAgentRunRestartAbortReason(controller.signal.reason)).toBe(true);
     expect(chatAbortControllers.size).toBe(0);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes("restart reply drain timed out after 0ms"),
+      ),
+    ).toBe(true);
+  });
+
+  it("marks active main sessions for restart recovery before aborting restart-drained runs", async () => {
+    const events: string[] = [];
+    const controller = new AbortController();
+    const agentController = new AbortController();
+    const completedController = new AbortController();
+    const hiddenController = new AbortController();
+    const alreadyAbortedController = new AbortController();
+    alreadyAbortedController.abort();
+    const chatAbortControllers = new Map([
+      [
+        "run-1",
+        {
+          controller,
+          sessionId: "session-id-1",
+          sessionKey: "agent:main:main",
+          lifecycleGeneration: "generation-1",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+      [
+        "agent-run-1",
+        {
+          controller: agentController,
+          sessionId: "session-id-2",
+          sessionKey: "agent:main:test:direct:source",
+          lifecycleGeneration: "generation-1",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+          kind: "agent" as const,
+        },
+      ],
+      [
+        "completed-run",
+        {
+          controller: completedController,
+          sessionId: "completed-session-id",
+          sessionKey: "agent:main:completed",
+          lifecycleGeneration: "generation-1",
+          projectSessionActive: false,
+          projectSessionTerminalPersisted: true,
+          registrationCleanupRequested: true,
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+      [
+        "stale-run",
+        {
+          controller: alreadyAbortedController,
+          sessionId: "stale-session-id",
+          sessionKey: "agent:main:stale",
+          lifecycleGeneration: "generation-1",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+      [
+        "hidden-run",
+        {
+          controller: hiddenController,
+          sessionId: "hidden-session-id",
+          sessionKey: "agent:main:hidden",
+          lifecycleGeneration: "generation-1",
+          controlUiVisible: false,
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+          kind: "agent" as const,
+        },
+      ],
+    ]);
+    const chatRunState = createTestChatRunState();
+    const abortedRunsSet = vi.spyOn(chatRunState.abortedRuns, "set");
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(async () => {
+      events.push("marker");
+    });
+    const removeChatRun = vi.fn(() => {
+      events.push("abort");
+      return {
+        sessionKey: "agent:main:main",
+        clientRunId: "run-1",
+        registeredAtMs: 1_000,
+        registeredSequence: 1,
+      };
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+        chatRunState,
+        markMainSessionsAbortedForRestart,
+        removeChatRun,
+        resolveActiveSessionIdForKey: (sessionKey) => {
+          if (sessionKey === "agent:main:main") {
+            return "current-session-id-1";
+          }
+          if (sessionKey === "agent:main:test:direct:source") {
+            return "stale-agent-registry-id";
+          }
+          return undefined;
+        },
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledTimes(1);
+    expect(events[0]).toBe("marker");
+    const markerCall = firstMockCall(markMainSessionsAbortedForRestart);
+    expect(markerCall?.[0]?.reason).toBe("gateway restart shutdown");
+    expect(markerCall?.[0]?.sessionKeys).toStrictEqual(
+      new Set(["agent:main:main", "agent:main:test:direct:source"]),
+    );
+    expect(markerCall?.[0]?.sessionIds).toStrictEqual(
+      new Set(["current-session-id-1", "session-id-2"]),
+    );
+    expect(markerCall?.[0]?.activeRuns).toEqual([
+      {
+        runId: "run-1",
+        lifecycleGeneration: "generation-1",
+        sessionKey: "agent:main:main",
+        sessionId: "current-session-id-1",
+        observedAt: expect.any(Number),
+      },
+      {
+        runId: "agent-run-1",
+        lifecycleGeneration: "generation-1",
+        sessionKey: "agent:main:test:direct:source",
+        sessionId: "session-id-2",
+        observedAt: expect.any(Number),
+      },
+    ]);
+    expect(controller.signal.aborted).toBe(true);
+    expect(agentController.signal.aborted).toBe(true);
+    expect(completedController.signal.aborted).toBe(true);
+    expect(hiddenController.signal.aborted).toBe(true);
+    const completedMarker = abortedRunsSet.mock.calls.find(
+      ([runId]) => runId === "completed-run",
+    )?.[1];
+    expect(completedMarker).toEqual({
+      abortedAtMs: expect.any(Number),
+      sequence: expect.any(Number),
+    });
+    chatRunState.registry.add("completed-run", {
+      sessionKey: "agent:main:fresh",
+      clientRunId: "completed-run",
+    });
+    expect(
+      isChatAbortMarkerCurrent(completedMarker, chatRunState.registry.peek("completed-run")),
+    ).toBe(false);
+  });
+
+  it("keeps post-terminal caller work in restart drain and recovery", async () => {
+    const controller = new AbortController();
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
+    const chatAbortControllers = new Map([
+      [
+        "post-terminal-run",
+        {
+          controller,
+          sessionId: "post-terminal-session-id",
+          sessionKey: "agent:main:post-terminal",
+          lifecycleGeneration: "generation-1",
+          projectSessionActive: false,
+          projectSessionTerminalPersisted: true,
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+        markMainSessionsAbortedForRestart,
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-reply-drain");
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRuns: [
+          {
+            runId: "post-terminal-run",
+            lifecycleGeneration: "generation-1",
+            sessionKey: "agent:main:post-terminal",
+            sessionId: "post-terminal-session-id",
+            observedAt: expect.any(Number),
+          },
+        ],
+      }),
+    );
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("marks and quietly cancels terminal runs before persistence settles", async () => {
+    const controller = new AbortController();
+    const broadcast = vi.fn();
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
+    const nodeSendToSession = vi.fn();
+    const chatAbortControllers = new Map([
+      [
+        "completed-run",
+        {
+          controller,
+          sessionId: "completed-session-id",
+          sessionKey: "agent:main:completed",
+          lifecycleGeneration: "generation-1",
+          projectSessionActive: false,
+          projectSessionTerminalPersisted: false,
+          registrationCleanupRequested: true,
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        broadcast,
+        chatAbortControllers,
+        getPendingReplyCount: () => 1,
+        markMainSessionsAbortedForRestart,
+        nodeSendToSession,
+      }),
+    );
+
+    await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(chatAbortControllers.size).toBe(0);
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activeRuns: [
+          {
+            runId: "completed-run",
+            lifecycleGeneration: "generation-1",
+            sessionKey: "agent:main:completed",
+            sessionId: "completed-session-id",
+            observedAt: expect.any(Number),
+          },
+        ],
+      }),
+    );
+    expect(broadcast.mock.calls.some(([event]) => event === "chat")).toBe(false);
+    expect(nodeSendToSession).not.toHaveBeenCalled();
+  });
+
+  it("awaits terminal persistence before deciding restart recovery", async () => {
+    const controller = new AbortController();
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
+    const chatAbortControllers = new Map([
+      [
+        "completed-run",
+        {
+          controller,
+          sessionId: "completed-session-id",
+          sessionKey: "agent:main:completed",
+          lifecycleGeneration: "generation-1",
+          projectSessionActive: false,
+          projectSessionTerminalPersisted: false,
+          projectSessionTerminalPersistence: Promise.resolve(),
+          registrationCleanupRequested: true,
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+        getPendingReplyCount: () => 1,
+        markMainSessionsAbortedForRestart,
+      }),
+    );
+
+    await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(markMainSessionsAbortedForRestart).not.toHaveBeenCalled();
+    expect(controller.signal.aborted).toBe(true);
+    expect(chatAbortControllers.size).toBe(0);
+  });
+
+  it("bounds terminal persistence waiting and preserves recovery", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>();
+    const getPendingReplyCount = vi.fn().mockReturnValueOnce(1).mockReturnValue(0);
+    const chatAbortControllers = new Map([
+      [
+        "persisting-run",
+        {
+          controller,
+          sessionId: "persisting-session-id",
+          sessionKey: "agent:main:persisting",
+          lifecycleGeneration: "generation-1",
+          projectSessionActive: false,
+          projectSessionTerminalPersisted: false,
+          projectSessionTerminalPersistence: new Promise<void>(() => {}),
+          registrationCleanupRequested: true,
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+        getPendingReplyCount,
+        markMainSessionsAbortedForRestart,
+      }),
+    );
+
+    const closePromise = close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await closePromise;
+
+    expect(markMainSessionsAbortedForRestart).toHaveBeenCalledTimes(1);
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("warns on slow restart marker persistence and waits before cleanup", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const getPendingReplyCount = vi.fn().mockReturnValueOnce(1).mockReturnValue(0);
+    let finishMarker: (() => void) | undefined;
+    const markerPending = new Promise<void>((resolve) => {
+      finishMarker = resolve;
+    });
+    const chatAbortControllers = new Map([
+      [
+        "active-run",
+        {
+          controller,
+          sessionId: "active-session-id",
+          sessionKey: "agent:main:active",
+          lifecycleGeneration: "generation-1",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+        getPendingReplyCount,
+        markMainSessionsAbortedForRestart: () => markerPending,
+      }),
+    );
+
+    let closeSettled = false;
+    const closePromise = close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+    void closePromise.finally(() => {
+      closeSettled = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(closeSettled).toBe(false);
+    expect(controller.signal.aborted).toBe(false);
+    finishMarker?.();
+    const result = await closePromise;
+
+    expect(result.warnings).toContain("restart-main-session-marker");
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("marks failed terminal persistence after the run guard is gone", async () => {
+    let activeDuringMark = false;
+    const markMainSessionsAbortedForRestart = vi.fn<MarkMainSessionsAbortedForRestart>(
+      async (params) => {
+        const run = params.activeRuns[0];
+        activeDuringMark = run ? params.isActiveRun(run) : false;
+      },
+    );
+    const restartRecoveryCandidates = new Map([
+      [
+        "failed-persistence-run",
+        {
+          runId: "failed-persistence-run",
+          lifecycleGeneration: "generation-1",
+          sessionKey: "agent:main:failed-persistence",
+          sessionId: "failed-persistence-session",
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        markMainSessionsAbortedForRestart,
+        restartRecoveryCandidates,
+        resolveActiveSessionIdForKey: () => "rotated-persistence-session",
+      }),
+    );
+
+    await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    const markerCall = firstMockCall(markMainSessionsAbortedForRestart);
+    expect(markerCall?.[0]?.activeRuns).toEqual([
+      {
+        runId: "failed-persistence-run",
+        lifecycleGeneration: "generation-1",
+        sessionKey: "agent:main:failed-persistence",
+        sessionId: "rotated-persistence-session",
+        observedAt: expect.any(Number),
+      },
+    ]);
+    expect(activeDuringMark).toBe(true);
+    expect(restartRecoveryCandidates.size).toBe(0);
+  });
+
+  it("continues restart shutdown when marking active main sessions fails", async () => {
+    const controller = new AbortController();
+    const chatAbortControllers = new Map([
+      [
+        "run-1",
+        {
+          controller,
+          sessionId: "session-id-1",
+          sessionKey: "agent:main:main",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + 60_000,
+        },
+      ],
+    ]);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        chatAbortControllers,
+        markMainSessionsAbortedForRestart: vi.fn(async () => {
+          throw new Error("marker unavailable");
+        }),
+      }),
+    );
+
+    const result = await close({
+      reason: "gateway restarting",
+      restartExpectedMs: 123,
+      drainTimeoutMs: 0,
+    });
+
+    expect(result.warnings).toContain("restart-main-session-marker");
+    expect(controller.signal.aborted).toBe(true);
+    expect(chatAbortControllers.size).toBe(0);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes(
+          "failed to mark active main session(s) for restart recovery: Error: marker unavailable",
+        ),
       ),
     ).toBe(true);
   });

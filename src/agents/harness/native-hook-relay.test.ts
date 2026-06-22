@@ -249,6 +249,14 @@ describe("native hook relay registry", () => {
       "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
         `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
     );
+    expect(relay.commandForEvent("pre_tool_use", { timeoutMs: 900 })).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 900`,
+    );
+    expect(relay.commandForEvent("pre_tool_use", { timeoutMs: 2_000 })).toBe(
+      "/usr/local/bin/node '/opt/Open Claw/openclaw.mjs' hooks relay --provider codex --relay-id " +
+        `${relay.relayId} --generation ${relay.generation} --event pre_tool_use --timeout 1234`,
+    );
   });
 
   it("rejects relay registrations when expiry would exceed Date range", () => {

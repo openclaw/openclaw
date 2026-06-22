@@ -1,6 +1,5 @@
 /** Shared registration types that make up the in-memory plugin registry. */
 import type { AgentHarness } from "../agents/harness/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -33,43 +32,45 @@ import type { PluginManifestContracts } from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import type { PluginDependencyStatus } from "./status-dependencies.js";
-import type {
-  CliBackendPlugin,
-  ImageGenerationProviderPlugin,
-  MediaUnderstandingProviderPlugin,
-  TranscriptSourceProvider,
-  MusicGenerationProviderPlugin,
-  OpenClawPluginChannelRegistration,
-  OpenClawPluginCliCommandDescriptor,
-  OpenClawPluginCliRegistrar,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginGatewayRuntimeScopeSurface,
-  OpenClawGatewayDiscoveryService,
-  OpenClawPluginHttpRouteAuth,
-  OpenClawPluginHttpRouteHandler,
-  OpenClawPluginHttpRouteUpgradeHandler,
-  OpenClawPluginHttpRouteMatch,
-  OpenClawPluginHostedMediaResolver,
-  OpenClawPluginReloadRegistration,
-  OpenClawPluginSecurityAuditCollector,
-  OpenClawPluginService,
-  OpenClawPluginToolFactory,
-  PluginConversationBindingResolvedEvent,
-  PluginHookRegistration as TypedPluginHookRegistration,
-  PluginLogger,
-  PluginOrigin,
-  PluginTextTransformRegistration,
-  MigrationProviderPlugin,
-  ProviderPlugin,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeVoiceProviderPlugin,
-  SpeechProviderPlugin,
-  VideoGenerationProviderPlugin,
-  WebFetchProviderPlugin,
-  WebSearchProviderPlugin,
-  UnifiedModelCatalogProviderPlugin,
-} from "./types.js";
+import type { PluginDependencyStatus } from "./status-dependencies-core.js";
+type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
+type CliBackendPlugin = import("./types.js").CliBackendPlugin;
+type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProviderPlugin;
+type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
+type TranscriptSourceProvider = import("./types.js").TranscriptSourceProvider;
+type MusicGenerationProviderPlugin = import("./types.js").MusicGenerationProviderPlugin;
+type OpenClawPluginCliCommandDescriptor = import("./types.js").OpenClawPluginCliCommandDescriptor;
+type OpenClawPluginCliRegistrar = import("./types.js").OpenClawPluginCliRegistrar;
+type OpenClawPluginCommandDefinition = import("./types.js").OpenClawPluginCommandDefinition;
+type OpenClawPluginGatewayRuntimeScopeSurface =
+  import("./types.js").OpenClawPluginGatewayRuntimeScopeSurface;
+type OpenClawGatewayDiscoveryService = import("./types.js").OpenClawGatewayDiscoveryService;
+type OpenClawPluginHttpRouteAuth = import("./types.js").OpenClawPluginHttpRouteAuth;
+type OpenClawPluginHttpRouteHandler = import("./types.js").OpenClawPluginHttpRouteHandler;
+type OpenClawPluginHttpRouteUpgradeHandler =
+  import("./types.js").OpenClawPluginHttpRouteUpgradeHandler;
+type OpenClawPluginHttpRouteMatch = import("./types.js").OpenClawPluginHttpRouteMatch;
+type OpenClawPluginHostedMediaResolver = import("./types.js").OpenClawPluginHostedMediaResolver;
+type OpenClawPluginReloadRegistration = import("./types.js").OpenClawPluginReloadRegistration;
+type OpenClawPluginSecurityAuditCollector =
+  import("./types.js").OpenClawPluginSecurityAuditCollector;
+type OpenClawPluginService = import("./types.js").OpenClawPluginService;
+type OpenClawPluginToolFactory = import("./types.js").OpenClawPluginToolFactory;
+type PluginConversationBindingResolvedEvent =
+  import("./types.js").PluginConversationBindingResolvedEvent;
+type TypedPluginHookRegistration = import("./types.js").PluginHookRegistration;
+type PluginLogger = import("./types.js").PluginLogger;
+type PluginOrigin = import("./types.js").PluginOrigin;
+type PluginTextTransformRegistration = import("./types.js").PluginTextTransformRegistration;
+type MigrationProviderPlugin = import("./types.js").MigrationProviderPlugin;
+type ProviderPlugin = import("./types.js").ProviderPlugin;
+type RealtimeTranscriptionProviderPlugin = import("./types.js").RealtimeTranscriptionProviderPlugin;
+type RealtimeVoiceProviderPlugin = import("./types.js").RealtimeVoiceProviderPlugin;
+type SpeechProviderPlugin = import("./types.js").SpeechProviderPlugin;
+type VideoGenerationProviderPlugin = import("./types.js").VideoGenerationProviderPlugin;
+type WebFetchProviderPlugin = import("./types.js").WebFetchProviderPlugin;
+type WebSearchProviderPlugin = import("./types.js").WebSearchProviderPlugin;
+type UnifiedModelCatalogProviderPlugin = import("./types.js").UnifiedModelCatalogProviderPlugin;
 
 /** Agent tool factory registered by one plugin runtime. */
 export type PluginToolRegistration = {
@@ -306,6 +307,7 @@ export type PluginTrustedToolPolicyRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   policy: PluginTrustedToolPolicyRegistration;
+  origin?: PluginRecord["origin"];
   source: string;
   rootDir?: string;
 };
@@ -500,5 +502,3 @@ export type OpenClawPluginHttpRouteParams = import("./types.js").OpenClawPluginH
 export type OpenClawPluginHookOptions = import("./types.js").OpenClawPluginHookOptions;
 export type PluginHookHandlerMap = import("./types.js").PluginHookHandlerMap;
 export type OpenClawPluginApi = import("./types.js").OpenClawPluginApi;
-export type TypedPluginHook = TypedPluginHookRegistration;
-export type OpenClawPluginChannelReg = OpenClawPluginChannelRegistration;

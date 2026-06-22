@@ -10,6 +10,7 @@ import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { withProgress } from "../../cli/progress.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
@@ -213,12 +214,14 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   return lines;
 }
 
-/** Query gateway channel status, falling back to config-only output when unreachable. */
+/** Query gateway channel status, falling back to config-only output when unavailable. */
 export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, opts.probe ? 30_000 : 10_000);
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, opts.probe ? 30_000 : 10_000, {
+    invalidType: "error",
+  });
   const requestedChannel = opts.channel ? normalizeChannelId(opts.channel) : null;
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
@@ -254,7 +257,13 @@ export async function channelsStatusCommand(
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
     const safeError = formatChannelsStatusError(err);
-    runtime.error(`Gateway not reachable: ${safeError}`);
+    const gatewayAuthUnavailable = isGatewaySecretRefUnavailableError(err);
+    const fallbackReason = gatewayAuthUnavailable
+      ? "Gateway auth unavailable; showing config-only status."
+      : "Gateway not reachable; showing config-only status.";
+    runtime.error(
+      `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
+    );
     const cfg = await requireValidConfigSnapshot(runtime);
     if (!cfg) {
       return;
@@ -272,6 +281,7 @@ export async function channelsStatusCommand(
       writeRuntimeJson(runtime, {
         gatewayReachable: false,
         error: safeError,
+        gatewayAuthUnavailable,
         configOnly: true,
         config: {
           path: snapshot.path,
@@ -294,7 +304,7 @@ export async function channelsStatusCommand(
             path: snapshot.path,
             mode,
           },
-          { sourceConfig: cfg, channel: opts.channel },
+          { sourceConfig: cfg, channel: opts.channel, fallbackReason },
         )
       ).join("\n"),
     );

@@ -22,6 +22,7 @@ export type GatewayServiceRuntime = {
   cachedLabel?: boolean;
   missingUnit?: boolean;
   missingSupervision?: boolean;
+  missingGuiSession?: boolean;
   systemd?: GatewayServiceSystemdRuntime;
 };
 

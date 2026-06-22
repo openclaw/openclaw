@@ -32,6 +32,33 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
     return 1
   }
 
+  docker_e2e_detect_available_cpus() {
+    if [ -n "${OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS:-}" ]; then
+      printf '%s\n' "$OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS"
+      return 0
+    fi
+    if command -v nproc >/dev/null 2>&1; then
+      nproc
+      return 0
+    fi
+    if command -v getconf >/dev/null 2>&1; then
+      getconf _NPROCESSORS_ONLN
+      return 0
+    fi
+    return 1
+  }
+
+  docker_e2e_resolve_cpus() {
+    local requested="$1"
+    local available=""
+    available="$(docker_e2e_detect_available_cpus 2>/dev/null || true)"
+    if [[ "$requested" =~ ^[0-9]+$ ]] && [[ "$available" =~ ^[0-9]+$ ]] && [ "$requested" -gt "$available" ]; then
+      printf '%s\n' "$available"
+      return 0
+    fi
+    printf '%s\n' "$requested"
+  }
+
   docker_e2e_run_arg_present() {
     local option="$1"
     shift
@@ -49,6 +76,15 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
     return 1
   }
 
+  docker_e2e_resolve_pids_limit() {
+    local pids_limit="$1"
+    if [[ ! "$pids_limit" =~ ^[0-9]+$ ]] || (( 10#$pids_limit < 1 )); then
+      echo "invalid OPENCLAW_DOCKER_E2E_PIDS_LIMIT: $pids_limit" >&2
+      return 2
+    fi
+    printf '%s\n' "$((10#$pids_limit))"
+  }
+
   docker_e2e_docker_run_resource_args() {
     DOCKER_E2E_RUN_RESOURCE_ARGS=()
     if docker_e2e_resource_limits_disabled; then
@@ -58,6 +94,7 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
     local memory="${OPENCLAW_DOCKER_E2E_MEMORY:-8g}"
     local cpus="${OPENCLAW_DOCKER_E2E_CPUS:-16}"
     local pids_limit="${OPENCLAW_DOCKER_E2E_PIDS_LIMIT:-2048}"
+    cpus="$(docker_e2e_resolve_cpus "$cpus")"
 
     if ! docker_e2e_resource_value_disabled "$memory" && ! docker_e2e_run_arg_present --memory "$@"; then
       DOCKER_E2E_RUN_RESOURCE_ARGS+=(--memory "$memory")
@@ -66,6 +103,7 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
       DOCKER_E2E_RUN_RESOURCE_ARGS+=(--cpus "$cpus")
     fi
     if ! docker_e2e_resource_value_disabled "$pids_limit" && ! docker_e2e_run_arg_present --pids-limit "$@"; then
+      pids_limit="$(docker_e2e_resolve_pids_limit "$pids_limit")" || return $?
       DOCKER_E2E_RUN_RESOURCE_ARGS+=(--pids-limit "$pids_limit")
     fi
   }
@@ -74,12 +112,20 @@ if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
   docker_e2e_docker_run_cmd() {
     if [ "${1:-}" = "run" ]; then
       shift
-      docker_e2e_docker_run_resource_args "$@"
+      docker_e2e_docker_run_resource_args "$@" || return $?
       if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
-        docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+        if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
+          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+        else
+          docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker run "$@"
+        fi
         return
       fi
-      set -- run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+      if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
+        set -- run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
+      else
+        set -- run "$@"
+      fi
     fi
     if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
       docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
@@ -215,6 +261,8 @@ docker_e2e_harness_mount_args() {
   DOCKER_E2E_HARNESS_ARGS=(
     -v "$ROOT_DIR/scripts/e2e:/app/scripts/e2e:ro"
     -v "$ROOT_DIR/scripts/lib:/app/scripts/lib:ro"
+    -v "$ROOT_DIR/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
+    -v "$ROOT_DIR/test/helpers:/app/test/helpers:ro"
     -v "$ROOT_DIR/scripts/windows-cmd-helpers.mjs:/app/scripts/windows-cmd-helpers.mjs:ro"
   )
 }
@@ -305,8 +353,7 @@ docker_e2e_run_with_harness() {
     rmdir "$cid_dir" 2>/dev/null || true
     docker_e2e_cleanup_package_mount_args
     if [ -n "$harness_stdin_fd" ]; then
-      exec {harness_stdin_fd}<&-
-      harness_stdin_fd=""
+      eval "exec ${harness_stdin_fd}<&-"
     fi
     restore_harness_traps
     if [ "$exit_after_cleanup" = "1" ]; then
@@ -317,7 +364,19 @@ docker_e2e_run_with_harness() {
   trap 'cleanup_harness_run 130 1' INT
   trap 'cleanup_harness_run 143 1' TERM
   trap 'cleanup_harness_run 129 1' HUP
-  exec {harness_stdin_fd}<&0
+  local candidate_fd
+  for candidate_fd in 19 18 17 16 15 14 13 12 11 10; do
+    if ! eval "true <&${candidate_fd}" 2>/dev/null; then
+      harness_stdin_fd="$candidate_fd"
+      break
+    fi
+  done
+  if [ -z "$harness_stdin_fd" ]; then
+    echo "no free file descriptor available for Docker harness stdin" >&2
+    cleanup_harness_run 1
+    return 1
+  fi
+  eval "exec ${harness_stdin_fd}<&0"
   docker_e2e_docker_run_cmd run --rm --cidfile "$cidfile" "${DOCKER_E2E_HARNESS_ARGS[@]}" "$@" <&$harness_stdin_fd &
   docker_run_pid="$!"
   local had_errexit=0
@@ -350,9 +409,11 @@ docker_e2e_run_logged_with_harness() {
 docker_e2e_run_logged_print_with_harness() {
   local label="$1"
   shift
+  local heartbeat_seconds
+  heartbeat_seconds="$(docker_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS 30)" || return $?
   run_logged_print_heartbeat \
     "$label" \
-    "${OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS:-30}" \
+    "$heartbeat_seconds" \
     docker_e2e_run_with_harness \
     "$@"
 }

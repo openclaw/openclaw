@@ -21,6 +21,8 @@ export type MentionSource =
   | "command_bypass"
   | "none";
 
+export type InboundSourceModality = "text" | "voice" | "audio" | "image" | "video" | "document";
+
 type StickerContextMetadata = {
   cachedDescription?: string;
   emoji?: string;
@@ -190,6 +192,8 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  /** Original message modality before transcription or other media normalization. */
+  SourceModality?: InboundSourceModality;
   MediaWorkspaceDir?: string;
   /** Attachment indexes whose audio was already transcribed before media understanding runs. */
   MediaTranscribedIndexes?: number[];
@@ -201,8 +205,10 @@ export type MsgContext = {
   MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
-  /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
+  /** True when current-turn sticker media is present in MediaPaths. */
   StickerMediaIncluded?: boolean;
+  /** Skip automatic understanding for the current sticker because its cached description is used. */
+  SkipStickerMediaUnderstanding?: boolean;
   OutputDir?: string;
   OutputBase?: string;
   /** Remote host for SCP when media lives on a different machine (e.g., openclaw@192.168.64.3). */
@@ -279,6 +285,8 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
+  /** Gateway device id allowed to review approvals initiated by this turn. */
+  ApprovalReviewerDeviceId?: string;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
   /** Provider-native thread target for reply delivery without making the session thread-scoped. */
@@ -309,6 +317,11 @@ export type MsgContext = {
    * OriginatingChannel/OriginatingTo, rather than inheriting stale session route metadata.
    */
   ExplicitDeliverRoute?: boolean;
+  /**
+   * Internal flag for channels that emit message_received through a channel-specific
+   * privacy gate before entering the shared reply dispatcher.
+   */
+  SuppressMessageReceivedHooks?: boolean;
   /**
    * Provider-specific parent conversation id for threaded contexts.
    * For Discord threads, this is the parent channel id.

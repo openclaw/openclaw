@@ -32,7 +32,14 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
-  "provider" | "model" | "authProfileId" | "authProfileIdSource" | "thinkLevel" | "lane" | "enqueue"
+  | "provider"
+  | "model"
+  | "authProfileId"
+  | "authProfileIdSource"
+  | "thinkLevel"
+  | "fastMode"
+  | "lane"
+  | "enqueue"
 >;
 
 export type EmbeddedRunContextWindowInfo = {
@@ -40,6 +47,8 @@ export type EmbeddedRunContextWindowInfo = {
   referenceTokens?: number;
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";
 };
+
+export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   initialReplayState?: EmbeddedRunReplayState;
@@ -57,6 +66,14 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   authProfileIdSource?: "auto" | "user";
   provider: string;
   modelId: string;
+  /** Operator-requested or initial model id before any fallback resolution. */
+  requestedModelId?: string | null;
+  /** True when this attempt is running after a model fallback decision. */
+  fallbackActive?: boolean;
+  /** Concrete fallback reason that selected this attempt, when known. */
+  fallbackReason?: string | null;
+  /** Concrete degraded-runtime reason for this attempt, when known. */
+  degradedReason?: string | null;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
@@ -65,6 +82,14 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Signals that the attempt's own run-timeout watchdog is active. */
+  onAttemptTimeoutArmed?: () => void;
+  /** Signals that this attempt's timeout has fired and must unwind promptly. */
+  onAttemptTimeout?: (reason: Error) => void;
+  /** Signals an explicit cancellation through the active native run handle. */
+  onAttemptAbort?: () => void;
+  /** Supplies run-global model-call ordering for parallel tool outcomes. */
+  allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
@@ -76,6 +101,9 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
+  fastMode?: EmbeddedRunFastModeParam;
+  /** True when this attempt is running the auto fast-mode policy. */
+  fastModeAuto?: boolean;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
   beforeAgentFinalizeRevisionAttempts?: number;
   maxBeforeAgentFinalizeRevisions?: number;
@@ -164,9 +192,11 @@ export type EmbeddedRunAttemptResult = {
   messagesSnapshot: AgentMessage[];
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;
     meta?: string;
+    replaySafe?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -186,6 +216,7 @@ export type EmbeddedRunAttemptResult = {
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   toolTrustedLocalMedia?: boolean;
+  hasToolMediaBlockReply?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;

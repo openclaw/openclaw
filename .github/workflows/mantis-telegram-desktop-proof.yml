@@ -79,7 +79,7 @@ jobs:
     steps:
       - name: Require maintainer-level repository access
         id: permission
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             if (context.eventName === "pull_request_target") {
@@ -125,7 +125,7 @@ jobs:
     steps:
       - name: Resolve refs and target PR
         id: resolve
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const eventName = context.eventName;
@@ -223,7 +223,7 @@ jobs:
       candidate_trust: ${{ steps.validate.outputs.candidate_trust }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: main
           persist-credentials: false
@@ -350,7 +350,7 @@ jobs:
           done
 
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -362,7 +362,7 @@ jobs:
           install-bun: "true"
 
       - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version: "1.26.x"
           cache: false
@@ -551,7 +551,7 @@ jobs:
       - name: Upload Mantis Telegram desktop artifacts
         id: upload_artifact
         if: ${{ always() && steps.inspect.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.inspect.outputs.output_dir }}
@@ -561,7 +561,7 @@ jobs:
       - name: Create Mantis GitHub App token
         id: mantis_app_token
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' }}
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -620,7 +620,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
 
@@ -663,7 +663,7 @@ jobs:
 
       - name: Create Mantis GitHub App token
         id: mantis_app_token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
@@ -709,7 +709,7 @@ jobs:
       issues: write
     steps:
       - name: Remove workflow eyes reaction
-        uses: actions/github-script@v8
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             const { owner, repo } = context.repo;

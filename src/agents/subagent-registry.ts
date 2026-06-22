@@ -74,6 +74,7 @@ import {
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
 import {
+  clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow,
@@ -479,7 +480,7 @@ function schedulePendingLifecycleTimeout(params: {
     if (!entry) {
       return;
     }
-    if (entry.outcome?.status === "ok") {
+    if (entry.outcome?.status === "ok" || entry.pauseReason === "sessions_yield") {
       return;
     }
     const completionParams = {
@@ -1096,13 +1097,23 @@ function ensureListener() {
       const livenessState =
         typeof evt.data?.livenessState === "string" ? evt.data.livenessState : undefined;
       const stopReason = typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
-      if (phase === "error") {
-        schedulePendingLifecycleError({
-          runId: evt.runId,
-          endedAt,
-          startedAt,
-          error,
-        });
+      // sessions_yield ends the turn by aborting the run signal, so a yielded
+      // terminal can also look aborted. An explicit yield is authoritative — pause,
+      // don't kill — else the tracking task settles `cancelled` with a false notice (#92448).
+      if (evt.data?.yielded === true) {
+        // Drop any grace timer from an earlier aborted/error terminal so it can't
+        // later fire and settle this now-paused run with a false notice.
+        clearPendingLifecycleError(evt.runId);
+        clearPendingLifecycleTimeout(evt.runId);
+        if (
+          markSubagentRunPausedAfterYield({
+            entry,
+            endedAt,
+            startedAt: startedAt ?? entry.startedAt,
+          })
+        ) {
+          persistSubagentRuns();
+        }
         return;
       }
       if (isAbortedAgentStopReason(stopReason)) {
@@ -1124,6 +1135,15 @@ function ensureListener() {
           },
           "lifecycle-killed-event",
         );
+        return;
+      }
+      if (phase === "error") {
+        schedulePendingLifecycleError({
+          runId: evt.runId,
+          endedAt,
+          startedAt,
+          error,
+        });
         return;
       }
       if (isBlockedLivenessState(livenessState)) {
@@ -1151,18 +1171,6 @@ function ensureListener() {
           endedAt,
           startedAt,
         });
-        return;
-      }
-      if (evt.data?.yielded === true) {
-        if (
-          markSubagentRunPausedAfterYield({
-            entry,
-            endedAt,
-            startedAt: startedAt ?? entry.startedAt,
-          })
-        ) {
-          persistSubagentRuns();
-        }
         return;
       }
       clearPendingLifecycleError(evt.runId);
@@ -1202,6 +1210,7 @@ const subagentRunManager = createSubagentRunManager({
   stopSweeper,
   resumeSubagentRun,
   clearPendingLifecycleError,
+  clearPendingLifecycleTimeout,
   resolveSubagentWaitTimeoutMs,
   scheduleOrphanRecovery: (args) => scheduleSubagentOrphanRecovery(args),
   resolveSubagentSessionCompletion,
@@ -1255,6 +1264,7 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   runtimePluginsLoader.clear();
   subagentAnnounceLoader.clear();
   browserCleanupLoader.clear();
+  clearSubagentRunsReadCacheForTest();
   stopSweeper();
   sweepInProgress = false;
   restoreAttempted = false;

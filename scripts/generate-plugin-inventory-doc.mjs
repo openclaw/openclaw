@@ -145,6 +145,7 @@ function humanizeId(value) {
     ["qqbot", "QQ Bot"],
     ["qwen", "Qwen"],
     ["qwencloud", "Qwen Cloud"],
+    ["raft", "Raft"],
     ["searxng", "SearXNG"],
     ["sglang", "SGLang"],
     ["stepfun", "StepFun"],
@@ -323,6 +324,10 @@ function resolveInstallRoute(packageJson, status) {
     return "source checkout only";
   }
   if (status === "core") {
+    const release = packageJson.openclaw?.release;
+    if (release?.publishToClawHub === true || release?.publishToNpm === true) {
+      return `included in OpenClaw; ${resolveInstallRoute(packageJson, "external")}`;
+    }
     return "included in OpenClaw";
   }
   const install = packageJson.openclaw?.install;

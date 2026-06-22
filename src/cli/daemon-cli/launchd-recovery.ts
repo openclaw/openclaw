@@ -1,5 +1,9 @@
 // macOS LaunchAgent recovery helper for daemon lifecycle commands.
-import { launchAgentPlistExists, repairLaunchAgentBootstrap } from "../../daemon/launchd.js";
+import {
+  formatLaunchAgentGuiSessionError,
+  launchAgentPlistExists,
+  repairLaunchAgentBootstrap,
+} from "../../daemon/launchd.js";
 
 const LAUNCH_AGENT_RECOVERY_MESSAGE =
   "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.";
@@ -30,6 +34,17 @@ export async function recoverInstalledLaunchAgent(params: {
     status: "bootstrap-failed" as const,
   }));
   if (!repaired.ok) {
+    if (repaired.status === "gui-session-unavailable") {
+      const actionHint =
+        params.result === "started" ? "openclaw gateway start" : "openclaw gateway restart";
+      throw new Error(
+        formatLaunchAgentGuiSessionError({
+          detail: repaired.detail,
+          domain: repaired.domain,
+          actionHint,
+        }),
+      );
+    }
     return null;
   }
   return {

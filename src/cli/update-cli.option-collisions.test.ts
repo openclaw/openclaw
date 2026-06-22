@@ -89,6 +89,33 @@ describe("update cli option collisions", () => {
       },
     },
     {
+      name: "forwards parent-captured --json/--timeout to `update repair`",
+      argv: ["update", "repair", "--json", "--timeout", "19"],
+      assert: () => {
+        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
+        const opts = firstCallOptions(updateFinalizeCommand);
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.json,
+        ).toBe(true);
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.timeout,
+        ).toBe("19");
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.restart,
+        ).toBe(false);
+      },
+    },
+    {
+      name: "forwards repair channel and confirmation options",
+      argv: ["update", "repair", "--channel", "beta", "--yes"],
+      assert: () => {
+        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
+        const opts = firstCallOptions(updateFinalizeCommand);
+        expect((opts as { channel?: string; yes?: boolean } | undefined)?.channel).toBe("beta");
+        expect((opts as { channel?: string; yes?: boolean } | undefined)?.yes).toBe(true);
+      },
+    },
+    {
       name: "keeps hidden `update finalize --no-restart` as a no-op parity flag",
       argv: ["update", "finalize", "--no-restart"],
       assert: () => {

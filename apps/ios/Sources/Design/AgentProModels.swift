@@ -329,6 +329,13 @@ struct AgentConfigLite: Decodable {
 struct ConfigPatchParams: Encodable {
     let raw: String
     let baseHash: String
+    let replacePaths: [String]?
+
+    init(raw: String, baseHash: String, replacePaths: [String]? = nil) {
+        self.raw = raw
+        self.baseHash = baseHash
+        self.replacePaths = replacePaths
+    }
 }
 
 enum SkillMutationError: LocalizedError {

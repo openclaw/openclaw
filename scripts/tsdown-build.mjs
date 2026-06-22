@@ -8,6 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
   isSourceCheckoutRoot,
@@ -32,6 +33,8 @@ const CGROUP_MEMORY_LIMIT_PATHS = [
 ];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
 const TERMINATION_GRACE_MS = 5_000;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
+const POST_FORCE_KILL_WAIT_MS = 1_000;
 const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
 const PRESERVE_CLI_STARTUP_METADATA_ENV = "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA";
@@ -572,10 +575,11 @@ export function resolveTsdownBuildInvocation(params = {}) {
     };
   }
   const runner = resolvePnpmRunner({
+    env,
     pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec ?? env.ComSpec,
+    comSpec: params.comSpec,
     platform: params.platform ?? process.platform,
   });
   return {
@@ -588,6 +592,47 @@ export function resolveTsdownBuildInvocation(params = {}) {
       env,
     },
   };
+}
+
+function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+export function signalTsdownBuildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group may already be gone; fall back to the direct child handle.
+    }
+  }
+  if (platform === "win32" && child.pid) {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
+  }
+  child.kill(signal);
 }
 
 export async function runTsdownBuildInvocation(invocation, params = {}) {
@@ -605,12 +650,92 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   let timedOut = false;
   let settled = false;
   let lastOutputAt = Date.now();
+  let forceKillAt = null;
 
-  const child = spawn(invocation.command, invocation.args, invocation.options);
+  const platform = params.platform ?? process.platform;
+  const runTaskkill = params.runTaskkill ?? spawnSync;
+  const useProcessGroup = platform !== "win32";
+  const child = spawn(invocation.command, invocation.args, {
+    ...invocation.options,
+    detached: useProcessGroup,
+  });
   const pidText = child.pid ? ` pid=${child.pid}` : "";
 
   function markOutput() {
     lastOutputAt = Date.now();
+  }
+
+  function signalChild(signal) {
+    signalTsdownBuildProcessTree(child, signal, {
+      platform,
+      runTaskkill,
+      useProcessGroup,
+    });
+  }
+
+  const parentSignalHandlers = [];
+  function cleanupParentSignalHandlers() {
+    for (const { signal, handler } of parentSignalHandlers) {
+      process.off(signal, handler);
+    }
+    parentSignalHandlers.length = 0;
+  }
+
+  function relayParentSignal(signal) {
+    const handler = () => {
+      signalChild(signal);
+      signalChild("SIGKILL");
+      cleanupParentSignalHandlers();
+      process.kill(process.pid, signal);
+    };
+    parentSignalHandlers.push({ signal, handler });
+    process.once(signal, handler);
+  }
+
+  if (useProcessGroup) {
+    relayParentSignal("SIGINT");
+    relayParentSignal("SIGTERM");
+    relayParentSignal("SIGHUP");
+  }
+
+  function processTreeAlive() {
+    if (!child.pid) {
+      return false;
+    }
+    if (!useProcessGroup) {
+      return child.exitCode === null && child.signalCode === null;
+    }
+    try {
+      process.kill(-child.pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code === "EPERM";
+    }
+  }
+
+  async function waitForProcessTreeExit(timeoutMsToWait) {
+    const deadlineAt = Date.now() + timeoutMsToWait;
+    while (Date.now() < deadlineAt) {
+      if (!processTreeAlive()) {
+        return true;
+      }
+      await new Promise((resolvePoll) => {
+        setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+      });
+    }
+    return !processTreeAlive();
+  }
+
+  async function finishTimedOutProcessTree() {
+    const graceRemainingMs =
+      forceKillAt === null ? TERMINATION_GRACE_MS : Math.max(0, forceKillAt - Date.now());
+    if (graceRemainingMs > 0) {
+      await waitForProcessTreeExit(graceRemainingMs);
+    }
+    if (processTreeAlive()) {
+      signalChild("SIGKILL");
+      await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+    }
   }
 
   child.stdout?.on("data", (chunk) => {
@@ -648,11 +773,12 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
       ? setTimeout(() => {
           timedOut = true;
           stderr.write(`[tsdown-build] timeout after ${timeoutMs}ms${pidText}; sending SIGTERM\n`);
-          child.kill("SIGTERM");
+          signalChild("SIGTERM");
+          forceKillAt = Date.now() + TERMINATION_GRACE_MS;
           setTimeout(() => {
             if (!settled) {
               stderr.write(`[tsdown-build] forcing SIGKILL${pidText}\n`);
-              child.kill("SIGKILL");
+              signalChild("SIGKILL");
             }
           }, TERMINATION_GRACE_MS).unref();
         }, timeoutMs).unref()
@@ -661,6 +787,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   return new Promise((resolve) => {
     child.once("error", (error) => {
       settled = true;
+      cleanupParentSignalHandlers();
       clearInterval(heartbeat);
       clearTimeout(timeout);
       stderr.write(`[tsdown-build] failed to start: ${String(error)}\n`);
@@ -673,16 +800,26 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
       });
     });
     child.once("close", (status, signal) => {
-      settled = true;
-      clearInterval(heartbeat);
-      clearTimeout(timeout);
-      resolve({
-        status,
-        signal,
-        timedOut,
-        error: null,
-        ...scanner.finish(),
-      });
+      function finish() {
+        settled = true;
+        cleanupParentSignalHandlers();
+        clearInterval(heartbeat);
+        clearTimeout(timeout);
+        resolve({
+          status,
+          signal,
+          timedOut,
+          error: null,
+          ...scanner.finish(),
+        });
+      }
+
+      if (timedOut) {
+        void finishTimedOutProcessTree().then(finish, finish);
+        return;
+      }
+
+      finish();
     });
   });
 }

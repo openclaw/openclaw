@@ -11,9 +11,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
-import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -26,6 +24,10 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
+import {
+  parseOpenClawChannelsLoginShellCommand,
+  rejectUnsafeExecControlShellCommand,
+} from "../infra/exec-control-command-guard.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
@@ -1192,119 +1194,6 @@ function shouldSkipExecScriptPreflight(params: {
   return params.host === "gateway" && params.security === "full" && params.ask === "off";
 }
 
-type ParsedExecApprovalCommand = {
-  approvalId: string;
-  decision: "allow-once" | "allow-always" | "deny";
-};
-
-function parseExecApprovalShellCommand(raw: string): ParsedExecApprovalCommand | null {
-  const normalized = raw.trimStart();
-  const match = normalized.match(
-    /^\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(allow-once|allow-always|always|deny)\b/i,
-  );
-  if (!match) {
-    return null;
-  }
-  return {
-    approvalId: match[1],
-    decision:
-      normalizeLowercaseStringOrEmpty(match[2]) === "always"
-        ? "allow-always"
-        : (normalizeLowercaseStringOrEmpty(match[2]) as ParsedExecApprovalCommand["decision"]),
-  };
-}
-
-function normalizeCommandBaseName(token: string | undefined): string {
-  if (!token) {
-    return "";
-  }
-  const base = normalizeLowercaseStringOrEmpty(token.split(/[\\/]/u).at(-1));
-  return base.replace(/\.(?:cmd|exe)$/u, "");
-}
-
-function stripOpenClawPackageRunner(argv: string[]): string[] {
-  const commandName = normalizeCommandBaseName(argv[0]);
-  if (commandName === "openclaw") {
-    return argv;
-  }
-  if (
-    (commandName === "pnpm" || commandName === "npm" || commandName === "yarn") &&
-    normalizeCommandBaseName(argv[1]) === "openclaw"
-  ) {
-    return argv.slice(1);
-  }
-  if (
-    (commandName === "pnpm" || commandName === "npm" || commandName === "yarn") &&
-    (argv[1] === "exec" || argv[1] === "dlx" || argv[1] === "run") &&
-    normalizeCommandBaseName(argv[2]) === "openclaw"
-  ) {
-    return argv.slice(2);
-  }
-  if (commandName === "npx" || commandName === "bunx") {
-    let idx = 1;
-    while (idx < argv.length) {
-      const token = argv[idx];
-      if (token === "--") {
-        idx += 1;
-        break;
-      }
-      if (!token.startsWith("-") || token === "-") {
-        break;
-      }
-      idx += 1;
-      if ((token === "-p" || token === "--package") && idx < argv.length) {
-        idx += 1;
-      }
-    }
-    if (normalizeCommandBaseName(argv[idx]) === "openclaw") {
-      return argv.slice(idx);
-    }
-  }
-  return argv;
-}
-
-function parseOpenClawChannelsLoginShellCommand(raw: string): boolean {
-  const argv = splitShellArgs(raw);
-  if (!argv) {
-    return false;
-  }
-  const openclawArgv = stripOpenClawPackageRunner(argv);
-  return (
-    normalizeCommandBaseName(openclawArgv[0]) === "openclaw" &&
-    (openclawArgv[1] === "channels" || openclawArgv[1] === "channel") &&
-    openclawArgv[2] === "login"
-  );
-}
-
-function rejectUnsafeControlShellCommand(command: string): void {
-  const rawCommand = command.trim();
-  const analysis = analyzeShellCommand({ command: rawCommand });
-  const candidates = analysis.ok
-    ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
-    : normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
-        const argv = splitShellArgs(line);
-        return argv ? buildCommandPayloadCandidates(argv) : [line];
-      });
-  for (const candidate of candidates) {
-    if (parseExecApprovalShellCommand(candidate)) {
-      throw new Error(
-        [
-          "exec cannot run /approve commands.",
-          "Show the /approve command to the user as chat text, or route it through the approval command handler instead of shell execution.",
-        ].join(" "),
-      );
-    }
-    if (parseOpenClawChannelsLoginShellCommand(candidate)) {
-      throw new Error(
-        [
-          "exec cannot run interactive OpenClaw channel login commands.",
-          "Run `openclaw channels login` in a terminal on the gateway host, or use the channel-specific login agent tool when available (for WhatsApp: `whatsapp_login`).",
-        ].join(" "),
-      );
-    }
-  }
-}
-
 function resolveExecReviewerDefaults(params: { defaults?: ExecToolDefaults; agentId?: string }) {
   if (params.defaults?.reviewer) {
     return params.defaults.reviewer;
@@ -1315,6 +1204,13 @@ function resolveExecReviewerDefaults(params: { defaults?: ExecToolDefaults; agen
     ? cfg?.agents?.list?.find((entry) => normalizeAgentId(entry.id) === agentId)?.tools?.exec
     : undefined;
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
+}
+
+function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
+  if (typeof defaults?.notifyOnExitEmptySuccess === "boolean") {
+    return defaults.notifyOnExitEmptySuccess;
+  }
+  return normalizeChatChannelId(defaults?.messageProvider) !== null;
 }
 
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
@@ -1360,7 +1256,7 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
+  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
   const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
@@ -1671,7 +1567,7 @@ export function createExecTool(
         const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
-      rejectUnsafeControlShellCommand(params.command);
+      await rejectUnsafeExecControlShellCommand(params.command);
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
@@ -1758,7 +1654,10 @@ export function createExecTool(
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
+          sessionId: defaults?.sessionId,
+          sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
@@ -1806,7 +1705,10 @@ export function createExecTool(
           trigger: defaults?.trigger,
           agentId,
           sessionKey: defaults?.sessionKey,
+          sessionId: defaults?.sessionId,
+          sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,

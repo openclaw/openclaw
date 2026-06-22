@@ -77,6 +77,7 @@ function createSaveState(): {
       configActiveSection: null,
       configActiveSubsection: null,
       pendingUpdateExpectedVersion: null,
+      pendingUpdateHandoff: false,
       updateStatusBanner: null,
       lastError: null,
     },
