@@ -4,6 +4,9 @@ name: Upstream sync (Railway-safe)
 # supports BuildKit mounts), appends only the PaaS Control UI config, and PROVES
 # it builds before promoting to main (what Railway deploys). On any failure main
 # is left untouched and an issue is opened. Railway can never break from a sync.
+#
+# ONE-WAY ONLY: this workflow fetches from upstream (read-only) and pushes only
+# to origin (this fork). It never pushes code or issues to openclaw/openclaw.
 "on":
   schedule:
     - cron: '0 8 * * 1'  # Mondays 08:00 UTC
@@ -39,12 +42,14 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-      - name: Add upstream and fetch tags
+      - name: Add upstream (fetch-only) and fetch tags
         run: |
           git remote add upstream https://github.com/openclaw/openclaw.git \
             2>/dev/null \
             || git remote set-url upstream \
                  https://github.com/openclaw/openclaw.git
+          # One-way guard: never push to upstream openclaw.
+          git remote set-url --push upstream DISABLED
           git fetch --tags --prune upstream
       - name: Resolve target release
         id: pick
@@ -133,6 +138,7 @@ jobs:
         run: |
           REF="${{ steps.pick.outputs.ref }}"
           gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Upstream sync ${REF} needs manual merge" \
             --body "Automated sync to upstream ${REF} hit code conflicts \
           that need a human. main and Railway are untouched. Run the sync \
@@ -160,6 +166,7 @@ jobs:
         run: |
           git push origin "${{ steps.merge.outputs.branch }}" || true
           gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
             --title "Upstream sync ${{ steps.pick.outputs.ref }} — \
           BUILD FAILED" \
             --body "Automated sync build FAILED in CI, so it was NOT \
