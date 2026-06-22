@@ -13,7 +13,14 @@ export type ChatItem =
       action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
-  | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
+  | {
+      kind: "stream";
+      key: string;
+      text: string;
+      startedAt: number;
+      isStreaming: boolean;
+      source: "commentary" | "final";
+    }
   | { kind: "reading-indicator"; key: string };
 
 /** A group of consecutive messages from the same role (Slack-style layout) */

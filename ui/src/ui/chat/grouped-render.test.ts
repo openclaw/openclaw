@@ -891,7 +891,7 @@ describe("grouped chat rendering", () => {
   it("omits streaming bubble class for completed stream segments", () => {
     const container = document.createElement("div");
 
-    render(renderStreamingGroup("Completed segment", 1, false), container);
+    render(renderStreamingGroup("Completed segment", 1, false, "commentary"), container);
 
     const bubble = container.querySelector(".chat-bubble");
     expect(bubble?.classList.contains("streaming")).toBe(false);
@@ -910,6 +910,65 @@ describe("grouped chat rendering", () => {
     expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", undefined);
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
+  });
+
+  it("labels commentary, tool call, and final message blocks", () => {
+    const container = document.createElement("div");
+
+    render(
+      html`
+        ${renderStreamingGroup("Checking workspace", 1, false, "commentary")}
+        ${renderMessageGroup(
+          createMessageGroup(
+            {
+              role: "toolResult",
+              toolCallId: "call_1",
+              toolName: "shell",
+              content: "tool output",
+              timestamp: 2,
+            },
+            "tool",
+          ),
+          {
+            showReasoning: true,
+            showToolCalls: true,
+          },
+        )}
+        ${renderMessageGroup(
+          createMessageGroup(
+            {
+              role: "assistant",
+              content: [{ type: "text", text: "Done" }],
+              timestamp: 3,
+            },
+            "assistant",
+          ),
+          {
+            showReasoning: true,
+            showToolCalls: true,
+            assistantName: "OpenClaw",
+            assistantAvatar: null,
+          },
+        )}
+      `,
+      container,
+    );
+
+    expect(
+      [...container.querySelectorAll(".chat-message-source-label")].map((node) =>
+        node.textContent?.trim(),
+      ),
+    ).toEqual(["Commentary", "Tool call", "Final message"]);
+  });
+
+  it("labels live final-answer streams as final messages", () => {
+    const container = document.createElement("div");
+
+    render(renderStreamingGroup("Streaming final answer", 1), container);
+
+    expect(container.querySelector(".chat-message-source-label")?.textContent?.trim()).toBe(
+      "Final message",
+    );
   });
 
   it("renders configured local user names", () => {
