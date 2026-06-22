@@ -330,7 +330,9 @@ export function formatRestartSentinelMessage(
   payload: RestartSentinelPayload,
   options?: RestartSentinelFormatOptions,
 ): string {
-  const message = payload.message?.trim();
+  const completedConfigRestart =
+    isRestartRequiredConfigWriteSentinel(payload) && options?.state === "completed";
+  const message = completedConfigRestart ? undefined : payload.message?.trim();
   if (message && (!payload.stats || payload.kind === "config-auto-recovery")) {
     return message;
   }
@@ -342,7 +344,7 @@ export function formatRestartSentinelMessage(
   if (reason && reason !== message) {
     lines.push(`Reason: ${reason}`);
   }
-  if (payload.doctorHint?.trim()) {
+  if (!completedConfigRestart && payload.doctorHint?.trim()) {
     lines.push(payload.doctorHint.trim());
   }
   return lines.join("\n");

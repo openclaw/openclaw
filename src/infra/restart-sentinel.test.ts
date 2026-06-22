@@ -281,6 +281,7 @@ describe("restart sentinel", () => {
       status: "ok" as const,
       ts: Date.now(),
       message: "Run restart-gateway.ps1 to apply config changes.",
+      doctorHint: "Run openclaw doctor --non-interactive",
       stats: { mode: "config.patch", requiresRestart: true },
     };
 
@@ -288,13 +289,11 @@ describe("restart sentinel", () => {
       [
         "Gateway restart required (config.patch)",
         "Run restart-gateway.ps1 to apply config changes.",
+        "Run openclaw doctor --non-interactive",
       ].join("\n"),
     );
     expect(formatRestartSentinelMessage(payload, { state: "completed" })).toBe(
-      [
-        "Gateway restart completed (config.patch)",
-        "Run restart-gateway.ps1 to apply config changes.",
-      ].join("\n"),
+      "Gateway restart completed (config.patch)",
     );
     expect(summarizeRestartSentinel(payload)).toBe("Gateway restart required (config.patch)");
     expect(summarizeRestartSentinel(payload, { state: "pending" })).toBe(
