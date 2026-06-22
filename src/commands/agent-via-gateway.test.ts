@@ -324,6 +324,29 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("reads a UTF-8 message file for local embedded dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "task.md");
+      const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
+      fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        { messageFile, sessionKey: "agent:main:incident-42", local: true },
+        runtime,
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const opts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(opts.message).toBe(messageBody);
+      expect(opts).not.toHaveProperty("messageFile");
+    });
+  });
+
   it("rejects inline and file messages together", async () => {
     await expect(
       agentCliCommand(
