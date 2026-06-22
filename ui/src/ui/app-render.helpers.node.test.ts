@@ -66,7 +66,7 @@ vi.mock("../pages/chat/gateway.ts", () => ({
   loadChatHistory: loadChatHistoryMock,
 }));
 
-vi.mock("./controllers/sessions.ts", () => ({
+vi.mock("../pages/sessions/data.ts", () => ({
   createSessionAndRefresh: createSessionAndRefreshMock,
   loadSessions: loadSessionsMock,
   patchSession: patchSessionMock,

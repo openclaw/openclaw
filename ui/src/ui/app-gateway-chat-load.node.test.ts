@@ -173,7 +173,7 @@ vi.mock("./controllers/nodes.ts", () => ({
   loadNodes: loadNodesMock,
 }));
 
-vi.mock("./controllers/sessions.ts", () => ({
+vi.mock("../pages/sessions/data.ts", () => ({
   applySessionsChangedEvent: vi.fn(() => ({ applied: false })),
   loadSessions: vi.fn(async () => undefined),
   subscribeSessions: subscribeSessionsMock,
@@ -194,7 +194,7 @@ afterAll(() => {
   vi.doUnmock("./controllers/health.ts");
   vi.doUnmock("./controllers/model-auth-status.ts");
   vi.doUnmock("./controllers/nodes.ts");
-  vi.doUnmock("./controllers/sessions.ts");
+  vi.doUnmock("../pages/sessions/data.ts");
   vi.resetModules();
 });
 

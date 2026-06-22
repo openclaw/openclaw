@@ -3,13 +3,13 @@ import { html } from "lit";
 import type { RouteRenderContext } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { createSessionAndRefresh, loadSessions } from "../../ui/controllers/sessions.ts";
 import { normalizeAgentId } from "../../ui/session-key.ts";
 import { normalizeOptionalString } from "../../ui/string-coerce.ts";
 import type { GatewaySessionRow } from "../../ui/types.ts";
 import { createChatSessionsLoadOverrides } from "../chat/data.ts";
 import { loadChatHistory } from "../chat/gateway.ts";
 import { switchChatSessionAndWait } from "../chat/session-switch.ts";
+import { createSessionAndRefresh, loadSessions } from "../sessions/data.ts";
 import {
   countSkillWorkshopProposals,
   requestSkillWorkshopRevision,

@@ -5,6 +5,9 @@ import { definePage } from "../../router/index.ts";
 import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { clearChatMessagesFromCache } from "../../ui/chat/session-message-cache.ts";
+import { captureSessionToWorkboard, getWorkboardState } from "../../ui/controllers/workboard.ts";
+import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
+import { loadConfig } from "../config/data.ts";
 import {
   branchSessionFromCheckpoint,
   deleteSessionsAndRefresh,
@@ -13,10 +16,7 @@ import {
   patchSession,
   restoreSessionFromCheckpoint,
   toggleSessionCompactionCheckpoints,
-} from "../../ui/controllers/sessions.ts";
-import { captureSessionToWorkboard, getWorkboardState } from "../../ui/controllers/workboard.ts";
-import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
-import { loadConfig } from "../config/data.ts";
+} from "../sessions/data.ts";
 
 type SessionsRenderContext = RouteRenderContext;
 type SessionsLoadContext = { app: SettingsAppHost };
@@ -35,7 +35,7 @@ export const page = definePage({
   loader: ({ app }: SessionsLoadContext) =>
     Promise.all([loadConfig(app), loadSessions(app)]).then(() => undefined),
   component: () =>
-    import("../../ui/views/sessions.ts").then((module) => ({
+    import("./view.ts").then((module) => ({
       render: ({ state, navigate }: SessionsRenderContext) => {
         const requestUpdate = (state as AppViewState & { requestUpdate?: () => void })
           .requestUpdate;

@@ -4,13 +4,13 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { setAssistantAvatarOverride } from "../../ui/controllers/assistant-identity.ts";
-import { patchSession } from "../../ui/controllers/sessions.ts";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../ui/session-key.ts";
 import { loadLocalAssistantIdentity } from "../../ui/storage.ts";
 import { normalizeOptionalString } from "../../ui/string-coerce.ts";
 import type { FastMode } from "../../ui/types.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import { renderMcp } from "../../ui/views/mcp.ts";
+import { patchSession } from "../sessions/data.ts";
 import {
   applyConfig,
   loadConfig,

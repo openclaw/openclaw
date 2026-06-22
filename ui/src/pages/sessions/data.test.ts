@@ -1,6 +1,6 @@
 // Control UI tests cover sessions behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isSessionRunActive } from "../session-run-state.ts";
+import { isSessionRunActive } from "../../ui/session-run-state.ts";
 import {
   applyChatHistorySessionInfo,
   applySessionsChangedEvent,
@@ -15,7 +15,7 @@ import {
   syncSelectedSessionMessageSubscription,
   toggleSessionCompactionCheckpoints,
   type SessionsState,
-} from "./sessions.ts";
+} from "./data.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 

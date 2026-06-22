@@ -9,8 +9,8 @@ import {
   resetChatAttachmentPayloadStoreForTest,
 } from "../../ui/chat/attachment-payload-store.ts";
 import type { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
-import { loadSessions } from "../../ui/controllers/sessions.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../ui/types.ts";
+import { loadSessions } from "../sessions/data.ts";
 import type { ChatHost } from "./data.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;

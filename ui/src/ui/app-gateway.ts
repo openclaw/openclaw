@@ -28,6 +28,13 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "../pages/chat/gateway.ts";
+import {
+  applySessionsChangedEvent,
+  loadSessions,
+  subscribeSessions,
+  syncSelectedSessionMessageSubscription,
+  type SessionsState,
+} from "../pages/sessions/data.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { switchChatSession } from "./app-render.helpers.ts";
 import { scheduleChatScroll } from "./app-scroll.ts";
@@ -64,18 +71,10 @@ import {
   pruneExecApprovalQueue,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
-import { loadModelAuthStatusState } from "./controllers/model-auth-status.ts";
 import {
   loadModelAuthStatusState,
   type ModelAuthStatusState,
 } from "./controllers/model-auth-status.ts";
-import {
-  applySessionsChangedEvent,
-  loadSessions,
-  subscribeSessions,
-  syncSelectedSessionMessageSubscription,
-  type SessionsState,
-} from "./controllers/sessions.ts";
 import {
   resolveGatewayErrorDetailCode,
   type GatewayEventFrame,

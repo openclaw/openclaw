@@ -13,7 +13,6 @@ import {
 } from "../../ui/app-render.helpers.ts";
 import { scheduleChatScroll } from "../../ui/app-scroll.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { loadSessions } from "../../ui/controllers/sessions.ts";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -23,6 +22,7 @@ import {
 import { loadLocalAssistantIdentity } from "../../ui/storage.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import { loadChatPage } from "../loaders.ts";
+import { loadSessions } from "../sessions/data.ts";
 import {
   clearChatHistory,
   createChatSessionsLoadOverrides,

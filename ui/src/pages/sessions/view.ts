@@ -2,19 +2,22 @@
 import { html, nothing } from "lit";
 import { pathForRoute } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
-import { icons } from "../icons.ts";
-import { formatSessionTokens } from "../presenter.ts";
-import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
-import { parseAgentSessionKey } from "../session-key.ts";
-import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
+import { formatRelativeTimestamp, parseSessionKeyParts } from "../../ui/format.ts";
+import { icons } from "../../ui/icons.ts";
+import { formatSessionTokens } from "../../ui/presenter.ts";
+import { formatGoalDetail, formatGoalSummary } from "../../ui/session-goal.ts";
+import { parseAgentSessionKey } from "../../ui/session-key.ts";
+import { sessionModelMatchesDefaults } from "../../ui/session-model-defaults.ts";
+import { isSessionRunActive } from "../../ui/session-run-state.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../ui/string-coerce.ts";
 import {
   formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
-} from "../thinking-labels.ts";
+} from "../../ui/thinking-labels.ts";
 import type {
   AgentIdentityResult,
   GatewaySessionRow,
@@ -23,8 +26,8 @@ import type {
   FastMode,
   SessionCompactionCheckpoint,
   SessionsListResult,
-} from "../types.ts";
-import { resolveAgentRuntimeLabel } from "./agents-utils.ts";
+} from "../../ui/types.ts";
+import { resolveAgentRuntimeLabel } from "../../ui/views/agents-utils.ts";
 
 export type SessionsProps = {
   loading: boolean;

@@ -14,13 +14,17 @@ import {
   scopedAgentParamsForSession,
   scopedAgentListParamsForSession,
 } from "../pages/chat/data.ts";
-import { hasOperatorAdminAccess } from "./app-settings.ts";
-import type { AppViewState } from "./app-view-state.ts";
 import {
   resetChatStateForSessionSwitch,
   switchChatSession,
   switchChatSessionAndWait,
 } from "../pages/chat/session-switch.ts";
+import {
+  createSessionAndRefresh,
+  loadSessions,
+  patchSession,
+} from "../pages/sessions/data.ts";
+import { hasOperatorAdminAccess } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
   renderChatSessionSelect as renderChatSessionSelectBase,
@@ -29,7 +33,6 @@ import {
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { createSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 import { icons } from "./icons.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";

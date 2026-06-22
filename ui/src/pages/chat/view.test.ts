@@ -191,7 +191,7 @@ vi.mock("../../ui/controllers/agents.ts", () => ({
   refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
 }));
 
-vi.mock("../../ui/controllers/sessions.ts", () => ({
+vi.mock("../sessions/data.ts", () => ({
   loadSessions: loadSessionsMock,
   patchSession: patchSessionMock,
   syncSelectedSessionMessageSubscription: vi.fn(async () => undefined),

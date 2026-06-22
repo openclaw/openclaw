@@ -8,6 +8,7 @@ import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "../../pages/chat/data.ts";
+import { loadSessions, patchSession } from "../../pages/sessions/data.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -15,7 +16,6 @@ import {
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
-import { loadSessions, patchSession } from "../controllers/sessions.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";

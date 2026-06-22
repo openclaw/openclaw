@@ -47,12 +47,6 @@ import {
 } from "../../ui/control-ui-performance.ts";
 import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
 import {
-  applyChatHistorySessionInfo,
-  loadSessions,
-  type LoadSessionsOverrides,
-  type SessionsState,
-} from "../../ui/controllers/sessions.ts";
-import {
   GatewayRequestError,
   type GatewayBrowserClient,
   type GatewayHelloOk,
@@ -88,6 +82,12 @@ import type {
 } from "../../ui/ui-types.ts";
 import { generateUUID } from "../../ui/uuid.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
+import {
+  applyChatHistorySessionInfo,
+  loadSessions,
+  type LoadSessionsOverrides,
+  type SessionsState,
+} from "../sessions/data.ts";
 import {
   abortChatRun,
   appendUserChatMessage,

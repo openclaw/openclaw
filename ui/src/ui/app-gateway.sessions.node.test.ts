@@ -91,7 +91,7 @@ vi.mock("./controllers/exec-approval.ts", () => ({
 vi.mock("./controllers/nodes.ts", () => ({
   loadNodes: vi.fn(),
 }));
-vi.mock("./controllers/sessions.ts", () => ({
+vi.mock("../pages/sessions/data.ts", () => ({
   applySessionsChangedEvent: applySessionsChangedEventMock,
   loadSessions: loadSessionsMock,
   subscribeSessions: vi.fn(),
@@ -119,7 +119,7 @@ afterAll(() => {
   vi.doUnmock("./controllers/devices.ts");
   vi.doUnmock("./controllers/exec-approval.ts");
   vi.doUnmock("./controllers/nodes.ts");
-  vi.doUnmock("./controllers/sessions.ts");
+  vi.doUnmock("../pages/sessions/data.ts");
   vi.doUnmock("./gateway.ts");
   vi.resetModules();
 });
