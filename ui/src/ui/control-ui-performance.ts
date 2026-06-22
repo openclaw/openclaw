@@ -1,6 +1,6 @@
-import { getVisibleRouteId, type RouteId } from "../app-routes.ts";
 // Control UI module implements control ui performance behavior.
-import type { EventLogEntry } from "./app-events.ts";
+import type { EventLogEntry } from "../api/event-log.ts";
+import { getVisibleRouteId, type RouteId } from "../app-routes.ts";
 import type { GatewayConnectTiming, GatewayRequestTiming } from "./gateway.ts";
 
 type ControlUiPerformanceHost = {

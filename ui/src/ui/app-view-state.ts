@@ -1,3 +1,4 @@
+import type { EventLogEntry } from "../api/event-log.ts";
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
@@ -25,7 +26,6 @@ import type {
   SkillMessage,
 } from "../pages/skills/data.ts";
 import type { SessionLogEntry } from "../pages/usage/view.ts";
-import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { EmbedSandboxMode } from "./embed-sandbox.ts";

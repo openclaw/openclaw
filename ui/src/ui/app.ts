@@ -1,6 +1,7 @@
 // Control UI module implements app behavior.
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
+import type { EventLogEntry } from "../api/event-log.ts";
 import { appRouter, createApplicationContext, type ApplicationContext } from "../app-routes.ts";
 import { createRouterOutletSnapshot } from "../app/router-outlet.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
@@ -83,7 +84,6 @@ import type {
   SkillMessage,
 } from "../pages/skills/data.ts";
 import { DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
-import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
   handleConnected,

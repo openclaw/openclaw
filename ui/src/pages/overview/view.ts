@@ -1,5 +1,6 @@
 // Control UI view renders overview screen content.
 import { html, nothing } from "lit";
+import type { EventLogEntry } from "../../api/event-log.ts";
 import type { RouteId } from "../../app-routes.ts";
 import { icons } from "../../components/icons.ts";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
@@ -12,7 +13,6 @@ import {
   shouldShowInsecureContextHint,
 } from "../../lib/overview-hints.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import type { EventLogEntry } from "../../ui/app-events.ts";
 import type { GatewayHelloOk } from "../../ui/gateway.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../ui/storage.ts";
 import type {

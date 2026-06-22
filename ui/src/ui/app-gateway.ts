@@ -4,6 +4,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
+import type { EventLogEntry } from "../api/event-log.ts";
 import { appRouter, getVisibleRouteId, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
 import {
@@ -56,7 +57,6 @@ import {
   syncSelectedSessionMessageSubscription,
   type SessionsState,
 } from "../pages/sessions/data.ts";
-import type { EventLogEntry } from "./app-events.ts";
 import { applySettings, syncUrlWithSessionKey } from "./app-settings.ts";
 import {
   handleAgentEvent,
