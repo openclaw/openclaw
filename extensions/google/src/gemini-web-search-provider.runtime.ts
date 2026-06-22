@@ -66,11 +66,11 @@ function throwMalformedGeminiResponse(): never {
   throw new Error("Gemini API error: malformed JSON response");
 }
 
-const GEMINI_FRESHNESS_DAYS: Record<GeminiFreshness, number> = {
-  day: 1,
-  week: 7,
-  month: 30,
-  year: 365,
+const GEMINI_FRESHNESS_HINTS: Record<GeminiFreshness, string> = {
+  day: "Prioritize web sources published in the last 24 hours.",
+  week: "Prioritize web sources published in the last 7 days.",
+  month: "Prioritize web sources published in the last 30 days.",
+  year: "Prioritize web sources published in the last 365 days.",
 };
 
 // Gemini's google_search.time_range_filter accepts second-precision RFC 3339
@@ -93,17 +93,18 @@ function isoDateExclusiveEnd(value: string): string {
   return toGeminiTimeRangeTimestamp(end);
 }
 
-function freshnessStartTime(freshness: GeminiFreshness, now: Date): string {
-  const start = new Date(now);
-  start.setUTCDate(start.getUTCDate() - GEMINI_FRESHNESS_DAYS[freshness]);
-  return toGeminiTimeRangeTimestamp(start);
+function queryWithSoftFreshness(query: string, freshness?: GeminiFreshness): string {
+  if (!freshness) {
+    return query;
+  }
+  return `${query}\n\nSearch recency instruction: ${GEMINI_FRESHNESS_HINTS[freshness]} If no matching recent sources are available, state that limitation and use the most relevant available sources.`;
 }
 
 function resolveGeminiTimeRangeFilter(
   args: Record<string, unknown>,
   now = new Date(),
 ):
-  | { timeRangeFilter?: GeminiTimeRangeFilter }
+  | { timeRangeFilter?: GeminiTimeRangeFilter; freshness?: GeminiFreshness }
   | {
       error:
         | "invalid_freshness"
@@ -134,10 +135,7 @@ function resolveGeminiTimeRangeFilter(
   const { freshness, dateAfter, dateBefore } = parsedTimeFilters;
   if (freshness) {
     return {
-      timeRangeFilter: {
-        startTime: freshnessStartTime(freshness, now),
-        endTime: toGeminiTimeRangeTimestamp(now),
-      },
+      freshness,
     };
   }
 
@@ -321,6 +319,7 @@ export async function executeGeminiSearch(
     resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
     baseUrl,
     model,
+    timeRange.freshness,
     timeRange.timeRangeFilter?.startTime,
     timeRange.timeRangeFilter?.endTime,
   ]);
@@ -331,7 +330,7 @@ export async function executeGeminiSearch(
 
   const start = Date.now();
   const result = await runGeminiSearch({
-    query,
+    query: queryWithSoftFreshness(query, timeRange.freshness),
     apiKey,
     baseUrl,
     model,
