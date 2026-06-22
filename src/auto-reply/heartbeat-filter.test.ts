@@ -1058,5 +1058,68 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         },
       ]);
     });
+
+    it("extracts summary from heartbeat_respond tool call in keep-result mode", () => {
+      const messages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_heartbeat",
+              name: "heartbeat_respond",
+              arguments: {
+                outcome: "no_change",
+                notify: false,
+                summary: "Sync completed. No errors found.",
+              },
+            },
+          ],
+        },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
+      ).toEqual([
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "[Heartbeat summary: Sync completed. No errors found.]",
+            },
+          ],
+        },
+      ]);
+    });
+
+    it("strips heartbeat_respond silent turn when arguments are empty in keep-result mode", () => {
+      const messages = [
+        { role: "user", content: "Hello" },
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_heartbeat",
+              name: "heartbeat_respond",
+              arguments: {
+                outcome: "no_change",
+                notify: false,
+                summary: "",
+              },
+            },
+          ],
+        },
+        { role: "user", content: "Hi" },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
+      ).toEqual([
+        { role: "user", content: "Hello" },
+        { role: "user", content: "Hi" },
+      ]);
+    });
   });
 });

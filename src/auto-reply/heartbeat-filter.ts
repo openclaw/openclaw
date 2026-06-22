@@ -445,6 +445,43 @@ function resolveHeartbeatArtifactSpanEnd(
   return index;
 }
 
+function extractHeartbeatResponseToolSummary(message: {
+  role: string;
+  content?: unknown;
+}): string | undefined {
+  const findSummary = (block: Record<string, unknown>): string | undefined => {
+    if (readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME) {
+      const args = parseToolCallArguments(readToolCallArguments(block));
+      if (args) {
+        const summary = readString(args.summary) ?? "";
+        const notificationText = readString(args.notificationText) ?? "";
+        const reason = readString(args.reason) ?? "";
+        const text = summary || notificationText || reason;
+        if (text.trim()) {
+          return text.trim();
+        }
+      }
+    }
+    return undefined;
+  };
+
+  for (const call of collectMessageToolCalls(message)) {
+    const text = findSummary(call);
+    if (text) {
+      return text;
+    }
+  }
+
+  for (const block of collectToolCallBlocks(message.content)) {
+    const text = findSummary(block);
+    if (text) {
+      return text;
+    }
+  }
+
+  return undefined;
+}
+
 /** Remove heartbeat-only prompt, ack, and silent tool artifacts from a transcript. */
 export function filterHeartbeatTranscriptArtifacts<T extends { role: string; content?: unknown }>(
   messages: T[],
@@ -483,12 +520,16 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
       }
 
       if (lastAssistantMessage) {
-        const { text } = resolveMessageText(lastAssistantMessage.content);
-        const { text: cleanText } = stripHeartbeatToken(text, {
-          mode: "message",
-          maxAckChars: ackMaxChars,
-        });
-        const cleanTrimmed = cleanText.trim();
+        let cleanTrimmed = extractHeartbeatResponseToolSummary(lastAssistantMessage);
+        if (!cleanTrimmed) {
+          const { text } = resolveMessageText(lastAssistantMessage.content);
+          const { text: cleanText } = stripHeartbeatToken(text, {
+            mode: "message",
+            maxAckChars: ackMaxChars,
+          });
+          cleanTrimmed = cleanText.trim();
+        }
+
         if (cleanTrimmed) {
           const summaryContent = `[Heartbeat summary: ${cleanTrimmed}]`;
           result.push({
