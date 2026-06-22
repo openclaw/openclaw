@@ -244,6 +244,12 @@ export function buildGroupChatContext(params: {
   const botUsername = normalizeOptionalString(params.sessionCtx.BotUsername);
   const sharedChatNoun = resolveSharedChatNoun(params.sessionCtx.ChatType);
   const destinationLabel = sharedChatNoun === "channel" ? "this channel" : "this group chat";
+  const participantLabel = sharedChatNoun === "channel" ? "channel" : "group";
+  const textReplyDestinationLabel =
+    sharedChatNoun === "channel" ? "this same channel" : "this same destination";
+  const attachmentDestinationLabel =
+    sharedChatNoun === "channel" ? "same channel/thread" : "same group/topic";
+  const taskLabel = sharedChatNoun === "channel" ? "channel task" : "group-chat task";
 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} ${sharedChatNoun}.`);
@@ -258,11 +264,11 @@ export function buildGroupChatContext(params: {
     );
   } else {
     lines.push(
-      `Your text replies are automatically sent to ${destinationLabel}. For ordinary text, do not use the message tool to send to this same destination; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same ${sharedChatNoun === "channel" ? "channel/thread" : "group/topic"}.`,
+      `Your text replies are automatically sent to ${destinationLabel}. For ordinary text, do not use the message tool to send to ${textReplyDestinationLabel}; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this ${attachmentDestinationLabel}.`,
     );
   }
   lines.push(
-    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
+    `Be a good ${participantLabel} participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.`,
   );
   const tableGuidance = provider === "telegram" ? "" : " Avoid Markdown tables.";
   lines.push(
@@ -273,13 +279,13 @@ export function buildGroupChatContext(params: {
     lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
   }
   lines.push(
-    "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
+    `When subagent or session-spawn tools are available and a directly requested ${taskLabel} will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise ${participantLabel}-visible updates when they add value.`,
   );
   const canUseSilentReply =
     !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
   if (messageToolOnly) {
     lines.push(
-      `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to ${destinationLabel}.`,
+      `If no visible ${participantLabel} response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to ${destinationLabel}.`,
     );
   }
   if (canUseSilentReply) {

@@ -97,7 +97,24 @@ describe("group runtime loading", () => {
     });
 
     expect(context).toContain("You are in a Mattermost channel.");
-    expect(context).not.toContain("You are in a Mattermost group chat.");
+    expect(context).toContain("Your text replies are automatically sent to this channel.");
+    expect(context).toContain("send to this same channel");
+    expect(context).toContain("Be a good channel participant");
+    expect(context).toContain("a directly requested channel task");
+    expect(context).not.toContain("Mattermost group chat");
+    expect(context).not.toContain("this group chat");
+    expect(context).not.toContain("same group");
+    expect(context).not.toContain("group-chat task");
+
+    const toolOnlyContext = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(toolOnlyContext).toContain("not automatically sent to this channel");
+    expect(toolOnlyContext).toContain("target defaults to this channel");
+    expect(toolOnlyContext).toContain("If no visible channel response is needed");
+    expect(toolOnlyContext).not.toContain("group response");
+    expect(toolOnlyContext).not.toContain("this group chat");
   });
 
   it("builds direct chat context without silent-token guidance", () => {
