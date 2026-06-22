@@ -1,5 +1,6 @@
 import type {
   ApplicationGateway,
+  ApplicationPageContext,
   ApplicationTheme,
   StableApplicationContext,
 } from "./app/context.ts";
@@ -26,11 +27,16 @@ import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "./rout
 import type { PageDefinition, RouteLocation, RouterHistory } from "./router/index.ts";
 
 export type AppRouteModule = {
-  render: (context: ApplicationContext, data: unknown) => unknown;
+  render: (context: ApplicationPageContext<RouteId>, data: unknown) => unknown;
 };
 
 export type ApplicationContext = StableApplicationContext<RouteId, AppRouteModule, unknown>;
-export type AppRoute = PageDefinition<RouteId, ApplicationContext, AppRouteModule, unknown>;
+export type AppRoute = PageDefinition<
+  RouteId,
+  ApplicationPageContext<RouteId>,
+  AppRouteModule,
+  unknown
+>;
 export type ApplicationRouter = ApplicationContext["router"];
 
 // Only the migrated page is active. The old catalog and its paths remain available
@@ -67,7 +73,7 @@ const APP_ROUTE_PATHS = [
 const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
 
 export function createApplicationRouter(): ApplicationRouter {
-  return createRouter<RouteId, ApplicationContext, AppRouteModule, unknown>({
+  return createRouter<RouteId, ApplicationPageContext<RouteId>, AppRouteModule, unknown>({
     routes: appRoutes,
   });
 }
