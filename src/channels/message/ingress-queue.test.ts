@@ -28,7 +28,7 @@ describe("channel ingress queue", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
-  it("overrides the state dir without copying the full process env", () => {
+  it("opens a custom state database without copying the full process env", async () => {
     const baseEnv: NodeJS.ProcessEnv = {
       HOME: "/home/openclaw",
       PATH: "/usr/local/bin:/usr/bin",
@@ -36,13 +36,23 @@ describe("channel ingress queue", () => {
     for (let index = 0; index < 10_000; index += 1) {
       baseEnv[`KUBERNETES_SERVICE_${index}`] = "tcp://10.0.0.1:443";
     }
+    const inheritedEnv = new Proxy(baseEnv, {
+      ownKeys() {
+        throw new Error("inherited env should not be enumerated");
+      },
+    });
 
-    const env = createStateDirEnv("/tmp/openclaw-state", baseEnv);
+    await withTempState(async (stateDir) => {
+      const env = createStateDirEnv(stateDir, inheritedEnv);
 
-    expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-state");
-    expect(env.HOME).toBe("/home/openclaw");
-    expect(Object.getPrototypeOf(env)).toBe(baseEnv);
-    expect(Object.keys(env)).toEqual(["OPENCLAW_STATE_DIR"]);
+      expect(env.OPENCLAW_STATE_DIR).toBe(stateDir);
+      expect(env.HOME).toBe("/home/openclaw");
+      expect(Object.getPrototypeOf(env)).toBe(inheritedEnv);
+      expect(Object.keys(env)).toEqual(["OPENCLAW_STATE_DIR"]);
+
+      const database = openOpenClawStateDatabase({ env });
+      expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+    });
   });
 
   it("deduplicates pending and completed ingress events", async () => {

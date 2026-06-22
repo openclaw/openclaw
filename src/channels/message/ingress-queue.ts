@@ -191,9 +191,9 @@ export function createStateDirEnv(
   stateDir: string,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
-  return Object.assign(Object.create(baseEnv) as NodeJS.ProcessEnv, {
-    OPENCLAW_STATE_DIR: stateDir,
-  });
+  const env = Object.create(baseEnv) as NodeJS.ProcessEnv;
+  env.OPENCLAW_STATE_DIR = stateDir;
+  return env;
 }
 
 function openStateDatabase(stateDir?: string) {
