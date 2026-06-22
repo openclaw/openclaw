@@ -478,6 +478,188 @@ describe("listSessionsFromStore search", () => {
     expect(result.totalCount).toBe(1);
   });
 
+  test("filters direct sessions by configured account display fallback", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }, { id: "quote" }] },
+      channels: {
+        feishu: {
+          accounts: {
+            quote: { name: "Quote Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const directKey = "agent:quote:feishu:direct:ou_8ad348410b";
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        ...makeStore(),
+        [directKey]: {
+          sessionId: "feishu-direct-session",
+          updatedAt: Date.now(),
+          origin: {
+            provider: "feishu",
+            label: "ou_8ad348410b",
+          },
+        } as SessionEntry,
+      },
+      opts: { search: "assistant" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe(directKey);
+    expect(result.sessions[0].displayName).toBe("Quote Assistant");
+  });
+
+  test("filters omitted-account direct sessions by configured default account display fallback", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+          accounts: {
+            work: { name: "Zebra Assistant" },
+            main: { name: "Agent Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const directKey = "agent:main:feishu:direct:ou_8ad348410b";
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        ...makeStore(),
+        [directKey]: {
+          sessionId: "feishu-direct-session",
+          updatedAt: Date.now(),
+          origin: {
+            provider: "feishu",
+            label: "ou_8ad348410b",
+          },
+        } as SessionEntry,
+      },
+      opts: { search: "zebra" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe(directKey);
+    expect(result.sessions[0].displayName).toBe("Zebra Assistant");
+  });
+
+  test("filters omitted-account direct sessions by non-default agent account before default account", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }, { id: "quote" }] },
+      channels: {
+        feishu: {
+          defaultAccount: "main",
+          accounts: {
+            main: { name: "Main Assistant" },
+            quote: { name: "Quote Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const directKey = "agent:quote:feishu:direct:ou_8ad348410b";
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        ...makeStore(),
+        [directKey]: {
+          sessionId: "feishu-direct-session",
+          updatedAt: Date.now(),
+          origin: {
+            provider: "feishu",
+            label: "ou_8ad348410b",
+          },
+        } as SessionEntry,
+      },
+      opts: { search: "quote" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe(directKey);
+    expect(result.sessions[0].displayName).toBe("Quote Assistant");
+  });
+
+  test("filters resolved-default-agent direct sessions by configured default account", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops", default: true }, { id: "quote" }] },
+      channels: {
+        feishu: {
+          defaultAccount: "work",
+          accounts: {
+            ops: { name: "Ops Agent Account" },
+            work: { name: "Heliotrope Assistant" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const directKey = "agent:ops:feishu:direct:ou_8ad348410b";
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        ...makeStore(),
+        [directKey]: {
+          sessionId: "feishu-direct-session",
+          updatedAt: Date.now(),
+          origin: {
+            provider: "feishu",
+            label: "ou_8ad348410b",
+          },
+        } as SessionEntry,
+      },
+      opts: { search: "heliotrope" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe(directKey);
+    expect(result.sessions[0].displayName).toBe("Heliotrope Assistant");
+  });
+
+  test("filters direct sessions by normalized configured account display fallback", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "main", default: true }] },
+      channels: {
+        feishu: {
+          defaultAccount: "Router D",
+          accounts: {
+            "router-d": { name: "Router Display" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const directKey = "agent:main:feishu:direct:ou_8ad348410b";
+    const result = listSessionsFromStore({
+      cfg,
+      storePath: "/tmp/sessions.json",
+      store: {
+        ...makeStore(),
+        [directKey]: {
+          sessionId: "feishu-direct-session",
+          updatedAt: Date.now(),
+          origin: {
+            provider: "feishu",
+            label: "ou_8ad348410b",
+          },
+        } as SessionEntry,
+      },
+      opts: { search: "router" },
+    });
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0].key).toBe(directKey);
+    expect(result.sessions[0].displayName).toBe("Router Display");
+  });
+
   test("hides cron run alias session keys from sessions list", () => {
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
