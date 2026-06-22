@@ -60,7 +60,8 @@ describe("buildStatusMessage context window", () => {
       modelAuth: "api-key",
     });
 
-    expect(text).toContain("Session selected: ollama-cloud/glm-5.1");
+    expect(text).toContain("Model: ollama-cloud/glm-5.1");
+    expect(text).toContain("session override, default ollama-cloud/deepseek-v4-pro");
     expect(text).toContain("Context: 128k/200k");
     expect(text).not.toContain("Context: 128k/1.0m");
   });
@@ -127,5 +128,4 @@ describe("buildStatusMessage context window", () => {
     expect(text).toContain("Context: 36k/1.0m");
     expect(text).not.toContain("Context: 36k/200k");
   });
-
 });

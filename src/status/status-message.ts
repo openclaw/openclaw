@@ -1070,16 +1070,12 @@ export function buildStatusMessage(args: StatusArgs): string {
     !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel, {
       config: args.config,
     });
-  const modelLines = configDefaultDiffersFromSession
-    ? [
-        `🧠 Configured default: ${configuredDefaultModelLabel}`,
-        `📌 Session selected: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`,
-        "⚠️ Reason: session override",
-        `⚠️ This session is pinned to ${selectedModelLabel}; config primary ${configuredDefaultModelLabel} will apply to new/unpinned sessions.`,
-        "↩️ Clear with: /model default",
-        "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
-      ]
-    : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
+  const overrideLabel = configDefaultDiffersFromSession
+    ? ` · session override, default ${configuredDefaultModelLabel} · clear /model default`
+    : "";
+  const modelLines = [
+    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,
+  ];
 
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {
