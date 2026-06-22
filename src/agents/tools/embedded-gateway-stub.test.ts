@@ -333,10 +333,12 @@ describe("embedded gateway stub", () => {
       sessionFile: currentActive,
       sessionId: currentSessionId,
     });
-    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-00")).toBe(true);
-    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-30")).toBe(false);
-    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-31")).toBe(false);
-    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-39")).toBe(false);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-00")).toBe(false);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-09")).toBe(false);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-10")).toBe(true);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-30")).toBe(true);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-31")).toBe(true);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-39")).toBe(true);
     expect(JSON.stringify(result.messages)).toContain("current-cap-session");
     expect(JSON.stringify(result.messages)).toContain("ancestor-cap-session");
   });

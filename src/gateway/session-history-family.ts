@@ -22,6 +22,7 @@ export type SessionHistoryFamilyEntry = {
 };
 
 export const MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS = 32;
+const RESERVED_CURRENT_SESSION_FAMILY_TARGETS = 2;
 
 export function resolveHistoryFamilySessionIds(
   entry: Pick<SessionHistoryFamilyEntry, "usageFamilySessionIds"> | undefined,
@@ -63,6 +64,20 @@ function orderFamilyReadTargetsForOutput(
     .map(({ target }) => target);
 }
 
+function selectFamilySessionIdsForReadTargets(
+  sessionIds: string[],
+  currentSessionId: string,
+): string[] {
+  const ancestorLimit = Math.max(
+    0,
+    MAX_SESSION_FAMILY_TRANSCRIPT_READ_TARGETS - RESERVED_CURRENT_SESSION_FAMILY_TARGETS,
+  );
+  const ancestorSessionIds = sessionIds
+    .filter((sessionId) => sessionId !== currentSessionId)
+    .slice(-ancestorLimit);
+  return [...ancestorSessionIds, currentSessionId];
+}
+
 export async function resolveSessionFamilyTranscriptReadTargets(params: {
   entry: SessionHistoryFamilyEntry | undefined;
   sessionId: string | undefined;
@@ -75,7 +90,10 @@ export async function resolveSessionFamilyTranscriptReadTargets(params: {
   }
   const currentSessionId = params.sessionId;
   const sessionIds = params.includeFamily
-    ? resolveHistoryFamilySessionIds(params.entry, currentSessionId)
+    ? selectFamilySessionIdsForReadTargets(
+        resolveHistoryFamilySessionIds(params.entry, currentSessionId),
+        currentSessionId,
+      )
     : [currentSessionId];
   const targets: SessionTranscriptReadTarget[] = [];
   const seenFiles = new Set<string>();

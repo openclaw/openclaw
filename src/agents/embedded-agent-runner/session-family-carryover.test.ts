@@ -296,8 +296,8 @@ describe("session family carryover", () => {
 
     expect(carryover).toMatchObject({
       role: "compactionSummary",
-      summary: "Capped carryover 29",
-      tokensBefore: 1_029,
+      summary: "Capped carryover 34",
+      tokensBefore: 1_034,
     });
   });
 
