@@ -4,20 +4,24 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const canCreateFileSymlinks = (() => {
-  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qqbot-symlink-probe-"));
+async function probeFileSymlinkCapability(): Promise<boolean> {
+  const probeDir = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "openclaw-qqbot-symlink-probe-"),
+  );
   const targetFile = path.join(probeDir, "target.txt");
   const linkFile = path.join(probeDir, "link.txt");
   try {
-    fs.writeFileSync(targetFile, "content");
-    fs.symlinkSync(targetFile, linkFile);
+    await fs.promises.writeFile(targetFile, "content");
+    await fs.promises.symlink(targetFile, linkFile);
     return true;
   } catch {
     return false;
   } finally {
-    fs.rmSync(probeDir, { recursive: true, force: true });
+    await fs.promises.rm(probeDir, { recursive: true, force: true });
   }
-})();
+}
+
+const canCreateFileSymlinks = await probeFileSymlinkCapability();
 
 const adapterMocks = vi.hoisted(() => ({
   fetchMedia: vi.fn(),
