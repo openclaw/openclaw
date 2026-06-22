@@ -84,7 +84,7 @@ flow:
           value:
             expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))] : []"
         - assert:
-            expr: "!env.mock || debugRequests.some((request) => request.plannedToolName === 'read' && String(request.toolOutput ?? '').length >= 100000)"
+            expr: "!env.mock || debugRequests.some((request) => request.plannedToolName === 'read' && String(request.allInputText ?? '').length >= 100000)"
             message:
               expr: "`large read tool result was not observed: ${JSON.stringify(debugRequests.slice(-8))}`"
       detailsExpr: "outbound?.text ?? config.hitMarker"
