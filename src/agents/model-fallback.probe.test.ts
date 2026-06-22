@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import type { SessionSuspensionParams } from "./session-suspension.js";
@@ -334,6 +335,7 @@ describe("runWithModelFallback – probe logic", () => {
   }
 
   beforeEach(() => {
+    resetDiagnosticEventsForTest();
     realDateNow = Date.now;
     Date.now = vi.fn(() => NOW);
     setLoggerOverride({ level: "silent", consoleLevel: "silent" });
