@@ -144,3 +144,31 @@ export function parseTelegramTarget(to: string): TelegramTarget {
 export function resolveTelegramTargetChatType(target: string): "direct" | "group" | "unknown" {
   return parseTelegramTarget(target).chatType;
 }
+
+// Telegram cross-context matching is chat-scoped, but a topic is a conversation
+// key under allowWithinProvider:false, not a cosmetic thread. A bare target (no
+// explicit topic) auto-threads back into the bound topic, so it stays in the
+// current conversation and matches, e.g. "477789300" matches
+// "477789300:topic:340799". An explicit topic must match the bound topic
+// exactly; an explicit *different* topic in the same chat is a separate
+// conversation and stays cross-context so the guard can still deny it.
+export function telegramContextTargetsMatch(
+  target: string,
+  context: { currentChannelId?: string; currentMessagingTarget?: string },
+): boolean {
+  const parsedTarget = parseTelegramTarget(target);
+  const targetChatId = parsedTarget.chatId.toLowerCase();
+  const candidates = [context.currentMessagingTarget, context.currentChannelId].filter(
+    (value): value is string => Boolean(value),
+  );
+  return candidates.some((candidate) => {
+    const parsedCandidate = parseTelegramTarget(candidate);
+    if (parsedCandidate.chatId.toLowerCase() !== targetChatId) {
+      return false;
+    }
+    return (
+      parsedTarget.messageThreadId === undefined ||
+      parsedTarget.messageThreadId === parsedCandidate.messageThreadId
+    );
+  });
+}
