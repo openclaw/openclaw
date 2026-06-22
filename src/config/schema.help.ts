@@ -982,6 +982,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Provider-specific runtime parameters interpreted by provider plugins. Keep keys documented by the provider, and prefer explicit provider docs over ad hoc shared assumptions.",
   "models.providers.*.headers":
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
+  "models.providers.*.requestContextHeaders":
+    "Opt-in map from OpenClaw run context fields to HTTP request header names for model calls. Nothing is sent by default; set only the keys your proxy expects for cost attribution, such as runId, messageChannel, or operation.",
+  "models.providers.*.requestContextHeaders.runId":
+    "Header name that receives the current OpenClaw run id. Use this when a metering proxy needs to group all model calls for one agent run under a stable request or task identifier.",
+  "models.providers.*.requestContextHeaders.messageChannel":
+    "Header name that receives the normalized inbound channel, such as telegram or slack. Use this when provider-side attribution should distinguish where a real user message entered OpenClaw.",
+  "models.providers.*.requestContextHeaders.operation":
+    'Header name that receives the operation label: "message", "manual", "heartbeat", or "scheduled_job". Use this when a proxy should split real user turns from maintenance or scheduled work.',
   "models.providers.*.authHeader":
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
   "models.providers.*.agentRuntime":

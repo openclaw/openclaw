@@ -332,6 +332,15 @@ const ModelAgentRuntimePolicySchema = z
   .strict()
   .optional();
 
+const ModelProviderRequestContextHeadersSchema = z
+  .object({
+    runId: z.string().min(1).optional(),
+    messageChannel: z.string().min(1).optional(),
+    operation: z.string().min(1).optional(),
+  })
+  .strict()
+  .optional();
+
 const ModelImageInputSchema = z
   .object({
     maxBytes: z.number().int().positive().optional(),
@@ -509,6 +518,7 @@ const ModelProviderSchema = z
     agentRuntime: ModelAgentRuntimePolicySchema,
     localService: ModelProviderLocalServiceSchema,
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
+    requestContextHeaders: ModelProviderRequestContextHeadersSchema,
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
     models: z.array(ModelDefinitionSchema).optional(),

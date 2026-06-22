@@ -582,6 +582,11 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.injectNumCtxForOpenAICompat": "Model Provider Inject num_ctx (OpenAI Compat)",
   "models.providers.*.params": "Model Provider Runtime Parameters",
   "models.providers.*.headers": "Model Provider Headers",
+  "models.providers.*.requestContextHeaders": "Model Provider Request Context Headers",
+  "models.providers.*.requestContextHeaders.runId": "Model Provider Run ID Header",
+  "models.providers.*.requestContextHeaders.messageChannel":
+    "Model Provider Message Channel Header",
+  "models.providers.*.requestContextHeaders.operation": "Model Provider Operation Header",
   "models.providers.*.authHeader": "Model Provider Authorization Header",
   "models.providers.*.agentRuntime": "Model Provider Runtime",
   "models.providers.*.agentRuntime.id": "Model Provider Runtime ID",

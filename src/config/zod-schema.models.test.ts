@@ -50,4 +50,50 @@ describe("ModelsConfigSchema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it("accepts provider request context header mappings", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "my-proxy": {
+          baseUrl: "https://my-proxy.example.com/v1",
+          requestContextHeaders: {
+            runId: "X-OpenClaw-Run-Id",
+            messageChannel: "X-OpenClaw-Channel",
+            operation: "X-OpenClaw-Operation",
+          },
+          models: [
+            {
+              id: "gpt-5.4-proxy",
+              name: "GPT 5.4 Proxy",
+              reasoning: true,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown provider request context header fields", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "my-proxy": {
+          baseUrl: "https://my-proxy.example.com/v1",
+          requestContextHeaders: {
+            taskId: "X-Task-Id",
+          },
+          models: [
+            {
+              id: "gpt-5.4-proxy",
+              name: "GPT 5.4 Proxy",
+              reasoning: true,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
 });

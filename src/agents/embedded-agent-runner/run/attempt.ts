@@ -496,6 +496,7 @@ import {
   formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
+import { resolveModelRequestContext } from "./request-context.js";
 import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
@@ -3043,6 +3044,12 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      const modelRequestContext = resolveModelRequestContext({
+        runId: params.runId,
+        messageChannel: params.messageChannel,
+        messageProvider: params.messageProvider,
+        bootstrapContextRunKind: params.bootstrapContextRunKind,
+      });
       const innerStreamFn = activeSession.agent.streamFn;
       activeSession.agent.streamFn = (model, context, options) => {
         const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
@@ -3051,7 +3058,19 @@ export async function runEmbeddedAttempt(
             ReturnType<typeof innerStreamFn>
           >;
         }
-        return innerStreamFn(model, context, options);
+        return innerStreamFn(
+          model,
+          context,
+          modelRequestContext
+            ? {
+                ...options,
+                requestContext: {
+                  ...modelRequestContext,
+                  ...options?.requestContext,
+                },
+              }
+            : options,
+        );
       };
 
       // Some models emit tool names with surrounding whitespace (e.g. " read ").

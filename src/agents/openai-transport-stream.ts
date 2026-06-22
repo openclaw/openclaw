@@ -26,7 +26,7 @@ import { calculateCost } from "../llm/model-utils.js";
 import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
-import type { Api, Context, Model } from "../llm/types.js";
+import type { Api, Context, Model, ModelRequestContext } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
@@ -146,6 +146,7 @@ type BaseStreamOptions = {
   authProfileId?: string;
   onPayload?: (payload: unknown, model: Model) => unknown;
   headers?: Record<string, string>;
+  requestContext?: ModelRequestContext;
   openclawCodeModeToolSurface?: boolean;
   responseFormat?: Record<string, unknown>;
   frequencyPenalty?: number;
@@ -1808,6 +1809,7 @@ function buildOpenAIClientHeaders(
   context: Context,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  requestContext?: ModelRequestContext,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -1819,7 +1821,11 @@ function buildOpenAIClientHeaders(
       }),
     );
   }
-  const callerHeaders = { ...optionHeaders, ...turnHeaders };
+  const callerHeaders = {
+    ...(buildRequestContextHeaders(model.requestContextHeaders, requestContext) ?? {}),
+    ...optionHeaders,
+    ...turnHeaders,
+  };
   const headers = resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
@@ -1831,6 +1837,27 @@ function buildOpenAIClientHeaders(
     precedence: "caller-wins",
   }).headers;
   return headers ?? {};
+}
+
+function buildRequestContextHeaders(
+  requestContextHeaders: Model["requestContextHeaders"],
+  requestContext?: ModelRequestContext,
+): Record<string, string> | undefined {
+  if (!requestContextHeaders || !requestContext) {
+    return undefined;
+  }
+
+  const headers: Record<string, string> = {};
+  for (const key of ["runId", "messageChannel", "operation"] as const) {
+    const headerName = requestContextHeaders[key]?.trim();
+    const value = requestContext[key]?.trim();
+    if (!headerName || !value) {
+      continue;
+    }
+    headers[headerName] = value;
+  }
+
+  return Object.keys(headers).length > 0 ? headers : undefined;
 }
 
 function resolveProviderTransportTurnState(
@@ -1898,12 +1925,19 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  requestContext?: ModelRequestContext,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(
+      model,
+      context,
+      optionHeaders,
+      turnHeaders,
+      requestContext,
+    ),
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -1946,6 +1980,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          options?.requestContext,
         );
         let params = buildOpenAIResponsesParams(
           model,
@@ -2395,6 +2430,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          options?.requestContext,
         );
         const deploymentName = resolveAzureDeploymentName(model);
         let params = buildAzureOpenAIResponsesParams(
@@ -2486,12 +2522,19 @@ function createAzureOpenAIClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  requestContext?: ModelRequestContext,
 ) {
   const baseURL = normalizeAzureBaseUrl(model.baseUrl);
   const clientOptions = {
     apiKey,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(
+      model,
+      context,
+      optionHeaders,
+      turnHeaders,
+      requestContext,
+    ),
     baseURL,
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
@@ -2550,8 +2593,14 @@ function createOpenAICompletionsClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  requestContext?: ModelRequestContext,
 ) {
-  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
+  const clientConfig = buildOpenAICompletionsClientConfig(
+    model,
+    context,
+    optionHeaders,
+    requestContext,
+  );
   return new OpenAI({
     apiKey,
     baseURL: clientConfig.baseURL,
@@ -2590,12 +2639,19 @@ function buildOpenAICompletionsClientConfig(
   model: Model,
   context: Context,
   optionHeaders?: Record<string, string>,
+  requestContext?: ModelRequestContext,
 ): {
   baseURL: string;
   defaultHeaders: Record<string, string>;
   defaultQuery?: Record<string, string>;
 } {
-  const headers = buildOpenAIClientHeaders(model, context, optionHeaders);
+  const headers = buildOpenAIClientHeaders(
+    model,
+    context,
+    optionHeaders,
+    undefined,
+    requestContext,
+  );
   const defaultQuery: Record<string, string> = {};
   let baseURL = model.baseUrl;
   let isAzureHost = false;
@@ -2658,7 +2714,13 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
+        const client = createOpenAICompletionsClient(
+          model,
+          context,
+          apiKey,
+          options?.headers,
+          options?.requestContext,
+        );
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,

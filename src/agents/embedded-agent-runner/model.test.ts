@@ -2095,6 +2095,37 @@ describe("resolveModel", () => {
     });
   });
 
+  it("includes provider request context header mappings in resolved models", () => {
+    const requestContextHeaders = {
+      runId: "X-OpenClaw-Run-Id",
+      messageChannel: "X-OpenClaw-Channel",
+      operation: "X-OpenClaw-Operation",
+    };
+    const cfg = {
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "http://localhost:9000",
+            requestContextHeaders,
+            models: [makeModel("listed-model")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const listedResult = resolveModelForTest("custom", "listed-model", "/tmp/agent", cfg);
+    const listedModel = expectResolvedModel(listedResult) as unknown as {
+      requestContextHeaders?: Record<string, string>;
+    };
+    expect(listedModel.requestContextHeaders).toEqual(requestContextHeaders);
+
+    const fallbackResult = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
+    const fallbackModel = expectResolvedModel(fallbackResult) as unknown as {
+      requestContextHeaders?: Record<string, string>;
+    };
+    expect(fallbackModel.requestContextHeaders).toEqual(requestContextHeaders);
+  });
+
   it("drops SecretRef marker provider headers in fallback models", () => {
     const cfg = {
       models: {

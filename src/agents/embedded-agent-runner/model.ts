@@ -716,6 +716,9 @@ function applyConfiguredProviderOverrides(params: {
       ...(resolvedParams ? { params: resolvedParams } : {}),
       ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       headers: passthroughRequestConfig.headers,
+      ...(providerConfig.requestContextHeaders
+        ? { requestContextHeaders: providerConfig.requestContextHeaders }
+        : {}),
       ...(providerConfig.authHeader !== undefined ? { authHeader: providerConfig.authHeader } : {}),
     };
   }
@@ -835,6 +838,9 @@ function applyConfiguredProviderOverrides(params: {
         ...(resolvedParams ? { params: resolvedParams } : {}),
         ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         headers: requestConfig.headers,
+        ...(providerConfig.requestContextHeaders
+          ? { requestContextHeaders: providerConfig.requestContextHeaders }
+          : {}),
         ...(providerConfig.authHeader !== undefined
           ? { authHeader: providerConfig.authHeader }
           : {}),
@@ -1376,6 +1382,9 @@ function resolveConfiguredFallbackModel(params: {
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
+          ...(providerConfig?.requestContextHeaders
+            ? { requestContextHeaders: providerConfig.requestContextHeaders }
+            : {}),
           ...(providerConfig?.authHeader !== undefined
             ? { authHeader: providerConfig.authHeader }
             : {}),

@@ -63,6 +63,15 @@ export interface ProviderResponse {
   headers: Record<string, string>;
 }
 
+/** Run context fields that may be projected into provider request metadata. */
+export type ModelRequestContextHeaderKey = "runId" | "messageChannel" | "operation";
+
+/** Provider-configured mapping from run context fields to HTTP header names. */
+export type ModelRequestContextHeaders = Partial<Record<ModelRequestContextHeaderKey, string>>;
+
+/** Per-request run context available to provider transports. */
+export type ModelRequestContext = Partial<Record<ModelRequestContextHeaderKey, string>>;
+
 /** Request options shared by text streaming providers. */
 export interface StreamOptions {
   temperature?: number;
@@ -112,6 +121,11 @@ export interface StreamOptions {
    * Not supported by all providers (e.g., AWS Bedrock uses SDK auth).
    */
   headers?: Record<string, string>;
+  /**
+   * Optional OpenClaw run context for provider request metadata.
+   * Providers only forward these fields when explicitly configured.
+   */
+  requestContext?: ModelRequestContext;
   /**
    * HTTP request timeout in milliseconds for providers/SDKs that support it.
    * For example, OpenAI and Anthropic SDK clients default to 10 minutes.
@@ -609,6 +623,8 @@ export interface Model<TApi extends Api = Api> {
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
   headers?: Record<string, string>;
+  /** Maps run context fields to provider HTTP request headers. */
+  requestContextHeaders?: ModelRequestContextHeaders;
   /** Sends runtime credentials as Authorization: Bearer instead of provider-specific key headers. */
   authHeader?: boolean;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */

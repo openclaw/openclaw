@@ -153,6 +153,12 @@ const ProviderAuthModeSchema = Type.Union([
 ]);
 type ProviderAuthMode = Static<typeof ProviderAuthModeSchema>;
 
+const RequestContextHeadersSchema = Type.Object({
+  runId: Type.Optional(Type.String({ minLength: 1 })),
+  messageChannel: Type.Optional(Type.String({ minLength: 1 })),
+  operation: Type.Optional(Type.String({ minLength: 1 })),
+});
+
 // Schema for custom model definition
 // Most fields are optional with sensible defaults for local models (Ollama, LM Studio, etc.)
 const ModelDefinitionSchema = Type.Object({
@@ -185,6 +191,7 @@ const ProviderConfigSchema = Type.Object({
   auth: Type.Optional(ProviderAuthModeSchema),
   api: Type.Optional(Type.String({ minLength: 1 })),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
+  requestContextHeaders: Type.Optional(RequestContextHeadersSchema),
   compat: Type.Optional(ProviderCompatSchema),
   authHeader: Type.Optional(Type.Boolean()),
   models: Type.Optional(Type.Array(ModelDefinitionSchema)),
@@ -560,6 +567,7 @@ export class ModelRegistry {
           maxTokens: modelDef.maxTokens ?? 16384,
           params: modelDef.params,
           headers: undefined,
+          requestContextHeaders: providerConfig.requestContextHeaders,
           compat,
         } as Model);
       }
@@ -886,6 +894,7 @@ export class ModelRegistry {
           maxTokens: modelDef.maxTokens,
           params: modelDef.params,
           headers: undefined,
+          requestContextHeaders: config.requestContextHeaders,
           compat: modelDef.compat,
         } as Model);
       }
@@ -916,6 +925,7 @@ export interface ProviderConfigInput {
     options?: SimpleStreamOptions,
   ) => AssistantMessageEventStreamContract;
   headers?: Record<string, string>;
+  requestContextHeaders?: Model["requestContextHeaders"];
   authHeader?: boolean;
   /** OAuth provider for /login support */
   oauth?: Omit<OAuthProviderInterface, "id">;

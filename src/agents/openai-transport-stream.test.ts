@@ -669,6 +669,78 @@ describe("openai transport stream", () => {
     expect(headers.accept).toBeUndefined();
   });
 
+  it("maps configured run context fields into OpenAI-compatible request headers", () => {
+    const model = {
+      id: "proxy-model",
+      name: "Proxy Model",
+      api: "openai-completions",
+      provider: "litellm",
+      baseUrl: "https://proxy.example.com/v1",
+      requestContextHeaders: {
+        runId: "X-OpenClaw-Run-Id",
+        messageChannel: "X-OpenClaw-Channel",
+        operation: "X-OpenClaw-Operation",
+      },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+
+    const headers = testing.buildOpenAIClientHeaders(
+      model,
+      { systemPrompt: "", messages: [] } as never,
+      undefined,
+      undefined,
+      {
+        runId: "run-123",
+        messageChannel: "telegram",
+        operation: "message",
+      },
+    );
+
+    expectRecordFields(headers, {
+      "X-OpenClaw-Run-Id": "run-123",
+      "X-OpenClaw-Channel": "telegram",
+      "X-OpenClaw-Operation": "message",
+    });
+  });
+
+  it("keeps run context headers opt-in and below explicit caller headers", () => {
+    const context = { systemPrompt: "", messages: [] } as never;
+    const model = {
+      id: "proxy-model",
+      name: "Proxy Model",
+      api: "openai-completions",
+      provider: "litellm",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+
+    const unconfigured = testing.buildOpenAIClientHeaders(model, context, undefined, undefined, {
+      runId: "run-123",
+      operation: "message",
+    });
+    expect(unconfigured).not.toHaveProperty("X-OpenClaw-Run-Id");
+
+    const configured = testing.buildOpenAIClientHeaders(
+      {
+        ...model,
+        requestContextHeaders: { runId: "X-OpenClaw-Run-Id" },
+      },
+      context,
+      { "X-OpenClaw-Run-Id": "caller-run" },
+      undefined,
+      { runId: "run-123", operation: "message" },
+    );
+    expect(configured["X-OpenClaw-Run-Id"]).toBe("caller-run");
+  });
+
   it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
     const codexModel = {
       id: "gpt-5.5",
