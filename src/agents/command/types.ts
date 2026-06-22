@@ -1,6 +1,7 @@
 /**
  * Public option and metadata types for agent command execution.
  */
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
@@ -29,7 +30,7 @@ export type AgentCommandResultMetaOverrides = {
 };
 
 /** ACP turn source markers accepted by trusted command callsites. */
-export type AcpTurnSource = "manual_spawn";
+type AcpTurnSource = "manual_spawn";
 
 /** Channel/account/thread context carried into an agent run. */
 export type AgentRunContext = {
@@ -90,6 +91,8 @@ export type AgentCommandOpts = {
   accountId?: string;
   /** Context for embedded run routing (channel/account/thread). */
   runContext?: AgentRunContext;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   /** Internal trusted exec approval follow-up elevated defaults. */
   bashElevated?: ExecElevatedDefaults;
   /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
@@ -129,6 +132,10 @@ export type AgentCommandOpts = {
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
+  /** Resolved per-run fast mode from channel/directive handling. */
+  fastMode?: FastMode;
+  /** Resolved per-run auto cutoff seconds for fast mode. */
+  fastModeAutoOnSeconds?: number;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
   /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */

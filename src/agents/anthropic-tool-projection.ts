@@ -6,7 +6,7 @@ type AnthropicToolDescriptor = {
   readonly parameters: unknown;
 };
 
-export type AnthropicProjectedTool = {
+type AnthropicProjectedTool = {
   readonly originalName: string;
   readonly wireName: string;
   readonly description?: string;

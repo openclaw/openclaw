@@ -541,10 +541,10 @@ describe("finalizeSetupWizard", () => {
     ).rejects.toThrow("TUI exited with code 1");
 
     expect(restoreTerminalState).toHaveBeenCalledWith("pre-setup tui", {
-      resumeStdinIfPaused: true,
+      resumeStdinIfPaused: false,
     });
     expect(restoreTerminalState).toHaveBeenCalledWith("post-setup tui", {
-      resumeStdinIfPaused: true,
+      resumeStdinIfPaused: false,
     });
   });
 

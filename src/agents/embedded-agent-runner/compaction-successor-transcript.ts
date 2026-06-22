@@ -143,7 +143,9 @@ function buildSuccessorEntries(params: {
   }
 
   const removedIds = new Set<string>();
-  const duplicateUserMessageIds = collectDuplicateUserMessageEntryIdsForCompaction(branch);
+  const keptBranchEntries = branch.filter((entry) => !summarizedBranchIds.has(entry.id));
+  const duplicateUserMessageIds =
+    collectDuplicateUserMessageEntryIdsForCompaction(keptBranchEntries);
   for (const entry of allEntries) {
     if (
       (summarizedBranchIds.has(entry.id) && entry.type === "message") ||

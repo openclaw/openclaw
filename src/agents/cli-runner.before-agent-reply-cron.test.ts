@@ -1,6 +1,7 @@
 /** Tests cron before_agent_reply gating at the CLI runner entrypoint. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { CliOutput } from "./cli-output.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 
 // vi.mock factories are hoisted above imports, so any references inside them
@@ -28,9 +29,9 @@ const {
   runBeforeAgentReplyMock: vi.fn<(event: unknown, ctx: unknown) => Promise<BeforeAgentReplyResult>>(
     async () => undefined,
   ),
-  executePreparedCliRunMock: vi.fn(async (_context: unknown, _cliSessionIdToUse?: string) => ({
-    text: "",
-  })),
+  executePreparedCliRunMock: vi.fn<
+    (_context: unknown, _cliSessionIdToUse?: string) => Promise<CliOutput>
+  >(async () => ({ text: "" })),
   prepareCliRunContextMock: vi.fn(),
   closeClaudeLiveSessionForContextMock: vi.fn(),
   closeMcpLoopbackServerMock: vi.fn(),
@@ -262,6 +263,35 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
   });
 
+  it("reports confirmed CLI messaging delivery evidence without leaking it to later invocations", async () => {
+    executePreparedCliRunMock.mockResolvedValueOnce({
+      text: "sent",
+      didSendViaMessagingTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          to: "chat123",
+        },
+      ],
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "later" });
+
+    const firstResult = await runCliAgent(baseRunParams);
+    expect(firstResult.didSendViaMessagingTool).toBe(true);
+    expect(firstResult.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat123",
+      }),
+    ]);
+
+    const laterResult = await runCliAgent(baseRunParams);
+    expect(laterResult.didSendViaMessagingTool).toBeUndefined();
+    expect(laterResult.messagingToolSentTargets).toBeUndefined();
+  });
+
   it("can close temporary CLI live sessions after a run", async () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
 
@@ -281,5 +311,28 @@ describe("runCliAgent cron before_agent_reply seam", () => {
 
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
     expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves confirmed delivery when bundle MCP cleanup fails", async () => {
+    executePreparedCliRunMock.mockResolvedValue({
+      text: "",
+      didSendViaMessagingTool: true,
+    });
+    closeMcpLoopbackServerMock.mockRejectedValue(new Error("loopback cleanup failed"));
+
+    await expect(
+      runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true }),
+    ).resolves.toMatchObject({
+      didSendViaMessagingTool: true,
+    });
+  });
+
+  it("surfaces bundle MCP cleanup failures when nothing was delivered", async () => {
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+    closeMcpLoopbackServerMock.mockRejectedValue(new Error("loopback cleanup failed"));
+
+    await expect(runCliAgent({ ...baseRunParams, cleanupBundleMcpOnRunEnd: true })).rejects.toThrow(
+      "loopback cleanup failed",
+    );
   });
 });

@@ -29,6 +29,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../session-key.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   formatInheritedThinkingLabel,
@@ -41,7 +42,7 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
-import type { GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
+import type { FastMode, GatewayThinkingLevelOption, SessionsListResult } from "../types.ts";
 
 type ChatSessionSwitchHandler = (state: AppViewState, nextSessionKey: string) => void;
 type ChatSessionSelectSurface = "desktop" | "mobile" | "sidebar";
@@ -739,7 +740,7 @@ function renderChatSessionPickerPopover(
   `;
 }
 
-function renderChatQuotaPill(state: AppViewState) {
+export function renderChatQuotaPill(state: AppViewState) {
   const windows = collectQuotaWindowsFromAuthStatus(
     state.modelAuthStatusResult,
     isMonitoredAuthProvider,
@@ -887,7 +888,7 @@ type ChatThinkingSelectState = {
 };
 
 type ChatFastModeSelectState = {
-  currentOverride: "" | "on" | "off";
+  currentOverride: "" | "on" | "off" | "auto";
   disabled: boolean;
   options: ChatInlineSelectOption[];
   supported: boolean;
@@ -935,7 +936,13 @@ function resolveChatFastModeSelectState(
     provider?.trim().toLowerCase() ??
     null;
   const currentOverride =
-    activeRow?.fastMode === true ? "on" : activeRow?.fastMode === false ? "off" : "";
+    activeRow?.fastMode === "auto"
+      ? "auto"
+      : activeRow?.fastMode === true
+        ? "on"
+        : activeRow?.fastMode === false
+          ? "off"
+          : "";
   const supported = Boolean(
     (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || currentOverride,
   );
@@ -953,19 +960,10 @@ function resolveChatFastModeSelectState(
       { value: "", label: "Default" },
       { value: "on", label: "Fast" },
       { value: "off", label: "Standard" },
+      { value: "auto", label: "Auto" },
     ],
     supported,
   };
-}
-
-function sessionModelMatchesDefaults(
-  row: SessionsListResult["sessions"][number] | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-): boolean {
-  return (
-    (!row?.modelProvider || row.modelProvider === defaults?.modelProvider) &&
-    (!row?.model || row.model === defaults?.model)
-  );
 }
 
 function buildThinkingOptions(
@@ -1006,18 +1004,14 @@ function resolveThinkingLevelOptions(
   model: string | null,
   catalog: readonly ThinkingCatalogEntry[],
 ): GatewayThinkingLevelOption[] {
-  const sessionModelMatchesDefaultsLocal =
-    (!activeRow?.modelProvider || activeRow.modelProvider === defaults?.modelProvider) &&
-    (!activeRow?.model || activeRow.model === defaults?.model);
+  const modelMatchesDefaults = sessionModelMatchesDefaults(activeRow, defaults);
   const catalogEntry =
     provider && model
       ? catalog.find((entry) => entry.provider === provider && entry.id === model)
       : undefined;
   const explicitLevels =
     (activeRow?.thinkingLevels?.length ? activeRow.thinkingLevels : null) ??
-    (sessionModelMatchesDefaultsLocal && defaults?.thinkingLevels?.length
-      ? defaults.thinkingLevels
-      : null);
+    (modelMatchesDefaults && defaults?.thinkingLevels?.length ? defaults.thinkingLevels : null);
   if (explicitLevels) {
     if (catalogEntry?.reasoning === false && isOffOnlyThinkingLevels(explicitLevels)) {
       return [];
@@ -1026,9 +1020,7 @@ function resolveThinkingLevelOptions(
   }
   const explicitLabels =
     (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
-    (sessionModelMatchesDefaultsLocal && defaults?.thinkingOptions?.length
-      ? defaults.thinkingOptions
-      : null);
+    (modelMatchesDefaults && defaults?.thinkingOptions?.length ? defaults.thinkingOptions : null);
   if (catalogEntry?.reasoning === false) {
     if (!explicitLabels || explicitLabels.every(isOffThinkingOption)) {
       return [];
@@ -1113,7 +1105,7 @@ function renderChatModelReasoningSelect(params: {
   selectedThinkingValue: string;
   thinkingDisabled: boolean;
   thinkingOptions: ChatInlineSelectOption[];
-  onFastModeSelect: (value: "" | "on" | "off") => Promise<unknown>;
+  onFastModeSelect: (value: "" | "on" | "off" | "auto") => Promise<unknown>;
   onModelSelect: (value: string) => Promise<unknown>;
   onThinkingSelect: (value: string) => Promise<unknown>;
 }) {
@@ -1260,7 +1252,7 @@ function renderChatModelReasoningSelect(params: {
                     fastMode.options,
                     (speed) => speed.value,
                     (speed) => {
-                      const speedValue = speed.value as "" | "on" | "off";
+                      const speedValue = speed.value as "" | "on" | "off" | "auto";
                       const speedSelected = speedValue === fastMode.currentOverride;
                       return html`
                         <button
@@ -1309,7 +1301,7 @@ function renderChatModelReasoningSelect(params: {
 function patchSessionFastMode(
   state: AppViewState,
   sessionKey: string,
-  fastMode: boolean | undefined,
+  fastMode: FastMode | undefined,
 ) {
   const current = state.sessionsResult;
   if (!current) {
@@ -1323,14 +1315,15 @@ function patchSessionFastMode(
   };
 }
 
-async function switchChatFastMode(state: AppViewState, nextFastMode: "" | "on" | "off") {
+async function switchChatFastMode(state: AppViewState, nextFastMode: "" | "on" | "off" | "auto") {
   if (!state.client || !state.connected) {
     return;
   }
   const targetSessionKey = state.sessionKey;
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
   const previousFastMode = activeRow?.fastMode;
-  const next = nextFastMode === "" ? undefined : nextFastMode === "on";
+  const next: FastMode | undefined =
+    nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
   if (previousFastMode === next) {
     return;
   }

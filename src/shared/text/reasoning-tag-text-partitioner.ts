@@ -11,7 +11,7 @@ export type ReasoningTagTextDelta =
   | { kind: "thinking"; text: string };
 
 const REASONING_TAG_RE =
-  /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought|reasoning)|antthinking)\b[^<>]*>/gi;
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought|reasoning)|antthinking)\b[^<>]*>/gi;
 const REASONING_TAG_NAMES = [
   "think",
   "thinking",
@@ -22,6 +22,10 @@ const REASONING_TAG_NAMES = [
   "antml:thinking",
   "antml:thought",
   "antml:reasoning",
+  "mm:think",
+  "mm:thinking",
+  "mm:thought",
+  "mm:reasoning",
 ] as const;
 
 export interface ReasoningTagTextPartitioner {

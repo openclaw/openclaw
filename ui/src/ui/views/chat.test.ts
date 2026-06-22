@@ -1510,6 +1510,7 @@ describe("chat voice controls", () => {
       "medium",
       "high",
     ]);
+    expect(getTalkSelectOptionValues(container, "provider")).toEqual(["", "openai", "google"]);
     expect(container.textContent).toContain("Sensitivity");
     expect(container.textContent).toContain("Advanced");
     expect(container.textContent).toContain("Pause before send");
@@ -1552,6 +1553,110 @@ describe("chat voice controls", () => {
       "0.65",
       "0.5",
       "0.35",
+    ]);
+  });
+
+  it("renders compatible catalog providers and limits transports to the selected provider", () => {
+    const onRealtimeTalkOptionsChange = vi.fn();
+    const container = renderChatView({
+      realtimeTalkOptionsOpen: true,
+      realtimeTalkCatalogProviders: [
+        {
+          id: "openai",
+          label: "OpenAI",
+          configured: true,
+          transports: ["webrtc", "provider-websocket"],
+          supportsBrowserSession: true,
+        },
+        {
+          id: "plugin-realtime",
+          label: "Plugin realtime",
+          configured: true,
+          transports: ["gateway-relay"],
+        },
+        {
+          id: "plugin-default-relay",
+          label: "Plugin default relay",
+          configured: true,
+        },
+        {
+          id: "plugin-websocket",
+          label: "Unsupported plugin WebSocket",
+          configured: true,
+          transports: ["provider-websocket"],
+          supportsBrowserSession: true,
+        },
+        {
+          id: "relay-only",
+          label: "No browser session",
+          configured: true,
+          transports: ["webrtc"],
+        },
+        {
+          id: "unconfigured",
+          label: "Unconfigured provider",
+          configured: false,
+          transports: ["gateway-relay"],
+        },
+      ],
+      realtimeTalkOptions: {
+        provider: "openai",
+        model: "",
+        voice: "",
+        transport: "webrtc",
+        vadThreshold: "",
+        silenceDurationMs: "",
+        prefixPaddingMs: "",
+        reasoningEffort: "",
+      },
+      onRealtimeTalkOptionsChange,
+    });
+
+    expect(getTalkSelectOptionValues(container, "provider")).toEqual([
+      "",
+      "openai",
+      "plugin-realtime",
+      "plugin-default-relay",
+    ]);
+    expect(getTalkSelectOptionValues(container, "transport")).toEqual(["", "webrtc"]);
+
+    clickTalkSelectOption(container, "provider", "plugin-realtime");
+
+    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({
+      provider: "plugin-realtime",
+      transport: "",
+    });
+  });
+
+  it("keeps the Google provider WebSocket transport available", () => {
+    const container = renderChatView({
+      realtimeTalkOptionsOpen: true,
+      realtimeTalkCatalogProviders: [
+        {
+          id: "google",
+          label: "Google",
+          configured: true,
+          transports: ["provider-websocket", "gateway-relay"],
+          supportsBrowserSession: true,
+        },
+      ],
+      realtimeTalkOptions: {
+        provider: "google",
+        model: "",
+        voice: "",
+        transport: "provider-websocket",
+        vadThreshold: "",
+        silenceDurationMs: "",
+        prefixPaddingMs: "",
+        reasoningEffort: "",
+      },
+      onRealtimeTalkOptionsChange: () => undefined,
+    });
+
+    expect(getTalkSelectOptionValues(container, "transport")).toEqual([
+      "",
+      "gateway-relay",
+      "provider-websocket",
     ]);
   });
 
@@ -1613,23 +1718,153 @@ describe("chat voice controls", () => {
   });
 
   it("lets users dismiss Talk start errors", () => {
-    const onDismissError = vi.fn();
+    const onDismissRealtimeTalkError = vi.fn();
     const container = renderChatView({
-      error: 'Realtime voice provider "openai" is not configured',
       realtimeTalkStatus: "error",
       realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
-      onDismissError,
+      onDismissRealtimeTalkError,
     });
 
-    expect(container.querySelector('[role="alert"] .callout__content')?.textContent).toBe(
+    const talkAlert = container.querySelector('[role="alert"].agent-chat__talk-status');
+    expect(talkAlert?.querySelector(".agent-chat__talk-status-text")?.textContent?.trim()).toBe(
       'Realtime voice provider "openai" is not configured',
     );
 
-    const dismiss = container.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]');
+    const dismiss = container.querySelector<HTMLButtonElement>('[aria-label="Dismiss Talk error"]');
     expect(dismiss).toBeInstanceOf(HTMLButtonElement);
     dismiss!.click();
 
-    expect(onDismissError).toHaveBeenCalledTimes(1);
+    expect(onDismissRealtimeTalkError).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("chat composer IME composition", () => {
+  it("defers draft sync while IME composition is active", () => {
+    const onDraftChange = vi.fn();
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ onDraftChange, onRequestUpdate });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "dangqian";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+
+    textarea.value = "当前";
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    expect(onDraftChange).toHaveBeenLastCalledWith("当前");
+  });
+
+  it("preserves composing text across host rerenders with stale draft props", () => {
+    const onDraftChange = vi.fn();
+    const onRequestUpdate = vi.fn();
+    const container = document.createElement("div");
+    const props = createChatProps({ draft: "", onDraftChange, onRequestUpdate });
+
+    render(renderChat(props), container);
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "dangqian";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+
+    expect(onDraftChange).not.toHaveBeenCalled();
+    expect(onRequestUpdate).not.toHaveBeenCalled();
+
+    render(renderChat({ ...props, draft: "" }), container);
+
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("dangqian");
+
+    const rerenderedTextarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    rerenderedTextarea.value = "当前";
+    rerenderedTextarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+    expect(onDraftChange).toHaveBeenLastCalledWith("当前");
+  });
+
+  it("leaves keyboard events to the browser while IME composition is active", () => {
+    const onHistoryKeydown = vi.fn(() => ({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: null,
+      decision: "handled:history-up" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+    }));
+    const onSend = vi.fn();
+    const container = renderChatView({ onHistoryKeydown, onSend });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "dangqian";
+    const enterEvent = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+    });
+    const arrowEvent = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+    });
+    textarea.dispatchEvent(enterEvent);
+    textarea.dispatchEvent(arrowEvent);
+
+    expect(enterEvent.defaultPrevented).toBe(false);
+    expect(arrowEvent.defaultPrevented).toBe(false);
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onHistoryKeydown).not.toHaveBeenCalled();
+  });
+
+  it("does not force textarea resize during IME composition", () => {
+    const container = renderChatView({});
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+
+    // Set a sentinel height to detect unwanted overwrites
+    textarea.style.height = "42px";
+
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    textarea.value = "shi";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+    textarea.value = "shichang";
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+
+    // Height must stay untouched — no forced reflow during composition
+    expect(textarea.style.height).toBe("42px");
+
+    textarea.value = "市场";
+    textarea.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+
+    // After composition ends, adjustTextareaHeight runs via syncComposerValue
+    expect(textarea.style.height).not.toBe("42px");
   });
 });
 
@@ -3328,6 +3563,25 @@ describe("chat session controls", () => {
     });
   });
 
+  it("sets composer speed to auto", async () => {
+    const { state, request } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>("[data-chat-speed-option]")).map(
+        (option) => option.textContent?.trim(),
+      ),
+    ).toEqual(["Default", "Fast", "Standard", "Auto"]);
+
+    clickChatSpeedOption(container, "auto");
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "main",
+      fastMode: "auto",
+    });
+  });
+
   it("scopes composer model changes for a selected global-session agent", async () => {
     const { state, request } = createChatHeaderState();
     state.sessionKey = "global";
@@ -3404,7 +3658,7 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    expect(container.querySelectorAll("[data-chat-speed-option]").length).toBe(3);
+    expect(container.querySelectorAll("[data-chat-speed-option]").length).toBe(4);
 
     clickChatSpeedOption(container, "");
 

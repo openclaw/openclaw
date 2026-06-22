@@ -35,8 +35,11 @@ You can use Claude Code CLI **without any config** (the bundled Anthropic plugin
 registers a default backend):
 
 ```bash
-openclaw agent --message "hi" --model claude-cli/claude-sonnet-4-6
+openclaw agent --agent main --message "hi" --model claude-cli/claude-sonnet-4-6
 ```
+
+`main` is the default agent id when no explicit agent list is configured. If
+you use multiple agents, replace it with the agent id you want to run.
 
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
 command path:
@@ -284,8 +287,10 @@ load local files from plain paths.
 ## Inputs / outputs
 
 - `output: "json"` (default) tries to parse JSON and extract text + session id.
-- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and
-  usage from `stats` when `usage` is missing or empty.
+- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and usage
+  from `stats` when `usage` is missing or empty. The bundled Gemini CLI default
+  uses `stream-json`, but old `--output-format json` overrides still use the
+  JSON parser.
 - `output: "jsonl"` parses JSONL streams and extracts the final agent message plus session
   identifiers when present.
 - `output: "text"` treats stdout as the final response.
@@ -315,8 +320,11 @@ The bundled Anthropic plugin registers a default for `claude-cli`:
 The bundled Google plugin also registers a default for `google-gemini-cli`:
 
 - `command: "gemini"`
-- `args: ["--output-format", "json", "--prompt", "{prompt}"]`
-- `resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"]`
+- `args: ["--skip-trust", "--approval-mode", "auto_edit", "--output-format", "stream-json", "--prompt", "{prompt}"]`
+- `resumeArgs: ["--skip-trust", "--approval-mode", "auto_edit", "--resume", "{sessionId}", "--output-format", "stream-json", "--prompt", "{prompt}"]`
+- `output: "jsonl"`
+- `resumeOutput: "jsonl"`
+- `jsonlDialect: "gemini-stream-json"`
 - `imageArg: "@"`
 - `imagePathScope: "workspace"`
 - `modelArg: "--model"`
@@ -327,9 +335,13 @@ Prerequisite: the local Gemini CLI must be installed and available as
 `gemini` on `PATH` (`brew install gemini-cli` or
 `npm install -g @google/gemini-cli`).
 
-Gemini CLI JSON notes:
+Gemini CLI output notes:
 
-- Reply text is read from the JSON `response` field.
+- The default `stream-json` parser reads assistant `message` events, tool events,
+  final `result` usage, and fatal Gemini error events.
+- If you override Gemini args to `--output-format json`, OpenClaw normalizes that
+  backend back to `output: "json"` and reads reply text from the JSON `response`
+  field.
 - Usage falls back to `stats` when `usage` is absent or empty.
 - `stats.cached` is normalized into OpenClaw `cacheRead`.
 - If `stats.input` is missing, OpenClaw derives input tokens from
@@ -369,8 +381,10 @@ api.registerTextTransforms({
 rewrites streamed assistant deltas and parsed final text before OpenClaw handles
 its own control markers and channel delivery.
 
-For CLIs that emit Claude Code stream-json compatible JSONL, set
-`jsonlDialect: "claude-stream-json"` on that backend's config.
+For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that
+backend's config. Supported dialects are `claude-stream-json` for Claude
+Code-compatible streams and `gemini-stream-json` for Gemini CLI `stream-json`
+events.
 
 ## Native compaction ownership
 

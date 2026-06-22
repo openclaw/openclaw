@@ -61,6 +61,10 @@ vi.mock("../model-suppression.js", () => {
     return undefined;
   }
 
+  function isUnsupportedXaiMultiAgentModel(provider?: string, id?: string): boolean {
+    return provider === "xai" && id?.trim().toLowerCase() === "grok-4.20-multi-agent-0309";
+  }
+
   return {
     shouldSuppressBuiltInModel: ({
       provider,
@@ -79,6 +83,9 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return true;
       }
+      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
+        return true;
+      }
       return (
         (provider === "qwen" || provider === "modelstudio") &&
         id?.trim().toLowerCase() === "qwen3.6-plus" &&
@@ -92,7 +99,7 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return true;
       }
-      return false;
+      return isUnsupportedXaiMultiAgentModel(provider, id);
     },
     buildSuppressedBuiltInModelError: ({
       provider,
@@ -114,7 +121,10 @@ vi.mock("../model-suppression.js", () => {
         (provider === "openai" || provider === "azure-openai-responses" || provider === "openai") &&
         id?.trim().toLowerCase() === "gpt-5.3-codex-spark"
       ) {
-        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.`;
+        return `Unknown model: ${provider}/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run \`openclaw models auth login --provider openai\` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.`;
+      }
+      if (isUnsupportedXaiMultiAgentModel(provider, id)) {
+        return "Unknown model: xai/grok-4.20-multi-agent-0309. OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai.";
       }
       return undefined;
     },
@@ -3447,7 +3457,28 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
+    );
+  });
+
+  it("does not build a configured fallback for unsupported xAI multi-agent models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          xai: {
+            baseUrl: "https://api.x.ai/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("xai", "grok-4.20-multi-agent-0309", "/tmp/agent", cfg);
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: xai/grok-4.20-multi-agent-0309. OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai.",
     );
   });
 
@@ -3466,7 +3497,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
     );
   });
 
@@ -3876,7 +3907,7 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
     );
   });
 

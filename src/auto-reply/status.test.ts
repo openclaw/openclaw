@@ -109,6 +109,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
+        sessionStartedAt: 1 * 60 * 60_000 + 46 * 60_000,
         inputTokens: 1200,
         outputTokens: 800,
         totalTokens: 16_000,
@@ -124,21 +125,24 @@ describe("buildStatusMessage", () => {
       resolvedVerbose: "off",
       resolvedHarness: "openclaw",
       queue: { mode: "collect", depth: 0 },
+      pluginHealthLine: "🔌 Plugins: OK",
       modelAuth: "api-key",
       subagentsLine: "🤖 Subagents: 1\n- active run",
-      now: 10 * 60_000, // 10 minutes later
+      now: 4 * 60 * 60_000, // 4 hours after epoch
     });
     const normalized = normalizeTestText(text);
 
     expect(normalized).toContain("OpenClaw");
     expect(normalized).toContain("Model: anthropic/test:opus");
     expect(normalized).toContain("api-key");
+    expect(normalized).toContain("Plugins: OK");
     expect(normalized).toContain("Tokens: 1.2k in / 800 out");
     expect(normalized).toContain("Cost: $0.0020");
     expect(normalized).toContain("Context: 16k/32k (50%)");
     expect(normalized).toContain("Compactions: 2");
     expect(normalized).toContain("Session: agent:main:main");
-    expect(normalized).toContain("updated 10m ago");
+    expect(normalized).toContain("duration 2h 14m");
+    expect(normalized).toContain("updated 4h ago");
     expect(normalized).toContain("Execution: direct");
     expect(normalized).toContain("Runtime: OpenClaw Default");
     expect(normalized).not.toContain("Runner:");
@@ -987,6 +991,74 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 1.0k/66k");
   });
 
+  it("ignores stale session contextTokens after the default model changes", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "ollama-cloud/kimi-k2.7-code",
+        contextTokens: 262_144,
+      },
+      explicitConfiguredContextTokens: 262_144,
+      sessionEntry: {
+        sessionId: "default-model-context-window",
+        updatedAt: 0,
+        modelProvider: "ollama-cloud",
+        model: "deepseek-v4-pro",
+        totalTokens: 501,
+        totalTokensFresh: true,
+        contextTokens: 1_000_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: ollama-cloud/kimi-k2.7-code");
+    expect(normalized).toContain("Context: 501/262k");
+    expect(normalized).not.toContain("Context: 501/1.0m");
+  });
+
+  it("uses the selected model window when a stale runtime snapshot is smaller", () => {
+    const text = buildStatusMessage({
+      config: {
+        models: {
+          providers: {
+            "ollama-cloud": {
+              models: [
+                { id: "deepseek-v4-pro", contextWindow: 1_000_000 },
+                { id: "kimi-k2.7-code", contextWindow: 262_144 },
+              ],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      agent: {
+        model: "ollama-cloud/deepseek-v4-pro",
+        contextTokens: 1_000_000,
+      },
+      explicitConfiguredContextTokens: 1_000_000,
+      sessionEntry: {
+        sessionId: "default-model-context-window-larger",
+        updatedAt: 0,
+        modelProvider: "ollama-cloud",
+        model: "kimi-k2.7-code",
+        totalTokens: 0,
+        totalTokensFresh: true,
+        contextTokens: 262_144,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: ollama-cloud/deepseek-v4-pro");
+    expect(normalized).toContain("Context: 0/1.0m");
+    expect(normalized).not.toContain("Context: 0/262k");
+  });
+
   it("recomputes context window from the active fallback model when session contextTokens are stale", () => {
     const text = buildStatusMessage({
       config: {
@@ -1719,7 +1791,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain(
       "This session is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
     );
-    expect(normalized).toContain("Clear with: /model zhipu/glm-4.5-air or /reset");
+    expect(normalized).toContain("Clear with: /model default");
     expect(normalized).toContain(
       "Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     );
@@ -2632,7 +2704,7 @@ describe("buildHelpMessage", () => {
   });
 
   it("includes /fast in help output", () => {
-    expect(buildHelpMessage()).toContain("/fast status|on|off|default");
+    expect(buildHelpMessage()).toContain("/fast status|auto|on|off|default");
   });
 
   it("includes raw trace mode in help output", () => {

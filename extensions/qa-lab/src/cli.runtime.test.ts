@@ -75,6 +75,7 @@ vi.mock("./model-selection.runtime.js", () => ({
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import {
   runQaLabSelfCheckCommand,
+  runQaCredentialsAddCommand,
   runQaDockerBuildImageCommand,
   runQaDockerScaffoldCommand,
   runQaDockerUpCommand,
@@ -124,6 +125,7 @@ function makeQaEvidence(entries: unknown[] = []) {
     kind: "openclaw.qa.evidence-summary",
     schemaVersion: 2,
     generatedAt: "2026-06-14T00:00:00.000Z",
+    evidenceMode: "full",
     entries,
   };
 }
@@ -283,6 +285,13 @@ describe("qa cli runtime", () => {
       baseUrl: "http://127.0.0.1:58000",
       runSelfCheck: vi.fn().mockResolvedValue({
         outputPath: "/tmp/report.md",
+        report: "",
+        checks: [{ name: "QA self-check scenario", status: "pass" }],
+        scenarioResult: {
+          name: "QA self-check scenario",
+          status: "pass",
+          steps: [],
+        },
       }),
       stop: vi.fn(),
     });
@@ -441,6 +450,8 @@ describe("qa cli runtime", () => {
       expect(suiteArgs.scenarioIds).not.toContain("thinking-slash-model-remap");
       expect(process.env.OPENCLAW_QA_PROFILE).toBe("release");
       const evidence = JSON.parse(await fs.readFile(suiteEvidencePath, "utf8")) as {
+        evidenceMode?: unknown;
+        entries?: unknown[];
         profile?: unknown;
         scorecard?: {
           run?: { evidenceEntryCount?: unknown };
@@ -453,6 +464,7 @@ describe("qa cli runtime", () => {
         };
       };
       expect(evidence.profile).toBe("smoke-ci");
+      expect(evidence.evidenceMode).toBe("slim");
       expect(evidence.scorecard).toMatchObject({
         run: {
           evidenceEntryCount: 1,
@@ -461,13 +473,14 @@ describe("qa cli runtime", () => {
       expect(evidence.scorecard).not.toHaveProperty("kind");
       expect(evidence.scorecard).not.toHaveProperty("taxonomy");
       expect(evidence.scorecard).not.toHaveProperty("profile");
-      expect(evidence.scorecard?.features?.fulfilled).toBe(1);
+      expect(evidence.scorecard?.features?.fulfilled).toBe(0);
       expect(evidence.scorecard?.categoryReports?.[0]).toMatchObject({
         id: "agent-runtime-and-provider-execution.agent-turn-execution",
         features: {
-          fulfilled: 1,
+          fulfilled: 0,
         },
       });
+      expect(evidence.entries?.[0]).not.toHaveProperty("execution");
       expect(JSON.stringify(evidence.scorecard)).not.toContain("dm-chat-baseline");
       expectWriteContains(stdoutWrite, "QA run profile: smoke-ci; categories: 1; scenarios:");
       expectWriteContains(stdoutWrite, `QA profile scorecard: ${suiteEvidencePath}`);
@@ -1195,6 +1208,7 @@ describe("qa cli runtime", () => {
 
     expectFields(mockFirstObjectArg(runQaSuite), {
       scenarioIds: [
+        "runtime-long-context-cache-stability",
         "runtime-soak-100-turn",
         "runtime-tool-image-generate",
         "runtime-tool-memory-add",
@@ -2147,6 +2161,57 @@ describe("qa cli runtime", () => {
       repoRoot: path.resolve("/tmp/openclaw-repo"),
       outputPath: path.resolve("/tmp/openclaw-repo", ".artifacts/qa/self-check.md"),
     });
+  });
+
+  it("fails unsuccessful self-checks after stopping the lab server", async () => {
+    const stop = vi.fn();
+    startQaLabServer.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:58000",
+      runSelfCheck: vi.fn().mockResolvedValue({
+        outputPath: "/tmp/failed-report.md",
+        report: "",
+        checks: [{ name: "QA self-check scenario", status: "fail" }],
+        scenarioResult: {
+          name: "QA self-check scenario",
+          status: "fail",
+          steps: [],
+        },
+      }),
+      stop,
+    });
+
+    await expect(
+      runQaLabSelfCheckCommand({
+        repoRoot: "/tmp/openclaw-repo",
+      }),
+    ).rejects.toThrow("QA self-check failed. See /tmp/failed-report.md.");
+
+    expect(stop).toHaveBeenCalledOnce();
+    expectWriteContains(stdoutWrite, "QA self-check report: /tmp/failed-report.md");
+  });
+
+  it("rejects oversized credential payload files before broker setup", async () => {
+    const previousMaxBytes = process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES;
+    const payloadPath = path.join(suiteArtifactsDir, "oversized-credential.json");
+    await fs.writeFile(payloadPath, JSON.stringify({ blob: "x".repeat(64) }), "utf8");
+    process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = "32";
+
+    try {
+      await expect(
+        runQaCredentialsAddCommand({
+          kind: "telegram",
+          payloadFile: payloadPath,
+        }),
+      ).rejects.toThrow(
+        "Payload file exceeds OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES (32 bytes).",
+      );
+    } finally {
+      if (previousMaxBytes === undefined) {
+        delete process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES;
+      } else {
+        process.env.OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES = previousMaxBytes;
+      }
+    }
   });
 
   it("resolves docker scaffold paths relative to the explicit repo root", async () => {

@@ -761,6 +761,56 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("reports silent model calls as long-running before the abort threshold", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 90_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs,
+            stuckSessionAbortMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5",
+      });
+
+      vi.advanceTimersByTime(60_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.some((event) => event.type === "session.stalled")).toBe(false);
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.long_running"),
+        "long-running event",
+      ),
+      {
+        classification: "long_running",
+        reason: "active_model_call_without_progress",
+        activeWorkKind: "model_call",
+        lastProgressReason: "model_call:started",
+      },
+    );
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
   it("does not actively abort model calls with recent stream progress", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();

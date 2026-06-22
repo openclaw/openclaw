@@ -92,6 +92,7 @@ const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
   maxTimeout: 10_000,
   randomize: true,
 } as const;
+const QMD_INDEX_CONFIG_FILE = "index.yml";
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const QMD_UPDATE_QUEUE_KEY = Symbol.for("openclaw.qmdUpdateQueueState");
@@ -1140,6 +1141,35 @@ export class QmdMemoryManager implements MemorySearchManager {
     return normalize(left) === normalize(right);
   }
 
+  private resolveQmdIndexConfigPath(): string {
+    return path.join(this.xdgConfigHome, "qmd", QMD_INDEX_CONFIG_FILE);
+  }
+
+  private async refreshManagedCollectionIndexConfig(): Promise<void> {
+    const configPath = this.resolveQmdIndexConfigPath();
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, this.renderManagedCollectionIndexConfig(), "utf8");
+  }
+
+  private renderManagedCollectionIndexConfig(): string {
+    if (this.qmd.collections.length === 0) {
+      return "collections: {}\n";
+    }
+    const lines = ["collections:"];
+    for (const collection of this.qmd.collections) {
+      lines.push(
+        `  ${this.quoteYamlString(collection.name)}:`,
+        `    path: ${this.quoteYamlString(collection.path)}`,
+        `    pattern: ${this.quoteYamlString(collection.pattern)}`,
+      );
+    }
+    return `${lines.join("\n")}\n`;
+  }
+
+  private quoteYamlString(value: string): string {
+    return JSON.stringify(value);
+  }
+
   private shouldRepairNullByteCollectionError(err: unknown): boolean {
     const message = formatErrorMessage(err);
     const lower = normalizeLowercaseStringOrEmpty(message);
@@ -1163,6 +1193,13 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private async rebuildManagedCollectionsForRepair(reason: string): Promise<void> {
+    try {
+      await this.refreshManagedCollectionIndexConfig();
+    } catch (configErr) {
+      log.warn(
+        `qmd managed collection index refresh failed for update repair (${reason}): ${formatErrorMessage(configErr)}`,
+      );
+    }
     for (const collection of this.qmd.collections) {
       try {
         await this.removeCollection(collection.name);
@@ -1529,6 +1566,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    if (!qmdUsesVectors(this.qmd.searchMode)) {
+      return { ok: true, checked: false };
+    }
     const ok = await this.probeVectorAvailability();
     return {
       ok,

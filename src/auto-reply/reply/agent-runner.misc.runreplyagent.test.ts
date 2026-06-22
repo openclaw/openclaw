@@ -777,7 +777,10 @@ describe("runReplyAgent block streaming", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
-    expect(result).toBeUndefined();
+    // The block pipeline streamed "Hello" but never sent "Final message",
+    // so the unsent text-only final is preserved (not dropped).
+    expect(result).toBeDefined();
+    expect((result as { text?: string }).text).toBe("Final message");
   });
 
   it("returns the final payload when onBlockReply times out", async () => {

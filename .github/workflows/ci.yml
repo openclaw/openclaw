@@ -13,6 +13,11 @@ on:
         required: false
         default: false
         type: boolean
+      release_gate:
+        description: Run an exact-SHA maintainer release-gate fallback when PR CI is capacity-stalled.
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
     paths-ignore:
@@ -25,6 +30,8 @@ on:
 
 permissions:
   contents: read
+
+run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI' }}
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
@@ -75,6 +82,23 @@ jobs:
       run_android_job: ${{ steps.manifest.outputs.run_android_job }}
       android_matrix: ${{ steps.manifest.outputs.android_matrix }}
     steps:
+      - name: Validate release-gate dispatch
+        if: github.event_name == 'workflow_dispatch' && inputs.release_gate
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_gate requires target_ref to be a full commit SHA" >&2
+            exit 1
+          fi
+
+          if [[ "$GITHUB_SHA" != "$TARGET_REF" ]]; then
+            echo "release_gate must run from the branch at target_ref" >&2
+            exit 1
+          fi
+
       - name: Checkout
         env:
           CHECKOUT_REPO: ${{ github.repository }}
@@ -90,7 +114,7 @@ jobs:
             local ref="$1"
             local fetch_status
             for attempt in 1 2 3; do
-              timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
+              timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
                 fetch --no-tags --prune --no-recurse-submodules --depth=2 origin \
                 "+${ref}:refs/remotes/origin/checkout" && return 0
@@ -159,7 +183,7 @@ jobs:
           OPENCLAW_CI_DOCS_CHANGED: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}
           OPENCLAW_CI_RUN_NODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_node || 'false' }}
           OPENCLAW_CI_RUN_MACOS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}
-          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && inputs.include_android && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
+          OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: ${{ github.event_name == 'workflow_dispatch' && 'false' || steps.changed_scope.outputs.run_node_fast_plugin_contracts || 'false' }}
@@ -173,7 +197,7 @@ jobs:
           node --input-type=module <<'EOF'
           import { appendFileSync } from "node:fs";
           import {
-            createNodeTestShards,
+            createNodeTestShardBundles,
           } from "./scripts/lib/ci-node-test-plan.mjs";
           import {
             createChannelContractTestShards,
@@ -249,7 +273,7 @@ jobs:
           }
 
           const nodeTestShards = runNodeFull
-            ? createNodeTestShards({
+            ? createNodeTestShardBundles({
                 includeReleaseOnlyPluginShards: false,
               }).map((shard) => ({
                 check_name: shard.checkName,
@@ -296,7 +320,14 @@ jobs:
             run_checks_windows: runWindows,
             checks_windows_matrix: createMatrix(
               runWindows
-                ? [{ check_name: "checks-windows-node-test", runtime: "node", task: "test" }]
+                ? [
+                    {
+                      check_name: "checks-windows-node-test",
+                      runtime: "node",
+                      task: "test",
+                      runner: "blacksmith-8vcpu-windows-2025",
+                    },
+                  ]
                 : [],
             ),
             run_macos_node: runMacos,
@@ -351,7 +382,7 @@ jobs:
             local ref="$1"
             local fetch_status
             for attempt in 1 2 3; do
-              timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
+              timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
                 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${ref}:refs/remotes/origin/checkout" && return 0
@@ -499,7 +530,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -534,7 +565,7 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
@@ -564,7 +595,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -598,7 +629,7 @@ jobs:
           install-bun: "false"
 
       - name: Restore build-all step cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: .artifacts/build-all-cache
           key: ${{ runner.os }}-build-all-v3-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'packages/plugin-sdk/package.json', 'packages/llm-core/package.json', 'packages/model-catalog-core/package.json', 'packages/memory-host-sdk/package.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/plugin-sdk/**', 'packages/llm-core/src/**', 'packages/model-catalog-core/src/**', 'packages/memory-host-sdk/src/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'src/auto-reply/reply/export-html/**') }}
@@ -607,7 +638,7 @@ jobs:
 
       - name: Restore dist build cache
         id: dist_build_cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             dist/
@@ -630,14 +661,14 @@ jobs:
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
 
       - name: Upload built runtime artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dist-runtime-build
           path: dist-runtime-build.tar.zst
           retention-days: 1
 
       - name: Upload bundled plugin asset artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: bundled-plugin-assets
           path: |
@@ -668,7 +699,7 @@ jobs:
 
       - name: Upload startup memory report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: startup-memory
           path: .artifacts/startup-memory/
@@ -720,11 +751,6 @@ jobs:
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
 
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            start_check "gateway-watch" \
-              node scripts/check-gateway-watch-regression.mjs --skip-build
-          fi
-
           for index in "${!pids[@]}"; do
             name="${names[$index]}"
             log="${logs[$index]}"
@@ -742,6 +768,21 @@ jobs:
             results["$name"]="$result"
           done
 
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            log="${RUNNER_TEMP}/gateway-watch.log"
+            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build"
+            if node scripts/check-gateway-watch-regression.mjs --skip-build >"$log" 2>&1; then
+              result="success"
+            else
+              result="failure"
+            fi
+
+            echo "::group::gateway-watch log"
+            cat "$log"
+            echo "::endgroup::"
+            results["gateway-watch"]="$result"
+          fi
+
           for name in channels core-support-boundary gateway-watch; do
             echo "${name}-result=${results[$name]}" >> "$GITHUB_OUTPUT"
           done
@@ -757,7 +798,7 @@ jobs:
 
       - name: Save dist build cache
         if: steps.dist_build_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         continue-on-error: true
         with:
           path: |
@@ -769,7 +810,7 @@ jobs:
 
       - name: Upload gateway watch regression artifacts
         if: always() && needs.preflight.outputs.run_check_additional == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
@@ -785,6 +826,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - name: Checkout
@@ -810,7 +852,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -850,10 +892,10 @@ jobs:
               ;;
             contracts-plugins-ci-routing)
               pnpm test:contracts:plugins
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             ci-routing)
-              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
               ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
@@ -874,6 +916,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -899,7 +942,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -954,6 +997,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -979,7 +1023,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1056,7 +1100,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1102,10 +1146,11 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
+      max-parallel: 6
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout
@@ -1131,7 +1176,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1214,6 +1259,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         include:
           - check_name: check-guards
@@ -1230,7 +1276,7 @@ jobs:
             runner: blacksmith-16vcpu-ubuntu-2404
           - check_name: check-dependencies
             task: dependencies
-            runner: blacksmith-8vcpu-ubuntu-2404
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-test-types
             task: test-types
             runner: blacksmith-4vcpu-ubuntu-2404
@@ -1258,7 +1304,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1339,7 +1385,7 @@ jobs:
 
       - name: Upload deadcode reports
         if: ${{ always() && matrix.task == 'dependencies' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: deadcode-reports
           path: .artifacts/deadcode
@@ -1351,28 +1397,39 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
         include:
           - check_name: check-additional-boundaries-a
             group: boundaries
             boundary_shard: 1/4
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-boundaries-bcd
             group: boundaries
             boundary_shard: 2/4,3/4,4/4
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
+            runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-session-transcript-reader-boundary
+            group: session-transcript-reader-boundary
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-additional-extension-channels
             group: extension-channels
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-bundled
             group: extension-bundled
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
+            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-runtime-topology-architecture
             group: runtime-topology-architecture
+            runner: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout
         shell: bash
@@ -1397,7 +1454,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1426,7 +1483,7 @@ jobs:
       - name: Cache extension package boundary artifacts
         id: extension-package-boundary-cache
         if: matrix.group == 'extension-package-boundary'
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: |
             dist/plugin-sdk
@@ -1520,6 +1577,15 @@ jobs:
                 run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary
               fi
               ;;
+            session-transcript-reader-boundary)
+              if [ ! -f scripts/check-session-transcript-reader-boundary.mjs ]; then
+                echo "[skip] session transcript reader boundary check is not present in this checkout"
+              elif ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
+                echo "[skip] session transcript reader boundary script is not present in package.json"
+              else
+                run_check "lint:tmp:session-transcript-reader-boundary" pnpm run lint:tmp:session-transcript-reader-boundary
+              fi
+              ;;
             extension-channels)
               run_check "lint:extensions:channels" pnpm run lint:extensions:channels
               ;;
@@ -1573,7 +1639,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -1619,7 +1685,7 @@ jobs:
             git -C "$workdir" config gc.auto 0
             git -C "$workdir" remote add origin "https://github.com/openclaw/clawhub.git"
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+refs/heads/main:refs/remotes/origin/checkout" || return 1
@@ -1666,7 +1732,7 @@ jobs:
           fetch_checkout_ref() {
             local fetch_status
             for attempt in 1 2 3; do
-              timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
+              timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE" \
                 -c protocol.version=2 \
                 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
                 "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" && return 0
@@ -1685,7 +1751,7 @@ jobs:
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
           python-version: "3.12"
 
@@ -1706,7 +1772,7 @@ jobs:
     name: ${{ matrix.check_name }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-windows-2025' || 'windows-2025') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-windows-2025') || 'windows-2025') }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=8192
@@ -1718,6 +1784,7 @@ jobs:
         shell: bash
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - name: Checkout
@@ -1954,7 +2021,7 @@ jobs:
           echo "key=$toolchain_key" >> "$GITHUB_OUTPUT"
 
       - name: Cache SwiftPM
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/Library/Caches/org.swift.swiftpm
           key: ${{ runner.os }}-swiftpm-${{ hashFiles('apps/macos/Package.resolved') }}
@@ -1963,7 +2030,7 @@ jobs:
 
       - name: Cache Swift build directory
         id: swift-build-cache
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: apps/macos/.build
           key: ${{ runner.os }}-swift-build-v2-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
@@ -2047,6 +2114,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix: ${{ fromJson(needs.preflight.outputs.android_matrix) }}
     steps:
       - name: Checkout
@@ -2072,7 +2140,7 @@ jobs:
             git -C "$workdir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
             git -C "$workdir" config gc.auto 0
 
-            timeout --signal=TERM --kill-after=10s 30s git -C "$workdir" \
+            timeout --signal=TERM --kill-after=10s 120s git -C "$workdir" \
               -c protocol.version=2 \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
@@ -2094,7 +2162,7 @@ jobs:
           exit 1
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@ad2b38190b15e4d6bdf0c97fb4fca8412226d287 # v5
         with:
           distribution: temurin
           # Keep sdkmanager on the stable JDK path for Linux CI runners.
@@ -2106,7 +2174,7 @@ jobs:
             apps/android/gradle/libs.versions.toml
 
       - name: Cache Android SDK
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.android-sdk
           key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
@@ -2193,7 +2261,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout timing summary helper
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}
           fetch-depth: 1
@@ -2209,7 +2277,7 @@ jobs:
           cat ci-timings-summary.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload CI timing summary
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ci-timings-summary
           path: ci-timings-summary.txt

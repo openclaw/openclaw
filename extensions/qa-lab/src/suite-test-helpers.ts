@@ -9,7 +9,7 @@ export function makeQaSuiteTestScenario(
     config?: Record<string, unknown>;
     plugins?: string[];
     gatewayConfigPatch?: Record<string, unknown>;
-    gatewayRuntime?: { forwardHostHome?: boolean };
+    gatewayRuntime?: { forwardHostHome?: boolean; preserveDebugArtifacts?: boolean };
     runtimeParityTier?: QaSuiteTestScenario["runtimeParityTier"];
     surface?: string;
   } = {},

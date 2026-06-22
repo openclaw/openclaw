@@ -10,14 +10,22 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
+import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { isMessageToolSendActionName } from "./embedded-agent-messaging.js";
-import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
+import { isMessagingToolTargetEvidenceAction } from "./embedded-agent-messaging.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "./embedded-agent-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { readToolResultDetails, readToolResultStatus } from "./tool-result-error.js";
+
+export { isToolResultError } from "./tool-result-error.js";
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
@@ -276,6 +284,148 @@ export function extractToolResultText(result: unknown): string | undefined {
   return texts.join("\n");
 }
 
+function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = value.trim();
+  if (!normalized || seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  urls.push(normalized);
+}
+
+/** Collects messaging attachment references from tool-call arguments or result records. */
+export function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    for (const candidate of [
+      attachment.media,
+      attachment.mediaUrl,
+      attachment.path,
+      attachment.filePath,
+      attachment.fileUrl,
+      attachment.url,
+    ]) {
+      pushUniqueMessagingMediaUrl(urls, seen, candidate);
+    }
+  };
+
+  for (const candidate of [
+    record.media,
+    record.mediaUrl,
+    record.path,
+    record.filePath,
+    record.fileUrl,
+  ]) {
+    pushUniqueMessagingMediaUrl(urls, seen, candidate);
+  }
+  if (Array.isArray(record.mediaUrls)) {
+    for (const mediaUrl of record.mediaUrls) {
+      pushUniqueMessagingMediaUrl(urls, seen, mediaUrl);
+    }
+  }
+  if (Array.isArray(record.attachments)) {
+    for (const attachment of record.attachments) {
+      pushAttachment(attachment);
+    }
+  }
+  return urls;
+}
+
+/** Collects messaging attachment references from a completed tool result. */
+export function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const appendFromRecord = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    for (const url of collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>)) {
+      if (!seen.has(url)) {
+        seen.add(url);
+        urls.push(url);
+      }
+    }
+  };
+
+  appendFromRecord(result);
+  if (result && typeof result === "object") {
+    appendFromRecord((result as Record<string, unknown>).details);
+  }
+  const outputText = extractToolResultText(result);
+  if (outputText) {
+    try {
+      appendFromRecord(JSON.parse(outputText));
+    } catch {
+      // Ignore non-JSON tool output.
+    }
+  }
+  return urls;
+}
+
+/** Extract an internal source-reply payload from a completed message tool result. */
+export function extractMessagingToolSourceReplyPayload(
+  result: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  const details = readToolResultDetails(result);
+  if (!details || details.sourceReplySink !== "internal-ui") {
+    return undefined;
+  }
+  const status = normalizeOptionalLowercaseString(details.deliveryStatus);
+  if (status && status !== "sent") {
+    return undefined;
+  }
+  const sourceReply = readRecord(details.sourceReply) ?? details;
+  const payload: MessagingToolSourceReplyPayload = {};
+  const text = readStringValue(sourceReply.text) ?? readStringValue(details.message);
+  if (text) {
+    payload.text = text;
+  }
+  const mediaUrl = readStringValue(sourceReply.mediaUrl) ?? readStringValue(details.mediaUrl);
+  if (mediaUrl) {
+    payload.mediaUrl = mediaUrl;
+  }
+  const rawMediaUrls = Array.isArray(sourceReply.mediaUrls)
+    ? sourceReply.mediaUrls
+    : Array.isArray(details.mediaUrls)
+      ? details.mediaUrls
+      : [];
+  const mediaUrls = uniqueStrings(
+    rawMediaUrls.filter((value): value is string => typeof value === "string"),
+  );
+  if (mediaUrls.length > 0) {
+    payload.mediaUrls = mediaUrls;
+  }
+  if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
+    payload.audioAsVoice = true;
+  }
+  const presentation = normalizeMessagePresentation(sourceReply.presentation);
+  if (presentation) {
+    payload.presentation = presentation;
+  }
+  const interactive = normalizeInteractiveReply(sourceReply.interactive);
+  if (interactive) {
+    payload.interactive = interactive;
+  }
+  const channelData = readRecord(sourceReply.channelData);
+  if (channelData) {
+    payload.channelData = { ...channelData };
+  }
+  const idempotencyKey =
+    readStringValue(sourceReply.idempotencyKey) ?? readStringValue(details.idempotencyKey);
+  if (idempotencyKey) {
+    payload.idempotencyKey = idempotencyKey;
+  }
+  return Object.keys(payload).length > 0 ? payload : undefined;
+}
+
 // Core tool names that are allowed to emit trusted local media artifacts.
 // Plugin tools must be explicitly passed as trusted run-local names by the caller.
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
@@ -311,26 +461,11 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
     return false;
   }
   return TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolName(toolName));
-}
-
-function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const record = result as Record<string, unknown>;
-  return record.details && typeof record.details === "object" && !Array.isArray(record.details)
-    ? (record.details as Record<string, unknown>)
-    : undefined;
-}
-
-function readToolResultStatus(result: unknown): string | undefined {
-  const status = readToolResultDetails(result)?.status;
-  return normalizeOptionalLowercaseString(status);
 }
 
 function isExternalToolResult(result: unknown): boolean {
@@ -538,44 +673,6 @@ export function extractToolResultMediaArtifact(
   return undefined;
 }
 
-export function extractToolResultMediaPaths(result: unknown): string[] {
-  return extractToolResultMediaArtifact(result)?.mediaUrls ?? [];
-}
-
-export function isToolResultError(result: unknown): boolean {
-  const details = readToolResultDetails(result);
-  const normalized = readToolResultStatus(result);
-  const explicitlySuccessful = details?.ok === true || details?.success === true;
-  if (details?.ok === false || details?.success === false) {
-    return true;
-  }
-  const hasFailureStatus =
-    normalized === "error" ||
-    normalized === "failed" ||
-    normalized === "failure" ||
-    normalized === "timeout" ||
-    normalized === "timed_out" ||
-    normalized === "blocked" ||
-    normalized === "denied" ||
-    normalized === "forbidden" ||
-    normalized === "unavailable" ||
-    normalized === "approval-unavailable" ||
-    normalized === "disabled" ||
-    normalized === "aborted" ||
-    normalized === "cancelled" ||
-    normalized === "canceled" ||
-    normalized === "killed" ||
-    normalized === "invalid";
-  if (hasFailureStatus && !explicitlySuccessful) {
-    return true;
-  }
-  if (details?.timedOut === true || Boolean(details?.error)) {
-    return true;
-  }
-  const exitCode = details?.exitCode;
-  return typeof exitCode === "number" && Number.isFinite(exitCode) && exitCode !== 0;
-}
-
 export function extractToolErrorCode(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
@@ -632,12 +729,32 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   return text ? normalizeToolErrorText(text) : undefined;
 }
 
-function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
-  const toRaw = readStringValue(args.to);
-  if (toRaw) {
-    return toRaw;
+function resolveMessageToolTarget(params: {
+  action: string;
+  args: Record<string, unknown>;
+  providerId: string | null;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+}): string | undefined {
+  const directTarget =
+    normalizeOptionalString(params.args.target) ??
+    normalizeOptionalString(params.args.to) ??
+    normalizeOptionalString(params.args.channelId);
+  if (directTarget) {
+    return directTarget;
   }
-  return readStringValue(args.target);
+  const aliases = params.providerId
+    ? getChannelPlugin(params.providerId)?.actions?.messageActionTargetAliases?.[
+        params.action as ChannelMessageActionName
+      ]?.deliveryTargetAliases
+    : undefined;
+  for (const alias of aliases ?? []) {
+    const aliasTarget = normalizeOptionalStringifiedId(params.args[alias]);
+    if (aliasTarget) {
+      return aliasTarget;
+    }
+  }
+  return params.currentMessagingTarget ?? params.currentChannelId;
 }
 
 function resolveMessagingToolThreadEvidence(params: {
@@ -731,20 +848,26 @@ export function extractMessagingToolSend(
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
   if (toolName === "message") {
-    if (!isMessageToolSendActionName(action)) {
-      return undefined;
-    }
-    const toRaw = resolveMessageToolTarget(args);
-    if (!toRaw) {
+    if (!isMessagingToolTargetEvidenceAction(toolName, args)) {
       return undefined;
     }
     const providerRaw = normalizeOptionalString(args.provider) ?? "";
     const channelRaw = normalizeOptionalString(args.channel) ?? "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
+    const toRaw = resolveMessageToolTarget({
+      action,
+      args,
+      providerId,
+      currentChannelId: options?.currentChannelId,
+      currentMessagingTarget: options?.currentMessagingTarget,
+    });
+    if (!toRaw) {
+      return undefined;
+    }
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
-    const pluginExtractionArgs = readStringValue(args.to) ? args : { ...args, to: toRaw };
+    const pluginExtractionArgs = { ...args, to: toRaw };
     const pluginExtracted = providerId
       ? getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args: pluginExtractionArgs })
       : null;
@@ -845,13 +968,21 @@ export function extractMessagingToolSendResult(
   if (!extracted?.to) {
     return pending;
   }
+  const extractedThreadId = normalizeOptionalString(extracted.threadId);
+  const providerReportedThread =
+    extractedThreadId != null ||
+    extracted.threadImplicit === true ||
+    extracted.threadSuppressed === true;
+  // Thread route fields are one state. Mixing provider and pending values can
+  // create contradictory implicit and suppressed evidence.
+  const threadEvidence = providerReportedThread ? extracted : pending;
   return {
     ...pending,
     ...extracted,
     accountId: normalizeOptionalString(extracted.accountId) ?? pending.accountId,
     to: normalizeTargetForProvider(providerId ?? pending.provider, extracted.to),
-    threadId: normalizeOptionalString(extracted.threadId),
-    threadImplicit: extracted.threadImplicit === true ? true : undefined,
-    threadSuppressed: extracted.threadSuppressed === true ? true : undefined,
+    threadId: normalizeOptionalString(threadEvidence.threadId),
+    threadImplicit: threadEvidence.threadImplicit === true ? true : undefined,
+    threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
   };
 }

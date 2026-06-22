@@ -6,6 +6,7 @@ scenario:
   coverage:
     primary:
       - telemetry.prometheus
+      - telemetry.prometheus-authenticated-gateway-export
     secondary:
       - harness.qa-lab
       - docker.e2e

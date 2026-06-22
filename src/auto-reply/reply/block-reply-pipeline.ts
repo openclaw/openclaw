@@ -1,4 +1,5 @@
 // Buffers streaming reply blocks before coalesced final delivery.
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -18,11 +19,12 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  hasSentExactPayload?: (payload: ReplyPayload) => boolean;
   getSentMediaUrls: () => readonly string[];
 };
 
 /** Optional buffering strategy used before payloads enter block delivery. */
-export type BlockReplyBuffer = {
+type BlockReplyBuffer = {
   shouldBuffer: (payload: ReplyPayload) => boolean;
   onEnqueue?: (payload: ReplyPayload) => void;
   finalize?: (payload: ReplyPayload) => ReplyPayload;
@@ -94,6 +96,10 @@ const withTimeout = async <T>(
   }
 };
 
+function resolveBlockReplyTimeoutMs(timeoutMs: number): number {
+  return clampPositiveTimerTimeoutMs(timeoutMs) ?? 0;
+}
+
 /** Creates the ordered block reply delivery pipeline for streamed payloads. */
 export function createBlockReplyPipeline(params: {
   onBlockReply: (
@@ -104,7 +110,8 @@ export function createBlockReplyPipeline(params: {
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
 }): BlockReplyPipeline {
-  const { onBlockReply, timeoutMs, coalescing, buffer } = params;
+  const { onBlockReply, coalescing, buffer } = params;
+  const timeoutMs = resolveBlockReplyTimeoutMs(params.timeoutMs);
   const sentKeys = new Set<string>();
   const sentContentKeys = new Set<string>();
   const sentMediaUrls = new Set<string>();
@@ -315,6 +322,7 @@ export function createBlockReplyPipeline(params: {
     hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
     isAborted: () => aborted,
+    hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
     hasSentPayload: (payload) => {
       const payloadKey = createBlockReplyContentKey(payload);
       if (sentContentKeys.has(payloadKey)) {

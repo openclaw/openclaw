@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Status text types describe runtime status records used by status rendering.
 import type {
   ElevatedLevel,
@@ -19,12 +20,13 @@ export type BuildStatusTextParams = {
   sessionScope?: SessionScope;
   storePath?: string;
   statusChannel: string;
+  statusAccountId?: string;
   workspaceDir?: string;
   provider: string;
   model: string;
   contextTokens?: number;
   resolvedThinkLevel?: ThinkLevel;
-  resolvedFastMode?: boolean;
+  resolvedFastMode?: FastMode;
   resolvedHarness?: string;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
@@ -34,6 +36,7 @@ export type BuildStatusTextParams = {
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
   taskLineOverride?: string;
+  pluginHealthLineOverride?: string;
   skipDefaultTaskLookup?: boolean;
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;

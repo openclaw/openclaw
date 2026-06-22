@@ -7,7 +7,6 @@ import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-
 import {
   approveBootstrapDevicePairing,
   approveDevicePairing,
-  clearDevicePairing,
   ensureDeviceToken,
   getPairedDevice,
   hasEffectivePairedDeviceRole,
@@ -1817,6 +1816,37 @@ describe("device pairing tokens", () => {
     expect(hasEffectivePairedDeviceRole(device, "node")).toBe(false);
   });
 
+  test("normalizes non-string entries while updating persisted approvals", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    await mutatePairedDevice(baseDir, "device-1", (device) => {
+      device.roles = ["operator", undefined, null, 42, ""] as unknown as string[];
+      device.scopes = ["operator.read", undefined, null, 42, ""] as unknown as string[];
+      device.approvedScopes = ["operator.read", undefined, null, 42, ""] as unknown as string[];
+    });
+
+    const pending = await requestDevicePairing(
+      {
+        deviceId: "device-1",
+        publicKey: "public-key-1",
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+      baseDir,
+    );
+    const approved = await approveDevicePairing(
+      pending.request.requestId,
+      { callerScopes: ["operator.read", "operator.admin"] },
+      baseDir,
+    );
+
+    expect(approved?.status).toBe("approved");
+    const paired = await getPairedDevice("device-1", baseDir);
+    expect(paired?.roles).toEqual(["operator"]);
+    expect(paired?.approvedScopes).toEqual(["operator.read", "operator.admin"]);
+    expect(paired && listEffectivePairedDeviceRoles(paired)).toEqual(["operator"]);
+  });
+
   test("rejects rotating a token for a role that was never approved", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedOperatorDevice(baseDir, ["operator.pairing"]);
@@ -1903,14 +1933,5 @@ describe("device pairing tokens", () => {
       approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir),
     ).rejects.toThrow(/paired\.json/);
     await expect(readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
-  });
-
-  test("clears paired device state by device id", async () => {
-    const baseDir = await makeDevicePairingDir();
-    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
-
-    await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(true);
-    await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
-    await expect(clearDevicePairing("device-1", baseDir)).resolves.toBe(false);
   });
 });

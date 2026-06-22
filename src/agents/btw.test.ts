@@ -137,6 +137,8 @@ vi.mock("./embedded-agent-runner/runs.js", () => ({
 
 vi.mock("./agent-scope.js", () => ({
   listAgentEntries: (...args: unknown[]) => listAgentEntriesMock(...args),
+  resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
+    cfg.agents?.list?.find((entry) => entry.id === agentId),
   resolveSessionAgentIds: (...args: unknown[]) => resolveSessionAgentIdsMock(...args),
   resolveSessionAgentId: (...args: unknown[]) => resolveSessionAgentIdMock(...args),
   resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
@@ -610,6 +612,16 @@ describe("runBtwSideQuestion", () => {
       provider: "openai",
       model: "gpt-5.5",
       sessionKey: DEFAULT_SESSION_KEY,
+      sandboxSessionKey: "agent:main:runtime-policy",
+      agentAccountId: "account-1",
+      groupId: "group-1",
+      groupChannel: "#ops",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      senderId: "sender-1",
+      senderName: "Rosita",
+      senderUsername: "rosita",
+      senderE164: "+15550001",
     });
 
     expect(result).toEqual({ text: "Codex side answer." });
@@ -624,6 +636,17 @@ describe("runBtwSideQuestion", () => {
           agentId?: string;
           workspaceDir?: string;
           authProfileId?: string;
+          sandboxSessionKey?: string;
+          agentAccountId?: string;
+          groupId?: string;
+          groupChannel?: string;
+          groupSpace?: string;
+          spawnedBy?: string;
+          senderId?: string;
+          senderName?: string;
+          senderUsername?: string;
+          senderE164?: string;
+          toolsAllow?: string[];
         },
       ]
     >;
@@ -634,11 +657,148 @@ describe("runBtwSideQuestion", () => {
     expect(sideQuestionParams.agentId).toBe("main");
     expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
     expect(sideQuestionParams.authProfileId).toBe("openai:work");
+    expect(sideQuestionParams).toMatchObject({
+      agentAccountId: "account-1",
+      sandboxSessionKey: "agent:main:runtime-policy",
+      groupId: "group-1",
+      groupChannel: "#ops",
+      groupSpace: "workspace-1",
+      spawnedBy: "agent:main:parent",
+      senderId: "sender-1",
+      senderName: "Rosita",
+      senderUsername: "rosita",
+      senderE164: "+15550001",
+    });
     expect(
       (mockArg(codexSideQuestionMock, 0, 0) as { sessionFile?: string }).sessionFile,
     ).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: (ctx) =>
+        ctx.provider === "openai"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "openai only" },
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:user@example.test");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai-codex:user@example.test"],
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        },
+      } as never,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    const sideQuestionParams = mockArg(codexSideQuestionMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+    };
+    expect(sideQuestionParams.provider).toBe("openai");
+    expect(sideQuestionParams.authProfileId).toBe("openai-codex:user@example.test");
+    const authArgs = mockArg(resolveSessionAuthProfileOverrideMock, 0, 0) as {
+      provider?: string;
+      acceptedProviderIds?: string[];
+    };
+    expect(authArgs.provider).toBe("openai");
+    expect(authArgs.acceptedProviderIds).toEqual(["openai"]);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("prepares deny-all sender policy before calling a plugin side-question hook", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Policy answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    await runSideQuestion({
+      cfg: {
+        channels: {
+          telegram: {
+            groups: {
+              "deny-room": {
+                toolsBySender: {
+                  "id:restricted-sender": { deny: ["*"] },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: "agent:main:telegram:group:deny-room",
+      messageProvider: "telegram",
+      groupId: "deny-room",
+      senderId: "restricted-sender",
+    });
+
+    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
+  });
+
+  it("prepares a narrow global policy before calling a plugin side-question hook", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Policy answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+
+    await runSideQuestion({
+      cfg: { tools: { allow: ["message"] } } as never,
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(mockArg(codexSideQuestionMock, 0, 0)).toMatchObject({ toolsAllow: [] });
   });
 
   it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {
@@ -895,6 +1055,59 @@ describe("runBtwSideQuestion", () => {
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.executionMode).toBe("side-question");
     expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves auto-selected session CLI BTW routing before resolving runtime auth", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const sessionEntry = createSessionEntry({
+      authProfileOverride: "anthropic:auto-cli",
+      authProfileOverrideSource: "auto",
+    });
+    const sessionStore = { [DEFAULT_SESSION_KEY]: sessionEntry };
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Session Claude CLI answer." });
+    resolveSessionAuthProfileOverrideMock.mockImplementation(
+      async (params: { sessionEntry?: SessionEntry }) => {
+        if (params.sessionEntry) {
+          params.sessionEntry.authProfileOverride = "anthropic:api";
+          params.sessionEntry.authProfileOverrideSource = "auto";
+        }
+        return "anthropic:api";
+      },
+    );
+    mockDoneAnswer("Generic fallback answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:api"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:auto-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry,
+      sessionStore,
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Session Claude CLI answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+      executionMode?: string;
+    };
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(streamSimpleMock).not.toHaveBeenCalled();
@@ -1378,6 +1591,144 @@ describe("runBtwSideQuestion", () => {
     expect(diagDebugMock).toHaveBeenCalledWith(
       "btw snapshot leaf unavailable: sessionId=session-1 leaf=assistant-gone",
     );
+  });
+
+  it("honors an explicitly empty active run snapshot", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    mockTranscriptEntries([userEntry, assistantEntry]);
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: null,
+    });
+
+    await expect(runMathSideQuestion()).rejects.toThrow("No active session context.");
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([]);
+  });
+
+  it("uses the branch selected by a terminal transcript leaf control", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+    };
+    mockTranscriptEntries([userEntry, assistantEntry, sideEntry, leafEntry]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("keeps parentless history addressed by a terminal leaf control", async () => {
+    const userEntry = {
+      type: "message",
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    };
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    };
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+    };
+    mockTranscriptEntries([userEntry, assistantEntry, sideEntry, leafEntry]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledWith([
+      { ...userEntry, parentId: null },
+      { ...assistantEntry, parentId: "user-seed" },
+    ]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("keeps visible history after continuing from a disjoint opaque append cursor", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const metadataEntry = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: "side-delivery",
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+      appendParentId: "plugin-metadata",
+    };
+    const continuationEntry = createTranscriptEntry({
+      id: "assistant-continuation",
+      parentId: "plugin-metadata",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "continued answer" }]),
+    });
+    mockTranscriptEntries([
+      userEntry,
+      assistantEntry,
+      sideEntry,
+      metadataEntry,
+      leafEntry,
+      continuationEntry,
+    ]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledWith([
+      userEntry,
+      assistantEntry,
+      { ...continuationEntry, parentId: "assistant-seed" },
+    ]);
+    expect(result).toEqual({ text: MATH_ANSWER });
   });
 
   it("returns the BTW answer without appending transcript custom entries", async () => {

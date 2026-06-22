@@ -18,7 +18,7 @@ export type TypingModeContext = {
 };
 
 /** Group chats default to message-triggered typing to avoid noisy indicators. */
-export const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
+const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
 
 /** Resolves the effective typing mode for the current auto-reply turn. */
 export function resolveTypingMode({
@@ -132,10 +132,8 @@ export function createTypingSignaler(params: {
     if (disabled || !shouldStartOnReasoning) {
       return;
     }
-    // Reasoning-only streams should not expose typing until visible text exists.
-    if (!hasRenderableText) {
-      return;
-    }
+    // Reasoning deltas are the signal to show typing in thinking mode,
+    // even before any visible assistant text has arrived.
     await typing.startTypingLoop();
     typing.refreshTypingTtl();
   };

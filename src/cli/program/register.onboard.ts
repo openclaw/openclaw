@@ -14,7 +14,7 @@ import type {
   SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
-import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
+import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { parsePort } from "../shared/parse-port.js";
 
@@ -67,7 +67,7 @@ function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
   // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
   const seenCliFlags = new Set<string>();
   const flags: OnboardAuthFlag[] = [];
-  for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveManifestProviderOnboardAuthFlags()]) {
+  for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveProviderOnboardAuthFlags()]) {
     const cliFlags = extractCliFlags(flag.cliOption);
     if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
       continue;

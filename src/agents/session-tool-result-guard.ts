@@ -60,6 +60,7 @@ function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): numb
 
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
 type CompactionAppendValidator = (entryId: string, appendedText: string) => boolean;
+type AppendMessageOptions = Parameters<SessionManager["appendMessage"]>[1];
 
 function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage {
   return message.role === "user";
@@ -643,6 +644,7 @@ export function installSessionToolResultGuard(
   const allowSyntheticToolResults = opts?.allowSyntheticToolResults ?? true;
   const missingToolResultText = opts?.missingToolResultText;
   const beforeWrite = opts?.beforeMessageWriteHook;
+  const toolResultTransformerMayMutate = opts?.transformToolResultForPersistence !== undefined;
   const redactionConfig = opts?.redactLoggingConfig;
   const maxToolResultChars = resolveMaxToolResultChars(opts);
   const transcriptSeqByEntryId: TranscriptSeqByEntryId = new Map();
@@ -653,9 +655,10 @@ export function installSessionToolResultGuard(
 
   const appendMessageAndCacheTranscriptSeq = (
     message: AgentMessage,
+    options?: AppendMessageOptions,
   ): { entryId: string; messageSeq?: number; sessionFile?: string | null } => {
     const parentEntryId = sessionManager.getLeafId();
-    const entryId = originalAppend(message as never);
+    const entryId = originalAppend(message as never, options);
     void opts?.onMessagePersisted?.(message);
     const sessionFile = getSessionFile();
     if (!sessionFile) {
@@ -686,18 +689,20 @@ export function installSessionToolResultGuard(
    * Run the before_message_write hook. Returns the (possibly modified) message,
    * or null if the message should be blocked.
    */
-  const applyBeforeWriteHook = (msg: AgentMessage): AgentMessage | null => {
+  const applyBeforeWriteHook = (
+    msg: AgentMessage,
+  ): { message: AgentMessage; changed: boolean } | null => {
     if (!beforeWrite) {
-      return msg;
+      return { message: msg, changed: false };
     }
     const result = beforeWrite({ message: msg });
     if (result?.block) {
       return null;
     }
     if (result?.message) {
-      return result.message;
+      return { message: result.message, changed: true };
     }
-    return msg;
+    return { message: msg, changed: false };
   };
 
   const flushPendingToolResults = () => {
@@ -711,16 +716,22 @@ export function installSessionToolResultGuard(
           toolName: name,
           text: missingToolResultText,
         });
-        const flushed = applyBeforeWriteHook(
-          persistToolResult(persistMessage(synthetic), {
-            toolCallId: id,
-            toolName: name,
-            isSynthetic: true,
-          }),
-        );
+        const persistedSynthetic = persistMessage(synthetic);
+        const transformed = persistToolResult(persistedSynthetic, {
+          toolCallId: id,
+          toolName: name,
+          isSynthetic: true,
+        });
+        const flushed = applyBeforeWriteHook(transformed);
         if (flushed) {
           appendMessageAndCacheTranscriptSeq(
-            capToolResultForPersistence(flushed, maxToolResultChars, redactionConfig),
+            capToolResultForPersistence(flushed.message, maxToolResultChars, redactionConfig),
+            {
+              invalidateSerializedPrefixCache:
+                persistedSynthetic !== synthetic ||
+                toolResultTransformerMayMutate ||
+                flushed.changed,
+            },
           );
         }
       }
@@ -732,7 +743,8 @@ export function installSessionToolResultGuard(
     pendingState.clear();
   };
 
-  const guardedAppend = (message: AgentMessage) => {
+  const guardedAppend = (message: AgentMessage, callerOptions?: AppendMessageOptions) => {
+    const callerInvalidatesCache = callerOptions?.invalidateSerializedPrefixCache === true;
     let nextMessage = message;
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
@@ -758,23 +770,30 @@ export function installSessionToolResultGuard(
       const normalizedToolResult = normalizePersistedToolResultName(nextMessage, toolName);
       // Apply hard size cap before persistence to prevent oversized tool results
       // from consuming the entire context window on subsequent LLM calls.
+      const persistedToolResult = persistMessage(normalizedToolResult);
       const capped = capToolResultForPersistence(
-        persistMessage(normalizedToolResult),
+        persistedToolResult,
         maxToolResultChars,
         redactionConfig,
       );
-      const persisted = applyBeforeWriteHook(
-        persistToolResult(capped, {
-          toolCallId: id ?? undefined,
-          toolName,
-          isSynthetic: false,
-        }),
-      );
+      const transformed = persistToolResult(capped, {
+        toolCallId: id ?? undefined,
+        toolName,
+        isSynthetic: false,
+      });
+      const persisted = applyBeforeWriteHook(transformed);
       if (!persisted) {
         return undefined;
       }
       return appendMessageAndCacheTranscriptSeq(
-        capToolResultForPersistence(persisted, maxToolResultChars, redactionConfig),
+        capToolResultForPersistence(persisted.message, maxToolResultChars, redactionConfig),
+        {
+          invalidateSerializedPrefixCache:
+            callerInvalidatesCache ||
+            persistedToolResult !== normalizedToolResult ||
+            toolResultTransformerMayMutate ||
+            persisted.changed,
+        },
       ).entryId;
     }
 
@@ -818,10 +837,12 @@ export function installSessionToolResultGuard(
       flushPendingToolResults();
     }
 
-    const finalMessage = applyBeforeWriteHook(persistMessage(nextMessage));
-    if (!finalMessage) {
+    const transformedMessage = persistMessage(nextMessage);
+    const finalWrite = applyBeforeWriteHook(transformedMessage);
+    if (!finalWrite) {
       return undefined;
     }
+    const finalMessage = finalWrite.message;
     const finalRole = (finalMessage as { role?: unknown }).role;
     if (
       finalRole === "assistant" &&
@@ -845,7 +866,10 @@ export function installSessionToolResultGuard(
       entryId: result,
       messageSeq,
       sessionFile,
-    } = appendMessageAndCacheTranscriptSeq(finalMessage);
+    } = appendMessageAndCacheTranscriptSeq(finalMessage, {
+      invalidateSerializedPrefixCache:
+        callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
+    });
     if (sessionFile) {
       emitSessionTranscriptUpdate({
         sessionFile,

@@ -25,13 +25,14 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
 import type { GatewayRequestContext } from "./types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -51,6 +52,8 @@ const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
+  getChannelPlugin: vi.fn(),
+  sendDurableMessageBatch: vi.fn(),
   resolveSendPolicy: vi.fn((_args?: { entry?: { sendPolicy?: string } }) => "allow"),
   resolveSessionLifecycleTimestamps: vi.fn(
     ({ entry }: { entry?: { sessionStartedAt?: number; lastInteractionAt?: number } }) => ({
@@ -182,6 +185,38 @@ vi.mock("../../sessions/send-policy.js", () => ({
   resolveSendPolicy: (...args: unknown[]) =>
     (mocks.resolveSendPolicy as (...args: unknown[]) => unknown)(...args),
 }));
+
+vi.mock("../../channels/plugins/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../../channels/plugins/index.js")>(
+    "../../channels/plugins/index.js",
+  );
+  return {
+    ...actual,
+    getChannelPlugin: (...args: Parameters<typeof actual.getChannelPlugin>) => {
+      const override = mocks.getChannelPlugin.getMockImplementation();
+      return override
+        ? (override(...args) as ReturnType<typeof actual.getChannelPlugin>)
+        : actual.getChannelPlugin(...args);
+    },
+  };
+});
+
+vi.mock("../../channels/message/runtime.js", async () => {
+  const actual = await vi.importActual<typeof import("../../channels/message/runtime.js")>(
+    "../../channels/message/runtime.js",
+  );
+  return {
+    ...actual,
+    sendDurableMessageBatch: (...args: Parameters<typeof actual.sendDurableMessageBatch>) => {
+      const override = mocks.sendDurableMessageBatch.getMockImplementation();
+      return override
+        ? (mocks.sendDurableMessageBatch(...args) as ReturnType<
+            typeof actual.sendDurableMessageBatch
+          >)
+        : actual.sendDurableMessageBatch(...args);
+    },
+  };
+});
 
 vi.mock("../../utils/delivery-context.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils/delivery-context.js")>(
@@ -368,6 +403,10 @@ function resetTimeConfig() {
   vi.useRealTimers();
 }
 
+function useTestStateDir(root: string): void {
+  setTestEnvValue("OPENCLAW_STATE_DIR", root);
+}
+
 async function expectResetCall(expectedMessage: string) {
   const call = await waitForAgentCommandCall();
   expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
@@ -528,11 +567,7 @@ async function invokeAgentIdentityGet(
 
 describe("gateway agent handler", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    envSnapshot.restore();
     resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
     resetSubagentRegistryForTests({ persist: false });
@@ -542,6 +577,8 @@ describe("gateway agent handler", () => {
     mocks.emitGatewaySessionStartPluginHook.mockReset();
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
+    mocks.getChannelPlugin.mockReset();
+    mocks.sendDurableMessageBatch.mockReset();
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
     mocks.resolveSessionLifecycleTimestamps
       .mockReset()
@@ -2197,6 +2234,44 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("forwards admin caller ownership to ingress agent runs", async () => {
+    primeMainAgentRun({ cfg: mocks.loadConfigReturn });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "owner tool check",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-admin-sender-owner",
+      },
+      {
+        reqId: "admin-sender-owner",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(true);
+
+    mocks.agentCommand.mockClear();
+    await invokeAgent(
+      {
+        message: "non-owner tool check",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-write-sender-owner",
+      },
+      {
+        reqId: "write-sender-owner",
+        client: backendGatewayClient(),
+      },
+    );
+
+    expect((await waitForAgentCommandCall<{ senderIsOwner?: boolean }>()).senderIsOwner).toBe(
+      false,
+    );
+  });
+
   it("rejects public transcriptMessage overrides", async () => {
     primeMainAgentRun({ cfg: mocks.loadConfigReturn });
     mocks.agentCommand.mockClear();
@@ -3145,7 +3220,7 @@ describe("gateway agent handler", () => {
 
   it("terminalizes successful async gateway agent runs in the shared task registry", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
 
@@ -3171,7 +3246,7 @@ describe("gateway agent handler", () => {
 
   it("tracks plugin SDK subagent agent runs through the subagent registry only", async () => {
     await withTempDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       resetSubagentRegistryForTests({ persist: false });
       const runId = "plugin-subagent-task-run";
@@ -3291,7 +3366,7 @@ describe("gateway agent handler", () => {
     await withTempDir(
       { prefix: "openclaw-gateway-plugin-subagent-registry-fail-" },
       async (root) => {
-        process.env.OPENCLAW_STATE_DIR = root;
+        useTestStateDir(root);
         resetTaskRegistryForTests();
         resetSubagentRegistryForTests({ persist: false });
         subagentRegistryTesting.setDepsForTest({
@@ -3370,7 +3445,7 @@ describe("gateway agent handler", () => {
 
   it("terminalizes failed async gateway agent runs in the shared task registry", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-error-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockRejectedValueOnce(new Error("agent unavailable"));
@@ -3397,7 +3472,7 @@ describe("gateway agent handler", () => {
 
   it("preserves aborted async gateway agent runs as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockResolvedValueOnce({
@@ -3433,7 +3508,7 @@ describe("gateway agent handler", () => {
 
   it("classifies aborted async gateway agent rejections as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       const abortError = new Error("This operation was aborted");
@@ -3476,7 +3551,7 @@ describe("gateway agent handler", () => {
 
   it("preserves restart ownership for aborted async gateway agent rejections", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-restart-abort-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       const abortError = createAgentRunRestartAbortError();
@@ -3513,7 +3588,7 @@ describe("gateway agent handler", () => {
 
   it("classifies timeout async gateway agent rejections as timed out", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-timeout-error-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       const timeoutError = new Error("chat run timed out");
@@ -3558,7 +3633,7 @@ describe("gateway agent handler", () => {
     await withTempDir(
       { prefix: "openclaw-gateway-agent-task-wrapped-timeout-error-" },
       async (root) => {
-        process.env.OPENCLAW_STATE_DIR = root;
+        useTestStateDir(root);
         resetTaskRegistryForTests();
         primeMainAgentRun();
         const timeoutReason = new Error("chat run timed out");
@@ -3607,7 +3682,7 @@ describe("gateway agent handler", () => {
 
   it("does not hide provider timeout async gateway agent rejections", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-provider-timeout-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       const providerError = new Error("provider request timed out");
@@ -3648,7 +3723,7 @@ describe("gateway agent handler", () => {
 
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
       let resolveRun: (value: {
@@ -3752,6 +3827,49 @@ describe("gateway agent handler", () => {
     expect(call.agentId).toBe("main");
     expect(call.sessionId).toBe("existing-session-id");
     expect(call.sessionKey).toBe("agent:main:main");
+  });
+
+  it("uses an agent-scoped to value as the gateway session selector", async () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+    mocks.loadSessionEntry.mockImplementation((key: string) => ({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: key === sessionKey ? "wechat-session-id" : "main-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: key,
+    }));
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, Record<string, unknown>> = {
+        "agent:main:main": { sessionId: "main-session-id", updatedAt: Date.now() },
+        [sessionKey]: { sessionId: "wechat-session-id", updatedAt: Date.now() },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "callback result",
+        to: sessionKey,
+        idempotencyKey: "wechat-session-key-to",
+      },
+      { reqId: "wechat-session-key-to" },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      sessionId?: string;
+      sessionKey?: string;
+      to?: string;
+    }>();
+    expect(call.sessionId).toBe("wechat-session-id");
+    expect(call.sessionKey).toBe(sessionKey);
+    expect(call.to).toBeUndefined();
   });
 
   it("rolls stale gateway agent sessions even when updatedAt was recently touched", async () => {
@@ -4499,7 +4617,7 @@ describe("gateway agent handler", () => {
 
   it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-seam-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
 
@@ -4558,7 +4676,7 @@ describe("gateway agent handler", () => {
 
   it("logs a swallowed finalize error without blocking the background run", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-finalize-throw-" }, async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+      useTestStateDir(root);
       resetTaskRegistryForTests();
       primeMainAgentRun();
 
@@ -5134,6 +5252,79 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("uses the selected session target for bare /reset delivery when to is an agent session key", async () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    mockSessionResetSuccess({ reason: "reset", key: sessionKey, sessionId: "wechat-session-id" });
+    mocks.loadSessionEntry.mockImplementation((key: string) => ({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: key === sessionKey ? "wechat-session-id" : "main-session-id",
+        updatedAt: Date.now(),
+        lastChannel: "openclaw-weixin",
+        lastTo: "o9cq802hhmfc@im.wechat",
+      },
+      canonicalKey: key,
+    }));
+    mocks.getChannelPlugin.mockImplementation((channel: string) =>
+      channel === "openclaw-weixin"
+        ? {
+            id: "openclaw-weixin",
+            meta: { label: "WeChat" },
+            capabilities: { chatTypes: ["direct"] },
+            config: {},
+            outbound: {
+              resolveTarget: ({ to }: { to?: string }) =>
+                to === "o9cq802hhmfc@im.wechat"
+                  ? { ok: true, to }
+                  : { ok: false, error: new Error(`unexpected target: ${to ?? "none"}`) },
+            },
+          }
+        : undefined,
+    );
+    mocks.sendDurableMessageBatch.mockResolvedValue({
+      status: "sent",
+      results: [],
+      receipt: {},
+    });
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.agentCommand.mockClear();
+
+    const respond = await invokeAgent(
+      {
+        message: "/reset",
+        to: sessionKey,
+        deliver: true,
+        idempotencyKey: "test-idem-reset-deliver-session-key-to",
+      },
+      {
+        reqId: "4-reset-deliver-session-key-to",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        context: { ...makeContext(), deps: {} } as GatewayRequestContext,
+      },
+    );
+
+    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mockCallArg(respond)).toBe(true);
+    const result = expectRecordFields(mockCallArg(respond, 0, 1), {}).result as {
+      deliveryStatus?: { requested?: boolean; status?: string; succeeded?: boolean };
+      payloads?: Array<{ text?: string }>;
+    };
+    expect(result.payloads?.[0]?.text).toBe("✅ Session reset.");
+    expect(result.deliveryStatus).toMatchObject({
+      requested: true,
+      status: "sent",
+      succeeded: true,
+    });
+    expect(mocks.sendDurableMessageBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "openclaw-weixin",
+        to: "o9cq802hhmfc@im.wechat",
+      }),
+    );
+  });
+
   it("resets the selected global agent session for bare /new without startup context", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
@@ -5456,11 +5647,7 @@ describe("gateway agent handler", () => {
 
 describe("gateway agent handler chat.abort integration", () => {
   function resetIntegrationState() {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    envSnapshot.restore();
     resetDetachedTaskLifecycleRuntimeForTests();
     resetTaskRegistryForTests();
     mocks.agentCommand.mockReset();
@@ -5474,6 +5661,8 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.replaceSubagentRunAfterSteer.mockReset();
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
+    mocks.getChannelPlugin.mockReset();
+    mocks.sendDurableMessageBatch.mockReset();
     mocks.loadVoiceWakeRoutingConfig.mockReset();
     mocks.resolveVoiceWakeRouteByTrigger.mockReset();
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");

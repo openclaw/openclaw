@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.6.2",
+  "version": "2026.6.9",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/acpx",
-      "version": "2026.6.2",
+      "version": "2026.6.9",
       "dependencies": {
         "@agentclientprotocol/claude-agent-acp": "0.39.0",
         "@zed-industries/codex-acp": "0.15.0",
@@ -1548,9 +1548,9 @@
       }
     },
     "node_modules/hono": {
-      "version": "4.12.21",
-      "resolved": "https://registry.npmjs.org/hono/-/hono-4.12.21.tgz",
-      "integrity": "sha512-uV63apnb0kyPtAUwoWgaGh9HyIFcv8lgmzPZSiTBQAFOFGIzka5EZ1dZocmGnn0XdX0+XTqJ6Tqv7selMuGLRQ==",
+      "version": "4.12.25",
+      "resolved": "https://registry.npmjs.org/hono/-/hono-4.12.25.tgz",
+      "integrity": "sha512-2NFaIyNVgJmBs/ecmtGzlmluTFs5cHEWGTdu0t1HBwYzoGXOL5nUQBRMXsXWla5i4KkG//QMzVP88m1+I3fdAQ==",
       "license": "MIT",
       "engines": {
         "node": ">=16.9.0"

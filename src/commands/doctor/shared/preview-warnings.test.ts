@@ -67,6 +67,7 @@ vi.mock("../channel-capabilities.js", () => {
   };
   return {
     getDoctorChannelCapabilities: () => fallback,
+    resolveDoctorChannelAccountIds: () => undefined,
   };
 });
 

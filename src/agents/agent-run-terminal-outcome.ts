@@ -12,10 +12,10 @@ import {
 } from "./run-timeout-attribution.js";
 
 /** Wait status reported by agent run terminal wait paths. */
-export type AgentRunWaitStatus = "ok" | "error" | "timeout";
+type AgentRunWaitStatus = "ok" | "error" | "timeout";
 
 /** Normalized terminal reason for an agent run. */
-export type AgentRunTerminalReason =
+type AgentRunTerminalReason =
   | "completed"
   | "hard_timeout"
   | "timed_out"
@@ -38,7 +38,7 @@ export type AgentRunTerminalOutcome = {
 };
 
 /** Raw terminal input collected from run wait/liveness/timeout paths. */
-export type AgentRunTerminalInput = {
+type AgentRunTerminalInput = {
   status: AgentRunWaitStatus;
   error?: unknown;
   stopReason?: unknown;
@@ -50,7 +50,7 @@ export type AgentRunTerminalInput = {
 };
 
 /** Terminal wait input where pending/unknown status may still be present. */
-export type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
+type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
   status?: unknown;
 };
 
@@ -65,13 +65,13 @@ function asNonEmptyString(value: unknown): string | undefined {
 }
 
 /** True when a timeout phase should be treated as a hard agent-run timeout. */
-export function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPhase {
+function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPhase {
   const phase = normalizeAgentRunTimeoutPhase(value);
   return phase !== undefined && HARD_TIMEOUT_PHASES.has(phase);
 }
 
 /** True when an existing outcome is a hard timeout. */
-export function isHardAgentRunTimeoutOutcome(
+function isHardAgentRunTimeoutOutcome(
   outcome: AgentRunTerminalOutcome | undefined | null,
 ): boolean {
   return outcome?.reason === "hard_timeout";

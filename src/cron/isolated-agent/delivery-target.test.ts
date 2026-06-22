@@ -278,8 +278,11 @@ describe("resolveDeliveryTarget", () => {
 
     const result = await resolveLastTarget(makeCfg({ channels: { alpha: { allowFrom: [] } } }));
 
+    // #91613: a keyless implicit cron inheriting the shared agent-main bucket's lastTo is now
+    // refused (ok:false). The snapshot-read mechanism under test still runs — the resolver reads the
+    // session entry to make that determination — it just no longer drains to the inherited room.
     expect(result.channel).toBe("alpha");
-    expect(result.to).toBe("room-allowed");
+    expect(result.ok).toBe(false);
     expect(loadSessionEntry).toHaveBeenCalledWith({
       agentId: AGENT_ID,
       sessionKey: "agent:test:main",
@@ -450,6 +453,8 @@ describe("resolveDeliveryTarget", () => {
       channel: "forum",
       input: "123456789",
       accountId: undefined,
+      plugin: expect.objectContaining({ id: "forum" }),
+      preferredKind: undefined,
     });
   });
 
@@ -465,6 +470,7 @@ describe("resolveDeliveryTarget", () => {
               id: "alpha",
               outbound: createStubOutbound("Alpha"),
               messaging: { targetPrefixes: ["alpha"] },
+              capabilities: { chatTypes: ["group"] },
             }),
             directory: {
               listGroups: async () => [
@@ -501,6 +507,7 @@ describe("resolveDeliveryTarget", () => {
               id: "alpha",
               outbound: createStubOutbound("Alpha"),
               messaging: { targetPrefixes: ["alpha"] },
+              capabilities: { chatTypes: ["group"] },
             }),
             directory: {
               listGroups: async () => {
@@ -923,6 +930,8 @@ describe("resolveDeliveryTarget", () => {
       channel: "forum",
       input: "123456789",
       accountId: undefined,
+      plugin: expect.objectContaining({ id: "forum" }),
+      preferredKind: undefined,
     });
   });
 
@@ -1348,9 +1357,12 @@ describe("resolveDeliveryTarget", () => {
 
     const result = await resolveLastTarget(makeCfg({ bindings: [] }));
 
+    // #91613: channel=last still resolves the channel from the main session entry ("forum"), but a
+    // keyless implicit cron whose `to` is inherited from the shared agent-main bucket is now refused
+    // rather than drained to that cross-conversation room. (Successful channel=last delivery for a
+    // cron with an allowFrom reroute / its own identity is covered by the tests above.)
     expect(result.channel).toBe("forum");
-    expect(result.to).toBe("room:default");
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
   });
 
   it("parses explicit plugin topic targets into delivery threadId", async () => {

@@ -336,7 +336,7 @@ sleep 10
 }
 
 func TestPreviewCommandOutputFlattensAndTruncates(t *testing.T) {
-	input := "line one\n\nline   two\tline three " + strings.Repeat("x", 600)
+	input := "line one\n\nline   two\tline three " + strings.Repeat("x", 1200) + " final api error 429"
 	preview := previewCommandOutput(input, "")
 	if strings.Contains(preview, "\n") {
 		t.Fatalf("expected flattened whitespace, got %q", preview)
@@ -344,7 +344,22 @@ func TestPreviewCommandOutputFlattensAndTruncates(t *testing.T) {
 	if !strings.HasPrefix(preview, "line one line two line three ") {
 		t.Fatalf("unexpected preview prefix: %q", preview)
 	}
-	if !strings.HasSuffix(preview, "...") {
-		t.Fatalf("expected truncation suffix, got %q", preview)
+	if !strings.Contains(preview, "... [truncated] ...") {
+		t.Fatalf("expected truncation marker, got %q", preview)
+	}
+	if !strings.HasSuffix(preview, "final api error 429") {
+		t.Fatalf("expected retained error tail, got %q", preview)
+	}
+}
+
+func TestPreviewCommandOutputRetainsStderrTail(t *testing.T) {
+	stdout := "startup banner " + strings.Repeat("x", 1200)
+	stderr := "provider api error 429"
+	preview := previewCommandOutput(stdout, stderr)
+	if !strings.HasPrefix(preview, "startup banner ") {
+		t.Fatalf("unexpected preview prefix: %q", preview)
+	}
+	if !strings.HasSuffix(preview, stderr) {
+		t.Fatalf("expected retained stderr tail, got %q", preview)
 	}
 }

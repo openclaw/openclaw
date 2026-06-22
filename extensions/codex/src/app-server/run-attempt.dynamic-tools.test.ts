@@ -93,6 +93,11 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("thread/start");
+    await vi.waitFor(() =>
+      expect(onExecutionPhase).toHaveBeenCalledWith(
+        expect.objectContaining({ phase: "turn_accepted" }),
+      ),
+    );
 
     const toolResult = (await harness.handleServerRequest({
       id: "request-tool-1",

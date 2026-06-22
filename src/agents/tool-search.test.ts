@@ -829,7 +829,7 @@ describe("Tool Search", () => {
     expect(compacted.catalogToolCount).toBe(0);
   });
 
-  it("moves client tools into the same catalog when a session catalog exists", () => {
+  it("moves client tools into the same catalog and preserves client execution provenance", async () => {
     const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
     const config = {
       tools: {
@@ -855,6 +855,23 @@ describe("Tool Search", () => {
       .get("session:session-client")
       ?.entries.find((entry) => entry.id === "client:client:client_pick_file");
     expect(clientEntry?.source).toBe("client");
+
+    const executeTool = vi.fn(async () => jsonResult({ status: "ok" }));
+    const runtimeTools = createToolSearchTools({
+      sessionId: "session-client",
+      config: {},
+      executeTool,
+    });
+    await runtimeTools[3]?.execute("call-client", {
+      id: "client:client:client_pick_file",
+      args: { path: "/tmp/file" },
+    });
+
+    expect(mockCall(executeTool)[0]).toMatchObject({
+      source: "client",
+      sourceName: "client",
+      toolName: "client_pick_file",
+    });
   });
 
   it("keeps client tools visible in directory mode", () => {
@@ -1033,6 +1050,8 @@ describe("Tool Search", () => {
     const firstExecuteInput = mockCall(executeTool)[0] as {
       tool?: { name?: string };
       toolName?: string;
+      source?: string;
+      sourceName?: string;
       toolCallId?: string;
       parentToolCallId?: string;
       input?: unknown;
@@ -1041,6 +1060,8 @@ describe("Tool Search", () => {
     };
     expect(firstExecuteInput.tool?.name).toBe("fake_lifecycle");
     expect(firstExecuteInput.toolName).toBe("fake_lifecycle");
+    expect(firstExecuteInput.source).toBe("openclaw");
+    expect(firstExecuteInput.sourceName).toBe("fake-catalog");
     expect(firstExecuteInput.toolCallId).toBe("tool_search_code:call-lifecycle:fake_lifecycle:1");
     expect(firstExecuteInput.parentToolCallId).toBe("call-lifecycle");
     expect(firstExecuteInput.input).toEqual({ value: "ok" });
@@ -1061,6 +1082,8 @@ describe("Tool Search", () => {
     const secondExecuteInput = mockCall(executeTool, 1)[0] as {
       tool?: { name?: string };
       toolName?: string;
+      source?: string;
+      sourceName?: string;
       toolCallId?: string;
       parentToolCallId?: string;
       input?: unknown;
@@ -1069,6 +1092,8 @@ describe("Tool Search", () => {
     };
     expect(secondExecuteInput.tool?.name).toBe("fake_lifecycle");
     expect(secondExecuteInput.toolName).toBe("fake_lifecycle");
+    expect(secondExecuteInput.source).toBe("openclaw");
+    expect(secondExecuteInput.sourceName).toBe("fake-catalog");
     expect(secondExecuteInput.toolCallId).toBe(
       "tool_search_code:call-lifecycle-structured:fake_lifecycle:1",
     );

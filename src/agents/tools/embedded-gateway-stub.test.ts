@@ -124,9 +124,13 @@ describe("embedded gateway stub", () => {
       maxMessages: 200,
     });
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
-      "sess-main",
-      "/tmp/openclaw-sessions.json",
-      undefined,
+      {
+        agentId: "main",
+        sessionEntry: { sessionId: "sess-main" },
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      },
       {
         mode: "recent",
         maxMessages: 200,
@@ -187,9 +191,13 @@ describe("embedded gateway stub", () => {
       maxMessages: 1,
     });
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
-      "sess-main",
-      "/tmp/openclaw-sessions.json",
-      undefined,
+      {
+        agentId: "main",
+        sessionEntry: { sessionId: "sess-main" },
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      },
       {
         mode: "recent",
         maxMessages: 1,
@@ -217,9 +225,13 @@ describe("embedded gateway stub", () => {
       maxMessages: 2,
     });
     expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
-      "sess-main",
-      "/tmp/openclaw-sessions.json",
-      undefined,
+      {
+        agentId: "main",
+        sessionEntry: { sessionId: "sess-main" },
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      },
       {
         mode: "recent",
         maxMessages: 2,

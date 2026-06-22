@@ -13,6 +13,7 @@ type DiscoveredBeacon = Awaited<
 >[number];
 
 const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const formatGatewayClientRequestErrorJson = vi.fn();
 const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
   (port: number, opts?: unknown) => Promise<{ close: () => Promise<void> }>
@@ -55,6 +56,8 @@ vi.mock(
       url: "ws://127.0.0.1:18789",
     }),
     callGateway: (opts: unknown) => callGateway(opts),
+    formatGatewayClientRequestErrorJson: (error: unknown) =>
+      formatGatewayClientRequestErrorJson(error),
     formatGatewayTransportErrorJson: (error: unknown) => formatGatewayTransportErrorJson(error),
     isGatewayCredentialsRequiredError: () => false,
     randomIdempotencyKey: () => "rk_test",
@@ -156,6 +159,8 @@ describe("gateway-cli coverage", () => {
     startGatewayServer.mockClear();
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
+    formatGatewayClientRequestErrorJson.mockReset();
+    formatGatewayClientRequestErrorJson.mockReturnValue(null);
     formatGatewayTransportErrorJson.mockReset();
     formatGatewayTransportErrorJson.mockReturnValue(null);
   });
@@ -230,6 +235,34 @@ describe("gateway-cli coverage", () => {
     expect(formatGatewayTransportErrorJson).toHaveBeenCalledWith(error);
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
     expect(runtimeErrors.join("\n")).not.toContain("gateway closed");
+  });
+
+  it.each([
+    ["call", ["gateway", "call", "skills.bins", "--json"]],
+    ["usage cost", ["gateway", "usage-cost", "--json"]],
+    ["stability", ["gateway", "stability", "--json"]],
+  ])("writes JSON for gateway %s request failures in JSON mode", async (_label, args) => {
+    const error = Object.assign(new Error("unauthorized role: operator"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+    });
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_request_error",
+        code: "INVALID_REQUEST",
+        message: "unauthorized role: operator",
+        retryable: false,
+      },
+    };
+    callGateway.mockRejectedValueOnce(error);
+    formatGatewayClientRequestErrorJson.mockReturnValueOnce(payload);
+
+    await expectGatewayExit(args);
+
+    expect(formatGatewayClientRequestErrorJson).toHaveBeenCalledWith(error);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtimeErrors.join("\n")).not.toContain("unauthorized role");
   });
 
   it("prints the latest stability bundle without calling Gateway", async () => {

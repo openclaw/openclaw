@@ -64,7 +64,7 @@ Pinned iOS version `2026.4.10` maps to:
 - `apps/ios/fastlane/metadata/en-US/release_notes.txt`
   - generated from `apps/ios/CHANGELOG.md`
 - `apps/ios/build/Version.xcconfig`
-  - local gitignored build override generated per build or beta prep
+  - local gitignored build override generated per build or release prep
 
 ## Tooling surfaces
 
@@ -81,16 +81,22 @@ Pinned iOS version `2026.4.10` maps to:
 - `scripts/ios-pin-version.ts`
   - explicitly pins iOS to a chosen release version or the current gateway version
 
-### Build and beta flow
+### Build and App Store release flow
 
 - `scripts/ios-write-version-xcconfig.sh`
   - reads the pinned iOS version
   - writes the local numeric build override file in `apps/ios/build/Version.xcconfig`
-- `scripts/ios-beta-prepare.sh`
-  - prepares beta signing and bundle settings against the pinned iOS version
+- `scripts/ios-release-prepare.sh`
+  - prepares App Store distribution signing and bundle settings against the pinned iOS version
+- `scripts/ios-release-signing.mjs`
+  - validates the checked-in App Store signing manifest
+  - renders the temporary release xcconfig profile pins
 - `apps/ios/fastlane/Fastfile`
   - resolves version metadata from the pinned iOS helper
-  - increments TestFlight build numbers for the pinned short version
+  - creates or verifies Developer Portal bundle IDs/services through Fastlane `produce`
+  - syncs encrypted App Store signing assets with Fastlane `match`
+  - increments App Store Connect build numbers for the pinned short version
+  - uploads screenshots and release notes before archiving a release build
 
 ## Release-note resolution order
 
@@ -118,7 +124,7 @@ pnpm ios:version:pin -- --version 2026.4.10
 
 1. keep `apps/ios/version.json` pinned to the current TestFlight train version
 2. update `apps/ios/CHANGELOG.md` under `## Unreleased` while iterating
-3. upload more betas with the usual flow
+3. upload more App Store Connect builds with `pnpm ios:release:upload`
 4. let Fastlane increment only `CFBundleVersion`
 
 This keeps the TestFlight version stable while review is in flight.
@@ -139,12 +145,15 @@ pnpm ios:version:pin -- --from-gateway
    - `apps/ios/fastlane/metadata/en-US/release_notes.txt`
 3. update `apps/ios/CHANGELOG.md` for the new release if needed
 4. run `pnpm ios:version:sync` again if the changelog changed
-5. submit the first TestFlight build for that newly pinned version
+5. upload the first App Store Connect build for that newly pinned version
 6. keep iterating only by build number until the release candidate is ready
-7. release that reviewed TestFlight build to production
+7. manually submit the reviewed build for App Review in App Store Connect
+8. release the approved build to production
 
 ## Important invariant
 
 Fastlane and Xcode should consume only the pinned iOS version from `apps/ios/version.json`.
 
 Changing `package.json.version` alone must not change the iOS app version until a maintainer explicitly runs the pin step.
+
+App Review submission must remain manual. Automation may create/update the editable App Store version, upload screenshots, upload release notes, and upload builds, but it should not submit a build for review.

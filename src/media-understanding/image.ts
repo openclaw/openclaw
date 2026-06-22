@@ -1,5 +1,6 @@
 // Model-backed image understanding runtime for providers without a native media
 // provider hook.
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
@@ -298,6 +299,7 @@ function shouldPlaceImagePromptInUserContent(model: Model): boolean {
   });
   return (
     capabilities.endpointClass === "openrouter" ||
+    capabilities.endpointClass === "modelstudio-native" ||
     (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
   );
 }
@@ -429,10 +431,7 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
 }
 
 function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined) {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return undefined;
-  }
-  return Math.floor(timeoutMs);
+  return clampPositiveTimerTimeoutMs(timeoutMs);
 }
 
 function buildImageDescriptionTimeoutError(params: {

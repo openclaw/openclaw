@@ -22,6 +22,20 @@ struct PushBuildConfig {
     let apnsEnvironment: PushAPNsEnvironment
 
     static let current = PushBuildConfig()
+    static let openClawHostedRelayHost = "ios-push-relay.openclaw.ai"
+
+    var usesOpenClawHostedRelay: Bool {
+        guard self.transport == .relay, self.distribution == .official else { return false }
+        guard let relayBaseURL = self.relayBaseURL,
+              let components = URLComponents(url: relayBaseURL, resolvingAgainstBaseURL: false)
+        else {
+            return false
+        }
+        return components.scheme?.lowercased() == "https"
+            && components.host?.lowercased() == Self.openClawHostedRelayHost
+            && components.user == nil
+            && components.password == nil
+    }
 
     init(bundle: Bundle = .main) {
         self.transport = Self.readEnum(
@@ -37,10 +51,6 @@ struct PushBuildConfig {
             key: "OpenClawPushAPNsEnvironment",
             fallback: Self.defaultAPNsEnvironment)
         self.relayBaseURL = Self.readURL(bundle: bundle, key: "OpenClawPushRelayBaseURL")
-    }
-
-    var usesRelay: Bool {
-        self.transport == .relay
     }
 
     private static func readURL(bundle: Bundle, key: String) -> URL? {

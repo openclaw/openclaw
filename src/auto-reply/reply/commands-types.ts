@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Shared command handler context and result contracts. */
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -15,6 +16,7 @@ export type CommandContext = {
   surface: string;
   channel: string;
   channelId?: ChannelId;
+  accountId?: string;
   ownerList: string[];
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;
@@ -56,7 +58,7 @@ export type HandleCommandsParams = {
   opts?: GetReplyOptions;
   defaultGroupActivation: () => "always" | "mention";
   resolvedThinkLevel?: ThinkLevel;
-  resolvedFastMode?: boolean;
+  resolvedFastMode?: FastMode;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;

@@ -41,12 +41,23 @@ describe("markdownToWhatsApp", () => {
     ["returns empty string for empty input", "", ""],
     ["returns plain text unchanged", "no formatting here", "no formatting here"],
     ["handles bold inside a sentence", "This is **very** important", "This is *very* important"],
+    // Regression: a digit immediately after an inline-code span must not be
+    // absorbed into the placeholder index (which previously dropped both).
+    ["preserves inline code immediately followed by a digit", "`a`5", "`a`5"],
+    ["preserves inline code followed by a number", "`status`200 done", "`status`200 done"],
+    ["preserves two adjacent code+digit spans", "`x`1 and `y`2", "`x`1 and `y`2"],
+    ["preserves inline code with a space before a digit", "`a` 5", "`a` 5"],
   ] as const)("handles markdown-to-whatsapp conversion: %s", (_name, input, expected) => {
     expect(markdownToWhatsApp(input)).toBe(expected);
   });
 
   it("preserves fenced code blocks", () => {
     const input = "```\nconst x = **bold**;\n```";
+    expect(markdownToWhatsApp(input)).toBe(input);
+  });
+
+  it("preserves a fenced code block immediately followed by a digit", () => {
+    const input = "```code```7 done";
     expect(markdownToWhatsApp(input)).toBe(input);
   });
 

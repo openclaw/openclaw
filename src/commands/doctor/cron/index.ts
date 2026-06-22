@@ -216,7 +216,7 @@ async function applyLegacyCronStoreRepair(params: {
 export async function repairLegacyCronStoreWithoutPrompt(params: {
   cfg: OpenClawConfig;
 }): Promise<LegacyCronRepairResult> {
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+  const storePath = resolveCronJobsStorePath(normalizeOptionalString(params.cfg.cron?.store));
   let state: LegacyCronRepairState | null;
   try {
     state = await loadLegacyCronRepairState({

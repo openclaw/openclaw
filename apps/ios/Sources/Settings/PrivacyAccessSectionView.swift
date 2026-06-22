@@ -121,13 +121,18 @@ struct PrivacyAccessSectionView: View {
         switch self.contactsStatus {
         case .notDetermined:
             Task {
-                _ = await PermissionRequestBridge.awaitRequest { completion in
+                let granted = await PermissionRequestBridge.awaitRequest { completion in
                     let store = CNContactStore()
                     store.requestAccess(for: .contacts) { granted, _ in
                         completion(granted)
                     }
                 }
-                await MainActor.run { self.refreshAll() }
+                await MainActor.run {
+                    self.refreshAll()
+                    if granted {
+                        self.contactsStatus = .authorized
+                    }
+                }
             }
         case .denied, .restricted:
             self.openSettings()
@@ -164,8 +169,13 @@ struct PrivacyAccessSectionView: View {
         switch self.calendarStatus {
         case .notDetermined:
             Task {
-                _ = await self.requestCalendarWriteOnly()
-                await MainActor.run { self.refreshAll() }
+                let granted = await self.requestCalendarWriteOnly()
+                await MainActor.run {
+                    self.refreshAll()
+                    if granted {
+                        self.calendarStatus = .writeOnly
+                    }
+                }
             }
         case .denied, .restricted:
             self.openSettings()
@@ -206,8 +216,13 @@ struct PrivacyAccessSectionView: View {
         switch self.calendarStatus {
         case .notDetermined, .writeOnly:
             Task {
-                _ = await self.requestCalendarFull()
-                await MainActor.run { self.refreshAll() }
+                let granted = await self.requestCalendarFull()
+                await MainActor.run {
+                    self.refreshAll()
+                    if granted {
+                        self.calendarStatus = .fullAccess
+                    }
+                }
             }
         case .denied, .restricted:
             self.openSettings()
@@ -248,8 +263,13 @@ struct PrivacyAccessSectionView: View {
         switch self.remindersStatus {
         case .notDetermined, .writeOnly:
             Task {
-                _ = await self.requestRemindersFull()
-                await MainActor.run { self.refreshAll() }
+                let granted = await self.requestRemindersFull()
+                await MainActor.run {
+                    self.refreshAll()
+                    if granted {
+                        self.remindersStatus = .fullAccess
+                    }
+                }
             }
         case .denied, .restricted:
             self.openSettings()

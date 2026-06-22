@@ -51,6 +51,7 @@ import {
   convertDiscordPcm48kStereoToRealtimePcm24kMono,
   convertRealtimePcm24kMonoToDiscordPcm48kStereo,
 } from "./audio.js";
+import { formatVoiceLogPreview } from "./log-preview.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
 import {
@@ -81,7 +82,6 @@ const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_LIMIT = 16;
 const DISCORD_REALTIME_RECENT_AGENT_PROXY_CONSULT_TTL_MS = 15_000;
 const DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS = 10_000;
 const DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS = 10_000;
-const DISCORD_REALTIME_LOG_PREVIEW_CHARS = 500;
 const DISCORD_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 const DISCORD_REALTIME_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const DISCORD_REALTIME_DUPLICATE_ERROR_SUPPRESS_MS = 60_000;
@@ -138,14 +138,6 @@ type AgentProxyConsultState = {
 };
 
 type AgentProxyConsultHandle = RealtimeVoiceForcedConsultHandle<AgentProxyConsultState>;
-
-function formatRealtimeLogPreview(text: string): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  if (oneLine.length <= DISCORD_REALTIME_LOG_PREVIEW_CHARS) {
-    return oneLine;
-  }
-  return `${oneLine.slice(0, DISCORD_REALTIME_LOG_PREVIEW_CHARS)}...`;
-}
 
 function formatRealtimeInterruptionLog(event: RealtimeVoiceBridgeEvent): string | undefined {
   const detail = event.detail ? ` ${event.detail}` : "";
@@ -522,7 +514,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       onTranscript: (role, text, isFinal) => {
         if (isFinal && text.trim()) {
           logger.info(
-            `discord voice: realtime ${role} transcript (${text.length} chars): ${formatRealtimeLogPreview(text)}`,
+            `discord voice: realtime ${role} transcript (${text.length} chars): ${formatVoiceLogPreview(text)}`,
           );
         }
         if (isFinal && role === "assistant") {
@@ -1124,9 +1116,19 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       session.submitToolResult(callId, { text: exactSpeechText });
       return;
     }
-    const consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
+    let consultMessage: string;
+    try {
+      consultMessage = buildRealtimeVoiceAgentConsultChatMessage(event.args);
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      logger.warn(
+        `discord voice: realtime consult rejected malformed args call=${callId || "unknown"}: ${message}`,
+      );
+      session.submitToolResult(callId, { error: message });
+      return;
+    }
     logger.info(
-      `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatRealtimeLogPreview(consultMessage)}`,
+      `discord voice: realtime consult requested call=${callId || "unknown"} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} question=${formatVoiceLogPreview(consultMessage)}`,
     );
     const nativeConsult = this.forcedConsults.recordNativeConsult(event.args, callId);
     const pendingConsult = nativeConsult.kind === "pending" ? nativeConsult.handle : undefined;
@@ -1182,7 +1184,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     void promise
       .then((text) => {
         logger.info(
-          `discord voice: realtime consult answer (${text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatRealtimeLogPreview(text)}`,
+          `discord voice: realtime consult answer (${text.length} chars) voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId} speaker=${context.speakerLabel} owner=${context.senderIsOwner}: ${formatVoiceLogPreview(text)}`,
         );
         session.submitToolResult(callId, { text });
       })
@@ -1410,7 +1412,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (skipReason) {
       const context = this.consumePendingSpeakerContext();
       logger.info(
-        `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length} speaker=${context?.speakerLabel ?? "unknown"} transcript=${formatRealtimeLogPreview(question)}`,
+        `discord voice: realtime forced agent consult skipped reason=${skipReason} chars=${question.length} speaker=${context?.speakerLabel ?? "unknown"} transcript=${formatVoiceLogPreview(question)}`,
       );
       return undefined;
     }
@@ -1476,7 +1478,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       this.setRecentAgentProxyConsultPromise(pending, promise);
       const text = await promise;
       logger.info(
-        `discord voice: realtime forced agent consult answer (${text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatRealtimeLogPreview(text)}`,
+        `discord voice: realtime forced agent consult answer (${text.length} chars) elapsedMs=${Date.now() - startedAt} voiceSession=${this.params.entry.voiceSessionKey} supervisorSession=${this.params.entry.route.sessionKey} agent=${this.params.entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
       );
       if (text.trim()) {
         this.enqueueExactSpeechMessage(text);

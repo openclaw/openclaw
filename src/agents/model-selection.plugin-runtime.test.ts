@@ -230,4 +230,36 @@ describe("model-selection plugin runtime normalization", () => {
     expect(state.model).toBe("custom-modern-model");
     expect(state.resetModelOverride).toBe(false);
   });
+
+  it("forwards manifestPlugins to the runtime normalization call so it can skip the slot-or-load disk walk", async () => {
+    normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
+    const preparedPlugins = [
+      {
+        modelIdNormalization: {
+          providers: {
+            custom: { prefixWhenBare: "prepared" },
+          },
+        },
+      },
+    ];
+    const { normalizeModelRef } = await import("./model-selection-normalize.js");
+    normalizeModelRef("custom", "my-model", { manifestPlugins: preparedPlugins });
+    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "custom",
+        plugins: preparedPlugins,
+      }),
+    );
+  });
+
+  it("omits plugins from the runtime call when no manifestPlugins are prepared (preserves current behavior)", async () => {
+    normalizeProviderModelIdWithPluginMock.mockReturnValue(undefined);
+    const { normalizeModelRef } = await import("./model-selection-normalize.js");
+    normalizeModelRef("custom", "my-model");
+    const callArgs = normalizeProviderModelIdWithPluginMock.mock.calls[0]?.[0] as
+      | { plugins?: unknown }
+      | undefined;
+    expect(callArgs).toBeDefined();
+    expect(callArgs?.plugins).toBeUndefined();
+  });
 });

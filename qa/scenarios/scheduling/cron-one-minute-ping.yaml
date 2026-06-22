@@ -6,6 +6,8 @@ scenario:
   coverage:
     primary:
       - scheduling.cron
+      - scheduling.cron-rpcs
+      - scheduling.chat-announce-delivery
     secondary:
       - channels.qa-channel
   objective: Verify the agent can schedule a cron reminder one minute in the future and receive the follow-up in the QA channel.

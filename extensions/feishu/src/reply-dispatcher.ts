@@ -15,6 +15,7 @@ import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
+import type { MentionTarget } from "./mention-target.types.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
@@ -31,6 +32,23 @@ import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } 
 /** Detect if text contains markdown elements that benefit from card rendering */
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
+}
+
+function mergeStreamingFinalText(
+  previousText: string,
+  nextText: string,
+  appendError: boolean,
+): string {
+  if (!appendError || !previousText) {
+    return nextText;
+  }
+  if (nextText.startsWith(previousText)) {
+    return nextText;
+  }
+  if (previousText.endsWith(`\n\n${nextText}`)) {
+    return previousText;
+  }
+  return `${previousText}\n\n${nextText}`;
 }
 
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
@@ -129,6 +147,7 @@ type CreateFeishuReplyDispatcherParams = {
   rootId?: string;
   accountId?: string;
   identity?: OutboundIdentity;
+  mentionTargets?: MentionTarget[];
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -149,6 +168,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId,
     accountId,
     identity,
+    mentionTargets,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const typingTargetMessageId = explicitTypingTargetMessageId?.trim() || replyToMessageId;
@@ -246,6 +266,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let statusLine = "";
   let snapshotBaseText = "";
   let lastSnapshotTextLength = 0;
+  // Partial previews are replaceable; only committed final text may precede an error notice.
+  let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
@@ -400,6 +422,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     statusLine = "";
     snapshotBaseText = "";
     lastSnapshotTextLength = 0;
+    hasStreamingFinalText = false;
   };
 
   const closeStreaming = async (options?: { markClosedForReply?: boolean }) => {
@@ -625,7 +648,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const payloadText =
           payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
         const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
-        const text = reply.text;
+        const text =
+          info?.kind === "final"
+            ? mergeStreamingFinalText(
+                streamText,
+                reply.text,
+                payload.isError === true && hasStreamingFinalText,
+              )
+            : reply.text;
         const hasText = reply.hasText;
         const hasMedia = reply.hasMedia;
         const hasVoiceMedia =
@@ -705,7 +735,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
             }
             if (info?.kind === "final") {
+              // Final payloads can be cumulative snapshots or independent
+              // notices. Preserve both when the latter arrives after an answer.
               streamText = text;
+              hasStreamingFinalText = true;
               snapshotBaseText = "";
               lastSnapshotTextLength = text.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
@@ -743,7 +776,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text,
               useCard: false,
               infoKind: info?.kind,
-              sendChunk: async ({ chunk }) => {
+              sendChunk: async ({ chunk, isFirst }) => {
                 await sendMessageFeishu({
                   cfg,
                   to: chatId,
@@ -752,6 +785,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   replyInThread: effectiveReplyInThread,
                   allowTopLevelReplyFallback,
                   accountId,
+                  ...(info?.kind === "final" && isFirst && mentionTargets?.length
+                    ? { mentions: mentionTargets }
+                    : {}),
                 });
               },
             });

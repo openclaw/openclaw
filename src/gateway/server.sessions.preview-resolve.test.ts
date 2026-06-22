@@ -11,6 +11,7 @@ import {
   sessionStoreEntry,
   getMainPreviewEntry,
   directSessionReq,
+  createLinearSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -124,9 +125,10 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await fs.writeFile(
     transcriptPath,
-    `${Array.from({ length: 8 })
-      .map((_, idx) => JSON.stringify({ role: "assistant", content: `line ${idx}` }))
-      .join("\n")}\n`,
+    createLinearSessionTranscript(
+      sessionId,
+      Array.from({ length: 8 }, (_, index) => `line ${index}`),
+    ),
     "utf-8",
   );
 

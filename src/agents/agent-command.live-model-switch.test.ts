@@ -998,10 +998,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       meta: { durationMs: 0, stopReason: "end_turn" },
     }));
     state.persistCliTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+      async (params: { sessionEntry?: unknown }) => ({
+        kind: "persisted",
+        sessionEntry: params.sessionEntry,
+      }),
     );
     state.persistAcpTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+      async (params: { sessionEntry?: unknown }) => ({
+        kind: "persisted",
+        sessionEntry: params.sessionEntry,
+      }),
     );
     state.runCliTurnCompactionLifecycleMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
@@ -1120,7 +1126,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
     expect(lifecycleFinishingCalls.length).toBeGreaterThanOrEqual(1);
     expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
-      deferTerminalLifecycleEnd: true,
+      deferTerminalLifecycle: true,
     });
     const firstFinishingIndex = state.emitAgentEventMock.mock.calls.findIndex((call: unknown[]) => {
       const arg = call[0] as { stream?: string; data?: { phase?: string } };
@@ -1138,6 +1144,37 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(deliveryOrder).toBeLessThan(
       state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
     );
+  });
+
+  it("keeps the fast mode cutoff timestamp across live model switch retries", async () => {
+    let invocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      invocation++;
+      const result = await params.run(params.provider, params.model);
+      if (invocation === 1) {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+        });
+      }
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    const firstAttempt = mockCallArg(state.runAgentAttemptMock, 0) as {
+      fastModeStartedAtMs?: number;
+    };
+    const secondAttempt = mockCallArg(state.runAgentAttemptMock, 1) as {
+      fastModeStartedAtMs?: number;
+    };
+    expect(firstAttempt.fastModeStartedAtMs).toBe(secondAttempt.fastModeStartedAtMs);
   });
 
   it("uses an embedded queue rebound generation for terminal lifecycle and cleanup", async () => {
@@ -1244,7 +1281,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.persistAcpTurnTranscriptMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => {
         controller.abort(createAgentRunRestartAbortError());
-        return params.sessionEntry;
+        return { kind: "persisted", sessionEntry: params.sessionEntry };
       },
     );
 
@@ -1792,7 +1829,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.updateSessionStoreAfterAgentRunMock.mockImplementation(async () => {
       state.sessionStoreMock = { "agent:main:main": rotatedEntry };
     });
-    state.persistCliTurnTranscriptMock.mockResolvedValue(rotatedEntry);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: rotatedEntry,
+    });
     state.runCliTurnCompactionLifecycleMock.mockResolvedValue(rotatedEntry);
 
     await runBasicAgentCommand();
@@ -1811,6 +1851,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
       expectedSessionIdForFreshDelivery: "rotated-session",
     });
+  });
+
+  it("skips post-run persistence after the session is deleted", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "session-rebound",
+      sessionEntry: undefined,
+    });
+
+    await runBasicAgentCommand();
+
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not treat backend CLI session id as OpenClaw session identity", async () => {
@@ -3052,6 +3119,136 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       model: "claude",
       reason: "format",
     });
+  });
+
+  it("emits a failure lifecycle after delivering a preserved exhausted result", async () => {
+    const exhaustedResult = {
+      payloads: [{ text: "Terminal tool summary", isError: true }],
+      meta: {
+        durationMs: 100,
+        aborted: false,
+        stopReason: "end_turn",
+        error: {
+          kind: "incomplete_turn",
+          message: "All fallback candidates ended incomplete",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+        agentMeta: { provider: "anthropic", model: "claude" },
+      },
+    };
+    state.runAgentAttemptMock.mockImplementationOnce(async (attemptParams: unknown) => {
+      const params = attemptParams as {
+        deferTerminalLifecycle?: boolean;
+        onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+      };
+      expect(params.deferTerminalLifecycle).toBe(true);
+      params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "All fallback candidates ended incomplete",
+        },
+      });
+      return exhaustedResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "exhausted",
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [
+        {
+          provider: "anthropic",
+          model: "claude",
+          error: "All fallback candidates ended incomplete",
+          reason: "format",
+        },
+      ],
+    }));
+
+    await runBasicAgentCommand();
+
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    const lifecycleEvents = state.emitAgentEventMock.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents.some((event) => event.data?.phase === "finishing")).toBe(false);
+    expect(lifecycleEvents.some((event) => event.data?.phase === "end")).toBe(false);
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            error: "All fallback candidates ended incomplete",
+            fallbackExhaustedFailure: true,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("emits a failure lifecycle for completed non-fallbackable error results", async () => {
+    const terminalErrorResult = {
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: {
+        durationMs: 100,
+        aborted: false,
+        stopReason: "end_turn",
+        replayInvalid: true,
+        error: {
+          kind: "incomplete_turn",
+          message: "raw provider detail should stay private",
+          fallbackSafe: false,
+        },
+        agentMeta: { provider: "anthropic", model: "claude" },
+      },
+    };
+    state.runAgentAttemptMock.mockImplementationOnce(async (attemptParams: unknown) => {
+      const params = attemptParams as {
+        onAgentEvent?: (event: { stream: string; data: Record<string, unknown> }) => void;
+      };
+      params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "Command may have changed state",
+          replayInvalid: true,
+        },
+      });
+      return terminalErrorResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed",
+      result: await params.run("anthropic", "claude"),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+
+    await runBasicAgentCommand();
+
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    const lifecycleEvents = state.emitAgentEventMock.mock.calls
+      .map((call) => call[0] as { stream?: string; data?: Record<string, unknown> })
+      .filter((event) => event.stream === "lifecycle");
+    expect(lifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            error: "Command may have changed state",
+            replayInvalid: true,
+          }),
+        }),
+      ]),
+    );
+    expect(
+      lifecycleEvents.some(
+        (event) => event.data?.phase === "end" || event.data?.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(lifecycleEvents)).not.toContain("raw provider detail");
   });
 
   it("updates hasSessionModelOverride for fallback resolution after switch", async () => {

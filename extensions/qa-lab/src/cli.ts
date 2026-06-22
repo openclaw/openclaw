@@ -40,12 +40,16 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     qaProfile?: QaProfileCommandOptions["profile"];
     surface?: QaProfileCommandOptions["surface"];
     category?: QaProfileCommandOptions["category"];
+    evidenceMode?: QaProfileCommandOptions["evidenceMode"];
+    excludeTestExecutionEvidence?: boolean;
   };
 
 const QA_RUN_PROFILE_ONLY_OPTIONS = [
   { optionName: "outputDir", flag: "--output-dir" },
   { optionName: "surface", flag: "--surface" },
   { optionName: "category", flag: "--category" },
+  { optionName: "evidenceMode", flag: "--evidence-mode" },
+  { optionName: "excludeTestExecutionEvidence", flag: "--exclude-test-execution-evidence" },
   { optionName: "transport", flag: "--transport" },
   { optionName: "providerMode", flag: "--provider-mode" },
   { optionName: "model", flag: "--model" },
@@ -95,6 +99,29 @@ function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
     throw invalidQaCliArgument(`${flag} must be a positive integer.`);
   }
   return parsed;
+}
+
+function parseQaEvidenceModeOption(value: string): QaProfileCommandOptions["evidenceMode"] {
+  const evidenceMode = value.trim();
+  if (evidenceMode === "full" || evidenceMode === "slim") {
+    return evidenceMode;
+  }
+  if (evidenceMode === "compact") {
+    return "slim";
+  }
+  throw invalidQaCliArgument("--evidence-mode must be one of full, slim.");
+}
+
+function resolveQaEvidenceModeOptions(opts: QaRunCliOptions) {
+  if (opts.excludeTestExecutionEvidence !== true) {
+    return opts.evidenceMode;
+  }
+  if (opts.evidenceMode === "full") {
+    throw invalidQaCliArgument(
+      "--exclude-test-execution-evidence conflicts with --evidence-mode full.",
+    );
+  }
+  return "slim";
 }
 
 function collectCliSuppliedQaRunFlags(
@@ -360,7 +387,8 @@ export function registerQaLabCli(program: Command) {
     .description("Run private QA automation flows and launch the QA debugger");
   registerMantisCli(qa);
 
-  qa.command("run")
+  const qaRun = qa
+    .command("run")
     .description("Run the bundled QA self-check and write a Markdown report")
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output <path>", "Report output path")
@@ -368,6 +396,18 @@ export function registerQaLabCli(program: Command) {
     .option("--qa-profile <id>", "Run the QA profile from taxonomy.yaml")
     .option("--surface <id>", "Limit --qa-profile to a taxonomy surface id")
     .option("--category <id>", "Limit --qa-profile to a taxonomy category id")
+    .option(
+      "--evidence-mode <mode>",
+      "Set profile qa-evidence.json mode: full or slim",
+      parseQaEvidenceModeOption,
+    )
+    .option(
+      "--exclude-test-execution-evidence",
+      "Deprecated alias for --evidence-mode slim",
+      false,
+    );
+  qaRun.options.at(-1)?.hideHelp();
+  qaRun
     .option("--transport <id>", "QA transport id", "qa-channel")
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
@@ -380,31 +420,32 @@ export function registerQaLabCli(program: Command) {
       "Write artifacts without setting a failing exit code when scenarios fail",
       false,
     )
-    .option("--fast", "Enable provider fast mode where supported", false)
-    .action(async (opts: QaRunCliOptions, command: Command) => {
-      validateQaRunMode(opts, command);
-      if (opts.qaProfile?.trim()) {
-        await runQaProfile({
-          repoRoot: opts.repoRoot,
-          outputDir: opts.outputDir,
-          profile: opts.qaProfile,
-          surface: opts.surface,
-          category: opts.category,
-          transportId: opts.transport,
-          providerMode: opts.providerMode,
-          primaryModel: opts.model,
-          alternateModel: opts.altModel,
-          concurrency: opts.concurrency,
-          allowFailures: opts.allowFailures,
-          fastMode: opts.fast,
-        });
-        return;
-      }
-      await runQaSelfCheck({
+    .option("--fast", "Enable provider fast mode where supported", false);
+  qaRun.action(async (opts: QaRunCliOptions, command: Command) => {
+    validateQaRunMode(opts, command);
+    if (opts.qaProfile?.trim()) {
+      await runQaProfile({
         repoRoot: opts.repoRoot,
-        output: opts.output,
+        outputDir: opts.outputDir,
+        profile: opts.qaProfile,
+        surface: opts.surface,
+        category: opts.category,
+        evidenceMode: resolveQaEvidenceModeOptions(opts),
+        transportId: opts.transport,
+        providerMode: opts.providerMode,
+        primaryModel: opts.model,
+        alternateModel: opts.altModel,
+        concurrency: opts.concurrency,
+        allowFailures: opts.allowFailures,
+        fastMode: opts.fast,
       });
+      return;
+    }
+    await runQaSelfCheck({
+      repoRoot: opts.repoRoot,
+      output: opts.output,
     });
+  });
 
   qa.command("suite")
     .description("Run repo-backed QA scenarios against the QA gateway lane")

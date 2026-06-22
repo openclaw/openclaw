@@ -765,6 +765,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               api,
               executeParams: p,
               defaultAccountId,
+              requiredTool: { family: "drive", label: "Drive" },
             });
             switch (p.action) {
               case "list":

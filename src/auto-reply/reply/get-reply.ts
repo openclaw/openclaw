@@ -47,7 +47,7 @@ import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slas
 import { runPreparedReply } from "./get-reply-run.js";
 import type { ReplySessionBinding } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
-import { hasInboundMedia } from "./inbound-media.js";
+import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -178,7 +178,7 @@ async function applyMediaUnderstandingIfNeeded(params: {
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
 }): Promise<boolean> {
-  if (!hasInboundMedia(params.ctx)) {
+  if (!hasInboundMediaForUnderstanding(params.ctx)) {
     return false;
   }
   try {
@@ -440,7 +440,7 @@ export async function getReplyFromConfig(
       }),
     );
   }
-  if (!isFastTestEnv && hasInboundMedia(finalized)) {
+  if (!isFastTestEnv && hasInboundMediaForUnderstanding(finalized)) {
     await traceGetReplyPhase("reply.apply_media_understanding", () =>
       applyMediaUnderstandingIfNeeded({
         ctx: finalized,
@@ -529,13 +529,10 @@ export async function getReplyFromConfig(
           sessionStore[sessionKey] = sessionEntry;
         }
         if (sessionKey && storePath) {
-          const { applySessionStoreEntryPatch } = await import("../../config/sessions.js");
-          await applySessionStoreEntryPatch({
-            storePath,
-            sessionKey,
-            skipMaintenance: true,
-            takeCacheOwnership: true,
-            patch: {
+          const { updateSessionEntry } = await import("../../config/sessions/session-accessor.js");
+          await updateSessionEntry(
+            { storePath, sessionKey },
+            () => ({
               pendingFinalDelivery: undefined,
               pendingFinalDeliveryText: undefined,
               pendingFinalDeliveryCreatedAt: undefined,
@@ -543,8 +540,12 @@ export async function getReplyFromConfig(
               pendingFinalDeliveryAttemptCount: undefined,
               pendingFinalDeliveryLastError: undefined,
               pendingFinalDeliveryContext: undefined,
+            }),
+            {
+              skipMaintenance: true,
+              takeCacheOwnership: true,
             },
-          });
+          );
         }
       }
     }
@@ -781,6 +782,10 @@ export async function getReplyFromConfig(
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
+    resolvedFastMode,
+    resolvedFastModeAutoOnSeconds,
+    resolvedFastModeOverride,
+    resolvedFastModeAutoOnSecondsOverride,
     resolvedVerboseLevel,
     resolvedElevatedLevel,
     execOverrides,
@@ -1000,6 +1005,10 @@ export async function getReplyFromConfig(
       directives,
       defaultActivation,
       resolvedThinkLevel,
+      resolvedFastMode,
+      resolvedFastModeAutoOnSeconds,
+      resolvedFastModeOverride,
+      resolvedFastModeAutoOnSecondsOverride,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,

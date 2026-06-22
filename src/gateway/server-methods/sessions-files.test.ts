@@ -22,6 +22,15 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
+  };
+});
+
+vi.mock("../session-transcript-readers.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(
+    "../session-transcript-readers.js",
+  );
+  return {
+    ...actual,
     visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync,
   };
 });
@@ -108,18 +117,16 @@ describe("sessions.files RPC handlers", () => {
         spawnedCwd: workspaceRoot,
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        [
-          assistantToolCall("edit", { path: "ui/chat.ts" }),
-          assistantToolCall("read", { path: "src/readme.md" }),
-          assistantToolCall("apply_patch", {
-            input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
-          }),
-        ].forEach((message, index) => visit(message, index + 1));
-        return 3;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      [
+        assistantToolCall("edit", { path: "ui/chat.ts" }),
+        assistantToolCall("read", { path: "src/readme.md" }),
+        assistantToolCall("apply_patch", {
+          input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
+        }),
+      ].forEach((message, index) => visit(message, index + 1));
+      return 3;
+    });
   });
 
   afterEach(() => {
@@ -154,29 +161,27 @@ describe("sessions.files RPC handlers", () => {
   });
 
   it("collects touched files from existing transcript tool-call spellings", async () => {
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        visit(
-          {
-            role: "assistant",
-            content: [
-              { type: "tool_use", name: "read", input: { path: "src/readme.md" } },
-              { type: "toolcall", name: "edit", arguments: { path: "ui/vite.config.ts" } },
-              { type: "tool_use", name: "read", args: { path: "ui/chat.ts" } },
-              {
-                type: "tool_call",
-                name: "apply_patch",
-                input: {
-                  input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
-                },
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", name: "read", input: { path: "src/readme.md" } },
+            { type: "toolcall", name: "edit", arguments: { path: "ui/vite.config.ts" } },
+            { type: "tool_use", name: "read", args: { path: "ui/chat.ts" } },
+            {
+              type: "tool_call",
+              name: "apply_patch",
+              input: {
+                input: "*** Begin Patch\n*** Update File: package.json\n*** End Patch\n",
               },
-            ],
-          },
-          1,
-        );
-        return 1;
-      },
-    );
+            },
+          ],
+        },
+        1,
+      );
+      return 1;
+    });
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
@@ -193,21 +198,19 @@ describe("sessions.files RPC handlers", () => {
   });
 
   it("collects changed files from structured apply_patch changes", async () => {
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        visit(
-          assistantToolCall("apply_patch", {
-            changes: [
-              { path: "ui/chat.ts", kind: "update" },
-              { path: "src/readme.md", kind: "delete" },
-              { path: "old-name.md", kind: { type: "update", move_path: "package.json" } },
-            ],
-          }),
-          1,
-        );
-        return 1;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(
+        assistantToolCall("apply_patch", {
+          changes: [
+            { path: "ui/chat.ts", kind: "update" },
+            { path: "src/readme.md", kind: "delete" },
+            { path: "old-name.md", kind: { type: "update", move_path: "package.json" } },
+          ],
+        }),
+        1,
+      );
+      return 1;
+    });
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
@@ -239,13 +242,11 @@ describe("sessions.files RPC handlers", () => {
         spawnedWorkspaceDir: workspaceRoot,
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
-        visit(assistantToolCall("read", { path: "../shared/config.ts" }), 2);
-        return 2;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
+      visit(assistantToolCall("read", { path: "../shared/config.ts" }), 2);
+      return 2;
+    });
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
@@ -320,12 +321,10 @@ describe("sessions.files RPC handlers", () => {
         sessionFile: "sess-main.jsonl",
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
-        return 1;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
+      return 1;
+    });
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
@@ -354,12 +353,10 @@ describe("sessions.files RPC handlers", () => {
         sessionFile: "sess-main.jsonl",
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
-        return 1;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "src/readme.md" }), 1);
+      return 1;
+    });
 
     const payload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
@@ -454,12 +451,10 @@ describe("sessions.files RPC handlers", () => {
         sessionFile: "missing-session.jsonl",
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        visit(assistantToolCall("read", { path: outsidePath }), 1);
-        return 1;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: outsidePath }), 1);
+      return 1;
+    });
 
     try {
       const error = expectError(
@@ -570,12 +565,10 @@ describe("sessions.files RPC handlers", () => {
         sessionFile: "sess-main.jsonl",
       },
     });
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        visit(assistantToolCall("read", { path: "secret.txt" }), 1);
-        return 1;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "secret.txt" }), 1);
+      return 1;
+    });
     try {
       const listPayload = expectOkPayload(
         await invokeSessionFilesHandler("sessions.files.list", {
@@ -609,12 +602,10 @@ describe("sessions.files RPC handlers", () => {
 
   it("reports oversized existing files without marking them missing", async () => {
     writeWorkspaceFile(workspaceRoot, "large.log", "x".repeat(260 * 1024));
-    hoisted.visitSessionMessagesAsync.mockImplementation(
-      async (_sessionId, _storePath, _sessionFile, visit) => {
-        visit(assistantToolCall("read", { path: "large.log" }), 1);
-        return 1;
-      },
-    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "large.log" }), 1);
+      return 1;
+    });
 
     const error = expectError(
       await invokeSessionFilesHandler("sessions.files.get", {

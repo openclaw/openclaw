@@ -687,6 +687,24 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(command.to).toBe("user:U123");
   });
 
+  it("preserves multiline slash skill payloads in fast command context", () => {
+    const body = "/skill demo_skill first line\nsecond line";
+    const command = buildFastReplyCommandContext({
+      ctx: buildGetReplyCtx({
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
+      }),
+      cfg: {} as OpenClawConfig,
+      sessionKey: "main",
+      isGroup: false,
+      triggerBodyNormalized: body,
+      commandAuthorized: true,
+    });
+
+    expect(command.commandBodyNormalized).toBe("/skill demo_skill first line\nsecond line");
+  });
+
   it("keeps the existing session for /reset newline soft during fast bootstrap", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-newline-soft-"));
     const storePath = path.join(home, "sessions.json");

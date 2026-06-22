@@ -22,6 +22,7 @@ type PluginInstallInvalidConfigPolicy = "deny" | "allow-plugin-recovery";
 export type PluginInstallRequestContext = {
   rawSpec: string;
   normalizedSpec: string;
+  installKind?: "plugin";
   resolvedPath?: string;
   marketplace?: string;
   bundledPluginId?: string;
@@ -77,6 +78,12 @@ function resolveBundledInstallRecoveryMetadata(
       return direct;
     }
   }
+  if (
+    resolveFileNpmSpecToLocalPath(request.rawSpec) !== null ||
+    (request.resolvedPath !== undefined && fs.existsSync(request.resolvedPath))
+  ) {
+    return {};
+  }
   const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
   const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
   for (const value of [
@@ -104,7 +111,7 @@ function resolveBundledInstallRecoveryMetadata(
 }
 
 function resolveOfficialExternalInstallRecoveryMetadata(
-  request: Pick<PluginInstallRequestContext, "rawSpec" | "marketplace">,
+  request: Pick<PluginInstallRequestContext, "rawSpec" | "normalizedSpec" | "marketplace">,
 ): {
   pluginId?: string;
   allowInvalidConfigRecovery?: boolean;
@@ -112,19 +119,24 @@ function resolveOfficialExternalInstallRecoveryMetadata(
   if (request.marketplace) {
     return {};
   }
-  if (request.rawSpec.trim().startsWith("file:")) {
+  if (resolveFileNpmSpecToLocalPath(request.rawSpec) !== null) {
     return {};
   }
   if (fs.existsSync(resolveUserPath(request.rawSpec))) {
     return {};
   }
   const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
+  const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
   const values = new Set(
     normalizeStringEntries([
       request.rawSpec,
+      request.normalizedSpec,
       rawNpmPrefixSpec ?? "",
+      normalizedNpmPrefixSpec ?? "",
       parseRegistryNpmSpec(request.rawSpec)?.name ?? "",
+      parseRegistryNpmSpec(request.normalizedSpec)?.name ?? "",
       rawNpmPrefixSpec ? parseRegistryNpmSpec(rawNpmPrefixSpec)?.name : "",
+      normalizedNpmPrefixSpec ? parseRegistryNpmSpec(normalizedNpmPrefixSpec)?.name : "",
     ]),
   );
   if (values.size === 0) {
@@ -193,6 +205,7 @@ function resolvePluginInstallArgvRequest(commandPath: string[], argv: string[]) 
 export function resolvePluginInstallRequestContext(params: {
   rawSpec: string;
   marketplace?: string;
+  installKind?: "plugin";
 }): PluginInstallRequestResolution {
   if (params.marketplace) {
     return {
@@ -200,6 +213,7 @@ export function resolvePluginInstallRequestContext(params: {
       request: {
         rawSpec: params.rawSpec,
         normalizedSpec: params.rawSpec,
+        installKind: "plugin",
         marketplace: params.marketplace,
       },
     };
@@ -220,6 +234,7 @@ export function resolvePluginInstallRequestContext(params: {
   });
   const officialRecovered = resolveOfficialExternalInstallRecoveryMetadata({
     rawSpec: params.rawSpec,
+    normalizedSpec,
     marketplace: params.marketplace,
   });
   const recovered =
@@ -232,6 +247,7 @@ export function resolvePluginInstallRequestContext(params: {
       rawSpec: params.rawSpec,
       normalizedSpec,
       resolvedPath: resolveUserPath(normalizedSpec),
+      ...(params.installKind === "plugin" || recovered.pluginId ? { installKind: "plugin" } : {}),
       ...(recovered.pluginId ? { bundledPluginId: recovered.pluginId } : {}),
       ...(recovered.allowInvalidConfigRecovery !== undefined
         ? { allowInvalidConfigRecovery: recovered.allowInvalidConfigRecovery }

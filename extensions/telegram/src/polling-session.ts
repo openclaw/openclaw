@@ -658,6 +658,58 @@ export class TelegramPollingSession {
     return deferredSpooledUpdateClaimsByKey.has(buildDeferredSpooledUpdateClaimKey(update));
   }
 
+  async #failTimedOutCurrentProcessSpooledUpdateClaims(params: {
+    activeLaneKeys: Set<string>;
+    spoolDir: string;
+  }): Promise<void> {
+    const claims = await listTelegramSpooledUpdateClaims({ spoolDir: params.spoolDir });
+    const now = Date.now();
+    for (const claim of claims) {
+      const claimOwner = claim.claim;
+      if (!claimOwner) {
+        continue;
+      }
+      if (this.#isDeferredSpooledUpdateClaim(claim)) {
+        continue;
+      }
+      if (params.activeLaneKeys.has(this.#spooledUpdateLaneKey(claim))) {
+        continue;
+      }
+      if (now - claimOwner.claimedAt < this.#spooledUpdateHandlerTimeoutMs) {
+        continue;
+      }
+      if (!isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim)) {
+        continue;
+      }
+      // Same PID with a stale owner id means this process orphaned a previous
+      // local handler state; different live PIDs may still be processing.
+      if (claimOwner.processPid !== process.pid) {
+        continue;
+      }
+      const claimedForMs = now - claimOwner.claimedAt;
+      const message = `Telegram spooled update claim owned by this process for ${formatDurationPrecise(claimedForMs)} without active handler state; marking failed so the lane can continue.`;
+      try {
+        const failed = await failTelegramSpooledUpdateClaim({
+          update: claim,
+          reason: "lane-released-on-stuck",
+          message,
+        });
+        if (!failed) {
+          this.opts.log(
+            `[telegram][diag] spooled update ${claim.updateId} current-process claim no longer had a processing marker to fail.`,
+          );
+          continue;
+        }
+      } catch (err) {
+        this.opts.log(
+          `[telegram][diag] spooled update ${claim.updateId} current-process claim could not be marked failed: ${formatErrorMessage(err)}`,
+        );
+        continue;
+      }
+      this.opts.log(`[telegram][diag] spooled update ${claim.updateId} ${message}`);
+    }
+  }
+
   async #failTimedOutDeferredSpooledUpdate(state: DeferredSpooledUpdateClaimState): Promise<void> {
     const message =
       state.timedOutMessage ??
@@ -755,10 +807,21 @@ export class TelegramPollingSession {
     });
   }
 
+  #activeSpooledUpdateHandlerKeysForSpool(spoolDir: string): Set<string> {
+    const handlerKeys = new Set<string>();
+    for (const handlerKey of activeSpooledUpdateHandlersByLane.keys()) {
+      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+        handlerKeys.add(handlerKey);
+      }
+    }
+    return handlerKeys;
+  }
+
   #activeSpooledUpdateLaneKeysForSpool(spoolDir: string): Set<string> {
     const laneKeys = new Set<string>();
-    for (const [handlerKey, handler] of activeSpooledUpdateHandlersByLane) {
-      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+    for (const handlerKey of this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir)) {
+      const handler = activeSpooledUpdateHandlersByLane.get(handlerKey);
+      if (handler) {
         laneKeys.add(handler.laneKey);
       }
     }
@@ -770,6 +833,10 @@ export class TelegramPollingSession {
     spoolDir: string;
   }): Promise<SpooledUpdateDrainResult> {
     const activeLaneKeys = this.#activeSpooledUpdateLaneKeysForSpool(params.spoolDir);
+    await this.#failTimedOutCurrentProcessSpooledUpdateClaims({
+      activeLaneKeys,
+      spoolDir: params.spoolDir,
+    });
     await recoverStaleTelegramSpooledUpdateClaims({
       spoolDir: params.spoolDir,
       staleMs: 0,
@@ -989,6 +1056,8 @@ export class TelegramPollingSession {
       forceCycleResolve = resolve;
     });
     const stalledBacklogKeys = new Set<string>();
+    let requestImmediateDrain: () => void = () => undefined;
+    let drainRequested = false;
     const unsubscribe = worker.onMessage((message) => {
       const ackSpooledUpdate = (
         requestId: string,
@@ -1042,6 +1111,7 @@ export class TelegramPollingSession {
         }).then(
           (updateId) => {
             ackSpooledUpdate(message.requestId, { ok: true, updateId });
+            requestImmediateDrain();
           },
           (err: unknown) => {
             ackSpooledUpdate(message.requestId, {
@@ -1054,6 +1124,7 @@ export class TelegramPollingSession {
       }
       if (message.type === "spooled") {
         liveness.noteGetUpdatesActivity();
+        requestImmediateDrain();
       }
     });
     const stopOnAbort = () => {
@@ -1094,10 +1165,15 @@ export class TelegramPollingSession {
       }
     };
     const drainOnce = async () => {
-      if (restartRequested || drainActive || this.opts.abortSignal?.aborted) {
+      if (restartRequested || this.opts.abortSignal?.aborted) {
+        return;
+      }
+      if (drainActive) {
+        drainRequested = true;
         return;
       }
       drainActive = true;
+      drainRequested = false;
       try {
         const drain = await this.#drainSpooledUpdates({ bot, spoolDir });
         consecutiveDrainFailures = 0;
@@ -1119,7 +1195,15 @@ export class TelegramPollingSession {
             this.#status.notePollingError(handler.timeoutMessage);
           }
         }
-        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(drain.blockedByLane);
+        // Active handlers can outlive their owning session after shutdown grace.
+        // Recover every handler for this spool, including lone handlers with no backlog.
+        const timeoutCandidateHandlerKeys = this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir);
+        for (const handlerKey of drain.blockedByLane) {
+          timeoutCandidateHandlerKeys.add(handlerKey);
+        }
+        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(
+          timeoutCandidateHandlerKeys,
+        );
         if (timedOutRecovery?.restart) {
           requestStopForRestart();
         } else if (timedOutRecovery) {
@@ -1132,7 +1216,14 @@ export class TelegramPollingSession {
         );
       } finally {
         drainActive = false;
+        if (drainRequested && !restartRequested && !this.opts.abortSignal?.aborted) {
+          drainRequested = false;
+          void drainOnce();
+        }
       }
+    };
+    requestImmediateDrain = () => {
+      void drainOnce();
     };
     await drainOnce();
     const drainTimer = setInterval(() => {

@@ -7,7 +7,6 @@ import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import {
-  CLIENT_TOOL_NAME_CONFLICT_PREFIX,
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   isClientToolNameConflictError,
@@ -19,6 +18,7 @@ import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js
 
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
+const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 async function executeThrowingTool(name: string, callId: string) {
   const tool = {

@@ -42,6 +42,17 @@ function isOllamaApiKeyMarker(value: string): boolean {
   return value === "OLLAMA_API_KEY" || value === OLLAMA_DEFAULT_API_KEY;
 }
 
+export function resolveOllamaRuntimeBaseUrl(params: {
+  api?: ModelProviderConfig["api"];
+  configuredBaseUrl?: string;
+  discoveredBaseUrl: string;
+}): string {
+  if (params.configuredBaseUrl && params.api && params.api !== "ollama") {
+    return params.configuredBaseUrl;
+  }
+  return params.discoveredBaseUrl;
+}
+
 function resolveOllamaDiscoveryApiKey(params: {
   env: NodeJS.ProcessEnv;
   baseUrl?: string;
@@ -251,10 +262,12 @@ export async function resolveOllamaDiscoveryResult(params: {
     ollamaKey.trim() !== OLLAMA_DEFAULT_API_KEY;
   const explicitApiKey = readStringValue(explicit?.apiKey);
   if (hasExplicitModels && explicit) {
-    const baseUrl = resolveOllamaApiBase(readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL);
+    const configuredBaseUrl = readProviderBaseUrl(explicit) ?? OLLAMA_DEFAULT_BASE_URL;
+    const discoveredBaseUrl = resolveOllamaApiBase(configuredBaseUrl);
+    const api = explicit.api ?? "ollama";
     const apiKey = resolveOllamaDiscoveryApiKey({
       env: params.ctx.env,
-      baseUrl,
+      baseUrl: discoveredBaseUrl,
       explicitApiKey,
       resolvedApiKey: ollamaKey,
       resolvedDiscoveryApiKey: ollamaDiscoveryKey,
@@ -262,8 +275,8 @@ export async function resolveOllamaDiscoveryResult(params: {
     return {
       provider: {
         ...explicit,
-        baseUrl,
-        api: explicit.api ?? "ollama",
+        baseUrl: resolveOllamaRuntimeBaseUrl({ api, configuredBaseUrl, discoveredBaseUrl }),
+        api,
         ...(apiKey ? { apiKey } : {}),
       },
     };
@@ -307,9 +320,16 @@ export async function resolveOllamaDiscoveryResult(params: {
     resolvedApiKey: ollamaKey,
     resolvedDiscoveryApiKey: ollamaDiscoveryKey,
   });
+  const api = explicit?.api ?? provider.api;
   return {
     provider: {
       ...provider,
+      baseUrl: resolveOllamaRuntimeBaseUrl({
+        api,
+        configuredBaseUrl,
+        discoveredBaseUrl: provider.baseUrl,
+      }),
+      api,
       ...(apiKey ? { apiKey } : {}),
     },
   };

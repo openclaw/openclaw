@@ -349,6 +349,23 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("uses an agent-scoped --to value as the gateway session selector", async () => {
+    await withTempStore(async () => {
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: sessionKey }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.sessionKey).toBe(sessionKey);
+      expect(params.to).toBeUndefined();
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("retries gateway dispatch with shell env fallback only when credentials need it", async () => {
     await withTempStore(async ({ store }) => {
       const fastConfig = {
@@ -1501,29 +1518,6 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("does not run a fresh embedded session when a /compact control command times out", async () => {
-    await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayTimeoutError());
-
-      await expect(
-        agentCliCommand(
-          {
-            message: "/compact",
-            sessionId: "locked-session",
-            runId: "locked-run",
-          },
-          runtime,
-        ),
-      ).rejects.toThrow("gateway timeout");
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(
-        mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
-      ).toBe(false);
-    });
-  });
-
   it("uses the explicit session key agent for timeout fallback sessions", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(createGatewayTimeoutError());
@@ -1792,5 +1786,48 @@ describe("agentCliCommand", () => {
       expect(fallbackOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
       expect(fallbackOpts.oneShotCliRun).toBe(false);
     });
+  });
+
+  for (const message of [
+    "/compact",
+    "/compact Keep recent decisions.",
+    "/compact:Keep recent decisions.",
+    "/COMPACT",
+    "  /Compact  ",
+  ]) {
+    it(`rejects ${JSON.stringify(message)} from the CLI before any gateway or embedded turn`, async () => {
+      await withTempStore(async () => {
+        callGateway.mockRejectedValue(createGatewayTimeoutError());
+
+        await agentCliCommand(
+          { message, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
+          runtime,
+        );
+      });
+
+      // The slash-command handler rejects CLI senders, so a /compact turn would
+      // otherwise fall through to a normal turn and exit 0 without compacting.
+      // It must fail loudly before touching the gateway or a fresh embedded session.
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      const errorMessages = mockMessages(runtime.error);
+      expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
+      expect(errorMessages.some((m) => m.includes("EMBEDDED FALLBACK"))).toBe(false);
+    });
+  }
+
+  it("does not mistake a /compacting-prefixed message for the /compact control command", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        { message: "/compacting the report, please", to: "+15555550123", timeout: "0" },
+        runtime,
+      );
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).not.toHaveBeenCalledWith(1);
   });
 });

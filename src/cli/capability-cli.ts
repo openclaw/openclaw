@@ -49,7 +49,9 @@ import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { generateImage, listRuntimeImageGenerationProviders } from "../image-generation/runtime.js";
 import type {
   ImageGenerationBackground,
+  ImageGenerationOpenAIModeration,
   ImageGenerationOutputFormat,
+  ImageGenerationQuality,
 } from "../image-generation/types.js";
 import {
   parseStrictFiniteNumber,
@@ -65,15 +67,9 @@ import {
 } from "../media-understanding/runtime.js";
 import { convertHeicToJpeg, getImageMetadata } from "../media/media-services.js";
 import { saveMediaBuffer } from "../media/store.js";
-import {
-  createEmbeddingProvider,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "../plugin-sdk/memory-core-bundled-runtime.js";
+import { createEmbeddingProvider } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { listEmbeddingProviders } from "../plugins/embedding-provider-runtime.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
+import { listMemoryEmbeddingProviders } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
@@ -203,6 +199,12 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
       "--size",
       "--aspect-ratio",
       "--resolution",
+      "--output-format",
+      "--background",
+      "--openai-background",
+      "--openai-moderation",
+      "--quality",
+      "--timeout-ms",
       "--output",
       "--json",
     ],
@@ -222,6 +224,8 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
       "--output-format",
       "--background",
       "--openai-background",
+      "--openai-moderation",
+      "--quality",
       "--timeout-ms",
       "--output",
       "--json",
@@ -979,6 +983,8 @@ async function runImageGenerate(params: {
   outputFormat?: ImageGenerationOutputFormat;
   background?: ImageGenerationBackground;
   openaiBackground?: ImageGenerationBackground;
+  openaiModeration?: ImageGenerationOpenAIModeration;
+  quality?: ImageGenerationQuality;
   file?: string[];
   output?: string;
   timeoutMs?: number;
@@ -1008,11 +1014,18 @@ async function runImageGenerate(params: {
     size: params.size,
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
+    quality: params.quality,
     outputFormat: params.outputFormat,
     background: params.background,
-    providerOptions: params.openaiBackground
-      ? { openai: { background: params.openaiBackground } }
-      : undefined,
+    providerOptions:
+      params.openaiBackground || params.openaiModeration
+        ? {
+            openai: {
+              ...(params.openaiBackground ? { background: params.openaiBackground } : {}),
+              ...(params.openaiModeration ? { moderation: params.openaiModeration } : {}),
+            },
+          }
+        : undefined,
     timeoutMs: params.timeoutMs,
     inputImages,
   });
@@ -1214,6 +1227,35 @@ function normalizeImageBackground(
     return normalized as ImageGenerationBackground;
   }
   throw new Error(`${label} must be one of transparent, opaque, or auto`);
+}
+
+function normalizeImageQuality(raw: string | undefined): ImageGenerationQuality | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "low" ||
+    normalized === "medium" ||
+    normalized === "high" ||
+    normalized === "auto"
+  ) {
+    return normalized;
+  }
+  throw new Error("--quality must be one of low, medium, high, or auto");
+}
+
+function normalizeOpenAIModeration(
+  raw: string | undefined,
+): ImageGenerationOpenAIModeration | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  if (normalized === "low" || normalized === "auto") {
+    return normalized;
+  }
+  throw new Error("--openai-moderation must be one of low or auto");
 }
 
 function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
@@ -1992,7 +2034,6 @@ async function runMemoryEmbeddingCreate(params: {
   provider?: string;
   model?: string;
 }) {
-  ensureMemoryEmbeddingProvidersRegistered();
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer embedding create",
     targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
@@ -2025,15 +2066,6 @@ async function runMemoryEmbeddingCreate(params: {
       dimensions: embedding.length,
     })),
   } satisfies CapabilityEnvelope;
-}
-
-function ensureMemoryEmbeddingProvidersRegistered(): void {
-  if (listMemoryEmbeddingProviders().length > 0) {
-    return;
-  }
-  registerBuiltInMemoryEmbeddingProviders({
-    registerMemoryEmbeddingProvider,
-  });
 }
 
 function registerCapabilityListAndInspect(capability: Command) {
@@ -2229,6 +2261,8 @@ export function registerCapabilityCli(program: Command) {
     .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
     .option("--background <value>", "Background hint: transparent, opaque, or auto")
     .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
+    .option("--openai-moderation <value>", "OpenAI moderation hint: low or auto")
+    .option("--quality <value>", "Quality hint: low, medium, high, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
@@ -2248,6 +2282,8 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
+          openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
+          quality: normalizeImageQuality(opts.quality as string | undefined),
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
@@ -2267,6 +2303,8 @@ export function registerCapabilityCli(program: Command) {
     .option("--output-format <format>", "Output format hint: png, jpeg, or webp")
     .option("--background <value>", "Background hint: transparent, opaque, or auto")
     .option("--openai-background <value>", "OpenAI background hint: transparent, opaque, or auto")
+    .option("--openai-moderation <value>", "OpenAI moderation hint: low or auto")
+    .option("--quality <value>", "Quality hint: low, medium, high, or auto")
     .option("--timeout-ms <ms>", "Provider request timeout in milliseconds")
     .option("--output <path>", "Output path")
     .option("--json", "Output JSON", false)
@@ -2287,6 +2325,8 @@ export function registerCapabilityCli(program: Command) {
             opts.openaiBackground as string | undefined,
             "--openai-background",
           ),
+          openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
+          quality: normalizeImageQuality(opts.quality as string | undefined),
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
@@ -2802,7 +2842,6 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        ensureMemoryEmbeddingProvidersRegistered();
         const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);

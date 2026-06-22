@@ -44,10 +44,8 @@ export function createDiscordDraftPreviewController(params: {
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(params.discordConfig) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
-  const canStreamProgressDraftForToolOnlySource =
-    params.sourceRepliesAreToolOnly && discordStreamMode === "progress";
   const canStreamDraft =
-    (!params.sourceRepliesAreToolOnly || canStreamProgressDraftForToolOnlySource) &&
+    !params.sourceRepliesAreToolOnly &&
     discordStreamMode !== "off" &&
     !accountBlockStreamingEnabled;
   const draftStream = canStreamDraft
@@ -150,12 +148,6 @@ export function createDiscordDraftPreviewController(params: {
       finalizedViaPreviewMessage = true;
     },
     disableBlockStreamingForDraft: draftStream ? true : undefined,
-    async startProgressDraft() {
-      if (!draftStream || discordStreamMode !== "progress") {
-        return;
-      }
-      await progressDraft.start();
-    },
     async pushToolProgress(
       line?: string | ChannelProgressDraftLine,
       options?: { toolName?: string },

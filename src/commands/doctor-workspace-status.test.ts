@@ -323,4 +323,62 @@ describe("noteWorkspaceStatus", () => {
       noteSpy.mockRestore();
     }
   });
+
+  const makeSkill = (
+    skillKey: string,
+    fields: { eligible: boolean; platformIncompatible: boolean },
+  ) =>
+    ({
+      skillKey,
+      disabled: false,
+      blockedByAllowlist: false,
+      eligible: fields.eligible,
+      platformIncompatible: fields.platformIncompatible,
+    }) as never;
+
+  async function runWithSkills(skills: unknown[]) {
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
+    mocks.buildWorkspaceSkillStatus.mockReturnValue({ skills });
+    mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
+      workspaceDir: "/workspace",
+      ...createPluginLoadResult(),
+    });
+    mocks.buildPluginCompatibilityWarnings.mockReturnValue([]);
+    mocks.listTaskFlowRecords.mockReturnValue([]);
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    noteWorkspaceStatus({});
+    return noteSpy;
+  }
+
+  it("surfaces a platform-incompatible rollup and keeps those skills out of Missing requirements", async () => {
+    const noteSpy = await runWithSkills([
+      makeSkill("mac-only", { eligible: false, platformIncompatible: true }),
+      makeSkill("broken", { eligible: false, platformIncompatible: false }),
+    ]);
+    try {
+      const skillsCall = noteSpy.mock.calls.find(([, title]) => title === "Skills status");
+      expect(skillsCall).toBeDefined();
+      const [body] = skillsCall as [string, string];
+      expect(body).toContain("Incompatible (platform mismatch, auto-skipped): 1");
+      expect(body).toContain("Missing requirements: 1");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
+
+  it("omits the platform-incompatible rollup when the count is zero", async () => {
+    const noteSpy = await runWithSkills([
+      makeSkill("broken", { eligible: false, platformIncompatible: false }),
+    ]);
+    try {
+      const skillsCall = noteSpy.mock.calls.find(([, title]) => title === "Skills status");
+      expect(skillsCall).toBeDefined();
+      const [body] = skillsCall as [string, string];
+      expect(body).not.toContain("Incompatible (platform mismatch");
+      expect(body).toContain("Missing requirements: 1");
+    } finally {
+      noteSpy.mockRestore();
+    }
+  });
 });

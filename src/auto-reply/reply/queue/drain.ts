@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveStorePath } from "../../../config/sessions.js";
-import { readSessionEntry } from "../../../config/sessions/store-load.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
   channelRouteCompactKey,
@@ -548,7 +548,11 @@ async function runSyntheticOverflowSummary(params: {
           config: params.source.run.config,
         };
       }
-      const sessionEntry = readSessionEntry(storePath, sessionKey);
+      const sessionEntry = loadSessionEntry({
+        storePath,
+        sessionKey,
+        clone: false,
+      });
       return {
         sessionId: sessionEntry?.sessionId ?? params.source.run.sessionId,
         sessionKey,

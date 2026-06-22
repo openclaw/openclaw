@@ -1845,7 +1845,7 @@ describe("loadPluginManifestRegistry", () => {
       contracts: {
         mediaUnderstandingProviders: ["openai"],
         imageGenerationProviders: ["openai"],
-        tools: ["image_generate"],
+        tools: ["image_generate", "memory_get"],
       },
       imageGenerationProviderMetadata: {
         openai: {
@@ -1918,6 +1918,9 @@ describe("loadPluginManifestRegistry", () => {
               required: ["apiKey"],
             },
           ],
+        },
+        memory_get: {
+          replaySafe: true,
         },
       },
       configSchema: { type: "object" },
@@ -1994,6 +1997,9 @@ describe("loadPluginManifestRegistry", () => {
             required: ["apiKey"],
           },
         ],
+      },
+      memory_get: {
+        replaySafe: true,
       },
     });
   });

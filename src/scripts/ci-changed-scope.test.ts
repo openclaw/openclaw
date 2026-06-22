@@ -119,7 +119,9 @@ describe("parseArgs", () => {
 
   it("rejects missing CI diff refs", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
+    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
+    expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
   });
 });
@@ -295,6 +297,47 @@ describe("detectChangedScope", () => {
     });
   });
 
+  it("runs macOS CI for macOS packaging scripts with Darwin-only tests", () => {
+    for (const changedPath of [
+      "scripts/codesign-mac-app.sh",
+      "scripts/create-dmg.sh",
+      "scripts/lib/plistbuddy.sh",
+      "scripts/notarize-mac-artifact.sh",
+      "scripts/package-mac-app.sh",
+      "scripts/package-mac-dist.sh",
+    ]) {
+      expect(detectChangedScope([changedPath])).toEqual({
+        runNode: true,
+        runMacos: true,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
+  });
+
+  it("runs macOS CI for Darwin-only mac packaging owner tests", () => {
+    for (const changedPath of [
+      "test/scripts/codesign-mac-app.test.ts",
+      "test/scripts/create-dmg.test.ts",
+      "test/scripts/notarize-mac-artifact.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/package-mac-dist.test.ts",
+    ]) {
+      expect(detectChangedScope([changedPath])).toEqual({
+        runNode: true,
+        runMacos: true,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
+  });
+
   it("runs Windows only for Windows-relevant changes", () => {
     expect(detectChangedScope(["extensions/memory-lancedb/index.test.ts"])).toEqual({
       runNode: true,
@@ -342,15 +385,6 @@ describe("detectChangedScope", () => {
       runControlUiI18n: false,
     });
     expect(detectChangedScope(["src/shared/runtime-import.test.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
-      runAndroid: false,
-      runWindows: true,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-    });
-    expect(detectChangedScope(["src/plugins/import-specifier.test.ts"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,
@@ -665,7 +699,6 @@ describe("detectChangedScope", () => {
   it("identifies CI routing changes as fast Node-only CI scope", () => {
     expect(
       detectNodeFastScope([
-        ".github/workflows/ci.yml",
         "scripts/check-changed.mjs",
         "scripts/ci-changed-scope.mjs",
         "scripts/run-vitest.mjs",
@@ -681,6 +714,14 @@ describe("detectChangedScope", () => {
       runFastOnly: true,
       runPluginContracts: false,
       runCiRouting: true,
+    });
+  });
+
+  it("keeps CI workflow edits off fast-only scope so native lanes can run", () => {
+    expect(detectNodeFastScope([".github/workflows/ci.yml"])).toEqual({
+      runFastOnly: false,
+      runPluginContracts: false,
+      runCiRouting: false,
     });
   });
 

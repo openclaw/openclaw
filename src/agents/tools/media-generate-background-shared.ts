@@ -62,7 +62,7 @@ export function shouldDetachMediaGenerationTask(sessionKey: string | undefined):
 }
 
 /** Successful media generation output used to complete and wake detached tasks. */
-export type MediaGenerationExecutionResult = {
+type MediaGenerationExecutionResult = {
   provider: string;
   model: string;
   count: number;

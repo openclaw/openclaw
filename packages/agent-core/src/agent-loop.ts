@@ -588,6 +588,7 @@ async function executeToolCallsSequential(
         toolCall,
         result: preparation.result,
         isError: preparation.isError,
+        executionStarted: false,
       };
     } else {
       const executed = await executePreparedToolCall(preparation, signal, emit);
@@ -650,6 +651,7 @@ async function executeToolCallsParallel(
         toolCall,
         result: preparation.result,
         isError: preparation.isError,
+        executionStarted: false,
       } satisfies FinalizedToolCallOutcome;
       await emitToolExecutionEnd(finalized, emit);
       finalizedCalls.push(finalized);
@@ -715,6 +717,7 @@ type FinalizedToolCallOutcome = {
   toolCall: AgentToolCall;
   result: AgentToolResult<unknown>;
   isError: boolean;
+  executionStarted: boolean;
 };
 
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
@@ -951,6 +954,7 @@ async function finalizeExecutedToolCall(
     toolCall: prepared.toolCall,
     result,
     isError,
+    executionStarted: true,
   };
 }
 
@@ -971,6 +975,7 @@ async function emitToolExecutionEnd(
     toolName: finalized.toolCall.name,
     result: finalized.result,
     isError: finalized.isError,
+    executionStarted: finalized.executionStarted,
   });
 }
 

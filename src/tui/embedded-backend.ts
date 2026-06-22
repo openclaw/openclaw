@@ -25,8 +25,8 @@ import {
   formatSessionGoalStatus,
   getSessionGoal,
   updateSessionGoalStatus,
-  updateSessionStore,
 } from "../config/sessions.js";
+import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import {
@@ -49,7 +49,10 @@ import {
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
-import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
+import {
+  capArrayByJsonBytes,
+  readSessionMessagesAsync,
+} from "../gateway/session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
@@ -60,9 +63,8 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
-  readSessionMessagesAsync,
 } from "../gateway/session-utils.js";
-import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
+import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -445,12 +447,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
       sessionId && storePath
-        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            mode: "recent",
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-            allowResetArchiveFallback: true,
-          })
+        ? await readSessionMessagesAsync(
+            {
+              agentId: sessionAgentId,
+              sessionEntry: entry,
+              sessionId,
+              sessionKey: canonicalKey,
+              storePath,
+            },
+            {
+              mode: "recent",
+              maxMessages: max,
+              maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+              allowResetArchiveFallback: true,
+            },
+          )
         : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
@@ -535,21 +546,30 @@ export class EmbeddedTuiBackend implements TuiBackend {
       key: opts.key,
       agentId: opts.agentId,
     });
-    const applied = await updateSessionStore(target.storePath, async (store) => {
-      const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-        cfg,
-        key: opts.key,
-        store,
-        agentId: opts.agentId,
-      });
-      return await applySessionsPatchToStore({
-        cfg,
-        store,
-        storeKey: primaryKey,
-        agentId: opts.agentId,
-        patch: opts,
-        loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
-      });
+    const applied = await applySessionPatchProjection({
+      storePath: target.storePath,
+      resolveTarget: ({ entries }) => {
+        const store = Object.fromEntries(
+          entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        );
+        const { target: migratedTarget, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+          cfg,
+          key: opts.key,
+          store,
+          agentId: opts.agentId,
+        });
+        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
+      },
+      project: async ({ primaryKey, existingEntry, entries }) =>
+        await projectSessionsPatchEntry({
+          cfg,
+          entries,
+          existingEntry,
+          storeKey: primaryKey,
+          agentId: opts.agentId,
+          patch: opts,
+          loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
+        }),
     });
     if (!applied.ok) {
       throw new Error(applied.error.message);

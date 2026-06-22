@@ -322,6 +322,37 @@ describe("OpenResponses HTTP API (e2e)", () => {
       await ensureResponseConsumed(resHeader);
 
       mockAgentOnce([{ text: "hello" }]);
+      const resSessionOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        {
+          "x-openclaw-agent-id": "beta",
+          "x-openclaw-session-key": "agent:beta:openresponses:custom",
+        },
+      );
+      expect(resSessionOverride.status).toBe(200);
+      expect((firstAgentOpts() as { sessionKey?: string }).sessionKey).toBe(
+        "agent:beta:openresponses:custom",
+      );
+      await ensureResponseConsumed(resSessionOverride);
+
+      agentCommand.mockClear();
+      const resReservedSessionOverride = await postResponses(
+        port,
+        { model: "openclaw", input: "hi" },
+        { "x-openclaw-session-key": "agent:main:subagent:spoofed" },
+      );
+      expect(resReservedSessionOverride.status).toBe(400);
+      const reservedSessionJson = (await resReservedSessionOverride.json()) as {
+        error?: { type?: string; message?: string };
+      };
+      expect(reservedSessionJson.error?.type).toBe("invalid_request_error");
+      expect(reservedSessionJson.error?.message).toBe(
+        "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
+      );
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+
+      mockAgentOnce([{ text: "hello" }]);
       const resModel = await postResponses(port, { model: "openclaw/beta", input: "hi" });
       expect(resModel.status).toBe(200);
       const optsModel = firstAgentOpts();
