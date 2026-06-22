@@ -9,6 +9,7 @@ import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
+import { sleep } from "../utils.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SERVICE_KIND,
@@ -48,6 +49,8 @@ const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
 const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
+const LAUNCH_AGENT_STOP_PORT_RELEASE_ATTEMPTS = 20;
+const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
@@ -776,7 +779,15 @@ async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promi
     return;
   }
   cleanStaleGatewayProcessesSync(port);
-  const diagnostics = await inspectPortUsage(port).catch(() => null);
+  let diagnostics = await inspectPortUsage(port).catch(() => null);
+  for (
+    let attempt = 1;
+    diagnostics?.status === "busy" && attempt < LAUNCH_AGENT_STOP_PORT_RELEASE_ATTEMPTS;
+    attempt += 1
+  ) {
+    await sleep(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS);
+    diagnostics = await inspectPortUsage(port).catch(() => null);
+  }
   if (diagnostics?.status !== "busy") {
     return;
   }
