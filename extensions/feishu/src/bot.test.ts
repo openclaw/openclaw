@@ -2949,6 +2949,60 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("resolves template variables in interactive card sub-messages", () => {
+    const card = {
+      schema: "2.0",
+      template_variable: { name: "Bob", count: 3 },
+      body: {
+        elements: [{ tag: "markdown", content: "Hello ${name}, you have {{ count }} updates" }],
+      },
+    };
+    const content = JSON.stringify([
+      {
+        message_id: "container",
+        msg_type: "merge_forward",
+        body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+      },
+      {
+        message_id: "card",
+        upper_message_id: "container",
+        msg_type: "interactive",
+        body: { content: JSON.stringify(card) },
+        create_time: "1000",
+      },
+    ]);
+
+    expect(parseMergeForwardContent({ content })).toBe(
+      "[Merged and Forwarded Messages]\n- Hello Bob, you have 3 updates",
+    );
+  });
+
+  it("emits a single locale for i18n interactive card sub-messages", () => {
+    const card = {
+      schema: "2.0",
+      i18n_elements: {
+        en_us: [{ tag: "markdown", content: "Hello" }],
+        zh_cn: [{ tag: "markdown", content: "你好" }],
+      },
+    };
+    const content = JSON.stringify([
+      {
+        message_id: "container",
+        msg_type: "merge_forward",
+        body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+      },
+      {
+        message_id: "card",
+        upper_message_id: "container",
+        msg_type: "interactive",
+        body: { content: JSON.stringify(card) },
+        create_time: "1000",
+      },
+    ]);
+
+    expect(parseMergeForwardContent({ content })).toBe("[Merged and Forwarded Messages]\n- Hello");
+  });
+
   it("falls back when merge_forward API returns no sub-messages", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockCreateFeishuClient.mockReturnValue({
