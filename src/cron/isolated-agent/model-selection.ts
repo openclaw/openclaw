@@ -2,6 +2,7 @@
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
+import type { ModelManifestNormalizationContext } from "../../agents/model-selection-normalize.js";
 import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
@@ -30,6 +31,7 @@ export type ResolveCronModelSelectionParams = {
   payload: CronJob["payload"];
   isGmailHook: boolean;
   agentId?: string;
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
 };
 
 /** Resolved provider/model pair plus the precedence source that selected it. */
@@ -74,6 +76,7 @@ export async function resolveCronModelSelection(
     cfg: params.cfgWithAgentDefaults,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
+    manifestPlugins: params.manifestPlugins,
   });
   let provider = resolvedDefault.provider;
   let model = resolvedDefault.model;
@@ -104,6 +107,7 @@ export async function resolveCronModelSelection(
       raw: subagentModelRaw,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
+      manifestPlugins: params.manifestPlugins,
     });
     if (!("error" in resolvedSubagent)) {
       provider = resolvedSubagent.ref.provider;
@@ -117,6 +121,7 @@ export async function resolveCronModelSelection(
     ? resolveHooksGmailModel({
         cfg: params.cfg,
         defaultProvider: DEFAULT_PROVIDER,
+        manifestPlugins: params.manifestPlugins,
       })
     : null;
   if (hooksGmailModelRef) {
@@ -128,6 +133,7 @@ export async function resolveCronModelSelection(
       ref: hooksGmailModelRef,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
+      manifestPlugins: params.manifestPlugins,
     });
     if (status.allowed) {
       provider = hooksGmailModelRef.provider;
@@ -148,6 +154,7 @@ export async function resolveCronModelSelection(
       raw: modelOverride,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
+      manifestPlugins: params.manifestPlugins,
     });
     if ("error" in resolvedOverride) {
       return {
@@ -177,6 +184,7 @@ export async function resolveCronModelSelection(
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,
         defaultProvider: resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
+        manifestPlugins: params.manifestPlugins,
       });
       if (!("error" in resolvedSessionOverride)) {
         provider = resolvedSessionOverride.ref.provider;

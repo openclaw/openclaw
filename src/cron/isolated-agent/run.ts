@@ -106,6 +106,8 @@ import {
   setSessionRuntimeModel,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 
@@ -658,6 +660,15 @@ async function prepareCronRunContext(params: {
     cronSession.sessionEntry.label = `Cron: ${labelSuffix}`;
   }
 
+  const pluginsEnabled = normalizePluginsConfig(cfgWithAgentDefaults.plugins).enabled;
+  const manifestMetadataSnapshot = pluginsEnabled
+    ? loadManifestMetadataSnapshot({
+        config: cfgWithAgentDefaults,
+        workspaceDir,
+        env: process.env,
+      })
+    : undefined;
+
   const resolvedModelSelection = await resolveCronModelSelection({
     cfg: input.cfg,
     cfgWithAgentDefaults,
@@ -666,6 +677,7 @@ async function prepareCronRunContext(params: {
     payload: input.job.payload,
     isGmailHook,
     agentId,
+    manifestPlugins: manifestMetadataSnapshot?.plugins ?? [],
   });
   if (!resolvedModelSelection.ok) {
     return {
