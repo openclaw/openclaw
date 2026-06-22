@@ -735,12 +735,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
             }
             if (info?.kind === "final") {
-              // Final payloads can be cumulative snapshots or independent
-              // notices. Preserve both when the latter arrives after an answer.
-              streamText = text;
+              // Final payloads are normally the complete reply (a cumulative
+              // snapshot, or an answer already concatenated with a trailing
+              // notice), so we replace the streamed text with them. But some
+              // backends emit one assistant message per tool round, so the final
+              // payload can be just the LAST block — i.e. content we already
+              // streamed. Replacing in that case would collapse the card to the
+              // last block and drop everything before it. When the final is
+              // already contained in the streamed text, keep the richer
+              // accumulated text instead.
+              streamText = text && streamText.includes(text) ? streamText : text;
               hasStreamingFinalText = true;
               snapshotBaseText = "";
-              lastSnapshotTextLength = text.length;
+              lastSnapshotTextLength = streamText.length;
               flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
             }
             // Send media even when streaming handled the text
