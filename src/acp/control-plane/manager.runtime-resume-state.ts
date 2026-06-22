@@ -3,7 +3,7 @@ import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/sessi
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import type { AcpRuntimeError } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
@@ -188,7 +188,7 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
     const backend = params.deps.getRuntimeBackend(configuredBackend || undefined);
     if (!backend) {
       if (params.missingBackendError) {
-        throw toLintErrorObject(params.missingBackendError, "Non-Error thrown");
+        throw toErrorObject(params.missingBackendError, "Non-Error thrown");
       }
       return;
     }
@@ -200,18 +200,4 @@ export async function tryPrepareFreshManagerRuntimeSession(params: {
       `${params.logPrefix}: unable to prepare fresh session for ${params.sessionKey}: ${formatErrorMessage(error)}`,
     );
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
