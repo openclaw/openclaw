@@ -29,19 +29,19 @@ const {
   }),
 }));
 
-vi.mock("./chat/realtime-talk-google-live.ts", () => ({
+vi.mock("./realtime-talk-google-live.ts", () => ({
   GoogleLiveRealtimeTalkTransport: googleCtor,
 }));
 
-vi.mock("./chat/realtime-talk-gateway-relay.ts", () => ({
+vi.mock("./realtime-talk-gateway-relay.ts", () => ({
   GatewayRelayRealtimeTalkTransport: relayCtor,
 }));
 
-vi.mock("./chat/realtime-talk-webrtc.ts", () => ({
+vi.mock("./realtime-talk-webrtc.ts", () => ({
   WebRtcSdpRealtimeTalkTransport: webRtcCtor,
 }));
 
-import { RealtimeTalkSession } from "./chat/realtime-talk.ts";
+import { RealtimeTalkSession } from "./realtime-talk.ts";
 
 describe("RealtimeTalkSession", () => {
   beforeEach(() => {

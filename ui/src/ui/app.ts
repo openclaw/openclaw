@@ -39,6 +39,21 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "../pages/chat/data.ts";
+import {
+  reconcileRealtimeTalkCatalogSelection,
+  type RealtimeTalkCatalogProvider,
+} from "../pages/chat/realtime-talk-catalog.ts";
+import {
+  createRealtimeTalkConversationState,
+  updateRealtimeTalkConversation,
+  type RealtimeTalkConversationEntry,
+  type RealtimeTalkConversationState,
+} from "../pages/chat/realtime-talk-conversation.ts";
+import {
+  RealtimeTalkSession,
+  type RealtimeTalkLaunchOptions,
+  type RealtimeTalkStatus,
+} from "../pages/chat/realtime-talk.ts";
 import type { ChatSideResult } from "../pages/chat/side-result.ts";
 import type { ChatAttachment, ChatQueueItem } from "../pages/chat/types.ts";
 import { loadCronPage } from "../pages/cron/data.ts";
@@ -90,21 +105,6 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
-import {
-  reconcileRealtimeTalkCatalogSelection,
-  type RealtimeTalkCatalogProvider,
-} from "./chat/realtime-talk-catalog.ts";
-import {
-  createRealtimeTalkConversationState,
-  updateRealtimeTalkConversation,
-  type RealtimeTalkConversationEntry,
-  type RealtimeTalkConversationState,
-} from "./chat/realtime-talk-conversation.ts";
-import {
-  RealtimeTalkSession,
-  type RealtimeTalkLaunchOptions,
-  type RealtimeTalkStatus,
-} from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatStreamSegment } from "../pages/chat/stream-text.ts";

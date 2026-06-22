@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   steerRealtimeTalkActiveConsult,
   submitRealtimeTalkConsult,
-} from "./chat/realtime-talk-shared.js";
+} from "./realtime-talk-shared.ts";
 
 function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
   const call = calls.at(0);

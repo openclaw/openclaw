@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayRelayRealtimeTalkTransport } from "./chat/realtime-talk-gateway-relay.ts";
+import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   type RealtimeTalkEvent,
   type RealtimeTalkGatewayRelaySessionResult,
   type RealtimeTalkTransportContext,
-} from "./chat/realtime-talk-shared.ts";
+} from "./realtime-talk-shared.ts";
 
 type GatewayFrame = { event: string; payload?: unknown };
 type GatewayListener = (event: GatewayFrame) => void;

@@ -9,7 +9,7 @@ import {
 } from "../../../../src/talk/agent-run-control-shared.js";
 import type { RealtimeVoiceAgentControlMode } from "../../../../src/talk/agent-run-control-shared.js";
 import type { TalkEvent } from "../../../../src/talk/talk-events.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../ui/gateway.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;

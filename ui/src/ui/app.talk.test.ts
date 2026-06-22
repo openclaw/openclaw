@@ -11,7 +11,7 @@ const { realtimeTalkCtor, startMock, stopMock } = vi.hoisted(() => ({
 describe("OpenClawApp Talk controls", () => {
   beforeEach(() => {
     vi.resetModules();
-    vi.doMock("./chat/realtime-talk.ts", () => ({
+    vi.doMock("../pages/chat/realtime-talk.ts", () => ({
       RealtimeTalkSession: realtimeTalkCtor,
     }));
     realtimeTalkCtor.mockReset();

@@ -1,6 +1,6 @@
 // Control UI chat module implements realtime talk behavior.
 import { normalizeTalkTransport } from "../../../../src/talk/talk-session-controller.js";
-import type { GatewayBrowserClient } from "../gateway.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import type {

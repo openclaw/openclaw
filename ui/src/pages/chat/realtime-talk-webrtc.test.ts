@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
-} from "./chat/realtime-talk-shared.ts";
-import { WebRtcSdpRealtimeTalkTransport } from "./chat/realtime-talk-webrtc.ts";
+} from "./realtime-talk-shared.ts";
+import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
 class FakeDataChannel extends EventTarget {
   readyState: RTCDataChannelState = "open";

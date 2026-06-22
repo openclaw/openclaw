@@ -3,12 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGoogleLiveUrl,
   GoogleLiveRealtimeTalkTransport,
-} from "./chat/realtime-talk-google-live.ts";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./chat/realtime-talk-shared.ts";
+} from "./realtime-talk-google-live.ts";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./realtime-talk-shared.ts";
 import type {
   RealtimeTalkJsonPcmWebSocketSessionResult,
   RealtimeTalkTransportContext,
-} from "./chat/realtime-talk-shared.ts";
+} from "./realtime-talk-shared.ts";
 
 type MockWebSocketEvent = {
   data?: unknown;
