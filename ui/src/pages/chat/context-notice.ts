@@ -1,8 +1,8 @@
 // Control UI chat module implements context notice behavior.
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
-import type { GatewaySessionRow } from "../types.ts";
-import { formatCompactTokenCount } from "./token-format.ts";
+import { formatCompactTokenCount } from "../../ui/chat/token-format.ts";
+import type { GatewaySessionRow } from "../../ui/types.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 const CONTEXT_COMPACT_RATIO = 0.9;

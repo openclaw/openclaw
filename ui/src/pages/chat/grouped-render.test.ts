@@ -3,14 +3,14 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setUiTimeFormatPreference } from "../../lib/format.ts";
-import type { MessageGroup } from "../../pages/chat/chat-types.ts";
-import { normalizeMessage } from "../../pages/chat/message-normalizer.ts";
+import type { MessageGroup } from "./chat-types.ts";
 import {
   formatChatTimestampForDisplay,
   renderMessageGroup,
   renderStreamGroup,
   resetAssistantAttachmentAvailabilityCacheForTest,
 } from "./grouped-render.ts";
+import { normalizeMessage } from "./message-normalizer.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>
@@ -60,7 +60,7 @@ function requireFirstMockArg(
   return arg;
 }
 
-vi.mock("../views/agents-utils.ts", () => {
+vi.mock("../../ui/views/agents-utils.ts", () => {
   const isRenderableControlUiAvatarUrl = (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//"));
 
@@ -111,7 +111,7 @@ vi.mock("./chat-avatar.ts", () => ({
   },
 }));
 
-vi.mock("../tool-display.ts", () => ({
+vi.mock("../../ui/tool-display.ts", () => ({
   formatToolDetail: () => undefined,
   resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
     name,

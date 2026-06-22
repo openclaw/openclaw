@@ -11,24 +11,19 @@ import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentFile,
 } from "../../ui/chat/attachment-support.ts";
-import { buildRawSidebarContent } from "../../ui/chat/chat-sidebar-raw.ts";
-import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../../ui/chat/chat-welcome.ts";
 import { copyToClipboard } from "../../ui/chat/clipboard.ts";
 import { decodeCodeBlockCopyPayload } from "../../ui/chat/code-block-copy-payload.ts";
-import { renderContextNotice } from "../../ui/chat/context-notice.ts";
-import { DeletedMessages } from "../../ui/chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../../ui/chat/export.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
   type StreamGroupPart,
-} from "../../ui/chat/grouped-render.ts";
+} from "./grouped-render.ts";
 import type {
   ChatInputHistoryKeyInput,
   ChatInputHistoryKeyResult,
 } from "../../ui/chat/input-history.ts";
-import { PinnedMessages } from "../../ui/chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../../ui/chat/pinned-summary.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
@@ -38,11 +33,8 @@ import {
 } from "../../ui/chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "../../ui/chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../../ui/chat/realtime-talk.ts";
-import { renderChatRunControls } from "../../ui/chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../../ui/chat/run-lifecycle.ts";
 import { getOrCreateSessionCacheValue } from "../../ui/chat/session-cache.ts";
-import { renderSideResult } from "../../ui/chat/side-result-render.ts";
-import type { ChatSideResult } from "../../ui/chat/side-result.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
@@ -55,12 +47,12 @@ import {
   renderChatRunStatusIndicator,
   renderCompactionIndicator,
   renderFallbackIndicator,
-} from "../../ui/chat/status-indicators.ts";
-import type { ChatStreamSegment } from "../../ui/chat/stream-text.ts";
+} from "./status-indicators.ts";
+import type { ChatStreamSegment } from "./stream-text.ts";
 import {
   getExpandedToolCards,
   syncToolCardExpansionState,
-} from "../../ui/chat/tool-expansion-state.ts";
+} from "./tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../ui/session-goal.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
@@ -79,7 +71,15 @@ import {
 } from "./attachment-payload-store.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 import { renderChatQueue } from "./chat-queue.ts";
+import { buildRawSidebarContent } from "./chat-sidebar-raw.ts";
+import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { renderContextNotice } from "./context-notice.ts";
+import { DeletedMessages } from "./deleted-messages.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
+import { PinnedMessages } from "./pinned-messages.ts";
+import { renderChatRunControls } from "./run-controls.ts";
+import { renderSideResult } from "./side-result-render.ts";
+import type { ChatSideResult } from "./side-result.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import "../../components/resizable-divider.ts";
 

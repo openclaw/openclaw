@@ -2,6 +2,7 @@
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "../pages/chat/data.ts";
+import type { ChatSideResult } from "../pages/chat/side-result.ts";
 import type { ChatAttachment, ChatQueueItem } from "../pages/chat/types.ts";
 import type { CronModelSuggestionsState, CronState } from "../pages/cron/data.ts";
 import type { LogEntry, LogLevel } from "../pages/logs/data.ts";
@@ -23,8 +24,7 @@ import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-convers
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
-import type { ChatSideResult } from "./chat/side-result.ts";
-import type { ChatStreamSegment } from "./chat/stream-text.ts";
+import type { ChatStreamSegment } from "../pages/chat/stream-text.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";

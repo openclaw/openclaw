@@ -1,5 +1,5 @@
 // Control UI chat module implements chat sidebar raw behavior.
-import type { SidebarContent } from "../sidebar-content.ts";
+import type { SidebarContent } from "../../ui/sidebar-content.ts";
 
 function toPlainTextCodeFence(value: string, language = ""): string {
   const fenceHeader = language ? `\`\`\`${language}` : "```";

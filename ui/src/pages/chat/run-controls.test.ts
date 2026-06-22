@@ -3,7 +3,7 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
-import type { GatewaySessionRow } from "../types.ts";
+import type { GatewaySessionRow } from "../../ui/types.ts";
 import {
   getContextNoticeViewModel,
   renderContextNotice,
@@ -21,7 +21,7 @@ vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 
-vi.mock("../markdown.ts", () => ({
+vi.mock("../../components/markdown.ts", () => ({
   toSanitizedMarkdownHtml: (value: string) => value,
 }));
 

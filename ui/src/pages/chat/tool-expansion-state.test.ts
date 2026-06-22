@@ -1,6 +1,6 @@
 // Control UI tests cover tool expansion state behavior.
 import { afterEach, describe, expect, it } from "vitest";
-import type { MessageGroup } from "../../pages/chat/chat-types.ts";
+import type { MessageGroup } from "./chat-types.ts";
 import {
   getExpandedToolCards,
   resetToolExpansionStateForTest,

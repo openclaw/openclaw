@@ -7,21 +7,21 @@ import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
 import { resolveUiHourCycleOptions } from "../../lib/format.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import type { AssistantIdentity } from "../../ui/assistant-identity.ts";
+import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
+import { openExternalUrlSafe } from "../../ui/open-external-url.ts";
+import type { SidebarContent } from "../../ui/sidebar-content.ts";
+import { detectTextDirection } from "../../ui/text-direction.ts";
+import { resolveToolDisplay } from "../../ui/tool-display.ts";
+import { resolveLocalUserName } from "../../ui/user-identity.ts";
 import type {
   ChatItem,
   MessageContentItem,
   MessageGroup,
   NormalizedMessage,
   ToolCard,
-} from "../../pages/chat/chat-types.ts";
-import type { AssistantIdentity } from "../assistant-identity.ts";
-import type { EmbedSandboxMode } from "../embed-sandbox.ts";
-import { openExternalUrlSafe } from "../open-external-url.ts";
-import type { SidebarContent } from "../sidebar-content.ts";
-import { detectTextDirection } from "../text-direction.ts";
-import { resolveToolDisplay } from "../tool-display.ts";
-import { resolveLocalUserName } from "../user-identity.ts";
-export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
+} from "./chat-types.ts";
+export { resolveAssistantTextAvatar } from "../../ui/views/agents-utils.ts";
 import {
   extractThinkingCached,
   formatReasoningMarkdown,
@@ -39,9 +39,9 @@ import {
   renderToolPreview,
   resolveCollapsedToolDetail,
 } from "../../pages/chat/tool-cards.ts";
+import { renderCopyAsMarkdownButton } from "../../ui/chat/copy-as-markdown.ts";
+import { formatCompactTokenCount } from "../../ui/chat/token-format.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
-import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
-import { formatCompactTokenCount } from "./token-format.ts";
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }

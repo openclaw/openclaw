@@ -6,7 +6,7 @@ import {
   assistantAvatarFallbackUrl,
   resolveChatAvatarRenderUrl,
   resolveAssistantTextAvatar,
-} from "../views/agents-utils.ts";
+} from "../../ui/views/agents-utils.ts";
 
 export type ChatWelcomeProps = {
   assistantName: string;
