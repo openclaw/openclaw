@@ -2908,6 +2908,102 @@ ${JSON.stringify({
     );
   });
 
+  it("reuses Claude live sessions for stable MCP scope despite token rotation", async () => {
+    const cancels: Array<ReturnType<typeof vi.fn>> = [];
+    const turnResults = ["first-ok", "rotated-ok", "changed-scope-ok"];
+    let turnIndex = 0;
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const spawnIndex = supervisorSpawnMock.mock.calls.length;
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      const cancel = vi.fn();
+      cancels.push(cancel);
+      return {
+        runId: `live-mcp-run-${spawnIndex}`,
+        pid: 3345 + spawnIndex,
+        startedAtMs: Date.now(),
+        stdin: {
+          write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+            const result = turnResults[turnIndex] ?? "ok";
+            turnIndex += 1;
+            input.onStdout?.(
+              [
+                JSON.stringify({ type: "system", subtype: "init", session_id: "live-mcp" }),
+                JSON.stringify({
+                  type: "result",
+                  session_id: "live-mcp",
+                  result,
+                }),
+              ].join("\n") + "\n",
+            );
+            cb?.();
+          }),
+          end: vi.fn(),
+        },
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel,
+      };
+    });
+    const runTurn = async (params: {
+      runId: string;
+      token: string;
+      inboundEventKind?: "room_event" | "user_request";
+    }) => {
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: params.runId,
+        sessionKey: "agent:main:telegram:group:chat123",
+        backend: {
+          liveSession: "claude-stdio",
+        },
+        mcpConfigHash: "same-openclaw-mcp-config",
+      });
+      context.params.messageChannel = "telegram";
+      context.params.agentAccountId = "work";
+      context.params.currentInboundEventKind = params.inboundEventKind ?? "user_request";
+      context.params.senderIsOwner = false;
+      const result = await runClaudeLiveSessionTurn({
+        context,
+        args: ["-p", "--output-format", "stream-json"],
+        env: { OPENCLAW_MCP_TOKEN: params.token },
+        prompt: "hi",
+        useResume: false,
+        noOutputTimeoutMs: 1_000,
+        getProcessSupervisor: () => ({
+          spawn: (spawnParams: Parameters<SupervisorSpawnFn>[0]) =>
+            supervisorSpawnMock(spawnParams) as ReturnType<SupervisorSpawnFn>,
+          cancel: vi.fn(),
+          cancelScope: vi.fn(),
+          reconcileOrphans: vi.fn(),
+          getRecord: vi.fn(),
+        }),
+        onAssistantDelta: () => {},
+        cleanup: async () => {},
+      });
+      return result.output.text;
+    };
+
+    await expect(
+      runTurn({ runId: "run-live-mcp-token-one", token: "scoped-token-one" }),
+    ).resolves.toBe("first-ok");
+    await expect(
+      runTurn({ runId: "run-live-mcp-token-two", token: "scoped-token-two" }),
+    ).resolves.toBe("rotated-ok");
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+    expect(cancels[0]).not.toHaveBeenCalled();
+
+    await expect(
+      runTurn({
+        runId: "run-live-mcp-changed-scope",
+        token: "scoped-token-three",
+        inboundEventKind: "room_event",
+      }),
+    ).resolves.toBe("changed-scope-ok");
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(cancels[0]).toHaveBeenCalledWith("manual-cancel");
+    expect(cancels[1]).not.toHaveBeenCalled();
+  });
+
   it("ignores non-JSON stdout lines from Claude live sessions", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     const stdin = {

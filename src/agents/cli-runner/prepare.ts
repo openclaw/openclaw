@@ -14,7 +14,8 @@ import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
-  resolveMcpLoopbackBearerToken,
+  issueMcpLoopbackScopedBearerToken,
+  revokeMcpLoopbackScopedBearerToken,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import { isClaudeCliProvider } from "../../plugin-sdk/anthropic-cli.js";
@@ -99,7 +100,8 @@ const prepareDeps = {
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
   createMcpLoopbackServerConfig,
-  resolveMcpLoopbackBearerToken,
+  issueMcpLoopbackScopedBearerToken,
+  revokeMcpLoopbackScopedBearerToken,
   resolveMcpLoopbackScopedTools,
   resolveOpenClawReferencePaths: async (
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
@@ -437,39 +439,62 @@ export async function prepareCliRunContext(
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
   const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);
-  const preparedBackend = await prepareCliBundleMcpConfig({
-    enabled: bundleMcpEnabled,
-    mode: backendResolved.bundleMcpMode,
-    backend: backendResolved.config,
-    workspaceDir,
-    config: params.config,
-    additionalConfig: mcpLoopbackRuntime
-      ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
-      : undefined,
-    env: mcpLoopbackRuntime
-      ? {
-          OPENCLAW_MCP_TOKEN: prepareDeps.resolveMcpLoopbackBearerToken(
-            mcpLoopbackRuntime,
-            params.senderIsOwner === true,
-          ),
-          OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
-          OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
-          OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
-          OPENCLAW_MCP_SESSION_ID: params.sessionId,
-          OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
-          OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
-          OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
-          OPENCLAW_MCP_CURRENT_MESSAGE_ID:
-            params.currentMessageId != null ? String(params.currentMessageId) : "",
-          OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
-          OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
-          OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
-          OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: requireExplicitMessageTarget ? "true" : "",
-          OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
-        }
-      : undefined,
-    warn: (message) => cliBackendLog.warn(message),
-  });
+  const mcpLoopbackToken = mcpLoopbackRuntime
+    ? prepareDeps.issueMcpLoopbackScopedBearerToken(mcpLoopbackRuntime, {
+        sessionKey: params.sessionKey,
+        messageProvider: params.messageChannel ?? params.messageProvider,
+        currentChannelId: params.currentChannelId,
+        currentThreadTs: params.currentThreadTs,
+        currentMessageId:
+          params.currentMessageId != null ? String(params.currentMessageId) : undefined,
+        currentInboundAudio: params.currentInboundAudio === true,
+        accountId: params.agentAccountId,
+        inboundEventKind: params.currentInboundEventKind,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        sessionId: params.sessionId,
+        requireExplicitMessageTarget,
+        senderIsOwner: params.senderIsOwner === true,
+      })
+    : undefined;
+  let preparedBackend: Awaited<ReturnType<typeof prepareCliBundleMcpConfig>>;
+  try {
+    preparedBackend = await prepareCliBundleMcpConfig({
+      enabled: bundleMcpEnabled,
+      mode: backendResolved.bundleMcpMode,
+      backend: backendResolved.config,
+      workspaceDir,
+      config: params.config,
+      additionalConfig: mcpLoopbackRuntime
+        ? prepareDeps.createMcpLoopbackServerConfig(mcpLoopbackRuntime.port)
+        : undefined,
+      env:
+        mcpLoopbackRuntime && mcpLoopbackToken
+          ? {
+              OPENCLAW_MCP_TOKEN: mcpLoopbackToken,
+              OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
+              OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
+              OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+              OPENCLAW_MCP_SESSION_ID: params.sessionId,
+              OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+              OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
+              OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
+              OPENCLAW_MCP_CURRENT_MESSAGE_ID:
+                params.currentMessageId != null ? String(params.currentMessageId) : "",
+              OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
+              OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
+              OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
+              OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: requireExplicitMessageTarget
+                ? "true"
+                : "",
+              OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
+            }
+          : undefined,
+      warn: (message) => cliBackendLog.warn(message),
+    });
+  } catch (error) {
+    prepareDeps.revokeMcpLoopbackScopedBearerToken(mcpLoopbackToken);
+    throw error;
+  }
   const prepareExecutionContext = {
     config: params.config,
     workspaceDir,
@@ -520,16 +545,22 @@ export async function prepareCliRunContext(
     preparedExecution?.env && Object.keys(preparedExecution.env).length > 0
       ? { ...preparedBackend.env, ...preparedExecution.env }
       : preparedBackend.env;
-  const preparedBackendCleanup =
-    preparedBackend.cleanup || preparedExecution?.cleanup
-      ? async () => {
+  const shouldRunPreparedBackendCleanup = Boolean(
+    preparedBackend.cleanup || preparedExecution?.cleanup || mcpLoopbackToken,
+  );
+  const preparedBackendCleanup = shouldRunPreparedBackendCleanup
+    ? async () => {
+        try {
+          await preparedExecution?.cleanup?.();
+        } finally {
           try {
-            await preparedExecution?.cleanup?.();
-          } finally {
             await preparedBackend.cleanup?.();
+          } finally {
+            prepareDeps.revokeMcpLoopbackScopedBearerToken(mcpLoopbackToken);
           }
         }
-      : undefined;
+      }
+    : undefined;
   const claudeSkillsPlugin = isSideQuestion
     ? { args: [], cleanup: async () => {} }
     : await prepareDeps.prepareClaudeCliSkillsPlugin({

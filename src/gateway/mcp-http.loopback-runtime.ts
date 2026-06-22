@@ -1,8 +1,27 @@
 // Process-local MCP loopback runtime state for owner/non-owner HTTP access.
+import crypto from "node:crypto";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+
 type McpLoopbackRuntime = {
   port: number;
   ownerToken: string;
   nonOwnerToken: string;
+};
+
+export type McpLoopbackTokenScope = {
+  sessionKey?: string;
+  messageProvider?: string;
+  currentChannelId?: string;
+  currentThreadTs?: string;
+  currentMessageId?: string;
+  currentInboundAudio?: boolean;
+  accountId?: string;
+  inboundEventKind?: InboundEventKind;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sessionId?: string;
+  requireExplicitMessageTarget?: boolean;
+  senderIsOwner: boolean;
 };
 
 export type McpLoopbackToolCallResult = {
@@ -46,8 +65,14 @@ export type McpLoopbackToolCallCaptureHandle = {
 };
 
 let activeRuntime: McpLoopbackRuntime | undefined;
+const scopedTokenContexts = new Map<string, McpLoopbackTokenScope>();
 let nextToolCallCaptureGeneration = 0;
 const toolCallCaptures = new Map<string, McpLoopbackToolCallCapture>();
+
+function normalizeScopeString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
 
 function deleteMcpLoopbackToolCallCapture(captureKey: string): void {
   const capture = toolCallCaptures.get(captureKey);
@@ -349,6 +374,7 @@ export function getActiveMcpLoopbackRuntime(): McpLoopbackRuntime | undefined {
 /** Install the active loopback runtime used by in-process MCP callers. */
 export function setActiveMcpLoopbackRuntime(runtime: McpLoopbackRuntime): void {
   activeRuntime = { ...runtime };
+  scopedTokenContexts.clear();
 }
 
 /** Choose the bearer token matching owner/non-owner caller identity. */
@@ -359,10 +385,54 @@ export function resolveMcpLoopbackBearerToken(
   return senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken;
 }
 
+export function issueMcpLoopbackScopedBearerToken(
+  runtime: McpLoopbackRuntime,
+  scope: McpLoopbackTokenScope,
+): string {
+  if (
+    !activeRuntime ||
+    activeRuntime.ownerToken !== runtime.ownerToken ||
+    activeRuntime.nonOwnerToken !== runtime.nonOwnerToken
+  ) {
+    throw new Error("mcp loopback runtime is not active");
+  }
+  const token = crypto.randomBytes(32).toString("hex");
+  scopedTokenContexts.set(token, {
+    sessionKey: normalizeScopeString(scope.sessionKey),
+    messageProvider: normalizeScopeString(scope.messageProvider),
+    currentChannelId: normalizeScopeString(scope.currentChannelId),
+    currentThreadTs: normalizeScopeString(scope.currentThreadTs),
+    currentMessageId: normalizeScopeString(scope.currentMessageId),
+    currentInboundAudio: scope.currentInboundAudio,
+    accountId: normalizeScopeString(scope.accountId),
+    inboundEventKind: scope.inboundEventKind,
+    sourceReplyDeliveryMode: scope.sourceReplyDeliveryMode,
+    sessionId: normalizeScopeString(scope.sessionId),
+    requireExplicitMessageTarget: scope.requireExplicitMessageTarget,
+    senderIsOwner: scope.senderIsOwner,
+  });
+  return token;
+}
+
+export function revokeMcpLoopbackScopedBearerToken(token: string | undefined): void {
+  if (token) {
+    scopedTokenContexts.delete(token);
+  }
+}
+
+export function resolveMcpLoopbackScopedBearerTokenContext(
+  authHeader: string,
+): McpLoopbackTokenScope | undefined {
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : "";
+  const context = token ? scopedTokenContexts.get(token) : undefined;
+  return context ? { ...context } : undefined;
+}
+
 /** Clear loopback runtime only when the owning token matches the active runtime. */
 export function clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken: string): void {
   if (activeRuntime?.ownerToken === ownerToken) {
     activeRuntime = undefined;
+    scopedTokenContexts.clear();
   }
 }
 

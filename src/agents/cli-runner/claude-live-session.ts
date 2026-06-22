@@ -277,6 +277,32 @@ function buildClaudeLiveKey(context: PreparedCliRunContext): string {
   })}`;
 }
 
+function buildMcpLoopbackScopeFingerprint(context: PreparedCliRunContext): string {
+  return sha256(
+    JSON.stringify({
+      accountId: context.params.agentAccountId,
+      inboundEventKind: context.params.currentInboundEventKind,
+      messageProvider: context.params.messageChannel ?? context.params.messageProvider,
+      senderIsOwner: context.params.senderIsOwner === true,
+      sessionKey: context.params.sessionKey,
+    }),
+  );
+}
+
+function buildClaudeLiveStableEnvEntries(params: {
+  context: PreparedCliRunContext;
+  env: Record<string, string>;
+}): Array<[string, string]> {
+  return Object.keys(params.env)
+    .toSorted()
+    .map((key) => {
+      if (key === "OPENCLAW_MCP_TOKEN" && params.context.preparedBackend.mcpConfigHash) {
+        return [key, buildMcpLoopbackScopeFingerprint(params.context)];
+      }
+      return [key, params.env[key] ? sha256(params.env[key]) : ""];
+    });
+}
+
 function buildClaudeLiveFingerprint(params: {
   context: PreparedCliRunContext;
   argv: string[];
@@ -354,9 +380,10 @@ function buildClaudeLiveFingerprint(params: {
     mcpConfigHash: params.context.preparedBackend.mcpConfigHash,
     skillsFingerprint,
     argv: stableArgv,
-    env: Object.keys(params.env)
-      .toSorted()
-      .map((key) => [key, params.env[key] ? sha256(params.env[key]) : ""]),
+    env: buildClaudeLiveStableEnvEntries({
+      context: params.context,
+      env: params.env,
+    }),
   });
 }
 

@@ -20,6 +20,7 @@ import {
   markMcpLoopbackToolCallFinished,
   markMcpLoopbackToolCallStarted,
   recordMcpLoopbackToolCallResult,
+  resolveMcpLoopbackScopedBearerTokenContext,
   resolveMcpLoopbackYieldContext,
   setActiveMcpLoopbackRuntime,
   updateMcpLoopbackToolCallCapture,
@@ -42,7 +43,9 @@ import { McpLoopbackToolCache } from "./mcp-http.runtime.js";
 export {
   createMcpLoopbackServerConfig,
   getActiveMcpLoopbackRuntime,
+  issueMcpLoopbackScopedBearerToken,
   resolveMcpLoopbackBearerToken,
+  revokeMcpLoopbackScopedBearerToken,
 } from "./mcp-http.loopback-runtime.js";
 
 type McpLoopbackServer = {
@@ -183,6 +186,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
       res,
       ownerToken,
       nonOwnerToken,
+      resolveScopedTokenContext: resolveMcpLoopbackScopedBearerTokenContext,
       onSseResponse: trackSseResponse,
     });
     if (!auth) {
@@ -225,7 +229,10 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         });
         markMcpLoopbackRequestClassified(cliRequestCaptureHandle);
         const cfg = getRuntimeConfig();
-        const requestContext = resolveMcpRequestContext(req, cfg, auth);
+        // Bind the request scope to the per-request token instead of trusting
+        // ambient loopback HTTP headers. resolveMcpRequestContext reads the
+        // authorized token scope (auth) rather than req headers.
+        const requestContext = resolveMcpRequestContext(cfg, auth);
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
         const scopedTools = toolCache.resolve({
           cfg,

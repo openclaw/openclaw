@@ -257,9 +257,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn((runtime, senderIsOwner) =>
-        senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken,
-      ),
+      issueMcpLoopbackScopedBearerToken: vi.fn(() => "scoped-loopback-token"),
+      revokeMcpLoopbackScopedBearerToken: vi.fn(),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
@@ -809,7 +808,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime,
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      issueMcpLoopbackScopedBearerToken: vi.fn(() => "loopback-token"),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
     });
 
@@ -888,7 +887,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime,
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "loopback-token"),
+      issueMcpLoopbackScopedBearerToken: vi.fn(() => "loopback-token"),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
     });
 
@@ -964,7 +963,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       makeBootstrapWarn: vi.fn(() => () => undefined),
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn(() => "token"),
+      issueMcpLoopbackScopedBearerToken: vi.fn(() => "token"),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({
         agentId: "main",
         tools: [
@@ -2196,7 +2195,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-  it("passes current turn kind into bundle MCP loopback env", async () => {
+  it("binds current turn kind into the scoped bundle MCP token", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
@@ -2206,6 +2205,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       }));
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
       const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const issueMcpLoopbackScopedBearerToken = vi.fn(() => "scoped-room-token");
       const resolveMcpLoopbackScopedTools = vi.fn(() => ({
         agentId: "main",
         tools: [
@@ -2222,6 +2222,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         getActiveMcpLoopbackRuntime,
         ensureMcpLoopbackServer,
         createMcpLoopbackServerConfig,
+        issueMcpLoopbackScopedBearerToken,
         resolveMcpLoopbackScopedTools,
       });
       cliBackendsTesting.setDepsForTest({
@@ -2262,7 +2263,29 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         requireExplicitMessageTarget: true,
       });
 
+      expect(issueMcpLoopbackScopedBearerToken).toHaveBeenCalledWith(
+        {
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        },
+        {
+          sessionKey: "agent:main:telegram:group:chat123",
+          messageProvider: "telegram",
+          currentChannelId: "telegram:-100123:topic:42",
+          currentThreadTs: "42",
+          currentMessageId: "reply-message-1",
+          currentInboundAudio: true,
+          accountId: undefined,
+          inboundEventKind: "room_event",
+          sourceReplyDeliveryMode: "message_tool_only",
+          sessionId: "session-test",
+          requireExplicitMessageTarget: true,
+          senderIsOwner: false,
+        },
+      );
       expect(context.preparedBackend.env).toMatchObject({
+        OPENCLAW_MCP_TOKEN: "scoped-room-token",
         OPENCLAW_MCP_SESSION_ID: "session-test",
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
         OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",

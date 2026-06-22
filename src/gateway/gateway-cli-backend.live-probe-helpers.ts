@@ -20,6 +20,10 @@ import {
   type CronListJob,
 } from "./live-agent-probes.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.js";
+import {
+  issueMcpLoopbackScopedBearerToken,
+  revokeMcpLoopbackScopedBearerToken,
+} from "./mcp-http.loopback-runtime.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 // CI Docker live lanes can see repeated cancelled cron tool calls before a job
@@ -194,17 +198,18 @@ async function callLoopbackJsonRpc(params: {
   if (!runtime) {
     throw new Error("mcp loopback runtime is not active");
   }
+  // Live probes act as the owner; the scoped token binds the probe's
+  // session/channel context server-side so headers cannot widen it.
+  const token = issueMcpLoopbackScopedBearerToken(runtime, {
+    sessionKey: params.sessionKey,
+    messageProvider: params.messageProvider,
+    accountId: params.accountId,
+    senderIsOwner: true,
+  });
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${runtime.ownerToken}`,
+    Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
-    "x-session-key": params.sessionKey,
   };
-  if (params.messageProvider) {
-    headers["x-openclaw-message-channel"] = params.messageProvider;
-  }
-  if (params.accountId) {
-    headers["x-openclaw-account-id"] = params.accountId;
-  }
   const timeoutMs = parsePositiveInt(
     params.env?.OPENCLAW_MCP_LOOPBACK_PROBE_TIMEOUT_MS,
     CLI_CRON_MCP_LOOPBACK_REQUEST_TIMEOUT_MS,
@@ -229,6 +234,7 @@ async function callLoopbackJsonRpc(params: {
     text = await readBoundedResponseText(response, maxBodyBytes);
   } finally {
     clearTimeout(timer);
+    revokeMcpLoopbackScopedBearerToken(token);
   }
   if (!response) {
     throw new Error("mcp loopback did not return a response");
