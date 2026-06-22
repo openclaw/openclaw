@@ -1,4 +1,5 @@
 /** Tests block reply pipeline buffering, dedupe, and final flush behavior. */
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import {
@@ -448,5 +449,31 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     await pipeline.flush({ force: true });
 
     expect(pipeline.hasSentPayload({ text: "summary" })).toBe(false);
+  });
+
+  it("clamps oversized delivery timeouts before arming timers", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const observedTimeouts: number[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (_payload, options) => {
+        observedTimeouts.push(options?.timeoutMs ?? 0);
+        await waitForAbort(options?.abortSignal);
+      },
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+    });
+
+    pipeline.enqueue({ text: "slow block" });
+    const flushing = pipeline.flush({ force: true });
+    await Promise.resolve();
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(observedTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await flushing;
+
+    expect(pipeline.isAborted()).toBe(true);
+    setTimeoutSpy.mockRestore();
   });
 });

@@ -1,4 +1,5 @@
 // Buffers streaming reply blocks before coalesced final delivery.
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
@@ -95,6 +96,10 @@ const withTimeout = async <T>(
   }
 };
 
+function resolveBlockReplyTimeoutMs(timeoutMs: number): number {
+  return clampPositiveTimerTimeoutMs(timeoutMs) ?? 0;
+}
+
 /** Creates the ordered block reply delivery pipeline for streamed payloads. */
 export function createBlockReplyPipeline(params: {
   onBlockReply: (
@@ -105,7 +110,8 @@ export function createBlockReplyPipeline(params: {
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
 }): BlockReplyPipeline {
-  const { onBlockReply, timeoutMs, coalescing, buffer } = params;
+  const { onBlockReply, coalescing, buffer } = params;
+  const timeoutMs = resolveBlockReplyTimeoutMs(params.timeoutMs);
   const sentKeys = new Set<string>();
   const sentContentKeys = new Set<string>();
   const sentMediaUrls = new Set<string>();

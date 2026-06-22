@@ -84,6 +84,36 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
+  it("keeps docs-change detection fail-safe and fixture-aware", () => {
+    const action = readFileSync(".github/actions/detect-docs-changes/action.yml", "utf8");
+
+    expect(action).toContain("docs_only:");
+    expect(action).toContain("docs_changed:");
+    expect(action).toContain('BASE="${{ github.event.before }}"');
+    expect(action).toContain('BASE="${{ github.event.pull_request.base.sha }}"');
+    expect(action).toContain(
+      'CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")',
+    );
+    expect(action).toContain('if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then');
+    expect(action).toContain("docs_only=false");
+    expect(action).toContain("docs_changed=false");
+    expect(action).toContain("test/fixtures/*)");
+    expect(action).toContain("docs/* | *.md | *.mdx)");
+  });
+
+  it("bounds matrix fan-out for runner-registration pressure", () => {
+    const workflow = readCiWorkflow();
+
+    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(4);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(6);
+    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(4);
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(4);
+    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(4);
+    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(4);
+    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
+    expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
+  });
+
   it("runs the session accessor ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];

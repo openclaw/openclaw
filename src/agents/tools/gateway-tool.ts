@@ -19,8 +19,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import {
   buildRestartSuccessContinuation,
+  clearRestartSentinel,
   formatDoctorNonInteractiveHint,
-  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -493,7 +493,7 @@ export function createGatewayTool(opts?: {
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
-        let sentinelPath: string | null = null;
+        let sentinelWritten = false;
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
@@ -502,10 +502,13 @@ export function createGatewayTool(opts?: {
           sessionKey,
           emitHooks: {
             beforeEmit: async () => {
-              sentinelPath = await writeRestartSentinel(payload);
+              await writeRestartSentinel(payload);
+              sentinelWritten = true;
             },
             afterEmitRejected: async () => {
-              await removeRestartSentinelFile(sentinelPath);
+              if (sentinelWritten) {
+                await clearRestartSentinel();
+              }
             },
           },
         });

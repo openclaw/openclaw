@@ -800,6 +800,64 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it("uses configured model defaults instead of runtime auth metadata for the fast menu", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {
+              params: { fastMode: "auto", fastAutoOnSeconds: 30 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        updatedAt: 0,
+      },
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "fast",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "fast",
+    )?.[0];
+    expectRecordFields(menuCall, { cfg }, "fast menu call");
+    expect(
+      commandAuthMocks.resolveCommandArgMenu.mock.calls.some(
+        ([params]) =>
+          params.command.key === "fast" &&
+          params.provider === "openai" &&
+          params.model === "gpt-5.5",
+      ),
+    ).toBe(true);
+    const options = expectSendMessageCall({
+      sendMessage,
+      chatId: 100,
+      textIncludes:
+        "Current fast mode: auto (30 sec) (default: model).\nOptions: on, off, auto (30 sec), default, status.",
+      requireReplyMarkup: true,
+      label: "fast menu",
+    });
+    const replyMarkup = options.reply_markup as
+      | { inline_keyboard?: Array<Array<{ text?: string }>> }
+      | undefined;
+    const labels = (replyMarkup?.inline_keyboard ?? []).flatMap((row) =>
+      row.map((button) => button.text),
+    );
+    expect(labels).toContain("auto (30 sec)");
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
   it("hydrates runtime catalog metadata for thinking menu defaults", async () => {
     const cfg = {
       agents: {

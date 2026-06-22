@@ -33,7 +33,7 @@ class CliArgumentError extends Error {
 
 function readValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1]?.trim() ?? "";
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new CliArgumentError(`${flag} requires a value`);
   }
   return value;

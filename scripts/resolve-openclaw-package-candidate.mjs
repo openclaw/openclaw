@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Normalizes package-acceptance inputs into the tarball shape consumed by Docker E2E.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,6 +26,7 @@ const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
 const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -96,9 +98,13 @@ export function parseArgs(argv) {
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = (name) => {
+    const readValue = (name, readOptions = {}) => {
       const value = argv[(index += 1)];
-      if (value === undefined) {
+      if (
+        value === undefined ||
+        (!readOptions.allowEmpty && value === "") ||
+        value.startsWith("-")
+      ) {
         throw new Error(`${name} requires a value`);
       }
       return value;
@@ -114,17 +120,17 @@ export function parseArgs(argv) {
     } else if (arg === "--output-name") {
       options.outputName = readValue(arg);
     } else if (arg === "--package-sha256") {
-      options.packageSha256 = readValue(arg).toLowerCase();
+      options.packageSha256 = readValue(arg, { allowEmpty: true }).toLowerCase();
     } else if (arg === "--package-ref") {
-      options.packageRef = readValue(arg);
+      options.packageRef = readValue(arg, { allowEmpty: true });
     } else if (arg === "--package-spec") {
-      options.packageSpec = readValue(arg);
+      options.packageSpec = readValue(arg, { allowEmpty: true });
     } else if (arg === "--package-url") {
-      options.packageUrl = readValue(arg);
+      options.packageUrl = readValue(arg, { allowEmpty: true });
     } else if (arg === "--source") {
       options.source = readValue(arg);
     } else if (arg === "--trusted-source-id") {
-      options.trustedSourceId = readValue(arg);
+      options.trustedSourceId = readValue(arg, { allowEmpty: true });
     } else if (arg === "--trusted-source-policy") {
       options.trustedSourcePolicy = readValue(arg);
     } else if (arg === "--help" || arg === "-h") {
@@ -178,8 +184,30 @@ export function resolveNpmPackageCandidatePackRunner(packageSpec, outputDir, par
   });
 }
 
+function numericTimerValueMs(valueMs) {
+  const value = Number(valueMs);
+  return Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+function resolveTimerTimeoutMs(valueMs, fallbackMs = MAX_TIMER_TIMEOUT_MS) {
+  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
+  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+function resolveOptionalTimerTimeoutMs(valueMs) {
+  if (valueMs === undefined) {
+    return undefined;
+  }
+  return resolveTimerTimeoutMs(valueMs, 1);
+}
+
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
+    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+      options.killAfterMs,
+      COMMAND_TIMEOUT_KILL_AFTER_MS,
+    );
     const useProcessGroup = process.platform !== "win32";
     const spawnOptions = {
       cwd: options.cwd ?? ROOT_DIR,
@@ -197,34 +225,23 @@ function run(command, args, options = {}) {
     let timedOut = false;
     let killTimer;
     let forceKillAt;
-    const killChild = (signal) => {
-      if (useProcessGroup && child.pid) {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch {
-          // The process group can disappear between timeout and cleanup.
-        }
-      }
-      child.kill(signal);
-    };
+    const killChild = (signal) => signalChildProcessTree(child, signal, { useProcessGroup });
     const terminateChild = () => {
       killChild("SIGTERM");
-      const killAfterMs = options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS;
-      forceKillAt = Date.now() + killAfterMs;
+      forceKillAt = Date.now() + resolvedKillAfterMs;
       killTimer = setTimeout(() => {
         killTimer = undefined;
         forceKillAt = undefined;
         killChild("SIGKILL");
-      }, killAfterMs);
+      }, resolvedKillAfterMs);
     };
     const timeout =
-      options.timeoutMs === undefined
+      resolvedTimeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
             terminateChild();
-          }, options.timeoutMs);
+          }, resolvedTimeoutMs);
     timeout?.unref?.();
     ACTIVE_CHILD_KILLERS.add(killChild);
     let stdout = { text: "", truncatedChars: 0 };
@@ -262,14 +279,14 @@ function run(command, args, options = {}) {
       }
       if (timedOut) {
         const timeoutError = new Error(
-          `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`,
+          `${command} ${args.join(" ")} timed out after ${resolvedTimeoutMs}ms`,
         );
         if (killTimer) {
           void finishTimedOutProcessTree(child, {
             forceKillAt,
             killChild,
             killTimer,
-            killAfterMs: options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS,
+            killAfterMs: resolvedKillAfterMs,
             useProcessGroup,
           }).then(() => reject(timeoutError), reject);
           return;
@@ -310,6 +327,43 @@ async function finishTimedOutProcessTree(
     killChild("SIGKILL");
     await waitForProcessTreeExit(child, killAfterMs, useProcessGroup);
   }
+}
+
+export function signalChildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process group can disappear between timeout and cleanup.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
 }
 
 function childHasExited(child) {
@@ -458,6 +512,18 @@ export async function readArtifactPackageCandidateMetadata(dir) {
   const parsed = JSON.parse(raw);
   if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error(`artifact package-candidate.json must contain a JSON object`);
+  }
+  const packageSourceSha =
+    typeof parsed.packageSourceSha === "string" ? parsed.packageSourceSha.trim() : "";
+  if (packageSourceSha && !/^[0-9a-f]{40}$/iu.test(packageSourceSha)) {
+    throw new Error(
+      "artifact package-candidate.json packageSourceSha must be a 40-character commit SHA",
+    );
+  }
+  if (typeof parsed.packageSourceSha === "string") {
+    return packageSourceSha
+      ? { ...parsed, packageSourceSha: packageSourceSha.toLowerCase() }
+      : { ...parsed, packageSourceSha: "" };
   }
   return parsed;
 }
@@ -862,6 +928,14 @@ function parseTrustedPort(value) {
   return Number.NaN;
 }
 
+function pathnameMatchesTrustedPrefix(pathname, prefix) {
+  if (prefix === "/") {
+    return true;
+  }
+  const normalizedPrefix = prefix.endsWith("/") ? prefix : `${prefix}/`;
+  return pathname === prefix || pathname.startsWith(normalizedPrefix);
+}
+
 function toPathPrefixes(value, sourceId) {
   const prefixes = value === undefined ? ["/"] : value;
   if (!Array.isArray(prefixes) || prefixes.length === 0) {
@@ -953,7 +1027,11 @@ function validateTrustedPackageDownloadUrl(parsed, trustedSource, options = {}) 
       `package_url port ${packageUrlPort(parsed)} is not allowed by trusted package source ${trustedSource.id}`,
     );
   }
-  if (!trustedSource.pathPrefixes.some((prefix) => parsed.pathname.startsWith(prefix))) {
+  if (
+    !trustedSource.pathPrefixes.some((prefix) =>
+      pathnameMatchesTrustedPrefix(parsed.pathname, prefix),
+    )
+  ) {
     throw new Error(
       `package_url path is not allowed by trusted package source ${trustedSource.id}`,
     );
@@ -1195,7 +1273,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
 
 async function openPackageDownloadResponse(url, options) {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
-  const timeoutMs = options.timeoutMs ?? PACKAGE_URL_DOWNLOAD_TIMEOUT_MS;
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, PACKAGE_URL_DOWNLOAD_TIMEOUT_MS);
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
   let parsed = new URL(url);

@@ -4,9 +4,9 @@
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { PluginHookModelFailoverEvent } from "../../../plugins/hook-types.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
+import { sanitizeForConsole } from "../../console-sanitize.js";
 import {
   buildApiErrorObservationFields,
-  sanitizeForConsole,
   shouldSuppressRawErrorConsoleSuffix,
 } from "../../embedded-agent-error-observation.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";

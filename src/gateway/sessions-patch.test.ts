@@ -320,6 +320,20 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBeUndefined();
   });
 
+  test("sets fastMode to auto", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {} as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: "auto" },
+      }),
+    );
+
+    expect(entry.fastMode).toBe("auto");
+  });
+
   test("persists verboseLevel=full", async () => {
     const entry = expectPatchOk(
       await runPatch({
