@@ -137,7 +137,7 @@ describe("status-runtime-shared", () => {
     expect(usageCall.config).toEqual({ gateway: {} });
     expect(usageCall.agentDir).toContain("main");
     expect(usageCall.skipPluginAuthWithoutCredentialSource).toBe(true);
-    expect(usageCall.allowOAuthRefresh).toBe(false);
+    expect(usageCall.allowOAuthRefresh).toBeUndefined();
   });
 
   it("resolves usage summaries with explicit agent scope", async () => {
@@ -152,7 +152,6 @@ describe("status-runtime-shared", () => {
       config: { gateway: {} },
       agentDir: "/tmp/status-agent",
       skipPluginAuthWithoutCredentialSource: true,
-      allowOAuthRefresh: false,
     });
   });
 
@@ -259,7 +258,7 @@ describe("status-runtime-shared", () => {
     expect(usageCall.config).toEqual({ gateway: {} });
     expect(usageCall.agentDir).toContain("main");
     expect(usageCall.skipPluginAuthWithoutCredentialSource).toBe(true);
-    expect(usageCall.allowOAuthRefresh).toBe(false);
+    expect(usageCall.allowOAuthRefresh).toBeUndefined();
     expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
       method: "health",
       params: { probe: true },
