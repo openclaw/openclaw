@@ -9,14 +9,13 @@ import { t } from "../../i18n/index.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
 import { copyToClipboard } from "../../ui/chat/clipboard.ts";
 import { decodeCodeBlockCopyPayload } from "../../ui/chat/code-block-copy-payload.ts";
-import { exportChatMarkdown } from "../../ui/chat/export.ts";
+import { exportChatMarkdown } from "./export.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
   type StreamGroupPart,
 } from "./grouped-render.ts";
-import { getPinnedMessageSummary } from "../../ui/chat/pinned-summary.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
@@ -61,6 +60,7 @@ import { DeletedMessages } from "./deleted-messages.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import { PinnedMessages } from "./pinned-messages.ts";
+import { getPinnedMessageSummary } from "./pinned-summary.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
