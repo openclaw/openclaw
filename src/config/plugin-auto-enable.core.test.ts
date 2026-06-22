@@ -36,6 +36,9 @@ vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
           Boolean(params.env?.[key]?.trim()),
         );
       }
+      if (params.channelId === "test-channel") {
+        return Boolean(params.env?.TEST_CHANNEL_TOKEN?.trim());
+      }
       return actual.hasBundledChannelConfiguredState(params);
     },
   };
@@ -66,6 +69,7 @@ const emptyDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] 
 function makeBundledChannelCandidate(params: {
   pluginId: string;
   channelId: string;
+  configuredState?: { env: { anyOf: string[] } };
 }): PluginCandidate {
   return {
     idHint: params.pluginId,
@@ -74,7 +78,10 @@ function makeBundledChannelCandidate(params: {
     origin: "bundled",
     packageManifest: {
       plugin: { id: params.pluginId },
-      channel: { id: params.channelId },
+      channel: {
+        id: params.channelId,
+        ...(params.configuredState ? { configuredState: params.configuredState } : {}),
+      },
     },
   };
 }
@@ -1198,10 +1205,11 @@ describe("applyPluginAutoEnable core", () => {
   it("does not reuse same-turn auto-enable results after discovery mutates in place", () => {
     const config: OpenClawConfig = {};
     const mutableDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
-    const manifestRegistry = makeRegistry([{ id: "irc-plugin", channels: ["irc"] }]);
+    const manifestRegistry = makeRegistry([
+      { id: "test-channel-plugin", channels: ["test-channel"] },
+    ]);
     const configuredEnv = makeIsolatedEnv({
-      IRC_HOST: "irc.libera.chat",
-      IRC_NICK: "openclaw-bot",
+      TEST_CHANNEL_TOKEN: "token",
     });
 
     const first = applyPluginAutoEnable({
@@ -1211,7 +1219,11 @@ describe("applyPluginAutoEnable core", () => {
       manifestRegistry,
     });
     mutableDiscovery.candidates.push(
-      makeBundledChannelCandidate({ pluginId: "irc-plugin", channelId: "irc" }),
+      makeBundledChannelCandidate({
+        pluginId: "test-channel-plugin",
+        channelId: "test-channel",
+        configuredState: { env: { anyOf: ["TEST_CHANNEL_TOKEN"] } },
+      }),
     );
     const second = applyPluginAutoEnable({
       config,
@@ -1220,8 +1232,8 @@ describe("applyPluginAutoEnable core", () => {
       manifestRegistry,
     });
 
-    expect(first.config.plugins?.entries?.["irc-plugin"]).toBeUndefined();
-    expect(second.config.plugins?.entries?.["irc-plugin"]?.enabled).toBe(true);
+    expect(first.config.plugins?.entries?.["test-channel-plugin"]).toBeUndefined();
+    expect(second.config.plugins?.entries?.["test-channel-plugin"]?.enabled).toBe(true);
     expect(second).not.toBe(first);
   });
 
