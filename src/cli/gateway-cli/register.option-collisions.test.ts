@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   callGatewayCli: vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
     ok: true,
   })),
+  emitReachableGatewayAuthDiagnostic: vi.fn(async (_params: unknown) => false),
   gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
   defaultRuntime: {
     log: vi.fn(),
@@ -17,7 +18,8 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-const { callGatewayCli, gatewayStatusCommand, defaultRuntime } = mocks;
+const { callGatewayCli, emitReachableGatewayAuthDiagnostic, gatewayStatusCommand, defaultRuntime } =
+  mocks;
 
 vi.mock("../cli-utils.js", () => ({
   runCommandWithRuntime: async (
@@ -68,7 +70,8 @@ vi.mock("../daemon-cli/register-service-commands.js", () => ({
 }));
 
 vi.mock("../../commands/health.js", () => ({
-  emitReachableGatewayAuthDiagnostic: vi.fn(async () => false),
+  emitReachableGatewayAuthDiagnostic: (params: unknown) =>
+    mocks.emitReachableGatewayAuthDiagnostic(params),
   formatHealthChannelLines: () => [],
 }));
 
@@ -142,6 +145,7 @@ describe("gateway register option collisions", () => {
 
   beforeEach(() => {
     callGatewayCli.mockClear();
+    emitReachableGatewayAuthDiagnostic.mockClear();
     gatewayStatusCommand.mockClear();
     defaultRuntime.log.mockClear();
     defaultRuntime.error.mockClear();
@@ -221,5 +225,29 @@ describe("gateway register option collisions", () => {
   ])("$name", async ({ argv, assert }) => {
     await sharedProgram.parseAsync(argv, { from: "user" });
     assert();
+  });
+
+  it("uses the effective local port config for gateway health auth diagnostics", async () => {
+    const authError = new Error("gateway auth required");
+    callGatewayCli.mockRejectedValueOnce(authError);
+    emitReachableGatewayAuthDiagnostic.mockResolvedValueOnce(true);
+
+    await sharedProgram.parseAsync(["gateway", "health", "--port", "19081", "--json"], {
+      from: "user",
+    });
+
+    expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledTimes(1);
+    expect(emitReachableGatewayAuthDiagnostic).toHaveBeenCalledWith({
+      error: authError,
+      config: {
+        gateway: { mode: "local", port: 19081 },
+      },
+      runtime: defaultRuntime,
+      timeoutMs: 10000,
+      token: undefined,
+      password: undefined,
+      localPortOverride: 19081,
+      json: true,
+    });
   });
 });

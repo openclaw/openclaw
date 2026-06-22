@@ -598,11 +598,12 @@ export function registerGatewayCli(program: Command) {
               const { readBestEffortConfig } = await loadConfigModule();
               const handled = await emitReachableGatewayAuthDiagnostic({
                 error,
-                config: await readBestEffortConfig(),
+                config: rpcOpts.config ?? (await readBestEffortConfig()),
                 runtime: defaultRuntime,
                 timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
                 token: rpcOpts.token,
                 password: rpcOpts.password,
+                localPortOverride: rpcOpts.localPortOverride,
                 json: Boolean(rpcOpts.json),
               });
               if (handled) {

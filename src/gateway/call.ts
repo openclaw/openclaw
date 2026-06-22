@@ -1208,7 +1208,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
 export async function buildGatewayProbeConnectionDetails(
   opts: Pick<
     CallGatewayBaseOptions,
-    "config" | "configPath" | "password" | "tlsFingerprint" | "token" | "url"
+    "config" | "configPath" | "localPortOverride" | "password" | "tlsFingerprint" | "token" | "url"
   > = {},
 ): Promise<GatewayProbeConnectionDetails> {
   const callOpts = {
@@ -1221,6 +1221,8 @@ export async function buildGatewayProbeConnectionDetails(
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
+    ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
+    localPortOverride: opts.localPortOverride,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const tlsFingerprint = await resolveGatewayTlsFingerprint({
