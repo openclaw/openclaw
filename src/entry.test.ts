@@ -350,4 +350,22 @@ describe("entry precomputed command help fast path", () => {
     expect(handled).toBe(false);
     expect(outputPrecomputedSecretsHelpTextCalls).toBe(0);
   });
+
+  it("skips the host command help fast path when a container target comes from env", async () => {
+    let outputPrecomputedBrowserHelpTextCalls = 0;
+
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "browser", "--help"],
+      {
+        env: { OPENCLAW_CONTAINER: "demo" },
+        outputPrecomputedBrowserHelpText: () => {
+          outputPrecomputedBrowserHelpTextCalls += 1;
+          return true;
+        },
+      },
+    );
+
+    expect(handled).toBe(false);
+    expect(outputPrecomputedBrowserHelpTextCalls).toBe(0);
+  });
 });

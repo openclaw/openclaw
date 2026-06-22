@@ -419,6 +419,23 @@ const consumeLauncherRootOptionToken = (args, index) => {
   return 0;
 };
 
+const hasLauncherContainerTarget = (argv) => {
+  if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+    return true;
+  }
+  const args = argv.slice(2);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return false;
+    }
+    if (arg === "--container" || arg.startsWith("--container=")) {
+      return true;
+    }
+  }
+  return false;
+};
+
 const resolvePrecomputedCommandHelpByName = (commandName) => {
   if (Object.hasOwn(LAUNCHER_PRECOMPUTED_COMMAND_HELP, commandName)) {
     return LAUNCHER_PRECOMPUTED_COMMAND_HELP[commandName];
@@ -731,7 +748,7 @@ const tryOutputPrecomputedCommandHelp = () => {
   if (!commandHelp) {
     return false;
   }
-  if (commandHelp.subcommandKey && normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+  if (hasLauncherContainerTarget(process.argv)) {
     return false;
   }
   if (commandHelp.command === "nodes" && shouldDeferRootHelpToRuntimeEntry()) {

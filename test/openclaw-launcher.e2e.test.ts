@@ -555,6 +555,50 @@ describe("openclaw launcher", () => {
     expect(result.stdout).not.toContain("PRECOMPUTED");
   });
 
+  it.each([
+    {
+      name: "container env",
+      args: ["browser", "--help"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
+      name: "root --container flag",
+      args: ["--container", "demo", "browser", "--help"],
+      env: {},
+    },
+    {
+      name: "root --container=value flag",
+      args: ["--container=demo", "browser", "--help"],
+      env: {},
+    },
+  ])("defers precomputed command help to the runtime entry with $name", async (params) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ browserHelpText: "PRECOMPUTED browser help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), ...params.args],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(params.env),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
   it("defers root help to the runtime entry when plugin config can change help", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     const configPath = path.join(fixtureRoot, "openclaw.json");
