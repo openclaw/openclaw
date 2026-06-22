@@ -218,7 +218,7 @@ async function createPackStagingRoot(
   const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
   await fs.mkdir(stagingRoot, { recursive: true });
   await fs.writeFile(path.join(stagingRoot, "package.json"), JSON.stringify(manifest, null, 2));
-  const files: string[] = Array.isArray(manifest.files) ? (manifest.files as string[]) : [];
+  const files = manifest.files ?? [];
   for (const entry of files) {
     if (typeof entry !== "string") {
       continue;
