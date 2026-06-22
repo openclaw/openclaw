@@ -266,6 +266,7 @@ import {
   type ToolSearchCatalogToolExecutor,
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
+import { copyToolTerminalPresentation } from "../../tool-terminal-presentation.js";
 import {
   invalidateComputerFrameIfMissing,
   type ComputerContextEpoch,
@@ -2013,12 +2014,13 @@ export async function runEmbeddedAttempt(
           }
         }) as typeof originalExecute,
       };
-      // Preserve plugin/channel/before-tool-call metadata that lives in
-      // WeakMaps keyed by tool object identity. The spread above copies own
+      // Preserve plugin/channel/before-tool-call/terminal metadata that lives
+      // in WeakMaps keyed by tool object identity. The spread above copies own
       // enumerable properties but loses these associations.
       copyPluginToolMeta(tool, wrappedTool);
       copyChannelAgentToolMeta(tool as never, wrappedTool as never);
       copyBeforeToolCallHookMarker(tool, wrappedTool);
+      copyToolTerminalPresentation(tool, wrappedTool as never);
       return wrappedTool;
     });
     if (toolSearch.compacted && !toolSearch.catalogReused) {
