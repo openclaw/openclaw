@@ -13,7 +13,7 @@ function isTextContentBlockType(value: unknown, role: string): boolean {
   return (
     value === "text" ||
     (role === "user" && value === "input_text") ||
-    (role === "assistant" && value === "output_text")
+    (role === "assistant" && (value === "input_text" || value === "output_text"))
   );
 }
 

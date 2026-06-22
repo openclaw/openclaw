@@ -24,7 +24,7 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
 export type AssistantPhase = "commentary" | "final_answer";
 
 function isAssistantTextContentBlockType(value: unknown): boolean {
-  return value === "text" || value === "output_text";
+  return value === "text" || value === "input_text" || value === "output_text";
 }
 
 /** Narrows unknown phase metadata to assistant text phases that affect visibility. */

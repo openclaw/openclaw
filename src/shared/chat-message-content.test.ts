@@ -147,6 +147,15 @@ describe("extractAssistantVisibleText", () => {
     ).toBe("Persisted assistant answer");
   });
 
+  it("extracts persisted Responses assistant input_text blocks", () => {
+    expect(
+      extractAssistantVisibleText({
+        role: "assistant",
+        content: [{ type: "input_text", text: "Persisted assistant input" }],
+      }),
+    ).toBe("Persisted assistant input");
+  });
+
   it("does not mix unphased legacy text into final_answer output", () => {
     expect(
       extractAssistantVisibleText({

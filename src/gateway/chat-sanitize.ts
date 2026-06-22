@@ -59,7 +59,7 @@ function stripEnvelopeFromContentWithRole(
     const isRoleTextBlock =
       entry.type === "text" ||
       (role === "user" && entry.type === "input_text") ||
-      (role === "assistant" && entry.type === "output_text");
+      (role === "assistant" && (entry.type === "input_text" || entry.type === "output_text"));
     if (!isRoleTextBlock || typeof entry.text !== "string") {
       return item;
     }

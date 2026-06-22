@@ -23,7 +23,7 @@ function isTextContentBlock(
     typeof item.text === "string" &&
     (item.type === "text" ||
       (role === "user" && item.type === "input_text") ||
-      (role === "assistant" && item.type === "output_text"))
+      (role === "assistant" && (item.type === "input_text" || item.type === "output_text")))
   );
 }
 

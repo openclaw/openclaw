@@ -714,9 +714,22 @@ describe("gateway server chat", () => {
         content: [{ type: "output_text", text: "visible response" }],
         timestamp: 2,
       },
+      {
+        role: "assistant",
+        content: [{ type: "input_text", text: "NO_REPLY" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "input_text", text: "visible assistant input" }],
+        timestamp: 4,
+      },
     ]);
 
-    expect(collectHistoryTextValues(historyMessages)).toEqual(["visible response"]);
+    expect(collectHistoryTextValues(historyMessages)).toEqual([
+      "visible response",
+      "visible assistant input",
+    ]);
   });
 
   test("chat.history mirrors current-session message tool sends before NO_REPLY", async () => {
