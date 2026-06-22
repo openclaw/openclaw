@@ -37,9 +37,9 @@ describe("canvas a2ui copy", () => {
 
   it("throws a helpful error when assets are missing", async () => {
     await withA2uiFixture(async (dir) => {
-      await expect(copyA2uiAssets({ srcDir: dir, outDir: path.join(dir, "out") })).rejects.toThrow(
-        'Run "pnpm canvas:a2ui:bundle"',
-      );
+      await expect(
+        copyA2uiAssets({ srcDir: path.join(dir, "src"), outDir: path.join(dir, "out") }),
+      ).rejects.toThrow('Run "pnpm canvas:a2ui:bundle"');
     });
   });
 
@@ -47,7 +47,7 @@ describe("canvas a2ui copy", () => {
     await withA2uiFixture(async (dir) => {
       process.env.OPENCLAW_A2UI_SKIP_MISSING = "1";
       await expect(
-        copyA2uiAssets({ srcDir: dir, outDir: path.join(dir, "out") }),
+        copyA2uiAssets({ srcDir: path.join(dir, "src"), outDir: path.join(dir, "out") }),
       ).resolves.toBeUndefined();
     });
   });
@@ -56,7 +56,7 @@ describe("canvas a2ui copy", () => {
     await withA2uiFixture(async (dir) => {
       process.env.OPENCLAW_SPARSE_PROFILE = "core";
       await expect(
-        copyA2uiAssets({ srcDir: dir, outDir: path.join(dir, "out") }),
+        copyA2uiAssets({ srcDir: path.join(dir, "src"), outDir: path.join(dir, "out") }),
       ).resolves.toBeUndefined();
     });
   });
@@ -100,6 +100,23 @@ describe("canvas a2ui copy", () => {
       await expect(fs.stat(path.join(outDir, "stale.txt"))).rejects.toMatchObject({
         code: "ENOENT",
       });
+    });
+  });
+
+  it("rejects overlapping source and output directories before cleaning output", async () => {
+    await withA2uiFixture(async (dir) => {
+      const srcDir = path.join(dir, "src");
+      await fs.mkdir(srcDir, { recursive: true });
+      await fs.writeFile(path.join(srcDir, "index.html"), "<html></html>", "utf8");
+      await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log(1);", "utf8");
+
+      await expect(copyA2uiAssets({ srcDir, outDir: srcDir })).rejects.toThrow("must not overlap");
+      await expect(fs.readFile(path.join(srcDir, "index.html"), "utf8")).resolves.toBe(
+        "<html></html>",
+      );
+      await expect(copyA2uiAssets({ srcDir, outDir: path.join(srcDir, "dist") })).rejects.toThrow(
+        "must not overlap",
+      );
     });
   });
 });
