@@ -1,5 +1,5 @@
 // Control UI module implements activity model behavior.
-import { formatUnknownText, truncateText } from "./format.ts";
+import { formatUnknownText, truncateText } from "../../ui/format.ts";
 
 export const ACTIVITY_ENTRY_LIMIT = 100;
 export const ACTIVITY_OUTPUT_PREVIEW_LIMIT = 2_000;

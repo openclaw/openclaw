@@ -7,7 +7,7 @@ export const page = definePage({
   id: "activity",
   path: "/activity",
   component: () =>
-    import("../../ui/views/activity.ts").then((module) => ({
+    import("./view.ts").then((module) => ({
       render: ({ state }: ActivityRenderContext) =>
         module.renderActivity({
           entries: state.activityEntries,

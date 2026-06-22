@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { ACTIVITY_ENTRY_LIMIT, ACTIVITY_OUTPUT_PREVIEW_LIMIT } from "./activity-model.ts";
+import { ACTIVITY_ENTRY_LIMIT, ACTIVITY_OUTPUT_PREVIEW_LIMIT } from "../pages/activity/data.ts";
 import {
   handleAgentEvent,
   handleSessionOperationEvent,
