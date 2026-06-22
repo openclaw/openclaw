@@ -57,7 +57,7 @@ function makeReplyOperation(): Parameters<typeof runPreflightCompactionIfNeeded>
 }
 
 async function main(): Promise<void> {
-  let exitCode = 0;
+  const exitCode = 0;
   console.log("=== Reproduction for issue #95553 — preflight gate ===");
 
   // 1. preflight.enabled === false → no compactEmbeddedAgentSession call.
@@ -120,7 +120,7 @@ async function main(): Promise<void> {
   process.exit(exitCode);
 }
 
-main().catch((err) => {
+main().catch((err: unknown) => {
   console.error(err);
   process.exit(1);
 });
