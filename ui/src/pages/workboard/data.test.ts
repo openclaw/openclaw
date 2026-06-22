@@ -1,7 +1,7 @@
 // Control UI tests cover workboard behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GatewayRequestError } from "../gateway.ts";
-import type { GatewaySessionRow } from "../types.ts";
+import { GatewayRequestError } from "../../ui/gateway.ts";
+import type { GatewaySessionRow } from "../../ui/types.ts";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -26,7 +26,7 @@ import {
   syncWorkboardLifecycle,
   type WorkboardCard,
   type WorkboardTaskSummary,
-} from "./workboard.ts";
+} from "./data.ts";
 
 function createClient(
   responses: Record<string, unknown> | ((method: string, params: unknown) => unknown),

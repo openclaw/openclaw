@@ -13,8 +13,8 @@ import {
   type MockGatewayControls,
   type MockGatewayRequest,
 } from "../../test-helpers/control-ui-e2e.ts";
-import { WORKBOARD_STATUSES, type WorkboardCard } from "../controllers/workboard.ts";
-import type { GatewaySessionRow } from "../types.ts";
+import type { GatewaySessionRow } from "../../ui/types.ts";
+import { WORKBOARD_STATUSES, type WorkboardCard } from "./data.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);

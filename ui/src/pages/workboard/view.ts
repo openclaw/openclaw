@@ -2,6 +2,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { t } from "../../i18n/index.ts";
+import { clearActiveFloatingTooltips } from "../../ui/dom-tooltips.ts";
+import { formatDateMs, formatDateTimeMs } from "../../ui/format.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
+import { icons } from "../../ui/icons.ts";
+import type { AgentsListResult, GatewaySessionRow } from "../../ui/types.ts";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -41,12 +46,7 @@ import {
   type WorkboardTaskSummary,
   type WorkboardTemplateId,
   type WorkboardUiState,
-} from "../controllers/workboard.ts";
-import { clearActiveFloatingTooltips } from "../dom-tooltips.ts";
-import { formatDateMs, formatDateTimeMs } from "../format.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
-import { icons } from "../icons.ts";
-import type { AgentsListResult, GatewaySessionRow } from "../types.ts";
+} from "./data.ts";
 
 type WorkboardAgentRow = AgentsListResult["agents"][number];
 type WorkboardConfiguredAgentOption = {

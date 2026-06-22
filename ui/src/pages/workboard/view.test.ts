@@ -1,13 +1,9 @@
 // Control UI tests cover workboard behavior.
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import {
-  getWorkboardState,
-  stopWorkboardLifecycleRefresh,
-  stopWorkboardPolling,
-} from "../controllers/workboard.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
-import { renderWorkboard } from "./workboard.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
+import { getWorkboardState, stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "./data.ts";
+import { renderWorkboard } from "./view.ts";
 
 type WorkboardRenderProps = Parameters<typeof renderWorkboard>[0];
 

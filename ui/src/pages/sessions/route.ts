@@ -5,7 +5,6 @@ import { definePage } from "../../router/index.ts";
 import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { clearChatMessagesFromCache } from "../../ui/chat/session-message-cache.ts";
-import { captureSessionToWorkboard, getWorkboardState } from "../../ui/controllers/workboard.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
 import { loadConfig } from "../config/data.ts";
 import {
@@ -17,6 +16,7 @@ import {
   restoreSessionFromCheckpoint,
   toggleSessionCompactionCheckpoints,
 } from "../sessions/data.ts";
+import { captureSessionToWorkboard, getWorkboardState } from "../workboard/data.ts";
 
 type SessionsRenderContext = RouteRenderContext;
 type SessionsLoadContext = { app: SettingsAppHost };
