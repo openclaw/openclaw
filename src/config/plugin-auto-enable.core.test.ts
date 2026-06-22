@@ -1204,14 +1204,11 @@ describe("applyPluginAutoEnable core", () => {
     const manifestRegistry = makeRegistry([
       { id: "cache-channel-plugin", channels: ["cache-channel"] },
     ]);
-    const configuredEnv = makeIsolatedEnv({
-      CACHE_CHANNEL_TOKEN: "configured",
-    });
 
     const first = applyPluginAutoEnable({
       config,
       discovery: mutableDiscovery,
-      env: configuredEnv,
+      env,
       manifestRegistry,
     });
     mutableDiscovery.candidates.push(
@@ -1223,7 +1220,7 @@ describe("applyPluginAutoEnable core", () => {
     const second = applyPluginAutoEnable({
       config,
       discovery: mutableDiscovery,
-      env: configuredEnv,
+      env,
       manifestRegistry,
     });
 
