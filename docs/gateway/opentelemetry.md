@@ -70,6 +70,39 @@ openclaw plugins enable diagnostics-otel
 `protocol` currently supports `http/protobuf` only. `grpc` is ignored.
 </Note>
 
+## Kubernetes collectors
+
+In Kubernetes, point `diagnostics.otel.endpoint` at a collector service that is
+reachable from the Gateway pod. Use the collector's OTLP/HTTP port, commonly
+`4318`:
+
+```json5
+{
+  diagnostics: {
+    enabled: true,
+    otel: {
+      enabled: true,
+      endpoint: "http://otel-collector.observability.svc.cluster.local:4318",
+      protocol: "http/protobuf",
+      serviceName: "openclaw-gateway",
+      metrics: true,
+      traces: true,
+      logs: true,
+      captureContent: { enabled: false },
+    },
+  },
+}
+```
+
+Some cluster collectors expose OTLP/gRPC on port `4317` but do not expose
+OTLP/HTTP. OpenClaw does not export over gRPC today, so those deployments need
+an OTLP/HTTP receiver, a collector sidecar, or a cluster collector route that
+accepts HTTP protobuf.
+
+Container stdout/stderr logs are separate from `diagnostics-otel` log export.
+Use your platform log collector for process logs. Enable `diagnostics.otel.logs`
+when you also want structured diagnostic log records with trace context.
+
 ## Signals exported
 
 | Signal      | What goes in it                                                                                                                                                                                                    |

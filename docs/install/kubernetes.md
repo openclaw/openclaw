@@ -105,6 +105,52 @@ Edit the `AGENTS.md` in `scripts/k8s/manifests/configmap.yaml` and redeploy:
 
 Edit `openclaw.json` in `scripts/k8s/manifests/configmap.yaml`. See [Gateway configuration](/gateway/configuration) for the full reference.
 
+### Observability
+
+Kubernetes deployments usually have two separate observability paths:
+
+- Container stdout/stderr logs, collected by your cluster log pipeline.
+- OpenClaw diagnostics, exported by plugins as OpenTelemetry or Prometheus data.
+
+For OpenTelemetry push export, install and enable `diagnostics-otel`, then point
+the Gateway at an OTLP/HTTP collector that is reachable from the pod:
+
+```json5
+{
+  plugins: {
+    allow: ["diagnostics-otel"],
+    entries: {
+      "diagnostics-otel": { enabled: true },
+    },
+  },
+  diagnostics: {
+    enabled: true,
+    otel: {
+      enabled: true,
+      endpoint: "http://otel-collector.observability.svc.cluster.local:4318",
+      protocol: "http/protobuf",
+      serviceName: "openclaw-gateway",
+      metrics: true,
+      traces: true,
+      logs: true,
+      captureContent: { enabled: false },
+    },
+  },
+}
+```
+
+OpenClaw currently emits OTLP/HTTP protobuf. If your cluster collector exposes
+only OTLP/gRPC, add an OTLP/HTTP receiver or route OpenClaw through a collector
+that accepts HTTP on port `4318`.
+
+For Prometheus pull export, enable `diagnostics-prometheus` and scrape
+`/api/diagnostics/prometheus` through Gateway auth. Do not expose a public
+unauthenticated `/metrics` path.
+
+See [OpenTelemetry export](/gateway/opentelemetry) and
+[Prometheus metrics](/gateway/prometheus) for the full signal catalog and
+privacy model.
+
 ### Add providers
 
 Re-run with additional keys exported:
