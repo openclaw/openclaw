@@ -2183,7 +2183,9 @@ export async function dispatchReplyFromConfig(
       return finishReplyOperationBusyDispatch({ dedupeDisposition: "release" });
     }
 
-    const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
+    const shouldSuppressDefaultToolProgressMessages = () =>
+      params.replyOptions?.forceSuppressToolProgressMessages === true ||
+      !shouldEmitVerboseProgress();
     const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
     const shouldSendToolSummaries = () => shouldSendVerboseProgressMessages();
     const shouldSendToolStartStatuses = false;

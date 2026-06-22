@@ -105,6 +105,12 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /**
+   * If true, suppression is authoritative regardless of verbose progress state.
+   * Channels set this to force-suppress tool progress when the user explicitly
+   * disables it (e.g. Telegram with streaming off).
+   */
+  forceSuppressToolProgressMessages?: boolean;
   /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
   allowToolLifecycleWhenProgressHidden?: boolean;
   /**
