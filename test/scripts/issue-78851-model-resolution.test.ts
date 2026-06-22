@@ -40,4 +40,12 @@ describe("issue 78851 model resolution profiler CLI", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("--providers must be a positive integer");
   });
+
+  it("rejects short flag values before starting the profiler", () => {
+    const result = runProfiler("--providers", "-h");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--providers requires a value");
+  });
 });

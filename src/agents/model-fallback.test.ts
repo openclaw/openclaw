@@ -446,7 +446,11 @@ async function expectFallsBackToHaiku(params: {
 
   expect(result.result).toBe("ok");
   expect(run).toHaveBeenCalledTimes(2);
-  expect(requireMockCall(run, 1, "fallback run")).toEqual(["anthropic", "claude-haiku-3-5"]);
+  expect(requireMockCall(run, 1, "fallback run")).toEqual([
+    "anthropic",
+    "claude-haiku-3-5",
+    { isFinalFallbackAttempt: true },
+  ]);
 }
 
 function createOverrideFailureRun(params: {
@@ -540,7 +544,7 @@ async function expectSkippedUnavailableProvider(params: {
   });
 
   expect(result.result).toBe("ok");
-  expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+  expect(run.mock.calls).toEqual([["fallback", "ok-model", { isFinalFallbackAttempt: true }]]);
   expect(result.attempts[0]?.reason).toBe(params.expectedReason);
   expect(result.attempts[0]?.authMode).toBe(params.expectedAuthMode);
 }
@@ -637,7 +641,9 @@ describe("runWithModelFallback", () => {
       "/tmp/openclaw-no-auth-profiles",
     );
     expect(authRuntimeMock.runtime.ensureAuthProfileStore).not.toHaveBeenCalled();
-    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini");
+    expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
+      isFinalFallbackAttempt: false,
+    });
   });
 
   it("resolves primary model aliases before running", () => {
@@ -759,7 +765,11 @@ describe("runWithModelFallback", () => {
     });
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
-    expect(requireMockCall(run, 1, "fallback run")).toEqual(["anthropic", "claude-haiku-3-5"]);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual([
+      "anthropic",
+      "claude-haiku-3-5",
+      { isFinalFallbackAttempt: false },
+    ]);
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0].reason).toBe("overloaded");
   });
@@ -1070,7 +1080,11 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("external cli ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+    expect(run.mock.calls[0]).toEqual([
+      "anthropic",
+      "claude-sonnet-4-6",
+      { isFinalFallbackAttempt: false },
+    ]);
     expect(result.attempts).toStrictEqual([]);
   });
 
@@ -1114,7 +1128,11 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("cli ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+    expect(run.mock.calls[0]).toEqual([
+      "anthropic",
+      "claude-sonnet-4-6",
+      { isFinalFallbackAttempt: true },
+    ]);
     expect(result.attempts).toStrictEqual([]);
   });
 
@@ -1162,7 +1180,7 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("direct cli ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run.mock.calls[0]).toEqual(["claude-cli", "opus"]);
+    expect(run.mock.calls[0]).toEqual(["claude-cli", "opus", { isFinalFallbackAttempt: true }]);
     expect(result.attempts).toStrictEqual([]);
   });
 
@@ -1467,7 +1485,11 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toEqual({ payloads: [{ text: "fallback ok" }] });
     expect(run).toHaveBeenCalledTimes(2);
-    expect(requireMockCall(run, 1, "fallback run")).toEqual(["anthropic", "claude-haiku-3-5"]);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual([
+      "anthropic",
+      "claude-haiku-3-5",
+      { isFinalFallbackAttempt: true },
+    ]);
     expect(result.attempts[0]?.provider).toBe("openai");
     expect(result.attempts[0]?.model).toBe("gpt-5.4");
     expect(result.attempts[0]?.reason).toBe("format");
@@ -1513,7 +1535,11 @@ describe("runWithModelFallback", () => {
 
     expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
     expect(run).toHaveBeenCalledTimes(2);
-    expect(requireMockCall(run, 1, "fallback run")).toEqual(["openai", "gpt-5.5"]);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual([
+      "openai",
+      "gpt-5.5",
+      { isFinalFallbackAttempt: true },
+    ]);
     expect(result.attempts[0]).toMatchObject({
       provider: "zai",
       model: "glm-5.1",
@@ -1835,8 +1861,8 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toStrictEqual([]);
     expect(onError).not.toHaveBeenCalled();
     expect(run.mock.calls).toEqual([
-      ["openai", "gpt-4.1-mini"],
-      ["anthropic", "claude-sonnet-4-6"],
+      ["openai", "gpt-4.1-mini", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-sonnet-4-6", { isFinalFallbackAttempt: false }],
     ]);
   });
 
@@ -1860,8 +1886,8 @@ describe("runWithModelFallback", () => {
     expect(result.model).toBe("claude-haiku-3-5");
     expect(result.attempts[0]?.reason).toBe("unknown");
     expect(run.mock.calls).toEqual([
-      ["openai", "gpt-4.1-mini"],
-      ["anthropic", "claude-haiku-3-5"],
+      ["openai", "gpt-4.1-mini", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-haiku-3-5", { isFinalFallbackAttempt: true }],
     ]);
   });
 
@@ -2083,9 +2109,9 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
-      ["anthropic", "claude-opus-4"],
-      ["anthropic", "claude-haiku-3-5"],
-      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-opus-4", { isFinalFallbackAttempt: false }],
+      ["anthropic", "claude-haiku-3-5", { isFinalFallbackAttempt: false }],
+      ["openai", "gpt-4.1-mini", { isFinalFallbackAttempt: true }],
     ]);
   });
 
@@ -2162,8 +2188,8 @@ describe("runWithModelFallback", () => {
 
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
-      ["openrouter", "xiaomi/mimo-v2-pro"],
-      ["openai", "gpt-4.1-mini"],
+      ["openrouter", "xiaomi/mimo-v2-pro", { isFinalFallbackAttempt: false }],
+      ["openai", "gpt-4.1-mini", { isFinalFallbackAttempt: true }],
     ]);
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0]?.reason).toBe("billing");
@@ -2177,6 +2203,7 @@ describe("runWithModelFallback", () => {
       error: Error;
       expectedFallback: [string, string];
       expectedReason?: string;
+      isFinalFallbackAttempt?: boolean;
     }> = [
       {
         name: "unknown anthropic override",
@@ -2199,6 +2226,7 @@ describe("runWithModelFallback", () => {
         error: new Error("stream_read_error"),
         expectedFallback: ["anthropic", "claude-haiku-3-5"],
         expectedReason: "timeout",
+        isFinalFallbackAttempt: true,
       },
     ];
 
@@ -2216,7 +2244,10 @@ describe("runWithModelFallback", () => {
 
         expect(result.result).toBe("ok");
         expect(run).toHaveBeenCalledTimes(2);
-        expect(requireMockCall(run, 1, "fallback run")).toEqual(testCase.expectedFallback);
+        expect(requireMockCall(run, 1, "fallback run")).toEqual([
+          ...testCase.expectedFallback,
+          { isFinalFallbackAttempt: testCase.isFinalFallbackAttempt ?? false },
+        ]);
         if (testCase.expectedReason) {
           expect(result.attempts).toHaveLength(1);
           expect(result.attempts[0]?.reason).toBe(testCase.expectedReason);
@@ -2376,7 +2407,7 @@ describe("runWithModelFallback", () => {
     });
 
     expect(result.result).toBe("ok");
-    expect(run.mock.calls).toEqual([[provider, "m1"]]);
+    expect(run.mock.calls).toEqual([[provider, "m1", { isFinalFallbackAttempt: false }]]);
     expect(result.attempts).toStrictEqual([]);
   });
 
@@ -2987,6 +3018,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        isFinalFallbackAttempt: false,
       });
     });
 
@@ -3020,6 +3052,7 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-sonnet-4-6", {
         allowTransientCooldownProbe: true,
+        isFinalFallbackAttempt: false,
       });
     });
 
@@ -3048,7 +3081,9 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("groq success");
       expect(run).toHaveBeenCalledTimes(1);
-      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(1, "groq", "llama-3.3-70b-versatile", {
+        isFinalFallbackAttempt: true,
+      });
     });
 
     it("tries cross-provider fallbacks when same provider has rate limit", async () => {
@@ -3096,8 +3131,11 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6", {
         allowTransientCooldownProbe: true,
+        isFinalFallbackAttempt: false,
       });
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile", {
+        isFinalFallbackAttempt: true,
+      });
     });
 
     it("limits cooldown probes to one per provider before moving to cross-provider fallback", async () => {
@@ -3134,8 +3172,11 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6", {
         allowTransientCooldownProbe: true,
+        isFinalFallbackAttempt: false,
       });
-      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile");
+      expect(run).toHaveBeenNthCalledWith(2, "groq", "llama-3.3-70b-versatile", {
+        isFinalFallbackAttempt: true,
+      });
     });
 
     it("does not consume transient probe slot when first same-provider probe fails with model_not_found", async () => {
@@ -3172,9 +3213,11 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(2);
       expect(run).toHaveBeenNthCalledWith(1, "anthropic", "claude-opus-4-6", {
         allowTransientCooldownProbe: true,
+        isFinalFallbackAttempt: false,
       });
       expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-sonnet-4-5", {
         allowTransientCooldownProbe: true,
+        isFinalFallbackAttempt: false,
       });
     });
   });

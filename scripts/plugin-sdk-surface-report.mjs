@@ -92,7 +92,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
-  "text-runtime": 188,
+  "text-runtime": 189,
   "agent-runtime": 7,
   "plugin-runtime": 13,
   "channel-secret-runtime": 23,
@@ -163,11 +163,11 @@ let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
     publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 321),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10338),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5187),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10327),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5184),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3246,
+      3247,
     ),
     publicWildcardReexports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
@@ -203,9 +203,25 @@ function hasDeprecatedTag(symbol) {
   return symbol.getJsDocTags().some((tag) => tag.name === "deprecated");
 }
 
+const generatedLlmCoreValidatorExports = new Set(["validateToolArguments", "validateToolCall"]);
+
+function isGeneratedLlmCoreValidatorDeclaration(exportName, declaration) {
+  if (!generatedLlmCoreValidatorExports.has(exportName)) {
+    return false;
+  }
+  const relative = path.relative(repoRoot, declaration.getSourceFile().fileName);
+  const relativePath = relative.split(path.sep).join(path.posix.sep);
+  // Build artifacts can make agent-core's package-name validator reexports look
+  // newly callable. Keep this source report independent of generated dist state.
+  return relativePath.includes("llm-core/dist/validation.d.");
+}
+
 function isCallableExport(checker, symbol, sourceFile) {
   const target = unwrapAlias(checker, symbol);
   const declaration = target.valueDeclaration ?? target.declarations?.[0] ?? sourceFile;
+  if (isGeneratedLlmCoreValidatorDeclaration(symbol.getName(), declaration)) {
+    return false;
+  }
   const type = checker.getTypeOfSymbolAtLocation(target, declaration);
   return checker.getSignaturesOfType(type, ts.SignatureKind.Call).length > 0;
 }

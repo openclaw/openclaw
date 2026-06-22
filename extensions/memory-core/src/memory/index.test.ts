@@ -4,11 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import {
-  clearMemoryEmbeddingProviders as clearRegistry,
-  listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
-  registerMemoryEmbeddingProvider as registerAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runtime";
@@ -25,7 +21,6 @@ import { splitSourceWideEmbeddingChunks } from "./manager-embedding-ops.js";
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -255,26 +250,6 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
-describe("memory embedding provider registration", () => {
-  beforeEach(() => {
-    vi.useRealTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    clearRegistry();
-  });
-
-  it("does not register a built-in local embedding provider", () => {
-    clearRegistry();
-    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
-
-    const adapter = listRegisteredAdapters().find((entry) => entry.id === "local");
-
-    expect(adapter).toBeUndefined();
-  });
-});
-
 describe("memory index", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
@@ -307,7 +282,6 @@ describe("memory index", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     clearRegistry();
-    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
     providerRuntimeBatchCalls = [];

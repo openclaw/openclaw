@@ -1,5 +1,6 @@
 // Defines shared TUI state, backend, and event types.
 import type { SessionGoal } from "../config/sessions/types.js";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 
 export type TuiOptions = {
   local?: boolean;
@@ -73,7 +74,7 @@ export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 export type SessionInfo = {
   thinkingLevel?: string;
   thinkingLevels?: Array<{ id: string; label: string }>;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;

@@ -7,12 +7,18 @@ read_when:
 ---
 
 Use IRC when you want OpenClaw in classic channels (`#room`) and direct messages.
-IRC ships as a bundled plugin, but it is configured in the main config under `channels.irc`.
+Install the official IRC plugin, then configure it under `channels.irc`.
 
 ## Quick start
 
-1. Enable IRC config in `~/.openclaw/openclaw.json`.
-2. Set at least:
+1. Install the plugin:
+
+```bash
+openclaw plugins install @openclaw/irc
+```
+
+2. Enable IRC config in `~/.openclaw/openclaw.json`.
+3. Set at least:
 
 ```json5
 {
@@ -31,7 +37,7 @@ IRC ships as a bundled plugin, but it is configured in the main config under `ch
 
 Prefer a private IRC server for bot coordination. If you intentionally use a public IRC network, common choices include Libera.Chat, OFTC, and Snoonet. Avoid predictable public channels for bot or swarm backchannel traffic.
 
-3. Start/restart gateway:
+4. Start/restart gateway:
 
 ```bash
 openclaw gateway run

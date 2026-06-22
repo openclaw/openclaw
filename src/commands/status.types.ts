@@ -3,6 +3,7 @@
 
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionKind } from "../sessions/classify-session-kind.js";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   RetainedLostTaskAuditSummary,
   TaskAuditSummary,
@@ -17,7 +18,7 @@ export type SessionStatus = {
   updatedAt: number | null;
   age: number | null;
   thinkingLevel?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;

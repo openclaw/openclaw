@@ -449,7 +449,7 @@ function parseFlagValue(flag: string): string | undefined {
     return undefined;
   }
   const value = process.argv[idx + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
@@ -462,7 +462,8 @@ function hasFlag(flag: string): boolean {
 function parseRepeatableFlag(flag: string): string[] {
   const values: string[] = [];
   for (let i = 0; i < process.argv.length; i += 1) {
-    if (process.argv[i] === flag && process.argv[i + 1]) {
+    const value = process.argv[i + 1];
+    if (process.argv[i] === flag && value && !value.startsWith("-")) {
       values.push(process.argv[i + 1]);
     }
   }
@@ -474,7 +475,7 @@ function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void 
     const arg = argv[index];
     if (VALUE_FLAGS.has(arg)) {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a value`);
       }
       index += 1;
@@ -1161,12 +1162,12 @@ function readBenchmarkComparisonForTesting(
 }
 
 async function main(): Promise<void> {
+  validateCliArgs();
   if (hasFlag("--help")) {
     printUsage();
     return;
   }
 
-  validateCliArgs();
   const options = parseOptions();
   if (options.compareBaseline || options.compareCandidate) {
     if (!options.compareBaseline || !options.compareCandidate) {
