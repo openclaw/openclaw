@@ -45,7 +45,6 @@ import {
 import { createMatrixGuardedFetch, type HttpMethod, type QueryParams } from "./sdk/transport.js";
 import type {
   MatrixClientEventMap,
-  MatrixAuthDict,
   MatrixCryptoBootstrapApi,
   MatrixDeviceVerificationStatusLike,
   MatrixRelationsPage,
@@ -485,8 +484,6 @@ export class MatrixClient {
     this.cryptoBootstrapper ??= new runtime.MatrixCryptoBootstrapper<MatrixRawEvent>({
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
-      preflightCrossSigningUiAuth: (authData: MatrixAuthDict | null) =>
-        this.client.uploadDeviceSigningKeys(authData ?? undefined),
       getDeviceId: () => this.client.getDeviceId(),
       verificationManager: this.verificationManager,
       recoveryKeyStore: this.recoveryKeyStore,

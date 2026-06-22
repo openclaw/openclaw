@@ -20,7 +20,6 @@ import { isMatrixDeviceOwnerVerified } from "./verification-status.js";
 export type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = {
   getUserId: () => Promise<string>;
   getPassword?: () => string | undefined;
-  preflightCrossSigningUiAuth: (authData: MatrixAuthDict | null) => Promise<void>;
   getDeviceId: () => string | null | undefined;
   verificationManager: MatrixVerificationManager;
   recoveryKeyStore: MatrixRecoveryKeyStore;
@@ -53,27 +52,24 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   ): Promise<MatrixCryptoBootstrapResult> {
     const strict = options.strict === true;
     const forceReset = options.forceResetCrossSigning === true;
+    const deferSecretStorageBootstrapUntilAfterCrossSigning = forceReset;
     // Register verification listeners before expensive bootstrap work so incoming requests
     // are not missed during startup.
     this.registerVerificationRequestHandler(crypto);
 
-    if (forceReset) {
-      // The auth-only upload is side-effect free: all signing-key fields are optional.
-      // Prove UIA before replacing SSSS or generating a new local identity.
-      await this.preflightCrossSigningUiAuth();
+    if (!deferSecretStorageBootstrapUntilAfterCrossSigning) {
+      await this.bootstrapSecretStorage(crypto, {
+        strict,
+        allowSecretStorageRecreateWithoutRecoveryKey:
+          options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+      });
     }
-    await this.bootstrapSecretStorage(crypto, {
-      strict: forceReset ? true : strict,
-      allowSecretStorageRecreateWithoutRecoveryKey: forceReset
-        ? true
-        : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
-      forceNewSecretStorage: forceReset,
-    });
 
     const crossSigning = await this.bootstrapCrossSigning(crypto, {
       forceResetCrossSigning: forceReset,
       allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
-      // Forced reset already authenticated and recreated SSSS, so never generate a second identity.
+      // A repair retry would generate another identity after the SDK already rotated local keys.
+      // Fail closed instead; the server identity and existing recovery material remain authoritative.
       allowSecretStorageRecreateWithoutRecoveryKey: forceReset
         ? false
         : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
@@ -122,17 +118,6 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         }
       }
     };
-  }
-
-  private async preflightCrossSigningUiAuth(): Promise<void> {
-    const userId = await this.deps.getUserId();
-    const authUploadDeviceSigningKeys = this.createSigningKeysUiAuthCallback({
-      userId,
-      password: this.deps.getPassword?.(),
-    });
-    await authUploadDeviceSigningKeys((authData) =>
-      this.deps.preflightCrossSigningUiAuth(authData),
-    );
   }
 
   private async bootstrapCrossSigning(
@@ -245,6 +230,12 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         }
         LogService.warn("MatrixClientLite", "Forced cross-signing reset failed:", err);
         if (options.strict) {
+          if (isRepairableSecretStorageAccessError(err)) {
+            throw new Error(
+              "Forced cross-signing reset cannot access secret storage; restore the Matrix recovery key before retrying",
+              { cause: err },
+            );
+          }
           throw err instanceof Error ? err : new Error(String(err));
         }
         return { ready: false, published: false };
@@ -355,19 +346,13 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     options: {
       strict: boolean;
       allowSecretStorageRecreateWithoutRecoveryKey: boolean;
-      forceNewSecretStorage?: boolean;
     },
   ): Promise<void> {
     try {
-      const secretStorageOptions = {
+      await this.deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(crypto, {
         allowSecretStorageRecreateWithoutRecoveryKey:
           options.allowSecretStorageRecreateWithoutRecoveryKey,
-        ...(options.forceNewSecretStorage ? { forceNewSecretStorage: true } : {}),
-      };
-      await this.deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(
-        crypto,
-        secretStorageOptions,
-      );
+      });
       LogService.info("MatrixClientLite", "Secret storage bootstrap complete");
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to bootstrap secret storage:", err);
