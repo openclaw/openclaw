@@ -237,7 +237,38 @@ export function getWindowsProgramFilesRoots(
 export function getWindowsCmdExePath(
   env: Record<string, string | undefined> = process.env,
 ): string {
-  return path.win32.join(getWindowsInstallRoots(env).systemRoot, "System32", "cmd.exe");
+  return getWindowsSystem32ExePath("cmd.exe", env);
+}
+
+export function getWindowsSystem32ExePath(
+  executableName: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  if (
+    path.win32.basename(executableName) !== executableName ||
+    !/^[A-Za-z0-9_.-]+\.exe$/u.test(executableName)
+  ) {
+    throw new Error(`Invalid Windows System32 executable name: ${executableName}`);
+  }
+  return path.win32.join(getWindowsInstallRoots(env).systemRoot, "System32", executableName);
+}
+
+export function getWindowsPowerShellExePath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return path.win32.join(
+    getWindowsInstallRoots(env).systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+}
+
+export function getWindowsWmicExePath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return path.win32.join(getWindowsInstallRoots(env).systemRoot, "System32", "wbem", "wmic.exe");
 }
 
 export function resetWindowsInstallRootsForTests(

@@ -1170,7 +1170,7 @@ function listCheckChangedPaths() {
   }
 }
 
-function resolvePackageDirs(args) {
+export function resolvePackageDirs(args) {
   const packageDirs = [];
   const check = args.includes("--check");
   const all = args.includes("--all");
@@ -1199,7 +1199,7 @@ function resolvePackageDirs(args) {
     }
     if (arg === "--package-dir") {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error("--package-dir requires a package directory.");
       }
       packageDirs.push(path.resolve(ROOT_DIR, value));
@@ -1208,7 +1208,7 @@ function resolvePackageDirs(args) {
     }
     if (arg === "--base" || arg === "--head") {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a git ref.`);
       }
       index += 1;

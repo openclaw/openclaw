@@ -5,6 +5,7 @@
  */
 import { createHash } from "node:crypto";
 import type { AgentMessage } from "./runtime/index.js";
+import { isThinkingLikeBlock } from "./thinking-block.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
@@ -122,14 +123,6 @@ export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolRes
     }
   }
   return ids;
-}
-
-function isThinkingLikeBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "thinking" || type === "redacted_thinking";
 }
 
 function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {

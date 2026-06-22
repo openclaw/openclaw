@@ -203,6 +203,26 @@ describe("gateway-smoke", () => {
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
   });
 
+  it("rejects option-looking CLI values before connecting", () => {
+    for (const [flag, args] of [
+      ["--url", ["--url", "-h", "--token", "token"]],
+      ["--token", ["--url", "ws://127.0.0.1:9", "--token", "-h"]],
+    ] as const) {
+      const result = spawnSync(
+        process.execPath,
+        ["--import", "tsx", "scripts/dev/gateway-smoke.ts", ...args],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr.trim()).toBe(`${flag} requires a value`);
+    }
+  });
+
   it("passes against a loopback gateway websocket using the real client", async () => {
     const stdout: string[] = [];
     const stderr: string[] = [];

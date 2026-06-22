@@ -29,11 +29,9 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   cancelTaskById,
   createTaskRecord as createTaskRecordOrNull,
-  findLatestTaskForOwnerKey,
   findLatestTaskForRelatedSessionKey,
   findTaskByRunId,
   getTaskById,
-  getTaskRegistrySummary,
   isParentFlowLinkError,
   listTasksForAgentId,
   listTasksForOwnerKey,
@@ -71,6 +69,7 @@ import {
   sweepTaskRegistry,
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
+import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
@@ -867,7 +866,7 @@ describe("task-registry", () => {
         deliveryStatus: "session_queued",
       });
 
-      expect(getTaskRegistrySummary()).toEqual({
+      expect(summarizeTaskRecords(listTaskRecords())).toEqual({
         total: 3,
         active: 2,
         terminal: 1,
@@ -2205,7 +2204,7 @@ describe("task-registry", () => {
       });
       nowSpy.mockRestore();
 
-      expect(findLatestTaskForOwnerKey("agent:main:main")?.taskId).toBe(latest.taskId);
+      expect(listTasksForOwnerKey("agent:main:main")[0]?.taskId).toBe(latest.taskId);
       expect(listTasksForOwnerKey("agent:main:main").map((task) => task.taskId)).toEqual([
         latest.taskId,
         older.taskId,
@@ -3237,7 +3236,7 @@ describe("task-registry", () => {
         startedAt: now - 60_000,
         lastEventAt: now - 60_000,
       });
-      expect(getTaskRegistrySummary().active).toBe(1);
+      expect(summarizeTaskRecords(listTaskRecords()).active).toBe(1);
 
       durableTasks = new Map([
         [
@@ -3268,7 +3267,7 @@ describe("task-registry", () => {
         taskId: "task-durable",
         status: "cancelled",
       });
-      expect(getTaskRegistrySummary().active).toBe(0);
+      expect(summarizeTaskRecords(listTaskRecords()).active).toBe(0);
     });
   });
 

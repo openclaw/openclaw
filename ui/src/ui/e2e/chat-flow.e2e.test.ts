@@ -252,6 +252,57 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps the composer clear when a stale native input replay arrives after send", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          content: [{ text: "Ready for stale replay check.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Ready for stale replay check.").waitFor({ timeout: 10_000 });
+
+      const prompt = "submitted message";
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      await gateway.waitForRequest("chat.send");
+      expect(await composer.inputValue()).toBe("");
+
+      const afterReplay = await composer.evaluate((element, submitted) => {
+        const textarea = element as HTMLTextAreaElement;
+        textarea.value = submitted;
+        textarea.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            data: submitted,
+            inputType: "insertText",
+          }),
+        );
+        return textarea.value;
+      }, prompt);
+
+      expect(afterReplay).toBe("");
+      expect(await composer.inputValue()).toBe("");
+
+      await composer.pressSequentially(prompt);
+      expect(await composer.inputValue()).toBe(prompt);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("copies a code block over a non-secure context via the execCommand fallback", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

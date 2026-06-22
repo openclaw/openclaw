@@ -43,7 +43,6 @@ import {
   resetTaskRegistryRuntimeForTests,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
-import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,
@@ -51,8 +50,6 @@ import type {
   TaskEventRecord,
   TaskNotifyPolicy,
   TaskRecord,
-  TaskRegistrySummary,
-  TaskRegistrySnapshot,
   TaskRuntime,
   TaskScopeKind,
   TaskStatus,
@@ -2262,18 +2259,6 @@ export function hasActiveTaskForChildSessionKey(params: {
   return false;
 }
 
-export function getTaskRegistrySummary(): TaskRegistrySummary {
-  ensureTaskRegistryReady();
-  return summarizeTaskRecords(tasks.values());
-}
-
-export function getTaskRegistrySnapshot(): TaskRegistrySnapshot {
-  return {
-    tasks: listTaskRecords(),
-    deliveryStates: [...taskDeliveryStates.values()].map((state) => cloneTaskDeliveryState(state)),
-  };
-}
-
 export function getTaskById(taskId: string): TaskRecord | undefined {
   ensureTaskRegistryReady();
   const task = tasks.get(taskId.trim());
@@ -2325,11 +2310,6 @@ export function listTasksForAgentId(agentId: string): TaskRecord[] {
   return snapshotTaskRecords(tasks)
     .filter((task) => task.agentId?.trim() === lookup)
     .toSorted(compareTasksNewestFirst);
-}
-
-export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined {
-  const task = listTasksForOwnerKey(ownerKey)[0];
-  return task ? cloneTaskRecord(task) : undefined;
 }
 
 export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {

@@ -5,7 +5,10 @@ import {
   resetWindowsInstallRootsForTests,
   getWindowsCmdExePath,
   getWindowsInstallRoots,
+  getWindowsPowerShellExePath,
   getWindowsProgramFilesRoots,
+  getWindowsSystem32ExePath,
+  getWindowsWmicExePath,
   normalizeWindowsInstallRoot,
 } from "./windows-install-roots.js";
 
@@ -172,10 +175,31 @@ describe("getWindowsProgramFilesRoots", () => {
   });
 });
 
-describe("getWindowsCmdExePath", () => {
+describe("Windows system executable helpers", () => {
   it("resolves cmd.exe from the trusted Windows system root", () => {
     expect(getWindowsCmdExePath({ SystemRoot: "D:\\Windows" })).toBe(
       "D:\\Windows\\System32\\cmd.exe",
+    );
+  });
+
+  it("resolves trusted Windows process-inspection tools", () => {
+    const env = { SystemRoot: "D:\\Windows" };
+
+    expect(getWindowsSystem32ExePath("netstat.exe", env)).toBe(
+      "D:\\Windows\\System32\\netstat.exe",
+    );
+    expect(getWindowsPowerShellExePath(env)).toBe(
+      "D:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    );
+    expect(getWindowsWmicExePath(env)).toBe("D:\\Windows\\System32\\wbem\\wmic.exe");
+  });
+
+  it("rejects unsafe System32 executable names", () => {
+    expect(() => getWindowsSystem32ExePath("..\\netstat.exe")).toThrow(
+      /Invalid Windows System32 executable name/u,
+    );
+    expect(() => getWindowsSystem32ExePath("netstat")).toThrow(
+      /Invalid Windows System32 executable name/u,
     );
   });
 });

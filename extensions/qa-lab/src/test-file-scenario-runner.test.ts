@@ -89,6 +89,64 @@ async function makeTempRepo(prefix: string) {
   return repoRoot;
 }
 
+async function writeScriptProducerEvidence(params: {
+  outputDir: string;
+  scenarioId?: string;
+  status: "blocked" | "fail" | "pass";
+  failureReason?: string;
+}) {
+  const scenarioArtifactBase = path.join(params.outputDir, params.scenarioId ?? "scenario-script");
+  const runRoot = path.join(scenarioArtifactBase, "run-1");
+  await fs.mkdir(runRoot, { recursive: true });
+  await fs.writeFile(
+    path.join(runRoot, "qa-evidence.json"),
+    `${JSON.stringify(
+      {
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-06-14T00:00:00.000Z",
+        evidenceMode: "full",
+        entries: [
+          {
+            test: {
+              kind: "script-producer-check",
+              id: "script-producer.web-ui.smoke",
+              title: "Script producer: web-ui smoke",
+              source: { path: "scripts/evidence-producer.ts" },
+            },
+            coverage: [{ id: "ui.control", role: "primary" }],
+            execution: {
+              runner: "evidence-producer-script",
+              environment: { ref: "scenario-ref", os: "darwin", nodeVersion: "v24.0.0" },
+              provider: {
+                id: "script-producer",
+                live: false,
+                model: { name: null, ref: null },
+                fixture: "mocked-script-evidence",
+              },
+              packageSource: { kind: "source-checkout", sha: "abc123" },
+              artifacts: [],
+            },
+            result: {
+              status: params.status,
+              ...(params.failureReason ? { failure: { reason: params.failureReason } } : {}),
+              timing: { wallMs: 1 },
+            },
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  await fs.writeFile(
+    path.join(scenarioArtifactBase, "latest-run.json"),
+    `${JSON.stringify({ qaEvidence: path.join(runRoot, "qa-evidence.json") }, null, 2)}\n`,
+    "utf8",
+  );
+}
+
 describe("qa test file scenario runner", () => {
   afterEach(async () => {
     await Promise.all([
@@ -431,26 +489,44 @@ describe("qa test file scenario runner", () => {
   });
 
   it("force-kills Windows scenario command trees when graceful taskkill fails", () => {
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.WINDIR;
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
     const runTaskkill = vi
       .fn()
       .mockReturnValueOnce({ status: 1 })
       .mockReturnValueOnce({ status: 0 });
 
-    expect(
-      qaTestFileScenarioRunnerTesting.killQaScenarioWindowsProcessTree(
-        12345,
-        "SIGTERM",
-        runTaskkill,
-      ),
-    ).toBe(true);
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/pid", "12345", "/T"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/pid", "12345", "/T", "/F"], {
-      stdio: "ignore",
-      windowsHide: true,
-    });
+    try {
+      expect(
+        qaTestFileScenarioRunnerTesting.killQaScenarioWindowsProcessTree(
+          12345,
+          "SIGTERM",
+          runTaskkill,
+        ),
+      ).toBe(true);
+      const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/pid", "12345", "/T"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/pid", "12345", "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+    } finally {
+      if (originalSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = originalSystemRoot;
+      }
+      if (originalWindir === undefined) {
+        delete process.env.WINDIR;
+      } else {
+        process.env.WINDIR = originalWindir;
+      }
+    }
   });
 
   it("fails script scenarios that exit cleanly after timeout termination", async () => {
@@ -707,6 +783,97 @@ describe("qa test file scenario runner", () => {
       },
       result: {
         status: "fail",
+      },
+    });
+  });
+
+  it("fails script scenario results when imported producer evidence is blocked by default", async () => {
+    const repoRoot = await makeTempRepo("qa-script-producer-blocked-");
+    const outputDir = path.join(
+      repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      "scenario-script-producer-blocked",
+    );
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [makeTestFileScenario("script", "scripts/evidence-producer.ts")],
+      runCommand: async () => {
+        await writeScriptProducerEvidence({
+          outputDir,
+          status: "blocked",
+          failureReason: "Playwright browser is missing.",
+        });
+        return {
+          exitCode: 0,
+          stdout: "script blocked\n",
+          stderr: "",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.results[0]).toMatchObject({
+      status: "blocked",
+      failureMessage: "Playwright browser is missing.",
+    });
+  });
+
+  it("allows blocked imported producer evidence for opt-in script scenarios", async () => {
+    const repoRoot = await makeTempRepo("qa-script-producer-blocked-allowed-");
+    const outputDir = path.join(
+      repoRoot,
+      ".artifacts",
+      "qa-e2e",
+      "scenario-script-producer-blocked-allowed",
+    );
+    const scenario = makeTestFileScenario("script", "scripts/evidence-producer.ts");
+    if (scenario.execution.kind !== "script") {
+      throw new Error("expected script scenario");
+    }
+    scenario.execution.allowBlockedEvidence = true;
+
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [scenario],
+      runCommand: async () => {
+        await writeScriptProducerEvidence({
+          outputDir,
+          status: "blocked",
+          failureReason: "Playwright browser is missing.",
+        });
+        return {
+          exitCode: 0,
+          stdout: "script blocked\n",
+          stderr: "",
+        };
+      },
+      env: {
+        OPENCLAW_QA_REF: "scenario-ref",
+      } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.results[0]).toMatchObject({
+      status: "pass",
+      producerEvidence: {
+        entries: [
+          {
+            test: {
+              id: "script-producer.web-ui.smoke",
+            },
+            result: {
+              status: "blocked",
+            },
+          },
+        ],
       },
     });
   });

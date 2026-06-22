@@ -18,6 +18,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatHelpExamples } from "../help-format.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
@@ -165,6 +166,34 @@ function resolveGatewayRpcOptions<T extends { token?: string; password?: string 
     ...opts,
     token: opts.token ?? parentToken,
     password: opts.password ?? parentPassword,
+  };
+}
+
+async function resolveGatewayRpcOptionsWithLocalPort(
+  opts: GatewayRpcOpts & { port?: unknown },
+  command?: Command,
+): Promise<GatewayRpcOpts> {
+  const rpcOpts = resolveGatewayRpcOptions(opts, command);
+  const port = parseGatewayPortOption(opts.port ?? inheritOptionFromParent(command, "port"));
+  if (port === undefined) {
+    return rpcOpts;
+  }
+  if (typeof opts.url === "string" && opts.url.trim()) {
+    throw new Error("Use either --url or --port, not both.");
+  }
+  const { readBestEffortConfig } = await loadConfigModule();
+  const config = await readBestEffortConfig();
+  return {
+    ...rpcOpts,
+    localPortOverride: port,
+    config: {
+      ...config,
+      gateway: {
+        ...config.gateway,
+        mode: "local",
+        port,
+      },
+    },
   };
 }
 
@@ -553,10 +582,11 @@ export function registerGatewayCli(program: Command) {
     gateway
       .command("health")
       .description("Fetch Gateway health")
+      .option("--port <port>", "Local Gateway port")
       .action(async (opts, command) => {
         await runGatewayCommand(
           async () => {
-            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
             const [
               { emitReachableGatewayAuthDiagnostic, formatHealthChannelLines },
               { styleHealthChannelLine },
@@ -568,11 +598,12 @@ export function registerGatewayCli(program: Command) {
               const { readBestEffortConfig } = await loadConfigModule();
               const handled = await emitReachableGatewayAuthDiagnostic({
                 error,
-                config: await readBestEffortConfig(),
+                config: rpcOpts.config ?? (await readBestEffortConfig()),
                 runtime: defaultRuntime,
                 timeoutMs: parseGatewayRpcTimeoutOption(rpcOpts.timeout),
                 token: rpcOpts.token,
                 password: rpcOpts.password,
+                localPortOverride: rpcOpts.localPortOverride,
                 json: Boolean(rpcOpts.json),
               });
               if (handled) {
@@ -728,6 +759,7 @@ export function registerGatewayCli(program: Command) {
       "Show gateway reachability, auth capability, and read-probe summary (local + remote)",
     )
     .option("--url <url>", "Explicit Gateway WebSocket URL (still probes localhost)")
+    .option("--port <port>", "Local Gateway port")
     .option("--ssh <target>", "SSH target for remote gateway tunnel (user@host or user@host:port)")
     .option("--ssh-identity <path>", "SSH identity file path")
     .option("--ssh-auto", "Try to derive an SSH target from Bonjour discovery", false)
@@ -739,7 +771,13 @@ export function registerGatewayCli(program: Command) {
       await runGatewayCommand(async () => {
         const rpcOpts = resolveGatewayRpcOptions(opts, command);
         const { gatewayStatusCommand } = await loadGatewayStatusModule();
-        await gatewayStatusCommand(rpcOpts, defaultRuntime);
+        await gatewayStatusCommand(
+          {
+            ...rpcOpts,
+            port: opts.port ?? inheritOptionFromParent(command, "port"),
+          },
+          defaultRuntime,
+        );
       });
     });
 

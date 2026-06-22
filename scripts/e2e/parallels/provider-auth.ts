@@ -20,7 +20,7 @@ export function parseBoolEnv(value: string | undefined): boolean {
 
 export function ensureValue(args: string[], index: number, flag: string): string {
   const value = args[index + 1];
-  if (value == null || value === "") {
+  if (value == null || value === "" || value.startsWith("-")) {
     die(`${flag} requires a value`);
   }
   return value;

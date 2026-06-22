@@ -187,7 +187,11 @@ describe("qa suite runtime agent process helpers", () => {
 
   it("force-kills timed-out Windows qa cli process trees with taskkill", async () => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.WINDIR;
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
     try {
       const child = createSpawnedProcess({ pid: 12345 });
       spawnMock.mockReturnValue(child);
@@ -213,14 +217,28 @@ describe("qa suite runtime agent process helpers", () => {
 
       await waitForSpawnCount(1);
       await timeoutAssertion;
-      expect(spawnSyncMock).toHaveBeenCalledWith("taskkill", ["/PID", "12345", "/T", "/F"], {
-        stdio: "ignore",
-        windowsHide: true,
-      });
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        path.win32.join("C:\\Windows", "System32", "taskkill.exe"),
+        ["/PID", "12345", "/T", "/F"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
       expect(child.kill).not.toHaveBeenCalled();
     } finally {
       if (platformDescriptor) {
         Object.defineProperty(process, "platform", platformDescriptor);
+      }
+      if (originalSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = originalSystemRoot;
+      }
+      if (originalWindir === undefined) {
+        delete process.env.WINDIR;
+      } else {
+        process.env.WINDIR = originalWindir;
       }
     }
   });
@@ -680,7 +698,7 @@ describe("qa suite runtime agent process helpers", () => {
 
     expect(gatewayCall).toHaveBeenCalledWith(
       "agent.wait",
-      { runId: "run-oversized", timeoutMs: 9e15 },
+      { runId: "run-oversized", timeoutMs: MAX_TIMER_TIMEOUT_MS },
       { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });

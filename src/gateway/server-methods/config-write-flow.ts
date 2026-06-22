@@ -203,13 +203,12 @@ function buildConfigRestartSentinelPayload(params: {
   };
 }
 
-async function tryWriteRestartSentinelPayload(
-  payload: RestartSentinelPayload,
-): Promise<string | null> {
+async function tryWriteRestartSentinelPayload(payload: RestartSentinelPayload): Promise<boolean> {
   try {
-    return await writeRestartSentinel(payload);
+    await writeRestartSentinel(payload);
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
@@ -256,7 +255,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   context?: GatewayRequestContext;
 }): Promise<{
   payload: RestartSentinelPayload;
-  sentinelPath: string | null;
+  sentinelPersisted: boolean;
   restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | undefined;
 }> {
   const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
@@ -270,7 +269,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
     threadId,
     note,
   });
-  const sentinelPath = await tryWriteRestartSentinelPayload(payload);
+  const sentinelPersisted = await tryWriteRestartSentinelPayload(payload);
   const restart = shouldScheduleDirectConfigRestart({
     changedPaths: params.changedPaths,
     nextConfig: params.nextConfig,
@@ -291,5 +290,5 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
       `${params.mode} restart coalesced ${formatControlPlaneActor(params.actor)} delayMs=${restart.delayMs}`,
     );
   }
-  return { payload, sentinelPath, restart };
+  return { payload, sentinelPersisted, restart };
 }
