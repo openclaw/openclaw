@@ -6,7 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
   setChannelConversationBindingMaxAgeBySessionKey,
@@ -411,17 +411,16 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
       agentId: sessionAgentId,
       sessionEntry: targetSessionEntry,
     });
-    const suffix =
-      state.source === "agent"
-        ? " (agent)"
-        : state.source === "config"
-          ? " (config)"
-          : state.source === "default"
-            ? " (default)"
-            : "";
     return {
       shouldContinue: false,
-      reply: { text: `⚙️ Current fast mode: ${state.enabled ? "on" : "off"}${suffix}.` },
+      reply: {
+        text: formatFastModeCurrentStatus({
+          mode: state.mode,
+          source: state.source,
+          fastAutoOnSeconds: state.fastAutoOnSeconds,
+          label: "⚙️ Current fast mode",
+        }),
+      },
     };
   }
 
@@ -441,7 +440,7 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
     }
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /fast status|on|off|default" },
+      reply: { text: "⚙️ Usage: /fast status|auto|on|off|default" },
     };
   }
 
@@ -452,7 +451,12 @@ export const handleFastCommand: CommandHandler = async (params, allowTextCommand
 
   return {
     shouldContinue: false,
-    reply: { text: `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.` },
+    reply: {
+      text:
+        nextMode === "auto"
+          ? "⚙️ Fast mode set to auto."
+          : `⚙️ Fast mode ${nextMode ? "enabled" : "disabled"}.`,
+    },
   };
 };
 

@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Status text types describe runtime status records used by status rendering.
 import type {
   ElevatedLevel,
@@ -25,7 +26,7 @@ export type BuildStatusTextParams = {
   model: string;
   contextTokens?: number;
   resolvedThinkLevel?: ThinkLevel;
-  resolvedFastMode?: boolean;
+  resolvedFastMode?: FastMode;
   resolvedHarness?: string;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;

@@ -1618,7 +1618,7 @@ function normalizeChannelConfigs(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeManifestChannelCommandDefaults(
+export function normalizeManifestChannelCommandDefaults(
   value: unknown,
 ): PluginManifestChannelCommandDefaults | undefined {
   if (!isRecord(value)) {

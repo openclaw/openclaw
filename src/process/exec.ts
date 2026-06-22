@@ -13,6 +13,7 @@ import {
 } from "../infra/windows-encoding.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
 import {
@@ -153,9 +154,12 @@ export async function runExec(
 ): Promise<{ stdout: string; stderr: string }> {
   const options =
     typeof opts === "number"
-      ? { timeout: opts, encoding: "buffer" as const }
+      ? { timeout: resolveTimerTimeoutMs(opts, 1), encoding: "buffer" as const }
       : {
-          timeout: opts.timeoutMs,
+          timeout:
+            typeof opts.timeoutMs === "number"
+              ? resolveTimerTimeoutMs(opts.timeoutMs, 1)
+              : undefined,
           maxBuffer: opts.maxBuffer,
           cwd: opts.cwd,
           encoding: "buffer" as const,
@@ -342,6 +346,7 @@ export async function runCommandWithTimeout(
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
   const { timeoutMs, cwd, input, baseEnv, env, noOutputTimeoutMs, signal, killProcessTree } =
     options;
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, baseEnv, env });
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
@@ -394,6 +399,9 @@ export async function runCommandWithTimeout(
       typeof noOutputTimeoutMs === "number" &&
       Number.isFinite(noOutputTimeoutMs) &&
       noOutputTimeoutMs > 0;
+    const resolvedNoOutputTimeoutMs = shouldTrackOutputTimeout
+      ? resolveTimerTimeoutMs(noOutputTimeoutMs, 1)
+      : undefined;
     let removeAbortListener: (() => void) | null = null;
 
     const clearNoOutputTimer = () => {
@@ -496,13 +504,13 @@ export async function runCommandWithTimeout(
         }
         noOutputTimedOut = true;
         killChild();
-      }, Math.floor(noOutputTimeoutMs));
+      }, resolvedNoOutputTimeoutMs);
     };
 
     const timer = setTimeout(() => {
       timedOut = true;
       killChild();
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
     armNoOutputTimer();
     if (signal) {
       const onAbort = () => killChild(false);

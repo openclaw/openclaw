@@ -60,7 +60,17 @@ function readOptionValue(argv: readonly string[], index: number, arg: string) {
 }
 
 function isHelpRequest(argv: readonly string[]) {
-  return argv.length === 1 && (argv[0] === "--help" || argv[0] === "-h");
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--artifact-base" || arg === "--repo-root") {
+      index += 1;
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      return true;
+    }
+  }
+  return false;
 }
 
 function parseOptions(argv: readonly string[]): ProducerOptions {

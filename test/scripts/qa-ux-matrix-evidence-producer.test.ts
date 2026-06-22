@@ -34,6 +34,16 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("prints help after boolean options without consuming valued option slots", () => {
+    const result = runCli("--skip-visual-proof", "--help");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/qa/ux-matrix-evidence-producer.ts",
+    );
+    expect(result.stderr).toBe("");
+  });
+
   it("reports invalid args without a Node stack trace", () => {
     const result = runCli("--wat");
 

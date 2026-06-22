@@ -1048,7 +1048,7 @@ export const AgentEntrySchema = z
     verboseDefault: z.enum(["off", "on", "full"]).optional(),
     toolProgressDetail: z.enum(["explain", "raw"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
-    fastModeDefault: z.boolean().optional(),
+    fastModeDefault: z.union([z.boolean(), z.literal("auto")]).optional(),
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),

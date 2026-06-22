@@ -275,7 +275,7 @@ export async function recordChannelMessageReplyDispatch(
     recordInboundSession: params.recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
-      preparePayload: (payload) =>
+      preparePayload: (payload): OutboundReplyPayload =>
         payload && typeof payload === "object" ? normalizeOutboundReplyPayload(payload) : {},
       deliver: async (payload, info) => {
         if (params.durable) {
