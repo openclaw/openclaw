@@ -5,12 +5,6 @@ import { definePage } from "../../router/index.ts";
 import { startNodesPolling, stopNodesPolling } from "../../ui/app-polling.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
-  loadConfig,
-  removeConfigFormValue,
-  saveConfig,
-  updateConfigFormValue,
-} from "../../ui/controllers/config.ts";
-import {
   approveDevicePairing,
   loadDevices,
   rejectDevicePairing,
@@ -24,6 +18,12 @@ import {
   updateExecApprovalsFormValue,
 } from "../../ui/controllers/exec-approvals.ts";
 import { loadNodes } from "../../ui/controllers/nodes.ts";
+import {
+  loadConfig,
+  removeConfigFormValue,
+  saveConfig,
+  updateConfigFormValue,
+} from "../config/data.ts";
 
 type NodesLoadContext = { host: SettingsHost; app: SettingsAppHost };
 type NodesRenderContext = { state: AppViewState };

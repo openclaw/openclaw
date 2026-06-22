@@ -17,6 +17,7 @@ import {
 } from "../app/router-outlet.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import { runUpdate } from "../pages/config/data.ts";
 import { refreshChatCommands } from "./app-chat.ts";
 import {
   createChatSession,
@@ -28,7 +29,6 @@ import {
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { renderChatSessionSelect } from "./chat/session-controls.ts";
-import { runUpdate } from "./controllers/config.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { formatRelativeTimestamp } from "./format.ts";
 import { icons } from "./icons.ts";

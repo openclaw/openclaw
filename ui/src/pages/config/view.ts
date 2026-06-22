@@ -1,17 +1,6 @@
 // Control UI view renders config screen content.
 import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
-import { t } from "../../i18n/index.ts";
-import { icons } from "../icons.ts";
-import {
-  BORDER_RADIUS_STOPS,
-  TEXT_SCALE_STOPS,
-  type BorderRadiusStop,
-  type TextScaleStop,
-} from "../storage.ts";
-import type { ThemeTransitionContext } from "../theme-transition.ts";
-import type { ThemeMode, ThemeName } from "../theme.ts";
-import type { ConfigUiHints } from "../types.ts";
 import {
   countSensitiveConfigValues,
   hintForPath,
@@ -21,8 +10,23 @@ import {
   REDACTED_PLACEHOLDER,
   schemaType,
   type JsonSchema,
-} from "./config-form.shared.ts";
-import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+} from "../../components/config-form.shared.ts";
+import {
+  analyzeConfigSchema,
+  renderConfigForm,
+  SECTION_META,
+} from "../../components/config-form.ts";
+import { t } from "../../i18n/index.ts";
+import { icons } from "../../ui/icons.ts";
+import {
+  BORDER_RADIUS_STOPS,
+  TEXT_SCALE_STOPS,
+  type BorderRadiusStop,
+  type TextScaleStop,
+} from "../../ui/storage.ts";
+import type { ThemeTransitionContext } from "../../ui/theme-transition.ts";
+import type { ThemeMode, ThemeName } from "../../ui/theme.ts";
+import type { ConfigUiHints } from "../../ui/types.ts";
 
 const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   0: "None",

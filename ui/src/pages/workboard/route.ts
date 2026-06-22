@@ -5,7 +5,6 @@ import { definePage } from "../../router/index.ts";
 import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadAgents } from "../../ui/controllers/agents.ts";
-import { loadConfig } from "../../ui/controllers/config.ts";
 import { loadSessions } from "../../ui/controllers/sessions.ts";
 import {
   loadWorkboard,
@@ -13,6 +12,7 @@ import {
   stopWorkboardPolling,
 } from "../../ui/controllers/workboard.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
+import { loadConfig } from "../config/data.ts";
 
 type WorkboardRenderContext = RouteRenderContext;
 type WorkboardLoadContext = { host: SettingsHost; app: SettingsAppHost };

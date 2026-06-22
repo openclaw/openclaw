@@ -18,7 +18,6 @@ import { loadAgentIdentities, loadAgentIdentity } from "../ui/controllers/agent-
 import { loadAgentSkills } from "../ui/controllers/agent-skills.ts";
 import { loadAgents } from "../ui/controllers/agents.ts";
 import { loadChannels } from "../ui/controllers/channels.ts";
-import { loadConfig, loadConfigSchema } from "../ui/controllers/config.ts";
 import { loadCronJobsPage, loadCronRuns, loadCronStatus } from "../ui/controllers/cron.ts";
 import { loadDebug } from "../ui/controllers/debug.ts";
 import {
@@ -35,6 +34,7 @@ import { loadUsage } from "../ui/controllers/usage.ts";
 import { resolveCronJobLastRunStatus } from "../ui/cron-status.ts";
 import { isMonitoredAuthProvider } from "../ui/model-auth-helpers.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../ui/session-key.ts";
+import { loadConfig, loadConfigSchema } from "./config/data.ts";
 
 export async function loadSettingsPage(host: SettingsHost, app: SettingsAppHost) {
   const primaryRefresh = loadConfig(app);

@@ -1,12 +1,12 @@
 // Control UI view renders config form screen content.
 import { html, nothing, type TemplateResult } from "lit";
-import { formatUnknownText } from "../format.ts";
-import { icons as sharedIcons } from "../icons.ts";
+import { formatUnknownText } from "../ui/format.ts";
+import { icons as sharedIcons } from "../ui/icons.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../string-coerce.ts";
-import type { ConfigUiHints } from "../types.ts";
+} from "../ui/string-coerce.ts";
+import type { ConfigUiHints } from "../ui/types.ts";
 import {
   defaultValue,
   hasSensitiveConfigData,

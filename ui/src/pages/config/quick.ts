@@ -8,28 +8,28 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import { t } from "../../i18n/index.ts";
-import { icons } from "../icons.ts";
-import type { BorderRadiusStop, TextScaleStop } from "../storage.ts";
-import { normalizeOptionalString } from "../string-coerce.ts";
-import type { ThemeTransitionContext } from "../theme-transition.ts";
-import type { ThemeMode, ThemeName } from "../theme.ts";
-import type { FastMode } from "../types.ts";
+import { icons } from "../../ui/icons.ts";
+import type { BorderRadiusStop, TextScaleStop } from "../../ui/storage.ts";
+import { normalizeOptionalString } from "../../ui/string-coerce.ts";
+import type { ThemeTransitionContext } from "../../ui/theme-transition.ts";
+import type { ThemeMode, ThemeName } from "../../ui/theme.ts";
+import type { FastMode } from "../../ui/types.ts";
 import {
   normalizeLocalUserIdentity,
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
-} from "../user-identity.ts";
+} from "../../ui/user-identity.ts";
 import {
   assistantAvatarFallbackUrl,
   resolveChatAvatarRenderUrl,
   resolveAssistantTextAvatar,
-} from "./agents-utils.ts";
+} from "../../ui/views/agents-utils.ts";
 import {
   CONFIG_PRESETS,
   detectActivePreset,
   getPresetById,
   type ConfigPresetId,
-} from "./config-presets.ts";
+} from "./presets.ts";
 
 // ── Types ──
 

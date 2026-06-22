@@ -20,13 +20,6 @@ import {
   saveAgentsConfig,
 } from "../../ui/controllers/agents.ts";
 import { loadChannels } from "../../ui/controllers/channels.ts";
-import {
-  loadConfig,
-  removeConfigFormValue,
-  stageDefaultAgentConfigEntry,
-  updateConfigFormValue,
-} from "../../ui/controllers/config.ts";
-import { ensureAgentConfigEntry, findAgentConfigEntryIndex } from "../../ui/controllers/config.ts";
 import { runCronJob } from "../../ui/controllers/cron.ts";
 import { parseAgentSessionKey } from "../../ui/session-key.ts";
 import { normalizeStringEntries } from "../../ui/string-coerce.ts";
@@ -35,6 +28,13 @@ import {
   resolveEffectiveModelFallbacks,
   resolveModelPrimary,
 } from "../../ui/views/agents-utils.ts";
+import {
+  loadConfig,
+  removeConfigFormValue,
+  stageDefaultAgentConfigEntry,
+  updateConfigFormValue,
+} from "../config/data.ts";
+import { ensureAgentConfigEntry, findAgentConfigEntryIndex } from "../config/data.ts";
 import { loadAgentsPage } from "../loaders.ts";
 
 type AgentsLoadContext = { host: SettingsHost; app: SettingsAppHost };

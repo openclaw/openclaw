@@ -4,7 +4,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadChannels } from "../../ui/controllers/channels.ts";
-import { updateConfigFormValue } from "../../ui/controllers/config.ts";
+import { updateConfigFormValue } from "../config/data.ts";
 import { loadChannelsPage } from "../loaders.ts";
 
 type ChannelsLoadContext = { host: SettingsHost };

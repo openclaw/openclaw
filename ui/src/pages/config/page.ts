@@ -4,6 +4,13 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { setAssistantAvatarOverride } from "../../ui/controllers/assistant-identity.ts";
+import { patchSession } from "../../ui/controllers/sessions.ts";
+import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../ui/session-key.ts";
+import { loadLocalAssistantIdentity } from "../../ui/storage.ts";
+import { normalizeOptionalString } from "../../ui/string-coerce.ts";
+import type { FastMode } from "../../ui/types.ts";
+import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
+import { renderMcp } from "../../ui/views/mcp.ts";
 import {
   applyConfig,
   loadConfig,
@@ -15,17 +22,10 @@ import {
   updateConfigFormValue,
   updateConfigRawValue,
   updateMcpServerEnabled,
-} from "../../ui/controllers/config.ts";
-import { patchSession } from "../../ui/controllers/sessions.ts";
-import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../ui/session-key.ts";
-import { loadLocalAssistantIdentity } from "../../ui/storage.ts";
-import { normalizeOptionalString } from "../../ui/string-coerce.ts";
-import type { FastMode } from "../../ui/types.ts";
-import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
-import { getPresetById } from "../../ui/views/config-presets.ts";
-import { renderQuickSettings, type QuickSettingsChannel } from "../../ui/views/config-quick.ts";
-import { renderConfig, type ConfigProps } from "../../ui/views/config.ts";
-import { renderMcp } from "../../ui/views/mcp.ts";
+} from "./data.ts";
+import { getPresetById } from "./presets.ts";
+import { renderQuickSettings, type QuickSettingsChannel } from "./quick.ts";
+import { renderConfig, type ConfigProps } from "./view.ts";
 
 export type ConfigPageId =
   | "config"

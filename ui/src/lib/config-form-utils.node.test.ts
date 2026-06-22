@@ -1,14 +1,14 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import type { JsonSchema } from "../../views/config-form.shared.ts";
-import { coerceFormValues } from "./form-coerce.ts";
+import type { JsonSchema } from "../components/config-form.shared.ts";
+import { coerceFormValues } from "../pages/config/form-coerce.ts";
 import {
   cloneConfigObject,
   removePathValue,
   sanitizeRedactedFormForSubmit,
   serializeConfigForm,
   setPathValue,
-} from "./form-utils.ts";
+} from "./config-form-utils.ts";
 
 /**
  * Minimal model provider schema matching the Zod-generated JSON Schema for

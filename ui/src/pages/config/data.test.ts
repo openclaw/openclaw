@@ -16,7 +16,7 @@ import {
   updateConfigFormValue,
   updateConfigRawValue,
   type ConfigState,
-} from "./config.ts";
+} from "./data.ts";
 
 function createState(): ConfigState {
   return {

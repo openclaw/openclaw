@@ -1,8 +1,8 @@
 // Control UI view renders config form.render screen content.
 import { html, nothing } from "lit";
-import { icons } from "../icons.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import type { ConfigUiHints } from "../types.ts";
+import { icons } from "../ui/icons.ts";
+import { normalizeLowercaseStringOrEmpty } from "../ui/string-coerce.ts";
+import type { ConfigUiHints } from "../ui/types.ts";
 import { matchesNodeSearch, parseConfigSearchQuery, renderNode } from "./config-form.node.ts";
 import { hintForPath, humanize, schemaType, type JsonSchema } from "./config-form.shared.ts";
 

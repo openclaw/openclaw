@@ -1,8 +1,8 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ThemeMode, ThemeName } from "../theme.ts";
-import { renderConfig, resetConfigViewStateForTests, type ConfigProps } from "./config.ts";
+import type { ThemeMode, ThemeName } from "../../ui/theme.ts";
+import { renderConfig, resetConfigViewStateForTests, type ConfigProps } from "./view.ts";
 
 describe("config view", () => {
   const baseProps = () => ({
