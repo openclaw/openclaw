@@ -68,7 +68,6 @@ const FAST_MODE_PROVIDER_IDS = new Set([
 ]);
 
 const CHAT_SESSION_PICKER_SEARCH_DEBOUNCE_MS = 300;
-const CHAT_SESSION_PICKER_MAX_HIDDEN_PAGE_SKIPS = 10;
 const chatSessionPickerSearchControllers = new WeakMap<
   AppViewState,
   ChatSessionPickerSearchController
@@ -470,7 +469,6 @@ async function loadMoreChatSessionPickerResults(state: AppViewState) {
   let offset = resolveNextChatSessionOffset(result);
   let visibleCount = resolveChatSessionPickerRows(state, result).length;
   const seenOffsets = new Set<number>();
-  let hiddenPageSkips = 0;
   while (offset !== null && !seenOffsets.has(offset)) {
     seenOffsets.add(offset);
     const next = await loadChatSessionPickerPage(state, {
@@ -488,10 +486,6 @@ async function loadMoreChatSessionPickerResults(state: AppViewState) {
     }
     visibleCount = nextVisibleCount;
     offset = resolveNextChatSessionOffset(result);
-    hiddenPageSkips += 1;
-    if (hiddenPageSkips >= CHAT_SESSION_PICKER_MAX_HIDDEN_PAGE_SKIPS) {
-      return;
-    }
   }
 }
 
