@@ -542,7 +542,21 @@ function isStalledModelCallRecoveryEligible(params: {
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "model_call" &&
-    params.activity?.hasActiveEmbeddedRun === true &&
+    typeof lastProgressAgeMs === "number" &&
+    lastProgressAgeMs >= params.stuckSessionAbortMs
+  );
+}
+
+function isOrphanedActiveWorkRecoveryEligible(params: {
+  classification: SessionAttentionClassification | undefined;
+  activity?: DiagnosticSessionActivitySnapshot;
+  stuckSessionAbortMs: number;
+}): boolean {
+  const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
+  return (
+    params.classification?.eventType === "session.stalled" &&
+    params.classification.classification === "stalled_agent_run" &&
+    params.classification.activeWorkKind !== undefined &&
     typeof lastProgressAgeMs === "number" &&
     lastProgressAgeMs >= params.stuckSessionAbortMs
   );
@@ -557,7 +571,8 @@ function isActiveAbortRecoveryEligible(params: {
   return (
     isStalledEmbeddedRunRecoveryEligible(params) ||
     isBlockedToolCallRecoveryEligible(params) ||
-    isStalledModelCallRecoveryEligible(params)
+    isStalledModelCallRecoveryEligible(params) ||
+    isOrphanedActiveWorkRecoveryEligible(params)
   );
 }
 

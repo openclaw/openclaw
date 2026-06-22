@@ -1,12 +1,12 @@
 // JSON-only task command helpers.
-// These paths avoid maintenance reconciliation so short-lived JSON CLI processes stay read-only and exit cleanly.
+// These paths use the same operator-inspection projection as the human task list.
 
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
-import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
 import { listTaskAuditFindings, summarizeTaskAuditFindings } from "../tasks/task-registry.audit.js";
+import { reconcileInspectableTasks } from "../tasks/task-registry.reconcile.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildTaskSystemAuditFindings,
@@ -15,9 +15,7 @@ import {
 } from "./tasks-audit-system.js";
 
 function listTaskJsonRecords(): TaskRecord[] {
-  // Keep the routed JSON path a read-only store snapshot; maintenance reconciliation imports
-  // broader task runtimes and can keep JSON-only CLI processes alive.
-  return listTaskRecords();
+  return reconcileInspectableTasks();
 }
 
 type TasksListJsonArgs = {

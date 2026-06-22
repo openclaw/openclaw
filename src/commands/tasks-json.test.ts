@@ -160,12 +160,12 @@ describe("tasks JSON commands", () => {
         },
         summary: {
           total: 1,
-          warnings: 0,
-          errors: 1,
+          warnings: 1,
+          errors: 0,
           byCode: {
             stale_queued: 0,
-            stale_running: 1,
-            lost: 0,
+            stale_running: 0,
+            lost: 1,
             delivery_failed: 0,
             missing_cleanup: 0,
             inconsistent_timestamps: 0,
@@ -185,7 +185,7 @@ describe("tasks JSON commands", () => {
               inconsistent_timestamps: 0,
             },
           },
-          combined: { total: 5, errors: 3, warnings: 2 },
+          combined: { total: 5, errors: 2, warnings: 3 },
         },
         findings: [
           {
