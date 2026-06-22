@@ -70,7 +70,6 @@ function resolvePinnedMediaRequesterOrigin(params: {
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const sessionOrigin = normalizeDeliveryContext(params.sessionOrigin);
   const accountsConflict =
-    requesterOrigin?.channel === sessionOrigin?.channel &&
     requesterOrigin?.accountId &&
     sessionOrigin?.accountId &&
     requesterOrigin.accountId !== sessionOrigin.accountId;

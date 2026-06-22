@@ -482,6 +482,17 @@ describe("createMediaGenerationTaskLifecycle", () => {
       to: undefined,
       accountId: "bot-a",
     });
+
+    const accountOnlyHandle = lifecycle.createTaskRun({
+      sessionKey: "agent:main:telegram:shared",
+      requesterOrigin: { accountId: "bot-a" },
+      prompt: "account-only proof image",
+    });
+    expect(accountOnlyHandle?.requesterOrigin).toEqual({
+      channel: undefined,
+      to: undefined,
+      accountId: "bot-a",
+    });
   });
 
   it("returns the completion wake delivery result", async () => {
