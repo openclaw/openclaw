@@ -435,6 +435,7 @@ describe("agentCommand ACP runtime routing", () => {
       attemptExecutionMocks.persistAcpTurnTranscript.mockImplementationOnce(async (params) => {
         order.push("persist");
         return {
+          kind: "persisted",
           sessionEntry: (params as { sessionEntry?: unknown }).sessionEntry,
           saveOutcome: "saved",
         };
