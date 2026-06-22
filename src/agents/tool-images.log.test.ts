@@ -24,7 +24,7 @@ vi.mock("../logging/subsystem.js", () => {
   return { createSubsystemLogger: () => makeLogger() };
 });
 
-import { sanitizeContentBlocksImages } from "./tool-images.js";
+import { __testing, sanitizeContentBlocksImages } from "./tool-images.js";
 
 async function createLargePng(): Promise<Buffer> {
   return createSolidPngBuffer(2001, 8, { r: 0x7f, g: 0x7f, b: 0x7f });
@@ -40,6 +40,7 @@ describe("tool-images log context", () => {
   beforeEach(() => {
     infoMock.mockClear();
     warnMock.mockClear();
+    __testing.resetResizeCache();
   });
 
   it("includes filename from read label", async () => {
