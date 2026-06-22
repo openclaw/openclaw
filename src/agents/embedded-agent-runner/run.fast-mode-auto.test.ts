@@ -276,6 +276,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
         model: "glm-5.1:cloud",
         runId: `run-fast-auto-off-${failureTarget}`,
         fastMode: "auto",
+        fastModeAutoOnSeconds: 30,
         onAgentEvent: (event) => {
           events.push(event);
           const summary = event.data?.summary;
@@ -298,7 +299,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
       await vi.waitFor(() => {
         expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
       });
-      await vi.advanceTimersByTimeAsync(61_000);
+      await vi.advanceTimersByTimeAsync(31_000);
       await attemptParams?.onAgentEvent?.({
         stream: "tool",
         data: { phase: "result", name: "exec" },
@@ -350,6 +351,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
         model: "glm-5.1:cloud",
         runId: `run-fast-auto-reset-${failureTarget}`,
         fastMode: "auto",
+        fastModeAutoOnSeconds: 30,
         onAgentEvent: (event) => {
           events.push(event);
           if (failureTarget === "agent-event" && event.data?.summary === "💨Fast: auto-on") {
@@ -367,7 +369,7 @@ describe("runEmbeddedAgent fast auto progress", () => {
       await vi.waitFor(() => {
         expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
       });
-      await vi.advanceTimersByTimeAsync(61_000);
+      await vi.advanceTimersByTimeAsync(31_000);
       await attemptParams?.onAgentEvent?.({
         stream: "tool",
         data: { phase: "result", name: "exec" },
