@@ -61,7 +61,7 @@ private struct ExecApprovalPromptCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Exec approval required")
                     .font(.headline)
-                Text("OpenClaw opened from a notification. Review this exec request before continuing.")
+                Text("Review this exec request before continuing. Your decision will be sent back to the gateway.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
