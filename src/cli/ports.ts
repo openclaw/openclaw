@@ -134,7 +134,9 @@ async function isPortBusy(port: number): Promise<boolean> {
   // Route through checkPortInUse which probes all four endpoints
   // (127.0.0.1, 0.0.0.0, ::1, ::) instead of a single hostless bind
   // that defaults to IPv6 wildcard and misses IPv4-only occupants.
-  return (await checkPortInUse(port)) === "busy";
+  // Treat "unknown" as busy — inconclusive probe failures must not cause
+  // forceFreePortAndWait to exit early before lsof/fuser can inspect.
+  return (await checkPortInUse(port)) !== "free";
 }
 
 export function parseLsofOutput(output: string): PortProcess[] {
