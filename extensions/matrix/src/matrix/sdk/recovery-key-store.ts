@@ -144,10 +144,6 @@ export class MatrixRecoveryKeyStore {
     if (staged) {
       return staged[1];
     }
-    const cached = this.secretStorageKeyCache.get(normalizedKeyId);
-    if (cached) {
-      return new Uint8Array(cached.key);
-    }
     const stored = this.loadStoredRecoveryKey();
     if (!stored?.privateKeyBase64) {
       return null;

@@ -494,7 +494,11 @@ export class MatrixClient {
         if (!keyTuple || !key) {
           return false;
         }
-        return await this.client.secretStorage.checkKey(key, keyTuple[1]);
+        const keyInfo = keyTuple[1];
+        if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
+          return false;
+        }
+        return await this.client.secretStorage.checkKey(key, keyInfo);
       },
       getDeviceId: () => this.client.getDeviceId(),
       verificationManager: this.verificationManager,

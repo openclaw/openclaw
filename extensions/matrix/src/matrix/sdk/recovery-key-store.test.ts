@@ -240,6 +240,15 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(saved.privateKeyBase64).toBe(Buffer.from([9, 8, 7]).toString("base64"));
   });
 
+  it("does not authorize destructive reset from an ephemeral cached key", () => {
+    const store = new MatrixRecoveryKeyStore();
+    const callbacks = store.buildCryptoCallbacks();
+
+    callbacks.cacheSecretStorageKey?.("KEY123", { name: "openclaw" }, new Uint8Array([9, 8, 7]));
+
+    expect(store.getSecretStorageKeyCandidate("KEY123")).toBeNull();
+  });
+
   it("creates and persists a recovery key when secret storage is missing", async () => {
     const { store, createRecoveryKeyFromPassphrase, bootstrapSecretStorage } =
       await runSecretStorageBootstrapScenario({
