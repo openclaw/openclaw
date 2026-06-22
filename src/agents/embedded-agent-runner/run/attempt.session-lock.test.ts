@@ -2450,6 +2450,51 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releases).toEqual(["release", "release", "release"]);
   });
 
+  it("allows post-prompt writes after threshold compaction appends and creates a successor transcript", async () => {
+    const sessionFile = await createTempSessionFile();
+    const successorFile = path.join(path.dirname(sessionFile), "session.compacted.jsonl");
+    const releases: string[] = [];
+    const acquireSessionWriteLockForCompaction = vi.fn(async () => ({
+      release: vi.fn(async () => {
+        releases.push("release");
+      }),
+    }));
+    const firstController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockForCompaction,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await firstController.releaseForPrompt();
+
+    const secondController = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockForCompaction,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    await secondController.withSessionWriteLock(
+      async () => {
+        await fs.appendFile(
+          sessionFile,
+          '{"type":"compaction","id":"own-threshold-compaction","summary":"kept recent context"}\n',
+          "utf8",
+        );
+        await fs.writeFile(
+          successorFile,
+          '{"type":"session","parentSession":"session.jsonl"}\n{"type":"compaction","id":"own-threshold-compaction"}\n',
+          "utf8",
+        );
+      },
+      { publishOwnedWrite: true },
+    );
+    await secondController.releaseForPrompt();
+
+    await expect(firstController.withSessionWriteLock(() => "post-compaction")).resolves.toBe(
+      "post-compaction",
+    );
+    expect(firstController.hasSessionTakeover()).toBe(false);
+    expect(acquireSessionWriteLockForCompaction).toHaveBeenCalledTimes(3);
+    expect(releases).toEqual(["release", "release", "release"]);
+  });
+
   it("validates nested owned publications with the persisted entry ids", async () => {
     const sessionFile = await createTempSessionFile();
     const mergePromptReleasedSessionEntries = vi.fn();

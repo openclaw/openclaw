@@ -112,7 +112,7 @@ describe("compaction hook wiring", () => {
     ctx: ReturnType<typeof createCompactionEndCtx> | Record<string, unknown>,
     event: {
       willRetry: boolean;
-      result?: { summary: string; tokensAfter?: number };
+      result?: { summary: string; tokensAfter?: number; sessionFile?: string };
       aborted?: boolean;
     },
   ) {
@@ -195,6 +195,37 @@ describe("compaction hook wiring", () => {
       runId: "r2",
       stream: "compaction",
       data: { phase: "end", willRetry: false, completed: true },
+    });
+  });
+
+  it("passes the effective post-compaction session file to after hooks when supplied", () => {
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+
+    const ctx = createCompactionEndCtx({
+      runId: "r2b",
+      messages: [1, 2],
+      sessionFile: "/tmp/original-session.jsonl",
+      sessionKey: "agent:main:web-rotated",
+      compactionCount: 1,
+    });
+
+    runCompactionEnd(ctx, {
+      willRetry: false,
+      result: {
+        summary: "compacted",
+        sessionFile: "/tmp/rotated-session.jsonl",
+      },
+    });
+
+    expect(hookMocks.runner.runAfterCompaction).toHaveBeenCalledTimes(1);
+    expectCompactionEvent({
+      call: getAfterCompactionCall(),
+      expectedEvent: {
+        messageCount: 2,
+        compactedCount: 1,
+        sessionFile: "/tmp/rotated-session.jsonl",
+      },
+      expectedSessionKey: "agent:main:web-rotated",
     });
   });
 
