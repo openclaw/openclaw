@@ -338,6 +338,10 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   enqueueSystemEvent(summary, {
     sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
     deliveryContext: session.notifyDeliveryContext,
+    // Background-exec output is the subprocess's own stdout/stderr, which is
+    // attacker-reachable (a command can echo injected text); render it as
+    // quarantined untrusted context, not an actionable System line.
+    quarantineInPrompt: true,
   });
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.

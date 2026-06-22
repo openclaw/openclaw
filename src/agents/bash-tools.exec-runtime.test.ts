@@ -449,6 +449,9 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("partial output");
     expect(options.sessionKey).toBe("agent:main:main");
+    // Background-exec output is the subprocess's own stdout/stderr (attacker-reachable),
+    // so it must route to quarantined untrusted context, not an actionable System line.
+    expect(options.quarantineInPrompt).toBe(true);
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     const heartbeat = requireHeartbeatCall();
     expect(heartbeat.coalesceMs).toBe(0);
@@ -462,6 +465,7 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("Exec failed");
     expect(options.sessionKey).toBe("agent:main:main");
+    expect(options.quarantineInPrompt).toBe(true);
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     const heartbeat = requireHeartbeatCall();
     expect(heartbeat.coalesceMs).toBe(0);
