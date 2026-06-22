@@ -74,6 +74,7 @@ type MemorySearchManagerCacheStore = {
 };
 
 const QMD_MANAGER_OPEN_FAILURE_COOLDOWN_MS = 60_000;
+const DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS = 15_000;
 
 function createMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
   return {
@@ -123,6 +124,74 @@ function loadManagerRuntime() {
 function loadQmdManagerModule() {
   qmdManagerModulePromise ??= import("./qmd-manager.js");
   return qmdManagerModulePromise;
+}
+
+function createMemorySearchTimeoutError(timeoutMs: number): Error {
+  return new Error(`memory_search timed out after ${Math.round(timeoutMs / 1000)}s`);
+}
+
+function resolveAbortError(signal: AbortSignal, fallbackMessage: string): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error(fallbackMessage);
+}
+
+async function runFallbackMemorySearchWithDeadline<T>(params: {
+  timeoutMs: number;
+  signal?: AbortSignal;
+  run: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  if (params.signal?.aborted) {
+    throw resolveAbortError(params.signal, "memory_search aborted");
+  }
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  const timeoutPromise = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => {
+      resolve("timeout");
+      controller.abort(createMemorySearchTimeoutError(params.timeoutMs));
+    }, params.timeoutMs);
+    timer.unref?.();
+  });
+  const parentSignal = params.signal;
+  const abortPromise = parentSignal
+    ? new Promise<"abort">((resolve) => {
+        const onAbort = () => {
+          controller.abort(resolveAbortError(parentSignal, "memory_search aborted"));
+          resolve("abort");
+        };
+        parentSignal.addEventListener("abort", onAbort, { once: true });
+        removeAbortListener = () => parentSignal.removeEventListener("abort", onAbort);
+      })
+    : undefined;
+  const task = params.run(controller.signal);
+  task.catch(() => undefined);
+  try {
+    const result = await Promise.race(
+      abortPromise ? [task, timeoutPromise, abortPromise] : [task, timeoutPromise],
+    );
+    if (result === "timeout") {
+      throw createMemorySearchTimeoutError(params.timeoutMs);
+    }
+    if (result === "abort") {
+      throw resolveAbortError(parentSignal!, "memory_search aborted");
+    }
+    return result as T;
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    removeAbortListener?.();
+  }
+}
+
+function resolveFallbackMemorySearchTimeoutMs(manager: MemorySearchManager): number {
+  const timeoutMs = manager.getSearchTimeoutMs?.();
+  return Math.min(
+    DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS,
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? Math.floor(timeoutMs)
+      : DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS,
+  );
 }
 
 export type MemorySearchManagerResult = {
@@ -458,11 +527,15 @@ async function getBuiltinMemorySearchManager(params: {
 
 class BorrowedMemoryManager implements MemorySearchManager {
   readonly probeVectorStoreAvailability?: () => Promise<boolean>;
+  readonly getSearchTimeoutMs?: () => number;
 
   constructor(private readonly inner: MemorySearchManager) {
     if (inner.probeVectorStoreAvailability) {
       const probeVectorStoreAvailability = inner.probeVectorStoreAvailability.bind(inner);
       this.probeVectorStoreAvailability = async () => await probeVectorStoreAvailability();
+    }
+    if (inner.getSearchTimeoutMs) {
+      this.getSearchTimeoutMs = inner.getSearchTimeoutMs.bind(inner);
     }
   }
 
@@ -602,9 +675,22 @@ class FallbackMemoryManager implements MemorySearchManager {
     }
     const fallback = await this.ensureFallback();
     if (fallback) {
-      return await fallback.search(query, opts);
+      return await runFallbackMemorySearchWithDeadline({
+        timeoutMs: resolveFallbackMemorySearchTimeoutMs(fallback),
+        signal: opts?.signal,
+        run: async (fallbackSignal) =>
+          await fallback.search(query, { ...opts, signal: fallbackSignal }),
+      });
     }
     throw new Error(this.lastError ?? "memory search unavailable");
+  }
+
+  getSearchTimeoutMs(): number {
+    this.ensureOpen();
+    if (!this.primaryFailed) {
+      return this.deps.primary.getSearchTimeoutMs?.() ?? DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS;
+    }
+    return this.fallback?.getSearchTimeoutMs?.() ?? DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS;
   }
 
   async readFile(params: { relPath: string; from?: number; lines?: number }) {
@@ -701,13 +787,13 @@ class FallbackMemoryManager implements MemorySearchManager {
     return (await fallback?.probeVectorAvailability()) ?? false;
   }
 
-  async close() {
+  async close(timeoutMs?: number) {
     if (this.closed) {
       return;
     }
     this.closed = true;
-    await this.deps.primary.close?.();
-    await this.fallback?.close?.();
+    await this.deps.primary.close?.(timeoutMs);
+    await this.fallback?.close?.(timeoutMs);
     this.evictCacheEntry();
   }
 
