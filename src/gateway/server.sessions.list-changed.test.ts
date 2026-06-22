@@ -879,3 +879,17 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     subagentControlScope: "children",
   });
 });
+
+test("sessions.patch broadcasts canonical title with legacy label mirror", async () => {
+  await writeMainSessionStore();
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    title: "Broadcast Title",
+  });
+
+  expectMainPatchBroadcast(result, {
+    title: "Broadcast Title",
+    label: "Broadcast Title",
+  });
+});

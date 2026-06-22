@@ -307,6 +307,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "hasActiveRun",
   "inputTokens",
   "kind",
+  "title",
   "label",
   "latestCompactionCheckpoint",
   "model",
