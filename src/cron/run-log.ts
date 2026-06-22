@@ -167,25 +167,6 @@ export async function appendCronRunLog(params: {
   }
 }
 
-/** Reads recent run-log entries in chronological order after draining pending async writes. */
-export async function readCronRunLogEntries(params: {
-  storePath: string;
-  jobId?: string;
-  limit?: number;
-}): Promise<CronRunLogEntry[]> {
-  await drainPendingWrite(params.storePath, params.jobId);
-  const limit = Math.max(1, Math.min(5000, Math.floor(params.limit ?? 200)));
-  const page = await readCronRunLogEntriesPage({
-    storePath: params.storePath,
-    jobId: params.jobId,
-    limit,
-    offset: 0,
-    status: "all",
-    sortDir: "desc",
-  });
-  return page.entries.toReversed();
-}
-
 /** Reads recent run-log entries synchronously for startup/task reconciliation paths. */
 export function readCronRunLogEntriesSync(params: {
   storePath: string;

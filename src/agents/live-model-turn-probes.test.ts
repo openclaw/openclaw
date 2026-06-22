@@ -4,7 +4,6 @@ import {
   buildLiveModelFileProbeContext,
   buildLiveModelFileProbeRetryContext,
   buildLiveModelImageProbeContext,
-  extractAssistantText,
   fileProbeTextMatches,
   imageProbeTextMatches,
   isLiveModelProbeEnabled,
@@ -59,18 +58,6 @@ describe("live model turn probes", () => {
     expect(content[0]?.type).toBe("text");
     expect(content[1]?.type).toBe("image");
     expect(content[1]).toHaveProperty("mimeType", "image/png");
-  });
-
-  it("extracts assistant text blocks only", () => {
-    expect(
-      extractAssistantText({
-        content: [
-          { type: "thinking", thinking: "hidden" },
-          { type: "text", text: " ok " },
-          { type: "toolCall", id: "1", name: "noop", arguments: {} },
-        ],
-      }),
-    ).toBe("ok");
   });
 
   it("detects image input support from model metadata", () => {

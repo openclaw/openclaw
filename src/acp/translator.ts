@@ -33,8 +33,12 @@ import type {
 import { readBool, readNonNegativeInteger, readString } from "@openclaw/acp-core/meta";
 import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
 import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeFastMode,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow, SessionsListResult } from "../gateway/session-utils.js";
@@ -98,7 +102,7 @@ import {
   resolveListSessionsPageSize,
 } from "./translator.session-list.js";
 import { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
-import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
+import { ACP_AGENT_INFO } from "./types.js";
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;
@@ -1495,6 +1499,7 @@ export class AcpGatewayAgent implements Agent {
       modelProvider: session.modelProvider,
       model: session.model,
       fastMode: session.fastMode,
+      effectiveFastMode: session.effectiveFastMode,
       verboseLevel: session.verboseLevel,
       traceLevel: session.traceLevel,
       reasoningLevel: session.reasoningLevel,
@@ -1524,11 +1529,16 @@ export class AcpGatewayAgent implements Agent {
           patch: { thinkingLevel: value },
           overrides: { thinkingLevel: value },
         };
-      case ACP_FAST_MODE_CONFIG_ID:
+      case ACP_FAST_MODE_CONFIG_ID: {
+        const fastMode = normalizeFastMode(value);
+        if (fastMode === undefined) {
+          throw new Error(`Unsupported fast mode value: ${value}`);
+        }
         return {
-          patch: { fastMode: value === "on" },
-          overrides: { fastMode: value === "on" },
+          patch: { fastMode },
+          overrides: { fastMode },
         };
+      }
       case ACP_VERBOSE_LEVEL_CONFIG_ID:
         return {
           patch: { verboseLevel: value },

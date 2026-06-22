@@ -84,6 +84,80 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
+  it("keeps docs-change detection fail-safe and fixture-aware", () => {
+    const action = readFileSync(".github/actions/detect-docs-changes/action.yml", "utf8");
+
+    expect(action).toContain("docs_only:");
+    expect(action).toContain("docs_changed:");
+    expect(action).toContain('BASE="${{ github.event.before }}"');
+    expect(action).toContain('BASE="${{ github.event.pull_request.base.sha }}"');
+    expect(action).toContain(
+      'CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")',
+    );
+    expect(action).toContain('if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then');
+    expect(action).toContain("docs_only=false");
+    expect(action).toContain("docs_changed=false");
+    expect(action).toContain("test/fixtures/*)");
+    expect(action).toContain("docs/* | *.md | *.mdx)");
+  });
+
+  it("bounds matrix fan-out for runner-registration pressure", () => {
+    const workflow = readCiWorkflow();
+
+    expect(workflow.concurrency.group).toContain("github.event.pull_request.number");
+    expect(workflow.concurrency["cancel-in-progress"]).toContain(
+      "github.event_name == 'pull_request'",
+    );
+    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
+    expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
+  });
+
+  it("debounces canonical main pushes before Blacksmith admission", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const admission = workflow.jobs["runner-admission"];
+
+    expect(admission["runs-on"]).toBe("ubuntu-24.04");
+    expect(admission.steps[0].if).toContain("github.ref == 'refs/heads/main'");
+    expect(admission.steps[0].run).toContain('sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"');
+    expect(admission.env.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBe("90");
+    expect(workflow.jobs.preflight.needs).toContain("runner-admission");
+    expect(workflow.jobs["security-fast"].needs).toContain("runner-admission");
+    expect(source).toContain(
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}",
+    );
+  });
+
+  it("uses bundled Node shards and telemetry-backed runner sizes", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+
+    expect(source).toContain("createNodeTestShardBundles");
+    expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
+      "blacksmith-4vcpu-ubuntu-2404",
+    );
+    expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-dependencies",
+      task: "dependencies",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+    expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
+    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-session-accessor-boundary",
+      group: "session-accessor-boundary",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+    expect(workflow.jobs["checks-windows"]["runs-on"]).toContain("matrix.runner");
+    expect(source).toContain("blacksmith-8vcpu-windows-2025");
+  });
+
   it("runs the session accessor ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -91,6 +165,7 @@ describe("ci workflow guards", () => {
     expect(matrixRows).toContainEqual({
       check_name: "check-session-accessor-boundary",
       group: "session-accessor-boundary",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
 
     const runStep = additionalJob.steps.find((step) => step.name === "Run additional check shard");
@@ -107,6 +182,7 @@ describe("ci workflow guards", () => {
     expect(matrixRows).toContainEqual({
       check_name: "check-session-transcript-reader-boundary",
       group: "session-transcript-reader-boundary",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
 
     const runStep = additionalJob.steps.find((step) => step.name === "Run additional check shard");
@@ -380,10 +456,12 @@ describe("ci workflow guards", () => {
 
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
+    const preflightJob = workflow.jobs.preflight;
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
     const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
 
-    expect(nodeTestJob["timeout-minutes"]).toBe(60);
+    expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
+    expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");

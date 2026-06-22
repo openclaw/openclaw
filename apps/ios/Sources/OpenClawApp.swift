@@ -409,7 +409,7 @@ enum WatchPromptNotificationBridge {
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty || !body.isEmpty else { return }
-        guard await self.requestNotificationAuthorizationIfNeeded() else { return }
+        guard await self.isNotificationAuthorizationAllowed() else { return }
 
         let normalizedActions = (params.actions ?? []).compactMap { action -> OpenClawWatchAction? in
             let id = action.id.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -516,29 +516,10 @@ enum WatchPromptNotificationBridge {
         }
     }
 
-    private static func requestNotificationAuthorizationIfNeeded() async -> Bool {
+    private static func isNotificationAuthorizationAllowed() async -> Bool {
         let center = UNUserNotificationCenter.current()
         let status = await self.notificationAuthorizationStatus(center: center)
-        switch status {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        case .notDetermined:
-            let granted = await (try? center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
-            if !granted { return false }
-            let updatedStatus = await self.notificationAuthorizationStatus(center: center)
-            if self.isAuthorizationStatusAllowed(updatedStatus) {
-                // Refresh APNs registration immediately after the first permission grant so the
-                // gateway can receive a push registration without requiring an app relaunch.
-                await MainActor.run {
-                    UIApplication.shared.registerForRemoteNotifications()
-                }
-            }
-            return self.isAuthorizationStatusAllowed(updatedStatus)
-        case .denied:
-            return false
-        @unknown default:
-            return false
-        }
+        return self.isAuthorizationStatusAllowed(status)
     }
 
     private static func isAuthorizationStatusAllowed(_ status: UNAuthorizationStatus) -> Bool {
@@ -635,6 +616,9 @@ struct OpenClawApp: App {
             UserDefaults.standard.set(true, forKey: "gateway.hasConnectedOnce")
             UserDefaults.standard.set(true, forKey: "onboarding.quickSetupDismissed")
             appModel.enterScreenshotFixtureMode()
+            if Self.screenshotNotificationGuidanceEnabled {
+                appModel._debug_presentNotificationPermissionGuidancePromptForScreenshot()
+            }
         }
         #endif
         OpenClawAppModelRegistry.appModel = appModel
@@ -681,6 +665,14 @@ struct OpenClawApp: App {
     private static var screenshotModeEnabled: Bool {
         #if DEBUG
         ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")
+        #else
+        false
+        #endif
+    }
+
+    private static var screenshotNotificationGuidanceEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-notification-guidance")
         #else
         false
         #endif

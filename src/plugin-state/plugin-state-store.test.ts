@@ -13,7 +13,7 @@ import {
 import {
   clearPluginStateStoreForTests,
   closePluginStateDatabase,
-  createCorePluginStateKeyedStore,
+  createCorePluginStateSyncKeyedStore,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   PluginStateStoreError,
@@ -657,13 +657,13 @@ describe("plugin state keyed store", () => {
 
   it("allows core owners and reserves core-prefixed plugin ids", async () => {
     await withPluginStateTestState(async () => {
-      const store = createCorePluginStateKeyedStore<{ stopped: boolean }>({
+      const store = createCorePluginStateSyncKeyedStore<{ stopped: boolean }>({
         ownerId: "core:channel-intent",
         namespace: "stopped",
         maxEntries: 10,
       });
-      await store.register("telegram:personal", { stopped: true });
-      await expect(store.lookup("telegram:personal")).resolves.toEqual({ stopped: true });
+      store.register("telegram:personal", { stopped: true });
+      expect(store.lookup("telegram:personal")).toEqual({ stopped: true });
       expect(() =>
         createPluginStateKeyedStore("core:not-a-plugin", { namespace: "bad", maxEntries: 10 }),
       ).toThrow(PluginStateStoreError);
