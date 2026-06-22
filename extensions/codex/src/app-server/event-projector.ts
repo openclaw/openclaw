@@ -523,6 +523,7 @@ export class CodexAppServerEventProjector {
     if (this.isCommentaryAssistantItem(itemId)) {
       this.emitCommentaryProgress({ itemId, text });
     } else {
+      const knownFinalAnswer = this.shouldStreamAssistantPartial(itemId);
       const replace =
         this.streamedPartialAssistantItemId !== undefined &&
         this.streamedPartialAssistantItemId !== itemId;
@@ -534,12 +535,15 @@ export class CodexAppServerEventProjector {
       };
       this.emitAgentEvent({
         stream: "assistant",
-        data: { ...streamPayload, replaceable: true as const },
+        data: {
+          ...streamPayload,
+          ...(!knownFinalAnswer || replace ? { replaceable: true as const } : {}),
+        },
       });
       // Legacy channel preview callbacks are append-oriented and do not all
       // understand replacement snapshots. Keep them on the known final-answer
       // path; replaceable snapshots stay on the typed agent-event path.
-      if (this.shouldStreamAssistantPartial(itemId) && !replace) {
+      if (knownFinalAnswer && !replace) {
         await this.params.onPartialReply?.(streamPayload);
       }
     }
