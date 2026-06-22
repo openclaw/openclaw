@@ -20,7 +20,7 @@ import type { SkillWorkshopState } from "../pages/skill-workshop/data.ts";
 import type { SkillsState } from "../pages/skills/data.ts";
 import type { UsageState } from "../pages/usage/data.ts";
 import type { ModelAuthStatusState } from "../ui/controllers/model-auth-status.ts";
-import type { ResolvedTheme, ThemeMode, ThemeName } from "../ui/theme.ts";
+import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
 
 export type SettingsHost = {
   settings: UiSettings;

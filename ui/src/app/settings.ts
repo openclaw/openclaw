@@ -26,13 +26,13 @@ import { inferBasePathFromPathname, normalizeBasePath } from "../app-routes.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
-import { parseImportedCustomTheme, type ImportedCustomTheme } from "../ui/custom-theme.ts";
-import { parseThemeSelection, type ThemeMode, type ThemeName } from "../ui/theme.ts";
 import {
   hasLocalUserIdentity,
   normalizeLocalUserIdentity,
   type LocalUserIdentity,
 } from "../ui/user-identity.ts";
+import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 
 export const BORDER_RADIUS_STOPS = [0, 25, 50, 75, 100] as const;
 export type BorderRadiusStop = (typeof BORDER_RADIUS_STOPS)[number];

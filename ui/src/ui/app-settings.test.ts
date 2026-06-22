@@ -1,5 +1,6 @@
 // Control UI tests cover app settings behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ThemeMode, ThemeName } from "../app/theme.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
@@ -8,7 +9,6 @@ import {
   applySettingsFromUrl,
   syncThemeWithSettings,
 } from "./app-settings.ts";
-import type { ThemeMode, ThemeName } from "./theme.ts";
 
 type RouteId =
   | "agents"
@@ -47,11 +47,11 @@ type SettingsHost = {
     navGroupsCollapsed: Record<string, boolean>;
     borderRadius: number;
     textScale?: import("../app/settings.ts").TextScaleStop;
-    customTheme?: import("./custom-theme.ts").ImportedCustomTheme;
+    customTheme?: import("../app/custom-theme.ts").ImportedCustomTheme;
   };
   theme: ThemeName & ThemeMode;
   themeMode: ThemeMode;
-  themeResolved: import("./theme.ts").ResolvedTheme;
+  themeResolved: import("../app/theme.ts").ResolvedTheme;
   applySessionKey: string;
   sessionKey: string;
   routeId: RouteId;

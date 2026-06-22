@@ -9,11 +9,11 @@ import { html, nothing, type TemplateResult } from "lit";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { FastMode } from "../../api/types.ts";
 import type { BorderRadiusStop, TextScaleStop } from "../../app/settings.ts";
+import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
+import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { ThemeTransitionContext } from "../../ui/theme-transition.ts";
-import type { ThemeMode, ThemeName } from "../../ui/theme.ts";
 import {
   normalizeLocalUserIdentity,
   resolveLocalUserAvatarText,

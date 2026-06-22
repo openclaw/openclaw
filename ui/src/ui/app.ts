@@ -27,8 +27,15 @@ import type {
   ToolsEffectiveResult,
 } from "../api/types.ts";
 import { appRouter, createApplicationContext, type ApplicationContext } from "../app-routes.ts";
+import { importCustomThemeFromUrl } from "../app/custom-theme.ts";
 import { createRouterOutletSnapshot } from "../app/router-outlet.ts";
 import { loadLocalUserIdentity, loadSettings, type UiSettings } from "../app/settings.ts";
+import {
+  VALID_THEME_NAMES,
+  type ResolvedTheme,
+  type ThemeMode,
+  type ThemeName,
+} from "../app/theme.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -147,7 +154,6 @@ import {
   refreshPendingApprovalQueue,
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
-import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import {
   clearActiveFloatingTooltips,
   prepareActiveFloatingTooltipsForRender,
@@ -157,7 +163,6 @@ import {
 } from "./dom-tooltips.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
-import { VALID_THEME_NAMES, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 
 declare global {
   interface Window {

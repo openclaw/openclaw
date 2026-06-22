@@ -8,6 +8,8 @@ import {
   type BorderRadiusStop,
   type TextScaleStop,
 } from "../../app/settings.ts";
+import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
+import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import {
   countSensitiveConfigValues,
   hintForPath,
@@ -25,8 +27,6 @@ import {
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import type { ThemeTransitionContext } from "../../ui/theme-transition.ts";
-import type { ThemeMode, ThemeName } from "../../ui/theme.ts";
 
 const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   0: "None",
