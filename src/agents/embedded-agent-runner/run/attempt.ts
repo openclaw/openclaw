@@ -69,7 +69,7 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
-import { getPluginToolMeta } from "../../../plugins/tools.js";
+import { copyPluginToolMeta, getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
@@ -109,7 +109,10 @@ import {
   toClientToolDefinitions,
   toToolDefinitions,
 } from "../../agent-tool-definition-adapter.js";
-import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
+import {
+  copyBeforeToolCallHookMarker,
+  recordStructuredReplayTrustForToolCall,
+} from "../../agent-tools.before-tool-call.js";
 import {
   createOpenClawCodingTools,
   resolveProcessToolScopeKey,
@@ -140,6 +143,7 @@ import {
 } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
+  copyChannelAgentToolMeta,
   getChannelAgentToolMeta,
   listChannelSupportedActions,
   resolveChannelMessageToolHints,
@@ -1761,7 +1765,7 @@ export async function runEmbeddedAttempt(
     effectiveTools = [...toolSearchSchemaProjection.tools];
     effectiveTools = effectiveTools.map((tool) => {
       const originalExecute = tool.execute;
-      return {
+      const wrappedTool = {
         ...tool,
         execute: (async (...args: Parameters<typeof originalExecute>) => {
           try {
@@ -1774,6 +1778,13 @@ export async function runEmbeddedAttempt(
           }
         }) as typeof originalExecute,
       };
+      // Preserve plugin/channel/before-tool-call metadata that lives in
+      // WeakMaps keyed by tool object identity. The spread above copies own
+      // enumerable properties but loses these associations.
+      copyPluginToolMeta(tool, wrappedTool);
+      copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+      copyBeforeToolCallHookMarker(tool, wrappedTool);
+      return wrappedTool;
     });
     if (toolSearch.compacted && !toolSearch.catalogReused) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
