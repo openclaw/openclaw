@@ -245,16 +245,16 @@ describe("maybeRepairGatewayDaemon", () => {
     });
   }
 
-  async function runAutoRepair() {
+  async function runAutoRepair(options: { repair?: boolean; yes?: boolean } = { repair: true }) {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await maybeRepairGatewayDaemon({
       cfg: { gateway: {} },
       runtime,
       prompter: createDoctorPrompter({
         runtime,
-        options: { repair: true },
+        options,
       }),
-      options: { deep: false, repair: true },
+      options: { deep: false, ...options },
       gatewayDetailsMessage: "details",
       healthOk: false,
     });
@@ -555,6 +555,22 @@ describe("maybeRepairGatewayDaemon", () => {
     service.readRuntime.mockResolvedValue({ status: "stopped" });
 
     await runNonInteractiveRepair();
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts running service when repair is explicitly approved", async () => {
+    setPlatform("linux");
+
+    await runAutoRepair();
+
+    expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts running service when --yes explicitly approves repairs", async () => {
+    setPlatform("linux");
+
+    await runAutoRepair({ yes: true });
 
     expect(service.restart).toHaveBeenCalledTimes(1);
   });

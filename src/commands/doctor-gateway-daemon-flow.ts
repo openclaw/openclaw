@@ -459,13 +459,16 @@ export async function maybeRepairGatewayDaemon(params: {
         // Health probe failed — fall through to the restart prompt below.
       }
     }
+    if (params.options.nonInteractive === true) {
+      // --fix auto-approves runtime repairs; do not let a headless doctor kill its live gateway.
+      return;
+    }
 
     const restart = await confirmDoctorServiceRepair(
       params.prompter,
       {
         message: "Restart gateway service now?",
         initialValue: false,
-        requiresInteractiveConfirmation: true,
       },
       serviceRepairPolicy,
     );
