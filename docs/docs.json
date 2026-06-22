@@ -1654,15 +1654,6 @@
             ]
           },
           {
-            "tab": "Maturity",
-            "groups": [
-              {
-                "group": "Scorecard",
-                "pages": ["maturity/scorecard", "maturity/taxonomy"]
-              }
-            ]
-          },
-          {
             "tab": "Reference",
             "groups": [
               {

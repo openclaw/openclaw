@@ -482,17 +482,9 @@ function deriveCoverageScores(
     (item) => item.profile === "release" && item.scorecard,
   );
   if (!releaseSummary) {
-    if (evidenceSummaries.length > 0) {
-      warnings.push(
-        "coverage scores require a release profile qa-evidence.json artifact with a scorecard field",
-      );
-    }
-    return {
-      categories: new Map(),
-      surfaces: new Map(),
-      rollups: {},
-      warnings,
-    };
+    throw new Error(
+      "maturity scorecard rendering requires release profile qa-evidence.json with a scorecard field; pass --evidence-dir with release QA evidence artifacts",
+    );
   }
   if (releaseScorecardSummaries.length > 1) {
     warnings.push(
@@ -509,13 +501,14 @@ function deriveCoverageScores(
   }
 
   const surfaces = new Map<string, QaMaturityScoreObject>();
+  const missingCoverage: string[] = [];
   for (const surface of activeQaMaturityTaxonomySurfaces(taxonomy)) {
     const categoryScores = surface.categories
       .map((category) => {
         const key = qaMaturityCoverageCategoryKey(surface.id, category.name);
         const score = categories.get(key);
         if (!score) {
-          warnings.push(
+          missingCoverage.push(
             `${releaseSummary.path}: release evidence is missing scorecard coverage for ${surface.name} / ${category.name}`,
           );
         }
@@ -528,6 +521,13 @@ function deriveCoverageScores(
         surfaces.set(surface.id, surfaceScore);
       }
     }
+  }
+  if (missingCoverage.length > 0) {
+    throw new Error(
+      `maturity scorecard rendering requires complete release evidence coverage:\n${missingCoverage
+        .map((item) => `- ${item}`)
+        .join("\n")}`,
+    );
   }
 
   const activeSurfaces = activeQaMaturityTaxonomySurfaces(taxonomy);

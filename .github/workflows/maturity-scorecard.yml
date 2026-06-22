@@ -71,8 +71,24 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
-      - name: Check committed maturity docs
-        run: pnpm maturity:check
+      - name: Validate maturity score sources
+        run: |
+          node --import tsx --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import YAML from "yaml";
+          import {
+            parseQaMaturityScores,
+            parseQaMaturityTaxonomy,
+            validateQaMaturityScoresAgainstTaxonomy,
+          } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
+
+          const taxonomy = parseQaMaturityTaxonomy(YAML.parse(fs.readFileSync("taxonomy.yaml", "utf8")), "taxonomy.yaml");
+          const scores = parseQaMaturityScores(YAML.parse(fs.readFileSync("qa/maturity-scores.yaml", "utf8")), "qa/maturity-scores.yaml");
+          const warnings = validateQaMaturityScoresAgainstTaxonomy({ scores, taxonomy, scoresPath: "qa/maturity-scores.yaml" });
+          for (const warning of warnings) {
+            console.error(`warning: ${warning}`);
+          }
+          NODE
 
       - name: Download QA evidence artifacts
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.source_run_id != '' }}
@@ -89,33 +105,44 @@ jobs:
             --dir .artifacts/maturity-evidence
           find .artifacts/maturity-evidence -name qa-evidence.json -print
 
+      - name: Check QA evidence artifacts
+        id: evidence
+        run: |
+          set -euo pipefail
+          if find .artifacts/maturity-evidence -name qa-evidence.json -print -quit 2>/dev/null | grep -q .; then
+            echo "has_evidence=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_evidence=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require QA evidence for manual scorecard render
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.evidence.outputs.has_evidence != 'true' }}
+        run: |
+          echo "Maturity scorecard rendering requires release QA evidence artifacts." >&2
+          exit 1
+
       - name: Render artifact docs
+        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
         env:
           STRICT_INPUTS: ${{ github.event_name == 'workflow_dispatch' && inputs.strict_inputs }}
         run: |
           set -euo pipefail
-          args=(--output-dir .artifacts/maturity-docs --static-assets-dir .artifacts/maturity-docs/assets/maturity)
+          args=(--output-dir .artifacts/maturity-docs --static-assets-dir .artifacts/maturity-docs/assets/maturity --evidence-dir .artifacts/maturity-evidence)
           if [[ "$STRICT_INPUTS" == "true" ]]; then
             args+=(--strict-inputs)
-          fi
-          if find .artifacts/maturity-evidence -name qa-evidence.json -print -quit 2>/dev/null | grep -q .; then
-            args+=(--evidence-dir .artifacts/maturity-evidence)
           fi
           pnpm maturity:render -- "${args[@]}"
           {
             echo "### Maturity scorecard docs"
             echo
-            echo "- Committed docs check: passed"
+            echo "- Source validation: passed"
             echo "- Artifact docs: \`.artifacts/maturity-docs\`"
             echo "- Strict inputs: \`${STRICT_INPUTS:-false}\`"
-            if find .artifacts/maturity-evidence -name qa-evidence.json -print -quit 2>/dev/null | grep -q .; then
-              echo "- QA evidence: included"
-            else
-              echo "- QA evidence: none downloaded"
-            fi
+            echo "- QA evidence: included"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload maturity docs artifact
+        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: maturity-scorecard-docs-${{ github.run_id }}-${{ github.run_attempt }}
