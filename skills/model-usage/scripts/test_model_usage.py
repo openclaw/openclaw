@@ -4,8 +4,14 @@ Tests for model_usage helpers.
 """
 
 import argparse
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 from unittest import TestCase, main
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 from model_usage import filter_by_days, positive_int
 
