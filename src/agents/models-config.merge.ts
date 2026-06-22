@@ -4,6 +4,7 @@
  * model catalogs without discarding existing credentials.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
@@ -146,9 +147,16 @@ export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
 }): Record<string, ProviderConfig> {
-  const out: Record<string, ProviderConfig> = params.implicit ? { ...params.implicit } : {};
+  const out: Record<string, ProviderConfig> = {};
+  for (const [key, implicit] of Object.entries(params.implicit ?? {})) {
+    const providerKey = normalizeProviderId(key);
+    if (!providerKey) {
+      continue;
+    }
+    out[providerKey] = implicit;
+  }
   for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
-    const providerKey = normalizeOptionalString(key) ?? "";
+    const providerKey = normalizeProviderId(key);
     if (!providerKey) {
       continue;
     }
@@ -234,15 +242,24 @@ export function mergeWithExistingProviderSecrets(params: {
   secretRefManagedProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
   const { nextProviders, existingProviders, secretRefManagedProviders } = params;
-  const mergedProviders: Record<string, ProviderConfig> = {};
+  const normalizedExistingProviders: Record<string, ExistingProviderConfig> = {};
   for (const [key, entry] of Object.entries(existingProviders)) {
+    const providerKey = normalizeProviderId(key);
+    if (!providerKey) {
+      continue;
+    }
+    normalizedExistingProviders[providerKey] = entry;
+  }
+
+  const mergedProviders: Record<string, ProviderConfig> = {};
+  for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
     if (!isExistingProviderSelfContained(entry)) {
       continue;
     }
     mergedProviders[key] = entry;
   }
   for (const [key, newEntry] of Object.entries(nextProviders)) {
-    const existing = existingProviders[key];
+    const existing = normalizedExistingProviders[key];
     if (!existing) {
       mergedProviders[key] = newEntry;
       continue;
