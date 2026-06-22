@@ -660,7 +660,7 @@ function buildAggregateToolResultReplacements(params: {
   for (const item of candidates) {
     const originalEntry = params.originalBranchById?.get(item.entryId);
     const isAlreadyTruncated =
-      !!originalEntry?.message && messageHasTruncationMarker(originalEntry.message);
+      originalEntry?.message != null && messageHasTruncationMarker(originalEntry.message);
     (isAlreadyTruncated ? skippedTruncated : eligible).push(item);
   }
 

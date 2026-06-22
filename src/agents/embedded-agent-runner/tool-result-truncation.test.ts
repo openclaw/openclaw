@@ -605,7 +605,7 @@ it("does not re-truncate tool results that already contain a truncation marker",
     makeToolResult(medium, "call_3"),
   ];
 
-  const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
+  const { messages: result, truncatedCount: _truncatedCount } = truncateOversizedToolResultsInMessages(
     messages,
     128_000,
     12_000,
