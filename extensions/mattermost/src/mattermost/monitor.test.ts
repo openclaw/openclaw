@@ -1254,4 +1254,47 @@ describe("backfillMattermostThreadHistory", () => {
     expect(client.request).toHaveBeenCalledTimes(1);
     expect(backfilledSessionIds.get("channel:chan-1")).toBe("session-1");
   });
+
+  it("marks a non-empty first sighting serviced so a later same-session empty window does not refetch", async () => {
+    // Active-thread steady state: the first sighting has non-empty pending history (no fetch
+    // needed), then the turn kernel clears the window. The non-empty return must still record the
+    // session, otherwise the next same-session turn mis-reads the empty window as a cold start and
+    // refetches the whole server thread on an ordinary follow-up.
+    const channelHistories = new Map([["channel:chan-1", [{ sender: "@existing", body: "kept" }]]]);
+    const client = threadClientMock({ order: ["p1"], posts: { p1: { id: "p1", message: "x" } } });
+    const backfilledSessionIds = new Map();
+
+    // First sighting: non-empty window -> no fetch, but the session is recorded as serviced.
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 10,
+      currentPostId: "p2",
+      resolveUserInfo,
+      sessionId: "session-1",
+      backfilledSessionIds,
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(backfilledSessionIds.get("channel:chan-1")).toBe("session-1");
+
+    // The turn kernel clears the window; the next same-session follow-up must NOT refetch.
+    channelHistories.delete("channel:chan-1");
+    await backfillMattermostThreadHistory({
+      client,
+      threadRootId: "root-1",
+      historyKey: "channel:chan-1",
+      channelHistories,
+      historyLimit: 10,
+      currentPostId: "p3",
+      resolveUserInfo,
+      sessionId: "session-1",
+      backfilledSessionIds,
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(channelHistories.has("channel:chan-1")).toBe(false);
+  });
 });

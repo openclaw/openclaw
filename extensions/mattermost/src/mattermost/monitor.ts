@@ -520,6 +520,14 @@ export async function backfillMattermostThreadHistory(params: {
     return;
   }
   if ((params.channelHistories.get(params.historyKey)?.length ?? 0) > 0) {
+    // The active thread already has in-memory history, so no server fetch is needed — but mark
+    // this session serviced first. Otherwise a non-empty first sighting returns without recording
+    // the session, and the next same-session follow-up (after the turn kernel clears the window)
+    // mis-reads the empty window as a cold start and refetches the whole server thread on an
+    // ordinary reply, adding an awaited REST call and re-injecting context the session already has.
+    if (params.sessionId) {
+      params.backfilledSessionIds.set(params.historyKey, params.sessionId);
+    }
     return;
   }
   // Recovery gate: the in-memory window is cleared after every turn, so "window empty" also
