@@ -1,4 +1,5 @@
 // Argv tests cover CLI argument parsing helpers and platform-specific normalization.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import {
@@ -444,14 +445,16 @@ describe("argv helpers", () => {
     expect(getCommandPathWithRootOptions(argv, 2)).toEqual(expected);
   });
 
-  it("uses FLAG_TERMINATOR constant to stop command-path parsing", () => {
-    // #83902: getCommandPathInternal was the only function in argv.ts that
-    // used a hardcoded "--" instead of the FLAG_TERMINATOR constant.  If
-    // FLAG_TERMINATOR is changed, command-path resolution would silently
-    // diverge from every other argv helper. This test exercises the
-    // integration with the imported constant.
-    const argv = ["node", "openclaw", "channels", FLAG_TERMINATOR, "add"];
-    expect(getCommandPathWithRootOptions(argv, 2)).toEqual(["channels"]);
+  it("uses the shared flag terminator contract to stop command-path parsing", () => {
+    const argvSource = readFileSync(new URL("./argv.ts", import.meta.url), "utf8");
+    const commandPathInternalSource = argvSource.match(
+      /function getCommandPathInternal[\s\S]+?\n}\n\nexport function getPrimaryCommand/,
+    )?.[0];
+
+    expect(commandPathInternalSource).toContain("arg === FLAG_TERMINATOR");
+    expect(
+      getCommandPathWithRootOptions(["node", "openclaw", "channels", FLAG_TERMINATOR, "add"], 2),
+    ).toEqual(["channels"]);
   });
 
   it("extracts command path while skipping known root option values", () => {
