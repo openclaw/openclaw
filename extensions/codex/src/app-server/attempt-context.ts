@@ -273,7 +273,7 @@ function prioritizeCodexRootMemoryBootstrapFile(params: {
   if (rootMemoryIndex <= 0) {
     return params.bootstrapFiles;
   }
-  const rootMemoryBootstrapFile = params.bootstrapFiles[rootMemoryIndex]!;
+  const rootMemoryBootstrapFile = params.bootstrapFiles[rootMemoryIndex];
   return [
     rootMemoryBootstrapFile,
     ...params.bootstrapFiles.slice(0, rootMemoryIndex),
