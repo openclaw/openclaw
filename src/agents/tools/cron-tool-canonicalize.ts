@@ -250,9 +250,11 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
  * validation to reject the job with "unexpected property" errors.
  *
  * Only recognized CRON_RECOVERABLE_OBJECT_KEYS are trimmed — arbitrary keys
- * (including special ones like "__proto__") are never mutated. If both the
- * padded and canonical form of a key exist (e.g. "schedule " and "schedule"),
- * the canonical key wins and the padded variant is discarded.
+ * (including special ones like "__proto__") are never mutated.
+ *
+ * If both the padded and canonical form of a key exist (e.g. "schedule " and
+ * "schedule"), the padded key is preserved so strict gateway validation
+ * rejects the ambiguous input rather than silently picking one value.
  */
 function repairPaddedCronKeys(value: Record<string, unknown>): void {
   for (const key of Object.keys(value)) {
@@ -260,8 +262,10 @@ function repairPaddedCronKeys(value: Record<string, unknown>): void {
     if (trimmed !== key && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) {
       if (!(trimmed in value)) {
         value[trimmed] = value[key];
+        delete value[key];
       }
-      delete value[key];
+      // When the canonical key already exists, preserve the padded duplicate
+      // so strict gateway validation sees the conflict and rejects the input.
     }
   }
 }

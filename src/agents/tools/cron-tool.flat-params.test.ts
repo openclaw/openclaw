@@ -264,7 +264,10 @@ describe("cron tool flat-params", () => {
     expect(params).toHaveProperty("constructor ");
   });
 
-  it("preserves canonical key when both padded and clean form exist (#95407)", async () => {
+  it("preserves padded duplicate when canonical key already exists (#95407)", async () => {
+    // When both canonical and padded forms exist, the padded key is preserved
+    // so strict gateway validation rejects the ambiguous input rather than
+    // silently picking one value.
     const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
 
     await tool.execute("call-duplicate-keys", {
@@ -272,7 +275,7 @@ describe("cron tool flat-params", () => {
       job: {
         name: "Duplicate test",
         schedule: { kind: "cron", expr: "0 9 * * 1-5", tz: "UTC" },
-        // Both "schedule" and "schedule " exist — canonical wins
+        // Both "schedule" and "schedule " exist — padded preserved for rejection
         "schedule ": { kind: "every", everyMs: 60000 },
         payload: { kind: "agentTurn", message: "work" },
         "enabled ": true,
@@ -282,12 +285,14 @@ describe("cron tool flat-params", () => {
 
     const [method, _gatewayOpts, params] = firstGatewayToolCall<Record<string, unknown>>();
     expect(method).toBe("cron.add");
-    // Canonical keys should not be overwritten by padded variants
+    // Canonical key is untouched
     expect((params.schedule as Record<string, unknown>)?.kind).toBe("cron");
     expect(params.enabled).toBe(false);
-    // Padded keys should be removed
-    expect(params).not.toHaveProperty("schedule ");
-    expect(params).not.toHaveProperty("enabled ");
+    // Padded keys are preserved so gateway schema validation sees the conflict
+    // and rejects with "unexpected property 'schedule '" instead of silently
+    // accepting one of the two conflicting values.
+    expect(params).toHaveProperty("schedule ");
+    expect(params).toHaveProperty("enabled ");
   });
 
   it("preserves normal keys without any whitespace", async () => {
