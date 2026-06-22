@@ -708,7 +708,7 @@ describe("renderApp assistant avatar routing", () => {
     });
 
     renderApp(state);
-    chatProps.current?.onOpenSessionCheckpoints?.();
+    void chatProps.current?.onOpenSessionCheckpoints?.();
 
     expect(state.sessionsExpandedCheckpointKey).toBe("agent:review:chat");
     expect(setTab).toHaveBeenCalledWith("sessions");
