@@ -967,6 +967,7 @@ describe("TelegramPollingSession", () => {
         expect(handleUpdate).toHaveBeenCalledWith({ update_id: 42, message: { text: "hello" } }),
       );
       await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([]));
+      abort.abort();
       stopWorker?.();
       await runPromise;
     } finally {
@@ -979,17 +980,43 @@ describe("TelegramPollingSession", () => {
   it("drains worker-spooled updates that arrive during an active drain", async () => {
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    let releaseFirstClaim: (() => void) | undefined;
+    let firstClaimStarted: (() => void) | undefined;
+    const firstClaimGate = new Promise<void>((resolve) => {
+      releaseFirstClaim = resolve;
+    });
+    const firstClaimStartedPromise = new Promise<void>((resolve) => {
+      firstClaimStarted = resolve;
+    });
+    let blockedFirstClaim = false;
+    setTelegramRuntime({
+      state: {
+        resolveStateDir: () => tempDir,
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+        ) => {
+          const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
+          return {
+            ...queue,
+            claim: async (...args: Parameters<typeof queue.claim>) => {
+              if (args[0] === "0000000000000001" && !blockedFirstClaim) {
+                blockedFirstClaim = true;
+                firstClaimStarted?.();
+                await firstClaimGate;
+              }
+              return queue.claim(...args);
+            },
+          };
+        },
+      },
+    } as TelegramRuntime);
 
     await writeTelegramSpooledUpdate({
       spoolDir: tempDir,
       update: { update_id: 1, message: { text: "pre-seeded" } },
     });
 
-    const handleUpdate = vi.fn(async (update) => {
-      if (update.update_id === 1) {
-        await new Promise<void>((resolve) => { setTimeout(resolve, 300); });
-      }
-    });
+    const handleUpdate = vi.fn(async () => undefined);
 
     const bot = {
       api: {
@@ -1033,13 +1060,8 @@ describe("TelegramPollingSession", () => {
       });
 
       const runPromise = session.runUntilAbort();
-
-      await vi.waitFor(() =>
-        expect(handleUpdate).toHaveBeenCalledWith({
-          update_id: 1,
-          message: { text: "pre-seeded" },
-        }),
-      );
+      await vi.waitFor(() => expect(onMessage).toBeDefined());
+      await firstClaimStartedPromise;
 
       onMessage?.({
         type: "update",
@@ -1052,7 +1074,15 @@ describe("TelegramPollingSession", () => {
         expect(ackSpooledUpdate).toHaveBeenCalledWith("write-2", { ok: true, updateId: 2 }),
       );
       onMessage?.({ type: "spooled", updateId: 2, queued: 1 });
+      releaseFirstClaim?.();
+      releaseFirstClaim = undefined;
 
+      await vi.waitFor(() =>
+        expect(handleUpdate).toHaveBeenCalledWith({
+          update_id: 1,
+          message: { text: "pre-seeded" },
+        }),
+      );
       await vi.waitFor(() =>
         expect(handleUpdate).toHaveBeenCalledWith({
           update_id: 2,
@@ -1060,9 +1090,11 @@ describe("TelegramPollingSession", () => {
         }),
       );
       await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([]));
+      abort.abort();
       stopWorker?.();
       await runPromise;
     } finally {
+      releaseFirstClaim?.();
       abort.abort();
       stopWorker?.();
       await fs.rm(tempDir, { recursive: true, force: true });
