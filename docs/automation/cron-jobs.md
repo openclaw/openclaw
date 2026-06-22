@@ -183,7 +183,7 @@ Model-selection precedence for isolated jobs is:
 3. User-selected stored cron session model override
 4. Agent/default model selection
 
-Fast mode follows the resolved live selection too. If the selected model config has `params.fastMode`, isolated cron uses that by default. A stored session `fastMode` override still wins over config in either direction.
+Fast mode follows the resolved live selection too. If the selected model config has `params.fastMode`, isolated cron uses that by default. A stored session `fastMode` override still wins over config in either direction. Auto mode uses the selected model's `params.fastAutoOnSeconds` cutoff when present, defaulting to 60 seconds.
 
 If an isolated run hits a live model-switch handoff, cron retries with the switched provider/model and persists that live selection for the active run before retrying. When the switch also carries a new auth profile, cron persists that auth profile override for the active run too. Retries are bounded: after the initial attempt plus 2 switch retries, cron aborts instead of looping forever.
 

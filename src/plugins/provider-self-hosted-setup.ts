@@ -86,6 +86,12 @@ function readPositiveInteger(value: unknown): number | undefined {
   return Math.trunc(value);
 }
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 function resolveLlamaCppPropsUrl(baseUrl: string, modelId?: string): string {
   const parsed = new URL(baseUrl);
   const pathname = parsed.pathname.replace(/\/+$/, "");
@@ -124,6 +130,7 @@ async function discoverLlamaCppRuntimeContextTokens(params: {
     });
     try {
       if (!response.ok) {
+        await cancelUnreadResponseBody(response);
         return undefined;
       }
       const data = (await response.json()) as LlamaCppPropsResponse;
@@ -167,6 +174,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
     });
     try {
       if (!response.ok) {
+        await cancelUnreadResponseBody(response);
         log.warn(`Failed to discover ${params.label} models: ${response.status}`);
         return [];
       }

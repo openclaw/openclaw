@@ -317,6 +317,10 @@
       "destination": "/channels/zalo"
     },
     {
+      "source": "/channels/openclaw-zaloclawbot",
+      "destination": "/channels/zaloclawbot"
+    },
+    {
       "source": "/providers/whatsapp",
       "destination": "/channels/whatsapp"
     },
@@ -1132,6 +1136,7 @@
                   "channels/feishu",
                   "channels/yuanbao",
                   "channels/zalo",
+                  "channels/zaloclawbot",
                   "channels/zalouser"
                 ]
               },
@@ -1387,10 +1392,7 @@
                   "clawhub/http-api",
                   "clawhub/acceptable-usage",
                   "clawhub/moderation",
-                  "clawhub/security",
-                  "clawhub/security-audits",
-                  "clawhub/content-rights",
-                  "clawhub/plugin-validation-fixes"
+                  "clawhub/security-audits"
                 ]
               }
             ]

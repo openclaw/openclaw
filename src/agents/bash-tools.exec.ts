@@ -1567,7 +1567,7 @@ export function createExecTool(
         const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
-      rejectUnsafeExecControlShellCommand(params.command);
+      await rejectUnsafeExecControlShellCommand(params.command);
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
@@ -1657,6 +1657,7 @@ export function createExecTool(
           sessionId: defaults?.sessionId,
           sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
@@ -1707,6 +1708,7 @@ export function createExecTool(
           sessionId: defaults?.sessionId,
           sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,

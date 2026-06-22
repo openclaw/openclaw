@@ -2532,28 +2532,6 @@ async function installPluginFromInstalledPackageDirInternal(
   return result;
 }
 
-export async function preflightPluginPackageInstallSource(
-  params: {
-    packageDir: string;
-  } & PackageInstallCommonParams,
-): Promise<PluginInstallFailureResult | null> {
-  const runtime = await loadPluginInstallRuntime();
-  const { logger } = runtime.resolveTimedInstallModeOptions(params, defaultLogger);
-  const validated = await validatePackagePluginInstallSource({
-    runtime,
-    packageDir: params.packageDir,
-    expectedPluginId: params.expectedPluginId,
-    requirePluginManifest: params.requirePluginManifest,
-    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    config: params.config,
-    installPolicyRequest: params.installPolicyRequest,
-    logger,
-    mode: params.mode ?? "install",
-  });
-  return validated.ok ? null : validated;
-}
 
 async function installPluginFromPackageDir(
   params: {

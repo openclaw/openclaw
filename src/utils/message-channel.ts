@@ -22,8 +22,11 @@ export {
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
-  INTERNAL_NON_DELIVERY_CHANNELS,
   isInternalNonDeliveryChannel,
+  NATIVE_APPROVAL_CHANNELS,
+  isNativeApprovalChannel,
+  type InternalMessageChannel,
+  type NativeApprovalChannel,
 } from "./message-channel-constants.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 import { normalizeMessageChannel } from "./message-channel-normalize.js";

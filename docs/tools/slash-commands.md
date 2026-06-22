@@ -173,6 +173,7 @@ plugins.
     | --- | --- |
     | `/new [model]` | Archive the current session and start a fresh one |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
+    | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
     | `/compact [instructions]` | Compact the session context. See [Compaction](/concepts/compaction) |
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
@@ -197,7 +198,7 @@ plugins.
     | `/think <level\|default>` | Set the thinking level or clear the session override. Aliases: `/thinking`, `/t` |
     | `/verbose on\|off\|full` | Toggle verbose output. Alias: `/v` |
     | `/trace on\|off` | Toggle plugin trace output for the current session |
-    | `/fast [status\|on\|off\|default]` | Show, set, or clear fast mode |
+    | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show or set exec defaults |
@@ -210,7 +211,7 @@ plugins.
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines; normal verbose chatter stays off.
-        - `/fast on|off` persists a session override; use the Sessions UI `inherit` option to clear it.
+        - `/fast auto|on|off` persists a session override; use the Sessions UI `inherit` option to clear it.
         - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`; direct Anthropic requests map it to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 

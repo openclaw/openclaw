@@ -57,6 +57,11 @@ the resolved scenarios through `qa suite`. `--surface` and
 The resulting `qa-evidence.json` includes a profile scorecard summary with
 selected-category counts and missing coverage IDs; the individual evidence
 entries remain the source of truth for the tests, coverage roles, and results.
+Taxonomy feature coverage IDs are exact proof targets, not aliases. Primary
+scenario coverage fulfills matching IDs; secondary coverage stays advisory.
+Coverage IDs use dotted `namespace.behavior` form with lowercase
+alphanumeric/dash segments; profile, surface, and category IDs may still use
+the existing dashed or dotted taxonomy IDs.
 Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 `smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
 
@@ -297,13 +302,13 @@ Live transport runners should import the shared scenario ids, baseline
 coverage helpers, and scenario-selection helper from
 `openclaw/plugin-sdk/qa-live-transport-scenarios`.
 
-| Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
-| -------- | ------ | -------------- | ---------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
-| Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |
-| Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
-| Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
-| Slack    | x      | x              | x          | x               | x               | x              | x                | x                |                      |              |                             |
-| WhatsApp | x      | x              |            | x               | x               | x              |                  |                  | x                    | x            |                             |
+| Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Quote reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
+| -------- | ------ | -------------- | ---------- | --------------- | --------------- | ----------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
+| Matrix   | x      | x              | x          | x               | x               |             | x              | x                | x                | x                    |              |                             |
+| Telegram | x      | x              | x          |                 |                 |             |                |                  |                  |                      | x            |                             |
+| Discord  | x      | x              | x          |                 |                 |             |                |                  |                  |                      |              | x                           |
+| Slack    | x      | x              | x          | x               | x               |             | x              | x                | x                |                      |              |                             |
+| WhatsApp | x      | x              |            | x               | x               | x           | x              |                  |                  | x                    | x            |                             |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and other live transports share one explicit transport-contract checklist.
@@ -726,8 +731,9 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
   `whatsapp-whoami-command`, `whatsapp-context-command`,
   `whatsapp-native-new-command`.
 - Reply and final-output behavior: `whatsapp-tool-only-usage-footer`,
-  `whatsapp-reply-to-message`, `whatsapp-reply-context-isolation`,
-  `whatsapp-reply-delivery-shape`, `whatsapp-stream-final-message-accounting`.
+  `whatsapp-reply-to-message`, `whatsapp-group-reply-to-message`,
+  `whatsapp-reply-context-isolation`, `whatsapp-reply-delivery-shape`,
+  `whatsapp-stream-final-message-accounting`.
 - Inbound media and structured messages: `whatsapp-inbound-image-caption`,
   `whatsapp-audio-preflight`, `whatsapp-inbound-structured-messages`,
   `whatsapp-group-audio-gating`. These send real WhatsApp image, audio,
@@ -744,9 +750,9 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
   `whatsapp-approval-plugin-native`.
 - Status reactions: `whatsapp-status-reactions`.
 
-The catalog currently contains 35 scenarios. The `live-frontier` default lane is
-kept small at 8 scenarios for fast smoke coverage. The `mock-openai` default
-lane runs 29 deterministic scenarios through the real WhatsApp transport while
+The catalog currently contains 36 scenarios. The `live-frontier` default lane is
+kept small at 10 scenarios for fast smoke coverage. The `mock-openai` default
+lane runs 31 deterministic scenarios through the real WhatsApp transport while
 mocking only model output. Approval scenarios and a few heavier/blocking checks
 remain explicit by scenario id.
 
@@ -942,7 +948,12 @@ Every `qa suite` run writes top-level `qa-evidence.json`,
 `qa-suite-summary.json`, and `qa-suite-report.md` artifacts for the selected
 scenario set. Scenarios that declare `execution.kind: vitest` or
 `execution.kind: playwright` run the matching test path and also write
-per-scenario logs. When `qa suite` is reached through
+per-scenario logs. Scenarios that declare `execution.kind: script` run the
+evidence producer at `execution.path` through `node --import tsx` (with
+`${outputDir}` and `${scenarioId}` expanded in `execution.args`); the producer
+writes its own `qa-evidence.json`, whose entries are imported into the suite
+output and whose artifact paths are resolved relative to that producer
+`qa-evidence.json`. When `qa suite` is reached through
 `qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.

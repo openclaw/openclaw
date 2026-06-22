@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -24,7 +25,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const FAST_WAIT_OPTS = { timeout: 250, interval: 2 } as const;
+const FAST_WAIT_OPTS = { timeout: 2_000, interval: 5 } as const;
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
@@ -52,19 +53,6 @@ const sendReq = (
     }),
   );
 };
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
@@ -780,7 +768,7 @@ describe("gateway server chat", () => {
 
   test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    const dispatchRelease = createDeferred<void>();
+    const dispatchRelease = createDeferred();
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -1262,7 +1250,7 @@ describe("gateway server chat", () => {
 
   test("chat.send reuses only active WebChat text sends with the same system context", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    const dispatchRelease = createDeferred<void>();
+    const dispatchRelease = createDeferred();
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({

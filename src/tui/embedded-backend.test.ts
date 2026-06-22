@@ -7,7 +7,8 @@ import { withEnvAsync } from "../test-utils/env.js";
 const agentCommandFromIngressMock = vi.fn();
 const runBtwSideQuestionMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
-const applySessionsPatchToStoreMock = vi.fn();
+const applySessionPatchProjectionMock = vi.fn();
+const projectSessionsPatchEntryMock = vi.fn();
 const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
@@ -101,6 +102,10 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),
 }));
 
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  applySessionPatchProjection: (...args: unknown[]) => applySessionPatchProjectionMock(...args),
+}));
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}/agent`,
   resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
@@ -175,7 +180,10 @@ vi.mock("../gateway/session-utils.js", () => ({
     loadCombinedSessionStoreForGatewayMock(...args),
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
-  migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
+  migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({
+    primaryKey: key,
+    target: { storeKeys: [key] },
+  }),
   resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
     canonicalKey: key,
     storePath: "/tmp/openclaw-sessions.json",
@@ -198,7 +206,7 @@ vi.mock("../gateway/session-transcript-readers.js", () => ({
 }));
 
 vi.mock("../gateway/sessions-patch.js", () => ({
-  applySessionsPatchToStore: (...args: unknown[]) => applySessionsPatchToStoreMock(...args),
+  projectSessionsPatchEntry: (...args: unknown[]) => projectSessionsPatchEntryMock(...args),
 }));
 
 vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
@@ -267,8 +275,22 @@ describe("EmbeddedTuiBackend", () => {
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
     });
-    applySessionsPatchToStoreMock.mockReset();
-    applySessionsPatchToStoreMock.mockResolvedValue({ ok: true, entry: {} });
+    applySessionPatchProjectionMock.mockReset();
+    applySessionPatchProjectionMock.mockImplementation(
+      async (params: {
+        project: (context: {
+          entries: unknown[];
+          existingEntry?: unknown;
+          primaryKey: string;
+        }) => Promise<unknown>;
+        resolveTarget: (snapshot: { entries: unknown[] }) => { primaryKey: string };
+      }) => {
+        const target = params.resolveTarget({ entries: [] });
+        return await params.project({ ...target, entries: [] });
+      },
+    );
+    projectSessionsPatchEntryMock.mockReset();
+    projectSessionsPatchEntryMock.mockResolvedValue({ ok: true, entry: {} });
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
@@ -494,7 +516,7 @@ describe("EmbeddedTuiBackend", () => {
         provider: "tui-pty-mock",
       },
     ]);
-    applySessionsPatchToStoreMock.mockImplementation(
+    projectSessionsPatchEntryMock.mockImplementation(
       async ({
         loadGatewayModelCatalog,
       }: {
@@ -652,8 +674,9 @@ describe("EmbeddedTuiBackend", () => {
     expect(readSessionMessagesAsyncMock).toHaveBeenCalledWith(
       {
         agentId: "main",
-        sessionFile: undefined,
+        sessionEntry: { sessionId: "sess-main" },
         sessionId: "sess-main",
+        sessionKey: "agent:main:main",
         storePath: "/tmp/openclaw-sessions.json",
       },
       {
@@ -1345,7 +1368,7 @@ describe("EmbeddedTuiBackend", () => {
       fastMode: true,
     });
 
-    expect(applySessionsPatchToStoreMock).toHaveBeenCalledWith(
+    expect(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         storeKey: "global",
         agentId: "work",

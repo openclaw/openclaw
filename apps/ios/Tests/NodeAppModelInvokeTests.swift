@@ -1160,6 +1160,35 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 isBackgrounded: false))
     }
 
+    @Test func execApprovalEventIDDecodesGatewayPayload() {
+        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": " approval-1 "])) == "approval-1")
+        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": "   "])) == nil)
+        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["other": "approval-1"])) == nil)
+    }
+
+    @Test @MainActor func operatorGatewayResolvedEventClearsPendingApprovalPrompt() async throws {
+        let appModel = NodeAppModel()
+        try appModel._test_presentExecApprovalPrompt(
+            #require(
+                NodeAppModel._test_makeExecApprovalPrompt(
+                    id: "approval-event-resolved",
+                    commandText: "echo clear",
+                    allowedDecisions: ["allow-once", "deny"],
+                    host: "gateway",
+                    nodeId: nil,
+                    agentId: nil,
+                    expiresAtMs: Int(Date().timeIntervalSince1970 * 1000) + 60000)))
+
+        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+            type: "event",
+            event: ExecApprovalNotificationBridge.resolvedKind,
+            payload: AnyCodable(["id": "approval-event-resolved"]),
+            seq: nil,
+            stateversion: nil))
+
+        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+    }
+
     @Test func watchExecApprovalHydrateFetchesOnlyMissingIDs() {
         let idsToFetch = NodeAppModel._test_watchExecApprovalIDsNeedingFetch(
             candidateIDs: ["cached", "pending", "cached", "other", "", "  pending  "],

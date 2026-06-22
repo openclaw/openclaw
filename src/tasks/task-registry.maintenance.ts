@@ -1230,8 +1230,6 @@ export function stopTaskRegistryMaintenance() {
   sweepInProgress = false;
 }
 
-export const stopTaskRegistryMaintenanceForTests = stopTaskRegistryMaintenance;
-
 export function setTaskRegistryMaintenanceRuntimeForTests(
   runtime: TaskRegistryMaintenanceRuntime,
 ): void {
@@ -1252,9 +1250,4 @@ export function configureTaskRegistryMaintenance(options: {
   if (options.runtimeAuthoritative !== undefined) {
     configuredRuntimeAuthoritative = options.runtimeAuthoritative;
   }
-}
-
-export function getReconciledTaskById(taskId: string): TaskRecord | undefined {
-  const task = getTaskById(taskId);
-  return task ? reconcileTaskRecordForOperatorInspection(task) : undefined;
 }

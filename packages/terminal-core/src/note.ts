@@ -186,6 +186,13 @@ export function resolveNoteColumns(columns: number | undefined): number {
   return columns;
 }
 
+export function resolveNoteOutputColumns(message: string, columns: number): number {
+  const widestLine = message
+    .split("\n")
+    .reduce((max, line) => Math.max(max, visibleWidth(line)), 0);
+  return Math.max(columns, widestLine + 6);
+}
+
 function createNoteOutput(columns: number): NodeJS.WriteStream {
   if (process.stdout.columns === columns) {
     return process.stdout;
@@ -207,8 +214,9 @@ export function note(message: unknown, title?: string) {
     return;
   }
   const columns = resolveNoteColumns(process.stdout.columns);
-  clackNote(wrapNoteMessage(message, { columns }), stylePromptTitle(title), {
-    output: createNoteOutput(columns),
+  const wrappedMessage = wrapNoteMessage(message, { columns });
+  clackNote(wrappedMessage, stylePromptTitle(title), {
+    output: createNoteOutput(resolveNoteOutputColumns(wrappedMessage, columns)),
     format: (line) => line,
   });
 }

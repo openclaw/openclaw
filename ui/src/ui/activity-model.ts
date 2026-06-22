@@ -215,9 +215,3 @@ export function updateActivityFromToolEvent(host: ActivityHost, payload: ToolEve
     : [...host.activityEntries, nextEntry];
   host.activityEntries = next.slice(-ACTIVITY_ENTRY_LIMIT);
 }
-
-export function resetActivityEntries(host: ActivityHost) {
-  if (Array.isArray(host.activityEntries)) {
-    host.activityEntries = [];
-  }
-}

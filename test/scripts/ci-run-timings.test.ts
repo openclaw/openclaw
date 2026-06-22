@@ -263,7 +263,13 @@ describe("scripts/ci-run-timings.mjs", () => {
   });
 
   it("rejects missing monitor limits instead of treating flags as values", () => {
-    for (const args of [["--limit"], ["--limit", "--recent", "4"], ["--recent"]]) {
+    for (const args of [
+      ["--limit"],
+      ["--limit", "--recent", "4"],
+      ["--limit", "-h"],
+      ["--recent"],
+      ["--recent", "-h"],
+    ]) {
       expect(() => parseRunTimingArgs(args)).toThrow("requires a value");
     }
   });

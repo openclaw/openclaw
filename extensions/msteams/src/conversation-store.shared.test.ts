@@ -4,9 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createMSTeamsConversationStoreMemory } from "./conversation-store-memory.js";
+import {
+  findPreferredDmConversationByUserId,
+  mergeStoredConversationReference,
+  normalizeStoredConversationId,
+  toConversationStoreEntries,
+} from "./conversation-store-helpers.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
-import type { MSTeamsConversationStore } from "./conversation-store.js";
+import type {
+  MSTeamsConversationStore,
+  MSTeamsConversationStoreEntry,
+  StoredConversationReference,
+} from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
@@ -14,6 +23,39 @@ type StoreFactory = {
   name: string;
   createStore: () => Promise<MSTeamsConversationStore>;
 };
+
+function createMemoryConversationStore(
+  initial: MSTeamsConversationStoreEntry[] = [],
+): MSTeamsConversationStore {
+  const map = new Map<string, StoredConversationReference>();
+  for (const { conversationId, reference } of initial) {
+    map.set(normalizeStoredConversationId(conversationId), reference);
+  }
+
+  const findPreferredDmByUserId = async (
+    id: string,
+  ): Promise<MSTeamsConversationStoreEntry | null> =>
+    findPreferredDmConversationByUserId(toConversationStoreEntries(map.entries()), id);
+
+  return {
+    upsert: async (conversationId, reference) => {
+      const normalizedId = normalizeStoredConversationId(conversationId);
+      map.set(
+        normalizedId,
+        mergeStoredConversationReference(
+          map.get(normalizedId),
+          reference,
+          new Date().toISOString(),
+        ),
+      );
+    },
+    get: async (conversationId) => map.get(normalizeStoredConversationId(conversationId)) ?? null,
+    list: async () => toConversationStoreEntries(map.entries()),
+    remove: async (conversationId) => map.delete(normalizeStoredConversationId(conversationId)),
+    findPreferredDmByUserId,
+    findByUserId: findPreferredDmByUserId,
+  };
+}
 
 const storeFactories: StoreFactory[] = [
   {
@@ -28,7 +70,7 @@ const storeFactories: StoreFactory[] = [
   },
   {
     name: "memory",
-    createStore: async () => createMSTeamsConversationStoreMemory(),
+    createStore: async () => createMemoryConversationStore(),
   },
 ];
 

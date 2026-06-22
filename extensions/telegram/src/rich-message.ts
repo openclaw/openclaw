@@ -14,6 +14,7 @@ import {
   escapeTelegramHtml,
   limitTelegramRichHtmlNesting,
   markdownToTelegramRichHtml,
+  materializeTelegramRichHtmlLineBreaks,
   sanitizeTelegramRichHtml,
   splitTelegramHtmlChunks,
   telegramHtmlToPlainTextFallback,
@@ -187,7 +188,14 @@ export function buildTelegramRichMessage(
 }
 
 function prepareTelegramRichHtml(html: string): string {
-  return limitTelegramRichHtmlNesting(sanitizeTelegramRichHtml(html), TELEGRAM_RICH_NESTING_LIMIT);
+  // Materialize logical line breaks as <br> after sanitizing (so tag support is
+  // settled) but before the nesting limit. Bot API 10.1 rich messages parse real
+  // HTML, so bare newlines collapse; every rich send/edit/draft funnels through
+  // here, covering both the Markdown and explicit-HTML text modes.
+  return limitTelegramRichHtmlNesting(
+    materializeTelegramRichHtmlLineBreaks(sanitizeTelegramRichHtml(html)),
+    TELEGRAM_RICH_NESTING_LIMIT,
+  );
 }
 
 const TELEGRAM_RICH_HTML_CHUNK_LIMITS = {
@@ -400,21 +408,6 @@ export function splitTelegramRichMarkdownChunks(
   return splitTelegramRichMarkdownTextChunks(markdown, textLimit, chunkMode).flatMap((chunk) =>
     splitTelegramRichMarkdownBlocks(chunk, TELEGRAM_RICH_BLOCK_LIMIT),
   );
-}
-
-export function splitTelegramRichTextChunks(params: {
-  text: string;
-  textLimit: number;
-  textMode: TelegramRichTextMode;
-  chunkMode: ChunkMode;
-}): string[] {
-  return params.textMode === "html"
-    ? splitTelegramHtmlChunks(
-        prepareTelegramRichHtml(params.text),
-        params.textLimit,
-        TELEGRAM_RICH_HTML_CHUNK_LIMITS,
-      )
-    : splitTelegramRichMarkdownChunks(params.text, params.textLimit, params.chunkMode);
 }
 
 export function splitTelegramRichMessageTextChunks(params: {

@@ -60,20 +60,6 @@ function resolveMemoryToolContext(options: MemoryToolOptions) {
   return { cfg, agentId };
 }
 
-export async function getMemoryManagerContext(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<
-  | {
-      manager: NonNullable<MemorySearchManagerResult["manager"]>;
-    }
-  | {
-      error: string | undefined;
-    }
-> {
-  return await getMemoryManagerContextWithPurpose({ ...params, purpose: undefined });
-}
-
 export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
   agentId: string;

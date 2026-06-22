@@ -24,7 +24,7 @@ import {
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 
 /**
  * Synchronous security audit collector functions.

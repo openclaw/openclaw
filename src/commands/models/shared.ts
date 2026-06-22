@@ -5,7 +5,6 @@ import {
   buildModelAliasIndex,
   legacyModelKey,
   modelKey,
-  parseModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -20,8 +19,6 @@ import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { canonicalizeModelCatalogProviderRef } from "./provider-aliases.js";
-export { normalizeAlias } from "./alias-name.js";
-export { isLocalBaseUrl } from "./list.local-url.js";
 
 export const ensureFlagCompatibility = (opts: { json?: boolean; plain?: boolean }) => {
   if (opts.json && opts.plain) {
@@ -145,20 +142,6 @@ export function resolveModelKeysFromEntries(params: {
     )
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
     .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
-}
-
-/** Builds the configured model allowlist from agents.defaults.models keys. */
-export function buildAllowlistSet(cfg: OpenClawConfig): Set<string> {
-  const allowed = new Set<string>();
-  const models = cfg.agents?.defaults?.models ?? {};
-  for (const raw of Object.keys(models)) {
-    const parsed = parseModelRef(raw, DEFAULT_PROVIDER);
-    if (!parsed) {
-      continue;
-    }
-    allowed.add(modelKey(parsed.provider, parsed.model));
-  }
-  return allowed;
 }
 
 /** Validates an optional agent id against configured agents. */

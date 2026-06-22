@@ -998,10 +998,16 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       meta: { durationMs: 0, stopReason: "end_turn" },
     }));
     state.persistCliTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+      async (params: { sessionEntry?: unknown }) => ({
+        kind: "persisted",
+        sessionEntry: params.sessionEntry,
+      }),
     );
     state.persistAcpTurnTranscriptMock.mockImplementation(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+      async (params: { sessionEntry?: unknown }) => ({
+        kind: "persisted",
+        sessionEntry: params.sessionEntry,
+      }),
     );
     state.runCliTurnCompactionLifecycleMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
@@ -1140,6 +1146,37 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("keeps the fast mode cutoff timestamp across live model switch retries", async () => {
+    let invocation = 0;
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      invocation++;
+      const result = await params.run(params.provider, params.model);
+      if (invocation === 1) {
+        throw new LiveSessionModelSwitchError({
+          provider: "openai",
+          model: "gpt-5.4",
+        });
+      }
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "gpt-5.4"));
+
+    await runBasicAgentCommand();
+
+    const firstAttempt = mockCallArg(state.runAgentAttemptMock, 0) as {
+      fastModeStartedAtMs?: number;
+    };
+    const secondAttempt = mockCallArg(state.runAgentAttemptMock, 1) as {
+      fastModeStartedAtMs?: number;
+    };
+    expect(firstAttempt.fastModeStartedAtMs).toBe(secondAttempt.fastModeStartedAtMs);
+  });
+
   it("uses an embedded queue rebound generation for terminal lifecycle and cleanup", async () => {
     setupSingleAttemptFallback();
     state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
@@ -1244,7 +1281,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.persistAcpTurnTranscriptMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => {
         controller.abort(createAgentRunRestartAbortError());
-        return params.sessionEntry;
+        return { kind: "persisted", sessionEntry: params.sessionEntry };
       },
     );
 
@@ -1792,7 +1829,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.updateSessionStoreAfterAgentRunMock.mockImplementation(async () => {
       state.sessionStoreMock = { "agent:main:main": rotatedEntry };
     });
-    state.persistCliTurnTranscriptMock.mockResolvedValue(rotatedEntry);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "persisted",
+      sessionEntry: rotatedEntry,
+    });
     state.runCliTurnCompactionLifecycleMock.mockResolvedValue(rotatedEntry);
 
     await runBasicAgentCommand();
@@ -1811,6 +1851,33 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
       expectedSessionIdForFreshDelivery: "rotated-session",
     });
+  });
+
+  it("skips post-run persistence after the session is deleted", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.persistCliTurnTranscriptMock.mockResolvedValue({
+      kind: "session-rebound",
+      sessionEntry: undefined,
+    });
+
+    await runBasicAgentCommand();
+
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runCliTurnCompactionLifecycleMock).not.toHaveBeenCalled();
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not treat backend CLI session id as OpenClaw session identity", async () => {

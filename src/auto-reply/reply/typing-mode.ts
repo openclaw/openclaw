@@ -18,7 +18,7 @@ export type TypingModeContext = {
 };
 
 /** Group chats default to message-triggered typing to avoid noisy indicators. */
-export const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
+const DEFAULT_GROUP_TYPING_MODE: TypingMode = "message";
 
 /** Resolves the effective typing mode for the current auto-reply turn. */
 export function resolveTypingMode({

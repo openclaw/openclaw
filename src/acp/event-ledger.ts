@@ -6,7 +6,7 @@ import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
 import { resolveIntegerOption } from "@openclaw/acp-core/numeric-options";
 import { resolveStateDir } from "../config/paths.js";
 import { withFileLock } from "../infra/file-lock.js";
-import { readJsonFile, writeTextAtomic } from "../infra/json-files.js";
+import { readJsonFile } from "../infra/json-files.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
@@ -453,58 +453,6 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-/** Creates a file-backed ACP event ledger protected by a process/file lock. */
-export function createFileAcpEventLedger(
-  params: { filePath: string } & LedgerOptions,
-): AcpEventLedger {
-  const normalized = normalizeLedgerOptions(params);
-  const state: MutableLedgerState = {
-    store: createEmptyStore(),
-    ...normalized,
-  };
-  let operation = Promise.resolve();
-
-  const load = async () => {
-    state.store = normalizeStore(await readJsonFile(params.filePath));
-  };
-  const ensureParentDir = async () => {
-    await fs.mkdir(path.dirname(params.filePath), { recursive: true, mode: 0o700 });
-  };
-
-  const enqueue = async <T>(fn: () => Promise<T>): Promise<T> => {
-    const task = operation.then(fn, fn);
-    operation = task.then(
-      () => {},
-      () => {},
-    );
-    return task;
-  };
-
-  return createLedgerApi({
-    state,
-    mutate: async (fn) =>
-      enqueue(async () => {
-        await ensureParentDir();
-        await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
-          await load();
-          fn();
-          await writeTextAtomic(params.filePath, serializeLedgerStore(state.store), {
-            mode: 0o600,
-            dirMode: 0o700,
-          });
-        });
-      }),
-    read: async (fn) =>
-      enqueue(async () => {
-        await ensureParentDir();
-        return await withFileLock(params.filePath, FILE_LEDGER_LOCK_OPTIONS, async () => {
-          await load();
-          return fn();
-        });
-      }),
-  });
 }
 
 /** Migrates a legacy file ledger into the SQLite state database, preserving replay order. */
