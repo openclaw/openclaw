@@ -40,11 +40,17 @@ type TestReplyOperation = ReplyOperation & {
   updateSessionId: ReturnType<typeof vi.fn<ReplyOperation["updateSessionId"]>>;
 };
 
-function createReplyOperation(): TestReplyOperation {
+function createReplyOperation(
+  opts: {
+    abortSignal?: AbortSignal;
+    explicitAbortSignal?: AbortSignal;
+  } = {},
+): TestReplyOperation {
   return {
     key: "test",
     sessionId: "session",
-    abortSignal: new AbortController().signal,
+    abortSignal: opts.abortSignal ?? new AbortController().signal,
+    ...(opts.explicitAbortSignal ? { explicitAbortSignal: opts.explicitAbortSignal } : {}),
     resetTriggered: false,
     phase: "queued",
     result: null,
@@ -1070,7 +1076,13 @@ describe("runMemoryFlushIfNeeded", () => {
       totalTokens: 180_499,
       totalTokensFresh: true,
     };
-    const replyOperation = createReplyOperation();
+    const replyAbortController = new AbortController();
+    const explicitAbortController = new AbortController();
+    replyAbortController.abort(new Error("reply lifecycle timeout"));
+    const replyOperation = createReplyOperation({
+      abortSignal: replyAbortController.signal,
+      explicitAbortSignal: explicitAbortController.signal,
+    });
 
     await runPreflightCompactionIfNeeded({
       cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
@@ -1090,8 +1102,9 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.abortSignal).toBeUndefined();
+    expect(compactCall.abortSignal).toBe(explicitAbortController.signal);
     expect(compactCall.abortSignal).not.toBe(replyOperation.abortSignal);
+    expect(compactCall.abortSignal?.aborted).toBe(false);
   });
 
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {

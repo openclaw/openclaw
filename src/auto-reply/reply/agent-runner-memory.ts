@@ -969,6 +969,9 @@ export async function runPreflightCompactionIfNeeded(params: {
         entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
       thinkLevel: params.followupRun.run.thinkLevel,
       bashElevated: params.followupRun.run.bashElevated,
+      ...(params.replyOperation.explicitAbortSignal
+        ? { abortSignal: params.replyOperation.explicitAbortSignal }
+        : {}),
       trigger: "budget",
       force: true,
       forcePreflight: true,

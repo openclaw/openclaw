@@ -55,6 +55,11 @@ export type ReplyOperation = {
   readonly sessionId: string;
   readonly routeThreadId?: string | number;
   readonly abortSignal: AbortSignal;
+  /**
+   * Aborts only for explicit user/restart cancellation. Upstream reply
+   * lifecycle aborts use abortSignal and must not cap required preflight work.
+   */
+  readonly explicitAbortSignal?: AbortSignal;
   readonly resetTriggered: boolean;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
@@ -386,6 +391,7 @@ export function createReplyOperation(params: {
   }
 
   const controller = new AbortController();
+  const explicitAbortController = new AbortController();
   let currentSessionId = sessionId;
   let phase: ReplyOperationPhase = "queued";
   let result: ReplyOperationResult | null = null;
@@ -428,6 +434,11 @@ export function createReplyOperation(params: {
       controller.abort(reason);
     }
   };
+  const abortExplicitly = (reason?: unknown) => {
+    if (!explicitAbortController.signal.aborted) {
+      explicitAbortController.abort(reason);
+    }
+  };
 
   const abortWithReason = (
     reason: ReplyBackendCancelReason,
@@ -438,6 +449,7 @@ export function createReplyOperation(params: {
       result = { kind: "aborted", code: opts.abortedCode };
     }
     phase = "aborted";
+    abortExplicitly(abortReason);
     abortInternally(abortReason);
     getAttachedBackend(operation)?.cancel(reason);
   };
@@ -468,6 +480,9 @@ export function createReplyOperation(params: {
     },
     get abortSignal() {
       return controller.signal;
+    },
+    get explicitAbortSignal() {
+      return explicitAbortController.signal;
     },
     get resetTriggered() {
       return params.resetTriggered;
