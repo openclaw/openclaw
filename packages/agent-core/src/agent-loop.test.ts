@@ -836,9 +836,9 @@ describe("agentLoop tool termination", () => {
       "message_start",
       "message_end",
       "turn_end",
+      "turn_start",
       "message_start",
       "message_end",
-      "turn_start",
       "turn_end",
       "agent_end",
     ]);
@@ -907,9 +907,9 @@ describe("agentLoop tool termination", () => {
       "message_start",
       "message_end",
       "turn_end",
+      "turn_start",
       "message_start",
       "message_end",
-      "turn_start",
       "turn_end",
       "agent_end",
     ]);

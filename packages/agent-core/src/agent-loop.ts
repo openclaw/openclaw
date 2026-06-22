@@ -282,12 +282,12 @@ async function runLoop(
       true,
     );
     newMessages.push(abortedMessage);
-    await emit({ type: "message_start", message: abortedMessage });
-    await emit({ type: "message_end", message: abortedMessage });
     if (!turnOpen) {
       await emit({ type: "turn_start" });
       turnOpen = true;
     }
+    await emit({ type: "message_start", message: abortedMessage });
+    await emit({ type: "message_end", message: abortedMessage });
     await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });
     turnOpen = false;
     await emit({ type: "agent_end", messages: newMessages });
