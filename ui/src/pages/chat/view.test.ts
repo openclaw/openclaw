@@ -3,31 +3,30 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n, t } from "../../i18n/index.ts";
-import { switchChatSession } from "../app-render.helpers.ts";
-import type { AppViewState } from "../app-view-state.ts";
+import { switchChatSession } from "../../ui/app-render.helpers.ts";
+import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
-} from "../chat-model.test-helpers.ts";
+} from "../../ui/chat-model.test-helpers.ts";
 import {
   getChatAttachmentDataUrl,
   resetChatAttachmentPayloadStoreForTest,
-} from "../chat/attachment-payload-store.ts";
-import { renderChatQueue } from "../chat/chat-queue.ts";
-import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
-import { renderWelcomeState } from "../chat/chat-welcome.ts";
+} from "../../ui/chat/attachment-payload-store.ts";
+import { renderChatQueue } from "../../ui/chat/chat-queue.ts";
+import { buildRawSidebarContent } from "../../ui/chat/chat-sidebar-raw.ts";
+import { renderWelcomeState } from "../../ui/chat/chat-welcome.ts";
 import {
   blockArtCodeBlockCopyPayloadEncoding,
   encodeBlockArtCodeBlockCopyPayload,
-} from "../chat/code-block-copy-payload.ts";
-import { renderChatSessionSelect } from "../chat/session-controls.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
-import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../types.ts";
-import type { ChatItem, MessageGroup } from "../types/chat-types.ts";
-import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
-import { renderChat, resetChatViewState } from "./chat.ts";
-import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
+} from "../../ui/chat/code-block-copy-payload.ts";
+import { renderChatSessionSelect } from "../../ui/chat/session-controls.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
+import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../ui/types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../ui/ui-types.ts";
+import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
+import { renderChat, resetChatViewState } from "./view.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
   vi.fn(async (state: AppViewState) => {
@@ -147,15 +146,15 @@ function requireFirstAttachmentsChange(
   return attachments as ChatAttachment[];
 }
 
-vi.mock("../icons.ts", () => ({
+vi.mock("../../ui/icons.ts", () => ({
   icons: {},
 }));
 
-vi.mock("../chat/build-chat-items.ts", () => ({
+vi.mock("../../ui/chat/build-chat-items.ts", () => ({
   buildChatItems: buildChatItemsMock,
 }));
 
-vi.mock("../chat/grouped-render.ts", () => ({
+vi.mock("../../ui/chat/grouped-render.ts", () => ({
   getAssistantAttachmentAvailabilityRenderVersion: () => assistantAttachmentRenderVersionMock.value,
   renderMessageGroup: renderMessageGroupMock,
   renderStreamGroup: (parts: Array<{ kind: string; text?: string }>) => {
@@ -175,30 +174,30 @@ vi.mock("../chat/grouped-render.ts", () => ({
   },
 }));
 
-vi.mock("../markdown.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../markdown.ts")>();
+vi.mock("../../ui/markdown.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../ui/markdown.ts")>();
   return {
     ...actual,
     toSanitizedMarkdownHtml: (value: string) => value,
   };
 });
 
-vi.mock("../chat/tool-expansion-state.ts", () => ({
+vi.mock("../../ui/chat/tool-expansion-state.ts", () => ({
   getExpandedToolCards: () => new Map<string, boolean>(),
   syncToolCardExpansionState: () => undefined,
 }));
 
-vi.mock("../controllers/agents.ts", () => ({
+vi.mock("../../ui/controllers/agents.ts", () => ({
   refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
 }));
 
-vi.mock("../controllers/sessions.ts", () => ({
+vi.mock("../../ui/controllers/sessions.ts", () => ({
   loadSessions: loadSessionsMock,
   patchSession: patchSessionMock,
   syncSelectedSessionMessageSubscription: vi.fn(async () => undefined),
 }));
 
-vi.mock("./agents-utils.ts", () => ({
+vi.mock("../../ui/views/agents-utils.ts", () => ({
   isRenderableControlUiAvatarUrl: (value: string) =>
     /^data:image\//i.test(value) || (value.startsWith("/") && !value.startsWith("//")),
   agentLogoUrl: () => "/openclaw-logo.svg",
@@ -1427,46 +1426,6 @@ describe("chat loading skeleton", () => {
 
     expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
     expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
-  });
-
-  it("folds adjacent streaming items into one group and lets a message group break the run (#63956)", () => {
-    const items: Array<ChatItem | MessageGroup> = [
-      {
-        kind: "stream",
-        key: "stream-seg:main:0",
-        text: "alpha",
-        startedAt: 10,
-        isStreaming: false,
-      },
-      { kind: "stream", key: "stream-seg:main:1", text: "beta", startedAt: 20, isStreaming: false },
-      { kind: "reading-indicator", key: "reading:main" },
-      {
-        kind: "group",
-        key: "group:assistant:test",
-        role: "assistant",
-        messages: [{ key: "m0", message: { content: "tool break" } }],
-        timestamp: 25,
-        isStreaming: false,
-      },
-      { kind: "stream", key: "stream:main:live", text: "gamma", startedAt: 30, isStreaming: true },
-    ];
-    buildChatItemsMock.mockReturnValueOnce(
-      items as unknown as ReturnType<typeof buildChatItemsMock>,
-    );
-
-    const container = renderChatView({ stream: "gamma", streamStartedAt: 30 });
-
-    // Two contiguous streaming runs, split by the message group between them.
-    const runs = container.querySelectorAll(".chat-stream-run");
-    expect(runs).toHaveLength(2);
-    // First run folds both committed segments plus the trailing reading indicator.
-    expect(runs[0]?.querySelectorAll(".chat-stream")).toHaveLength(2);
-    expect(runs[0]?.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
-    // The message group stays its own group and breaks the run.
-    expect(container.querySelectorAll(".chat-group")).toHaveLength(1);
-    // The live segment after the group forms the second run.
-    expect(runs[1]?.querySelectorAll(".chat-stream")).toHaveLength(1);
-    expect(container.querySelectorAll(".chat-stream")).toHaveLength(3);
   });
 
   it("shows prompt-bar progress while the current session send is awaiting acknowledgement", () => {

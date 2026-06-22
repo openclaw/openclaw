@@ -17,8 +17,8 @@ import {
 } from "../app/router-outlet.ts";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import { refreshChatCommands } from "../pages/chat/data.ts";
 import { runUpdate } from "../pages/config/data.ts";
-import { refreshChatCommands } from "./app-chat.ts";
 import {
   createChatSession,
   renderRouteNavItem,

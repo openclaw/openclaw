@@ -7,7 +7,7 @@ import {
   createChatSessionsLoadOverrides,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-} from "../app-chat.ts";
+} from "../../pages/chat/data.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {

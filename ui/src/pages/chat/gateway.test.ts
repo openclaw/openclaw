@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   registerChatAttachmentPayload,
   resetChatAttachmentPayloadStoreForTest,
-} from "../chat/attachment-payload-store.ts";
-import { GatewayRequestError } from "../gateway.ts";
+} from "../../ui/chat/attachment-payload-store.ts";
+import { GatewayRequestError } from "../../ui/gateway.ts";
 import {
   abortChatRun,
   handleChatEvent,
@@ -16,7 +16,7 @@ import {
   sendSteerChatMessage,
   type ChatEventPayload,
   type ChatState,
-} from "./chat.ts";
+} from "./gateway.ts";
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 

@@ -18,7 +18,7 @@ vi.mock("../app-routes.ts", () => ({
   routeLoadContext: (host: unknown) => host,
 }));
 
-vi.mock("./app-chat.ts", () => ({
+vi.mock("../pages/chat/data.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   CHAT_SESSIONS_REFRESH_LIMIT: 25,
   createChatSessionsLoadOverrides: () => ({ activeMinutes: 10, limit: 25 }),
@@ -70,7 +70,7 @@ vi.mock("./controllers/agents.ts", () => ({
 vi.mock("./controllers/assistant-identity.ts", () => ({
   loadAssistantIdentity: vi.fn(),
 }));
-vi.mock("./controllers/chat.ts", () => ({
+vi.mock("../pages/chat/gateway.ts", () => ({
   loadChatHistory: loadChatHistoryMock,
   handleChatEvent: handleChatEventMock,
 }));
@@ -109,13 +109,13 @@ const { addExecApproval } = await vi.importActual<typeof import("./controllers/e
 
 afterAll(() => {
   vi.doUnmock("../app-routes.ts");
-  vi.doUnmock("./app-chat.ts");
+  vi.doUnmock("../pages/chat/data.ts");
   vi.doUnmock("./app-settings.ts");
   vi.doUnmock("./app-render.helpers.ts");
   vi.doUnmock("./app-tool-stream.ts");
   vi.doUnmock("./controllers/agents.ts");
   vi.doUnmock("./controllers/assistant-identity.ts");
-  vi.doUnmock("./controllers/chat.ts");
+  vi.doUnmock("../pages/chat/gateway.ts");
   vi.doUnmock("./controllers/devices.ts");
   vi.doUnmock("./controllers/exec-approval.ts");
   vi.doUnmock("./controllers/nodes.ts");

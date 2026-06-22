@@ -1,4 +1,3 @@
-import { scopedAgentParamsForSession } from "../../ui/app-chat.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../ui/session-key.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
@@ -8,7 +7,8 @@ import type {
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
 } from "../../ui/types.ts";
-import type { ChatProps } from "../../ui/views/chat.ts";
+import { scopedAgentParamsForSession } from "./data.ts";
+import type { ChatProps } from "./view.ts";
 
 type SessionWorkspaceProps = NonNullable<ChatProps["sessionWorkspace"]>;
 

@@ -1,20 +1,20 @@
-import { normalizeBasePath } from "../app-routes.ts";
+import { normalizeBasePath } from "../../app-routes.ts";
 // Control UI module implements app chat behavior.
-import { isNonTerminalAgentRunStatus } from "../../../src/shared/agent-run-status.js";
-import { setLastActiveSessionKey } from "./app-last-active-session.ts";
-import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
-import { resetToolStream } from "./app-tool-stream.ts";
+import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
+import { setLastActiveSessionKey } from "../../ui/app-last-active-session.ts";
+import { scheduleChatScroll, resetChatScroll } from "../../ui/app-scroll.ts";
+import { resetToolStream } from "../../ui/app-tool-stream.ts";
 import {
   cloneChatAttachmentsMetadata,
   discardChatAttachmentDataUrls,
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
-} from "./chat/attachment-payload-store.ts";
+} from "../../ui/chat/attachment-payload-store.ts";
 import {
   INTERRUPTED_MODEL_WAIT_ERROR,
   persistStoredChatComposerQueue,
   removeStoredChatComposerQueueItem,
-} from "./chat/composer-persistence.ts";
+} from "../../ui/chat/composer-persistence.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -24,24 +24,70 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
-} from "./chat/input-history.ts";
-import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
-import { clearChatMessagesFromCache, type ChatMessageCache } from "./chat/session-message-cache.ts";
-import type { ChatSideResult } from "./chat/side-result.ts";
-import { executeSlashCommand } from "./chat/slash-command-executor.ts";
+} from "../../ui/chat/input-history.ts";
+import { reconcileChatRunLifecycle } from "../../ui/chat/run-lifecycle.ts";
+import {
+  clearChatMessagesFromCache,
+  type ChatMessageCache,
+} from "../../ui/chat/session-message-cache.ts";
+import type { ChatSideResult } from "../../ui/chat/side-result.ts";
+import { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
 import {
   applyRemoteSlashCommandsResult,
   parseSlashCommand,
   refreshSlashCommands,
-} from "./chat/slash-commands.ts";
-import { formatConnectError } from "./connect-error.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
+} from "../../ui/chat/slash-commands.ts";
+import { formatConnectError } from "../../ui/connect-error.ts";
+import { resolveControlUiAuthHeader } from "../../ui/control-ui-auth.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
   scheduleControlUiAfterPaint,
-} from "./control-ui-performance.ts";
+} from "../../ui/control-ui-performance.ts";
+import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
+import {
+  applyChatHistorySessionInfo,
+  loadSessions,
+  type LoadSessionsOverrides,
+  type SessionsState,
+} from "../../ui/controllers/sessions.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../ui/gateway.ts";
+import {
+  areUiSessionKeysEquivalent,
+  DEFAULT_AGENT_ID,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiDefaultAgentId,
+  resolveUiGlobalAliasAgentId,
+  resolveUiKnownSelectedGlobalAgentId,
+  resolveUiSelectedGlobalAgentId,
+} from "../../ui/session-key.ts";
+import { isSessionRunActive } from "../../ui/session-run-state.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../ui/string-coerce.ts";
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  ModelCatalogEntry,
+} from "../../ui/types.ts";
+import type { SessionsListResult } from "../../ui/types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatQueueSkillWorkshopRevision,
+  ChatSessionRefreshTarget,
+} from "../../ui/ui-types.ts";
+import { generateUUID } from "../../ui/uuid.ts";
+import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import {
   abortChatRun,
   appendUserChatMessage,
@@ -56,43 +102,7 @@ import {
   type ChatSendAck,
   type ChatState,
   isGatewayMethodAdvertised,
-} from "./controllers/chat.ts";
-import { applyModelCatalogResult, loadModels } from "./controllers/models.ts";
-import {
-  applyChatHistorySessionInfo,
-  loadSessions,
-  type LoadSessionsOverrides,
-  type SessionsState,
-} from "./controllers/sessions.ts";
-import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "./gateway.ts";
-import {
-  areUiSessionKeysEquivalent,
-  DEFAULT_AGENT_ID,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveUiDefaultAgentId,
-  resolveUiGlobalAliasAgentId,
-  resolveUiKnownSelectedGlobalAgentId,
-  resolveUiSelectedGlobalAgentId,
-} from "./session-key.ts";
-import { isSessionRunActive } from "./session-run-state.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
-import type {
-  AgentsListResult,
-  ChatModelOverride,
-  GatewaySessionRow,
-  ModelCatalogEntry,
-} from "./types.ts";
-import type { SessionsListResult } from "./types.ts";
-import type {
-  ChatAttachment,
-  ChatQueueItem,
-  ChatQueueSkillWorkshopRevision,
-  ChatSessionRefreshTarget,
-} from "./ui-types.ts";
-import { generateUUID } from "./uuid.ts";
-import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
+} from "./gateway.ts";
 
 export type ChatHost = ChatInputHistoryState & {
   client: GatewayBrowserClient | null;

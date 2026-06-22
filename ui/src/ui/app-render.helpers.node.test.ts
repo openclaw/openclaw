@@ -22,7 +22,7 @@ const {
   syncSelectedSessionMessageSubscriptionMock: vi.fn(),
 }));
 
-vi.mock("./app-chat.ts", () => ({
+vi.mock("../pages/chat/data.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 120,
   CHAT_SESSIONS_REFRESH_LIMIT: 50,
   createChatSessionsLoadOverrides: () => ({
@@ -62,7 +62,7 @@ vi.mock("./chat/slash-commands.ts", () => ({
   refreshSlashCommands: (...args: unknown[]) => refreshSlashCommandsMock(...args),
 }));
 
-vi.mock("./controllers/chat.ts", () => ({
+vi.mock("../pages/chat/gateway.ts", () => ({
   loadChatHistory: loadChatHistoryMock,
 }));
 

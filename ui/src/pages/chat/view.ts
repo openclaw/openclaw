@@ -5,48 +5,51 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
-import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
+import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
 import {
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
-} from "../chat/attachment-payload-store.ts";
+} from "../../ui/chat/attachment-payload-store.ts";
 import {
   CHAT_ATTACHMENT_ACCEPT,
   isSupportedChatAttachmentFile,
-} from "../chat/attachment-support.ts";
-import { buildChatItems, type BuildChatItemsProps } from "../chat/build-chat-items.ts";
-import { renderChatQueue } from "../chat/chat-queue.ts";
-import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
-import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
-import { copyToClipboard } from "../chat/clipboard.ts";
-import { decodeCodeBlockCopyPayload } from "../chat/code-block-copy-payload.ts";
-import { renderContextNotice } from "../chat/context-notice.ts";
-import { DeletedMessages } from "../chat/deleted-messages.ts";
-import { exportChatMarkdown } from "../chat/export.ts";
+} from "../../ui/chat/attachment-support.ts";
+import { buildChatItems, type BuildChatItemsProps } from "../../ui/chat/build-chat-items.ts";
+import { renderChatQueue } from "../../ui/chat/chat-queue.ts";
+import { buildRawSidebarContent } from "../../ui/chat/chat-sidebar-raw.ts";
+import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../../ui/chat/chat-welcome.ts";
+import { copyToClipboard } from "../../ui/chat/clipboard.ts";
+import { decodeCodeBlockCopyPayload } from "../../ui/chat/code-block-copy-payload.ts";
+import { renderContextNotice } from "../../ui/chat/context-notice.ts";
+import { DeletedMessages } from "../../ui/chat/deleted-messages.ts";
+import { exportChatMarkdown } from "../../ui/chat/export.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
   renderStreamGroup,
   type StreamGroupPart,
-} from "../chat/grouped-render.ts";
-import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
-import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
-import { PinnedMessages } from "../chat/pinned-messages.ts";
-import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
+} from "../../ui/chat/grouped-render.ts";
+import { CHAT_HISTORY_RENDER_LIMIT } from "../../ui/chat/history-limits.ts";
+import type {
+  ChatInputHistoryKeyInput,
+  ChatInputHistoryKeyResult,
+} from "../../ui/chat/input-history.ts";
+import { PinnedMessages } from "../../ui/chat/pinned-messages.ts";
+import { getPinnedMessageSummary } from "../../ui/chat/pinned-summary.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
   resolveControlUiRealtimeTalkProviderTransports,
   type RealtimeTalkCatalogProvider,
-} from "../chat/realtime-talk-catalog.ts";
-import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
-import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
-import { renderChatRunControls } from "../chat/run-controls.ts";
-import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
-import { getOrCreateSessionCacheValue } from "../chat/session-cache.ts";
-import { renderSideResult } from "../chat/side-result-render.ts";
-import type { ChatSideResult } from "../chat/side-result.ts";
+} from "../../ui/chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "../../ui/chat/realtime-talk-conversation.ts";
+import type { RealtimeTalkStatus } from "../../ui/chat/realtime-talk.ts";
+import { renderChatRunControls } from "../../ui/chat/run-controls.ts";
+import type { ChatRunUiStatus } from "../../ui/chat/run-lifecycle.ts";
+import { getOrCreateSessionCacheValue } from "../../ui/chat/session-cache.ts";
+import { renderSideResult } from "../../ui/chat/side-result-render.ts";
+import type { ChatSideResult } from "../../ui/chat/side-result.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
@@ -54,24 +57,31 @@ import {
   getSlashCommandCompletions,
   type SlashCommandCategory,
   type SlashCommandDef,
-} from "../chat/slash-commands.ts";
+} from "../../ui/chat/slash-commands.ts";
 import {
   renderChatRunStatusIndicator,
   renderCompactionIndicator,
   renderFallbackIndicator,
-} from "../chat/status-indicators.ts";
-import type { ChatStreamSegment } from "../chat/stream-text.ts";
-import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
-import type { EmbedSandboxMode } from "../embed-sandbox.ts";
-import { icons } from "../icons.ts";
-import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
-import type { SidebarContent } from "../sidebar-content.ts";
-import { detectTextDirection } from "../text-direction.ts";
-import type { SessionWorkspaceListResult, SessionGoal, SessionsListResult } from "../types.ts";
-import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
-import { resolveLocalUserName } from "../user-identity.ts";
-import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
-import "../components/resizable-divider.ts";
+} from "../../ui/chat/status-indicators.ts";
+import type { ChatStreamSegment } from "../../ui/chat/stream-text.ts";
+import {
+  getExpandedToolCards,
+  syncToolCardExpansionState,
+} from "../../ui/chat/tool-expansion-state.ts";
+import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
+import { icons } from "../../ui/icons.ts";
+import { formatGoalDetail, formatGoalSummary } from "../../ui/session-goal.ts";
+import type { SidebarContent } from "../../ui/sidebar-content.ts";
+import { detectTextDirection } from "../../ui/text-direction.ts";
+import type {
+  SessionWorkspaceListResult,
+  SessionGoal,
+  SessionsListResult,
+} from "../../ui/types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../ui/ui-types.ts";
+import { resolveLocalUserName } from "../../ui/user-identity.ts";
+import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
+import "../../ui/components/resizable-divider.ts";
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "a[href]",

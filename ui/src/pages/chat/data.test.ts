@@ -1,17 +1,17 @@
 /* @vitest-environment jsdom */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatHost } from "./app-chat.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
   resetChatAttachmentPayloadStoreForTest,
-} from "./chat/attachment-payload-store.ts";
-import type { executeSlashCommand } from "./chat/slash-command-executor.ts";
-import { loadSessions } from "./controllers/sessions.ts";
-import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
+} from "../../ui/chat/attachment-payload-store.ts";
+import type { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
+import { loadSessions } from "../../ui/controllers/sessions.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../ui/types.ts";
+import type { ChatHost } from "./data.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 
@@ -22,12 +22,12 @@ const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() =
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-vi.mock("./app-last-active-session.ts", () => ({
+vi.mock("../../ui/app-last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
 
-vi.mock("./chat/slash-command-executor.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./chat/slash-command-executor.ts")>();
+vi.mock("../../ui/chat/slash-command-executor.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../ui/chat/slash-command-executor.ts")>();
   return {
     ...actual,
     executeSlashCommand: (...args: Parameters<ExecuteSlashCommand>) => {
@@ -41,20 +41,20 @@ vi.mock("./chat/slash-command-executor.ts", async (importOriginal) => {
   };
 });
 
-let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
-let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
-let navigateChatInputHistory: typeof import("./app-chat.ts").navigateChatInputHistory;
-let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
-let hasAbortableSessionRun: typeof import("./app-chat.ts").hasAbortableSessionRun;
-let refreshChat: typeof import("./app-chat.ts").refreshChat;
-let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
-let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
-let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
-let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
-let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
-let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
-let recordFirstAssistantChatTiming: typeof import("./app-chat.ts").recordFirstAssistantChatTiming;
-let createChatSessionsLoadOverrides: typeof import("./app-chat.ts").createChatSessionsLoadOverrides;
+let handleSendChat: typeof import("./data.ts").handleSendChat;
+let steerQueuedChatMessage: typeof import("./data.ts").steerQueuedChatMessage;
+let navigateChatInputHistory: typeof import("./data.ts").navigateChatInputHistory;
+let handleAbortChat: typeof import("./data.ts").handleAbortChat;
+let hasAbortableSessionRun: typeof import("./data.ts").hasAbortableSessionRun;
+let refreshChat: typeof import("./data.ts").refreshChat;
+let refreshChatAvatar: typeof import("./data.ts").refreshChatAvatar;
+let clearPendingQueueItemsForRun: typeof import("./data.ts").clearPendingQueueItemsForRun;
+let removeQueuedMessage: typeof import("./data.ts").removeQueuedMessage;
+let markQueuedChatSendsWaitingForReconnect: typeof import("./data.ts").markQueuedChatSendsWaitingForReconnect;
+let retryReconnectableQueuedChatSends: typeof import("./data.ts").retryReconnectableQueuedChatSends;
+let recordChatSendServerTiming: typeof import("./data.ts").recordChatSendServerTiming;
+let recordFirstAssistantChatTiming: typeof import("./data.ts").recordFirstAssistantChatTiming;
+let createChatSessionsLoadOverrides: typeof import("./data.ts").createChatSessionsLoadOverrides;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -72,7 +72,7 @@ async function loadChatHelpers(): Promise<void> {
     recordChatSendServerTiming,
     recordFirstAssistantChatTiming,
     createChatSessionsLoadOverrides,
-  } = await import("./app-chat.ts"));
+  } = await import("./data.ts"));
 }
 
 function requestUrl(input: string | URL | Request): string {
@@ -1088,7 +1088,7 @@ describe("refreshChat", () => {
   });
 
   it("uses startup metadata without scheduling command or metadata follow-ups", async () => {
-    const { resetSlashCommandsForTest } = await import("./chat/slash-commands.ts");
+    const { resetSlashCommandsForTest } = await import("../../ui/chat/slash-commands.ts");
     resetSlashCommandsForTest();
     const previousFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: false }) as never;
@@ -1188,7 +1188,8 @@ describe("refreshChat", () => {
   });
 
   it("ignores stale chat.metadata results after the selected global agent changes", async () => {
-    const { resetSlashCommandsForTest, SLASH_COMMANDS } = await import("./chat/slash-commands.ts");
+    const { resetSlashCommandsForTest, SLASH_COMMANDS } =
+      await import("../../ui/chat/slash-commands.ts");
     resetSlashCommandsForTest();
     const previousFetch = globalThis.fetch;
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: false }) as never;
@@ -3405,6 +3406,6 @@ describe("handleAbortChat", () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("./app-last-active-session.ts");
+  vi.doUnmock("../../ui/app-last-active-session.ts");
   vi.resetModules();
 });

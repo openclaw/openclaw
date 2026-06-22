@@ -113,8 +113,8 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   return { ...actual, GatewayBrowserClient, resolveGatewayErrorDetailCode };
 });
 
-vi.mock("./controllers/chat.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./controllers/chat.ts")>();
+vi.mock("../pages/chat/gateway.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../pages/chat/gateway.ts")>();
   return {
     ...actual,
     loadChatHistory: loadChatHistoryMock,

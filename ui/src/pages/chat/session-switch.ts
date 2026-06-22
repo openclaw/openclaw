@@ -1,21 +1,30 @@
+import type { AppViewState } from "../../ui/app-view-state.ts";
+import {
+  persistChatComposerState,
+  restoreChatComposerState,
+} from "../../ui/chat/composer-persistence.ts";
+import { reconcileChatRunLifecycle } from "../../ui/chat/run-lifecycle.ts";
+import { resetChatSessionPickerState } from "../../ui/chat/session-controls.ts";
+import {
+  cacheChatMessages,
+  readChatMessagesFromCache,
+} from "../../ui/chat/session-message-cache.ts";
+import { refreshSlashCommands } from "../../ui/chat/slash-commands.ts";
+import {
+  loadSessions,
+  syncSelectedSessionMessageSubscription,
+} from "../../ui/controllers/sessions.ts";
+import { resolveSessionDisplayName } from "../../ui/session-display.ts";
+import { parseAgentSessionKey } from "../../ui/session-key.ts";
+import type { ChatQueueItem } from "../../ui/ui-types.ts";
 // Chat session switching state transitions shared by chat UI and feature handoffs.
 import {
   createChatSessionsLoadOverrides,
   flushChatQueueAfterIdleSessionReconciliation,
   refreshChatAvatar,
   scopedAgentListParamsForSession,
-} from "./app-chat.ts";
-import type { AppViewState } from "./app-view-state.ts";
-import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
-import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
-import { resetChatSessionPickerState } from "./chat/session-controls.ts";
-import { cacheChatMessages, readChatMessagesFromCache } from "./chat/session-message-cache.ts";
-import { refreshSlashCommands } from "./chat/slash-commands.ts";
-import { loadChatHistory, type ChatState } from "./controllers/chat.ts";
-import { loadSessions, syncSelectedSessionMessageSubscription } from "./controllers/sessions.ts";
-import { resolveSessionDisplayName } from "./session-display.ts";
-import { parseAgentSessionKey } from "./session-key.ts";
-import type { ChatQueueItem } from "./ui-types.ts";
+} from "./data.ts";
+import { loadChatHistory, type ChatState } from "./gateway.ts";
 
 type SessionSwitchHost = AppViewState & {
   chatStreamStartedAt: number | null;

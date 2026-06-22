@@ -20,7 +20,14 @@ import {
   retryReconnectableQueuedChatSends,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
-} from "./app-chat.ts";
+} from "../pages/chat/data.ts";
+import { shouldReloadHistoryForFinalEvent } from "../pages/chat/event-reload.ts";
+import {
+  loadChatHistory,
+  handleChatEvent,
+  type ChatEventPayload,
+  type ChatState,
+} from "../pages/chat/gateway.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { switchChatSession } from "./app-render.helpers.ts";
 import { scheduleChatScroll } from "./app-scroll.ts";
@@ -32,7 +39,6 @@ import {
   type AgentEventPayload,
   type SessionOperationEventPayload,
 } from "./app-tool-stream.ts";
-import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { loadChatComposerSnapshot, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
@@ -46,12 +52,6 @@ import {
   loadAssistantIdentity,
   type AssistantIdentityState,
 } from "./controllers/assistant-identity.ts";
-import {
-  loadChatHistory,
-  handleChatEvent,
-  type ChatEventPayload,
-  type ChatState,
-} from "./controllers/chat.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import { closeDevicePairSetup, loadDevices, type DevicesState } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";

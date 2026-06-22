@@ -4,15 +4,6 @@ import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { i18n } from "../../i18n/index.ts";
 import { definePage } from "../../router/index.ts";
 import {
-  clearChatHistory,
-  createChatSessionsLoadOverrides,
-  hasAbortableSessionRun,
-  refreshChat,
-  refreshChatCommands,
-  scopedAgentParamsForSession,
-  scopedAgentListParamsForSession,
-} from "../../ui/app-chat.ts";
-import {
   createChatSession,
   dismissChatError,
   dismissRealtimeTalkError,
@@ -31,9 +22,18 @@ import {
 } from "../../ui/session-key.ts";
 import { loadLocalAssistantIdentity } from "../../ui/storage.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
-import { renderChat, resetChatViewState } from "../../ui/views/chat.ts";
 import { loadChatPage } from "../loaders.ts";
+import {
+  clearChatHistory,
+  createChatSessionsLoadOverrides,
+  hasAbortableSessionRun,
+  refreshChat,
+  refreshChatCommands,
+  scopedAgentParamsForSession,
+  scopedAgentListParamsForSession,
+} from "./data.ts";
 import { createSessionWorkspaceProps } from "./session-workspace.ts";
+import { renderChat, resetChatViewState } from "./view.ts";
 
 type ChatLoadContext = { host: SettingsHost; app: SettingsAppHost };
 type ChatRenderContext = RouteRenderContext;

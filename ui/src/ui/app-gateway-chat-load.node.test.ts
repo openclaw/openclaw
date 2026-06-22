@@ -96,7 +96,7 @@ vi.mock("./gateway.ts", async (importOriginal) => {
   };
 });
 
-vi.mock("./app-chat.ts", () => ({
+vi.mock("../pages/chat/data.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 60,
   CHAT_SESSIONS_REFRESH_LIMIT: 50,
   createChatSessionsLoadOverrides: () => ({ activeMinutes: 60, limit: 50 }),
@@ -183,7 +183,7 @@ vi.mock("./controllers/sessions.ts", () => ({
 afterAll(() => {
   vi.doUnmock("../app-routes.ts");
   vi.doUnmock("./gateway.ts");
-  vi.doUnmock("./app-chat.ts");
+  vi.doUnmock("../pages/chat/data.ts");
   vi.doUnmock("./app-scroll.ts");
   vi.doUnmock("./app-settings.ts");
   vi.doUnmock("./controllers/agents.ts");

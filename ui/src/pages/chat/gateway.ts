@@ -1,18 +1,18 @@
 // Control UI controller manages chat gateway state.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
-import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
+import { getChatAttachmentDataUrl } from "../../ui/chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
-} from "../chat/heartbeat-display.ts";
-import { extractText } from "../chat/message-extract.ts";
-import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
+} from "../../ui/chat/heartbeat-display.ts";
+import { extractText } from "../../ui/chat/message-extract.ts";
+import { reconcileChatRunLifecycle } from "../../ui/chat/run-lifecycle.ts";
 import {
   appendChatMessageToCache,
   cacheChatMessages,
   type ChatMessageCache,
-} from "../chat/session-message-cache.ts";
+} from "../../ui/chat/session-message-cache.ts";
 import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
@@ -25,37 +25,41 @@ import {
   persistedCurrentToolStreamIds,
   prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
-} from "../chat/stream-reconciliation.ts";
-import { buildUserChatMessageContentBlocks } from "../chat/user-message-content.ts";
-import { formatConnectError } from "../connect-error.ts";
+} from "../../ui/chat/stream-reconciliation.ts";
+import { buildUserChatMessageContentBlocks } from "../../ui/chat/user-message-content.ts";
+import { formatConnectError } from "../../ui/connect-error.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
-} from "../control-ui-performance.ts";
-import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
-import { GatewayRequestError, type GatewayBrowserClient, type GatewayHelloOk } from "../gateway.ts";
+} from "../../ui/control-ui-performance.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "../../ui/controllers/scope-errors.ts";
+import { isGatewayMethodAdvertised } from "../../ui/gateway-methods.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayHelloOk,
+} from "../../ui/gateway.ts";
 import {
   areUiSessionKeysEquivalent,
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
-} from "../session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+} from "../../ui/session-key.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
   GatewaySessionsDefaults,
   ModelCatalogEntry,
-} from "../types.ts";
-import type { ChatAttachment } from "../ui-types.ts";
-import { generateUUID } from "../uuid.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "./scope-errors.ts";
+} from "../../ui/types.ts";
+import type { ChatAttachment } from "../../ui/ui-types.ts";
+import { generateUUID } from "../../ui/uuid.ts";
 
-export { isGatewayMethodAdvertised } from "../gateway-methods.ts";
+export { isGatewayMethodAdvertised } from "../../ui/gateway-methods.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =

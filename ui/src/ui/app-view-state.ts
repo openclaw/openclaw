@@ -1,7 +1,7 @@
+import type { ChatAbortOptions, ChatSendOptions } from "../pages/chat/data.ts";
 import type { SkillWorkshopState } from "../pages/skill-workshop/data.ts";
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
-import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";

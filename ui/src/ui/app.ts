@@ -5,6 +5,18 @@ import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/cont
 import { appRouter, createApplicationContext, type ApplicationContext } from "../app-routes.ts";
 import { createRouterOutletSnapshot } from "../app/router-outlet.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
+import {
+  handleAbortChat as handleAbortChatInternal,
+  handleChatDraftChange as handleChatDraftChangeInternal,
+  handleChatInputHistoryKey as handleChatInputHistoryKeyInternal,
+  handleSendChat as handleSendChatInternal,
+  removeQueuedMessage as removeQueuedMessageInternal,
+  resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
+  retryQueuedChatMessage as retryQueuedChatMessageInternal,
+  steerQueuedChatMessage as steerQueuedChatMessageInternal,
+  type ChatInputHistoryKeyInput,
+  type ChatInputHistoryKeyResult,
+} from "../pages/chat/data.ts";
 import { loadCron as loadCronPage, loadOverview as loadOverviewPage } from "../pages/loaders.ts";
 import { type SkillWorkshopState } from "../pages/skill-workshop/data.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
@@ -21,18 +33,6 @@ import {
   handleWhatsAppStart as handleWhatsAppStartInternal,
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "./app-channels.ts";
-import {
-  handleAbortChat as handleAbortChatInternal,
-  handleChatDraftChange as handleChatDraftChangeInternal,
-  handleChatInputHistoryKey as handleChatInputHistoryKeyInternal,
-  handleSendChat as handleSendChatInternal,
-  removeQueuedMessage as removeQueuedMessageInternal,
-  resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
-  retryQueuedChatMessage as retryQueuedChatMessageInternal,
-  steerQueuedChatMessage as steerQueuedChatMessageInternal,
-  type ChatInputHistoryKeyInput,
-  type ChatInputHistoryKeyResult,
-} from "./app-chat.ts";
 import {
   DEFAULT_CRON_FORM,
   DEFAULT_LOG_LEVEL_FILTERS,

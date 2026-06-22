@@ -13,14 +13,15 @@ import {
   refreshChat,
   scopedAgentParamsForSession,
   scopedAgentListParamsForSession,
-} from "./app-chat.ts";
+} from "../pages/chat/data.ts";
 import { hasOperatorAdminAccess } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
   resetChatStateForSessionSwitch,
   switchChatSession,
   switchChatSessionAndWait,
-} from "./chat-session-switch.ts";
+} from "../pages/chat/session-switch.ts";
+import type { AppViewState } from "./app-view-state.ts";
 import {
   renderChatSessionSelect as renderChatSessionSelectBase,
   renderChatModelSelect,
