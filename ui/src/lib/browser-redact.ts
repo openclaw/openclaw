@@ -1,4 +1,4 @@
-// Control UI module implements browser redact behavior.
+// Browser-safe redaction for tool details rendered by the Control UI.
 const PAYMENT_CREDENTIAL_KEYS =
   "card[-_]?number|card[-_]?cvc|card[-_]?cvv|cvc|cvv|security[-_]?code|securityCode|payment[-_]?credential|paymentCredential|shared[-_]?payment[-_]?token|sharedPaymentToken";
 
