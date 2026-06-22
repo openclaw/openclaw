@@ -6,7 +6,9 @@ import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
   callGatewayMock,
+  dispatchCronDeliveryMock,
   retireSessionMcpRuntimeMock,
+  resolveCronDeliveryPlanMock,
   resolveFastModeStateMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
@@ -155,8 +157,8 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
 
   it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
     const result = await runCronIsolatedAgentTurn(
-      makeIsolatedAgentTurnParams({
-        job: makeIsolatedAgentTurnJob({
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
           deleteAfterRun: true,
           delivery: { mode: "none" },
           payload: { kind: "agentTurn", message: "cleanup me", model: OPENAI_GPT4_MODEL },
@@ -174,6 +176,40 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
       },
       timeoutMs: 10_000,
     });
+  });
+
+  it("does not repeat deleteAfterRun cleanup after dispatch already handled it", async () => {
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      ({ deliveryPayloads, summary, outputText, synthesizedText }) => ({
+        delivered: true,
+        deliveryAttempted: true,
+        cronRunSessionCleanupAttempted: true,
+        summary,
+        outputText,
+        synthesizedText,
+        deliveryPayloads,
+      }),
+    );
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          deleteAfterRun: true,
+          delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
+          payload: { kind: "agentTurn", message: "cleanup once", model: OPENAI_GPT4_MODEL },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
+    expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
   it("passes config-driven fast mode into embedded cron runs", async () => {

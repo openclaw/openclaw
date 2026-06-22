@@ -21,7 +21,7 @@ export async function cleanupCronRunSessionAfterRun(params: {
     return false;
   }
   if (!isCronSessionKey(params.agentSessionKey)) {
-    return true;
+    return false;
   }
   try {
     const { callGateway } = await loadGatewayCallRuntime();

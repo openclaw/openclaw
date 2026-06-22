@@ -632,6 +632,7 @@ function resetRunOutcomeMocks(): void {
           !sourceDeliveryOutcome?.satisfiesSourceDelivery &&
           resolvedDelivery.ok),
       ),
+      cronRunSessionCleanupAttempted: false,
       summary,
       outputText,
       synthesizedText,

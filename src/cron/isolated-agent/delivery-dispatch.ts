@@ -135,6 +135,7 @@ export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  cronRunSessionCleanupAttempted: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -915,7 +916,17 @@ export async function dispatchCronDelivery(
 
   let delivered = verifiedMessageToolDelivery;
   let deliveryAttempted = verifiedMessageToolDelivery;
-  let directCronSessionDeleted = false;
+  let directCronSessionCleanupAttempted = false;
+  const buildDeliveryState = (result?: RunCronAgentTurnResult): DispatchCronDeliveryState => ({
+    ...(result ? { result } : {}),
+    delivered,
+    deliveryAttempted,
+    cronRunSessionCleanupAttempted: directCronSessionCleanupAttempted,
+    summary,
+    outputText,
+    synthesizedText,
+    deliveryPayloads,
+  });
   const formatDeliveryTargetError = (error: string) =>
     params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? `${error}; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target`
@@ -931,7 +942,7 @@ export async function dispatchCronDelivery(
       ...params.telemetry,
     });
   const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-    if (directCronSessionDeleted) {
+    if (directCronSessionCleanupAttempted) {
       return;
     }
     const cleanupAttempted = await cleanupCronRunSessionAfterRun({
@@ -941,7 +952,7 @@ export async function dispatchCronDelivery(
       reason: "cron-delete-after-run-fallback",
     });
     if (cleanupAttempted) {
-      directCronSessionDeleted = true;
+      directCronSessionCleanupAttempted = true;
     }
   };
   const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
@@ -1394,32 +1405,18 @@ export async function dispatchCronDelivery(
       // non-deleteAfterRun / non-cron sessions (see cleanupDirectCronSession).
       await cleanupDirectCronSessionIfNeeded();
       if (!params.deliveryBestEffort) {
-        return {
-          result: failDeliveryTarget(params.resolvedDelivery.error.message),
-          delivered,
-          deliveryAttempted,
-          summary,
-          outputText,
-          synthesizedText,
-          deliveryPayloads,
-        };
+        return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));
       }
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
-      return {
-        result: params.withRunSession({
+      return buildDeliveryState(
+        params.withRunSession({
           status: "ok",
           summary,
           outputText,
           deliveryAttempted,
           ...params.telemetry,
         }),
-        delivered,
-        deliveryAttempted,
-        summary,
-        outputText,
-        synthesizedText,
-        deliveryPayloads,
-      };
+      );
     }
 
     // Finalize descendant/subagent output first for text-only cron runs, then
@@ -1430,38 +1427,15 @@ export async function dispatchCronDelivery(
     if (useDirectDelivery) {
       const directResult = await deliverViaDirectAndCleanup(params.resolvedDelivery);
       if (directResult) {
-        return {
-          result: directResult,
-          delivered,
-          deliveryAttempted,
-          summary,
-          outputText,
-          synthesizedText,
-          deliveryPayloads,
-        };
+        return buildDeliveryState(directResult);
       }
     } else {
       const finalizedTextResult = await finalizeTextDelivery(params.resolvedDelivery);
       if (finalizedTextResult) {
-        return {
-          result: finalizedTextResult,
-          delivered,
-          deliveryAttempted,
-          summary,
-          outputText,
-          synthesizedText,
-          deliveryPayloads,
-        };
+        return buildDeliveryState(finalizedTextResult);
       }
     }
   }
 
-  return {
-    delivered,
-    deliveryAttempted,
-    summary,
-    outputText,
-    synthesizedText,
-    deliveryPayloads,
-  };
+  return buildDeliveryState();
 }
