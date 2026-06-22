@@ -211,7 +211,14 @@ function affectedRows(result: { numAffectedRows?: bigint }): number {
 }
 
 function parseJson(value: string): unknown {
-  return JSON.parse(value);
+  try {
+    return JSON.parse(value);
+  } catch (err) {
+    throw new Error(
+      `Failed to parse channel ingress queue JSON: ${String(err)}`,
+      { cause: err },
+    );
+  }
 }
 
 function baseRecord<TPayload, TMetadata>(
