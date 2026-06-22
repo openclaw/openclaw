@@ -66,13 +66,39 @@ export class MatrixRecoveryKeyStore {
         if (requestedKeyIds.length === 0) {
           return null;
         }
+
+        const staged = this.resolveStagedSecretStorageKey(requestedKeyIds);
+        if (staged) {
+          return staged;
+        }
+
         for (const keyId of requestedKeyIds) {
-          const candidate = this.getSecretStorageKeyCandidate(keyId);
-          if (candidate) {
-            return [keyId, candidate];
+          const cached = this.secretStorageKeyCache.get(keyId);
+          if (cached) {
+            return [keyId, new Uint8Array(cached.key)];
           }
         }
-        return null;
+
+        const stored = this.loadStoredRecoveryKey();
+        if (!stored?.privateKeyBase64) {
+          return null;
+        }
+        const privateKey = new Uint8Array(Buffer.from(stored.privateKeyBase64, "base64"));
+        if (privateKey.length === 0) {
+          return null;
+        }
+
+        if (stored.keyId && requestedKeyIds.includes(stored.keyId)) {
+          this.rememberSecretStorageKey(stored.keyId, privateKey, stored.keyInfo);
+          return [stored.keyId, privateKey];
+        }
+
+        const firstRequestedKeyId = requestedKeyIds[0];
+        if (!firstRequestedKeyId) {
+          return null;
+        }
+        this.rememberSecretStorageKey(firstRequestedKeyId, privateKey, stored.keyInfo);
+        return [firstRequestedKeyId, privateKey];
       },
       cacheSecretStorageKey: (keyId, keyInfo, key) => {
         const privateKey = new Uint8Array(key);

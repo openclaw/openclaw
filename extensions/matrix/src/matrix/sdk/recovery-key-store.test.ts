@@ -156,6 +156,12 @@ describe("MatrixRecoveryKeyStore", () => {
 
     expect(resolved?.[0]).toBe("SSSS");
     expect(Array.from(resolved?.[1] ?? [])).toEqual([1, 2, 3, 4]);
+
+    const resolvedFromMultipleKeys = await callbacks.getSecretStorageKey?.(
+      { keys: { OLD: { name: "old" }, SSSS: { name: "active" } } },
+      "m.cross_signing.master",
+    );
+    expect(resolvedFromMultipleKeys?.[0]).toBe("SSSS");
   });
 
   it("keeps a readable legacy recovery key usable when SQLite migration fails", async () => {
