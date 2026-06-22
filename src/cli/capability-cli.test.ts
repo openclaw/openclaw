@@ -1894,6 +1894,52 @@ describe("capability cli", () => {
     ]);
   });
 
+  it("forwards --file input images through image generate to inputImages", async () => {
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from(pngBase64, "base64"),
+          mimeType: "image/png",
+          fileName: "provider-output.png",
+        },
+      ],
+    });
+
+    const tempInput = path.join(os.tmpdir(), `openclaw-image-generate-input-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(pngBase64, "base64"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--file",
+        tempInput,
+        "--prompt",
+        "stylize this as a watercolor",
+        "--model",
+        "openai/gpt-image-2",
+        "--json",
+      ],
+    });
+
+    const generationCall = firstImageGenerationCall();
+    expect(generationCall?.prompt).toBe("stylize this as a watercolor");
+    expect(generationCall?.modelOverride).toBe("openai/gpt-image-2");
+    const inputImages = generationCall?.inputImages as Array<Record<string, unknown>>;
+    expect(inputImages).toHaveLength(1);
+    expect(inputImages[0]?.fileName).toBe(path.basename(tempInput));
+    expect(inputImages[0]?.mimeType).toBe("image/png");
+
+    await fs.rm(tempInput, { force: true });
+  });
+
   it("streams url-only generated videos to --output paths", async () => {
     mocks.generateVideo.mockResolvedValue({
       provider: "vydra",
