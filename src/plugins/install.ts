@@ -2532,7 +2532,6 @@ async function installPluginFromInstalledPackageDirInternal(
   return result;
 }
 
-
 async function installPluginFromPackageDir(
   params: {
     packageDir: string;

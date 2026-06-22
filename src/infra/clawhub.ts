@@ -645,10 +645,7 @@ async function clawhubRequest(
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   const controller = new AbortController();
   const timeout = setTimeout(
-    () =>
-      controller.abort(
-        new Error(`ClawHub request timed out after ${timeoutMs}ms`),
-      ),
+    () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
     timeoutMs,
   );
   try {

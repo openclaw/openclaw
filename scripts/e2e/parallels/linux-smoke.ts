@@ -514,9 +514,7 @@ if command -v curl >/dev/null 2>&1; then
     url,
   )} -o ${shellQuote(outputPath)}
 else
-  wget -q --timeout=10 --read-timeout=120 --tries=3 -O ${shellQuote(outputPath)} ${shellQuote(
-    url,
-  )}
+  wget -q --timeout=10 --read-timeout=120 --tries=3 -O ${shellQuote(outputPath)} ${shellQuote(url)}
 fi`);
   }
 

@@ -259,9 +259,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(combinedCommand).toContain(
         "docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test'",
       );
-      expect(combinedCommand).toContain(
-        "published_upgrade_survivor_baselines='openclaw@2026.5.3'",
-      );
+      expect(combinedCommand).toContain("published_upgrade_survivor_baselines='openclaw@2026.5.3'");
       expect(combinedCommand).toContain(
         "published_upgrade_survivor_scenarios='plugin-dependency-cleanup'",
       );
@@ -270,9 +268,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(result.stdout).toContain(
         "docker_e2e_bare_image='ghcr.io/openclaw/openclaw-bare:test'",
       );
-      expect(result.stdout).toContain(
-        "published_upgrade_survivor_baselines='openclaw@2026.5.3'",
-      );
+      expect(result.stdout).toContain("published_upgrade_survivor_baselines='openclaw@2026.5.3'");
       expect(result.stdout).toContain(
         "published_upgrade_survivor_scenarios='plugin-dependency-cleanup'",
       );
@@ -372,9 +368,7 @@ describe("Docker E2E helper CLIs", () => {
       expect(result.stderr).toBe("");
       const combinedCommand = result.stdout.match(/Combined GitHub rerun:\n([^\n]+)/u)?.[1] ?? "";
       expect(combinedCommand).toContain("--ref 'release/2026.6'");
-      expect(combinedCommand).toContain(
-        "published_upgrade_survivor_baselines='openclaw@2026.5.3'",
-      );
+      expect(combinedCommand).toContain("published_upgrade_survivor_baselines='openclaw@2026.5.3'");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

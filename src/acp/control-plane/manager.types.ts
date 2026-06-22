@@ -58,6 +58,14 @@ export type AcpTurnAttachment = {
 };
 
 /** Input for one ACP prompt turn routed through the manager. */
+
+export type AcpTurnEndHookContext = {
+  sessionKey: string;
+  success: boolean;
+  durationMs: number;
+  errorCode?: AcpRuntimeError["code"];
+};
+
 export type AcpRunTurnInput = {
   cfg: OpenClawConfig;
   sessionKey: string;

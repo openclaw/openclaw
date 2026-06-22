@@ -177,9 +177,7 @@ describe("kitchen-sink RPC isolated state", () => {
   it("clamps timer env values before they reach Node timers", () => {
     const oversizedTimerMs = String(Number.MAX_SAFE_INTEGER);
 
-    expect(readPositiveTimerMs(oversizedTimerMs, 60_000)).toBe(
-      MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
-    );
+    expect(readPositiveTimerMs(oversizedTimerMs, 60_000)).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
 
     const config = resolveKitchenSinkRpcConfig({
       OPENCLAW_KITCHEN_SINK_RPC_CALL_MS: oversizedTimerMs,

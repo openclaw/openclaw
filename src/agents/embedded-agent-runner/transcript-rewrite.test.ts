@@ -155,10 +155,8 @@ function requireString(value: string | undefined, label: string): string {
 beforeAll(async () => {
   ({ onSessionTranscriptUpdate } = await import("../../sessions/transcript-events.js"));
   ({ installSessionToolResultGuard } = await import("../session-tool-result-guard.js"));
-  ({
-    rewriteTranscriptEntriesInRuntimeTranscript,
-    rewriteTranscriptEntriesInSessionManager,
-  } = await import("./transcript-rewrite.js"));
+  ({ rewriteTranscriptEntriesInRuntimeTranscript, rewriteTranscriptEntriesInSessionManager } =
+    await import("./transcript-rewrite.js"));
 });
 
 beforeEach(() => {
@@ -411,5 +409,4 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       cleanup();
     }
   });
-
 });

@@ -1,8 +1,8 @@
 // Qqbot tests cover stt plugin behavior.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),

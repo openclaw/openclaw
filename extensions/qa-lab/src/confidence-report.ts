@@ -389,8 +389,7 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   const failedCount = readCount(counts?.failed);
   const explicitSkippedCount = readCount(counts?.skipped);
   if (totalCount !== undefined) {
-    const providedCountSum =
-      (passedCount ?? 0) + (failedCount ?? 0) + (explicitSkippedCount ?? 0);
+    const providedCountSum = (passedCount ?? 0) + (failedCount ?? 0) + (explicitSkippedCount ?? 0);
     if (totalCount < providedCountSum) {
       return {
         passed: false,

@@ -419,13 +419,13 @@ function printEntries(entries, ref, workflow, runValue) {
         );
       }
     }
-      console.log("");
-      console.log("Per-lane GitHub reruns:");
-      for (const entry of workflowEntries) {
-        console.log(
-          `- ${entry.lane}: ${ghWorkflowCommand([entry.lane], ref, workflow, entry.reuseInputs)}`,
-        );
-      }
+    console.log("");
+    console.log("Per-lane GitHub reruns:");
+    for (const entry of workflowEntries) {
+      console.log(
+        `- ${entry.lane}: ${ghWorkflowCommand([entry.lane], ref, workflow, entry.reuseInputs)}`,
+      );
+    }
   } else {
     console.log("");
     console.log("No targetable failed Docker E2E lanes found.");

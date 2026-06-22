@@ -4,8 +4,8 @@ import {
   logLaneDequeue,
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
-import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 /**
