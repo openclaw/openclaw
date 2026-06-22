@@ -34,7 +34,7 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   // as group. When the monitor has resolved the channel type, the cache
   // entry carries the authoritative Mattermost channel kind (D→direct,
   // G/P→group, O→channel).
-  const cachedKind = mattermostChannelKindCache.get(rawId, params.accountId);
+  const cachedKind = mattermostChannelKindCache.get(rawId, params.accountId ?? undefined);
   const chatType = isUser ? "direct" : cachedKind === "group" ? "group" : "channel";
   // Align peer kind, from, and to with the resolved chatType so that
   // private-channel group routes share the same session-key namespace.
