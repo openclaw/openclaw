@@ -1766,6 +1766,27 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("preserves inline message whitespace for local embedded runs", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "  keep spaces  ",
+          to: "+1555",
+          local: true,
+        },
+        runtime,
+      );
+
+      const localOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(localOpts.message).toBe("  keep spaces  ");
+    });
+  });
+
   it("passes explicit session keys to local embedded runs", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();

@@ -229,8 +229,8 @@ async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatc
     }
     return { ...rest, message };
   }
-  const message = (opts.message ?? "").trim();
-  if (!message) {
+  const message = opts.message ?? "";
+  if (!message.trim()) {
     throw missingAgentMessageError();
   }
   return { ...rest, message };
