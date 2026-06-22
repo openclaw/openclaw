@@ -161,6 +161,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "vi", fileName: "vi.ts", exportName: "vi", languageKey: "vi" },
   { locale: "nl", fileName: "nl.ts", exportName: "nl", languageKey: "nl" },
   { locale: "fa", fileName: "fa.ts", exportName: "fa", languageKey: "fa" },
+  { locale: "he", fileName: "he.ts", exportName: "he", languageKey: "he" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -263,6 +264,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Dutch";
     case "fa":
       return "Persian";
+    case "he":
+      return "Hebrew";
     case "de":
       return "German";
     case "es":

@@ -1414,6 +1414,7 @@ export const zh_CN: TranslationMap = {
     vi: "Tiếng Việt（越南语）",
     nl: "Nederlands（荷兰语）",
     fa: "فارسی（波斯语）",
+    he: "עברית (Hebrew)",
   },
   cron: {
     quickCreate: {

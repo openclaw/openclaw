@@ -1459,6 +1459,7 @@ export const it: TranslationMap = {
     vi: "Tiếng Việt (Vietnamita)",
     nl: "Nederlands (Olandese)",
     fa: "فارسی (Persiano)",
+    he: "עברית (Hebrew)",
   },
   cron: {
     quickCreate: {

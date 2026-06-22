@@ -9,6 +9,7 @@ import { en } from "../locales/en.ts";
 import { es } from "../locales/es.ts";
 import { fa } from "../locales/fa.ts";
 import { fr } from "../locales/fr.ts";
+import { he } from "../locales/he.ts";
 import { id } from "../locales/id.ts";
 import { it as itLocale } from "../locales/it.ts";
 import { ja_JP } from "../locales/ja-JP.ts";
@@ -29,6 +30,7 @@ const shippedLocales = {
   es,
   fa,
   fr,
+  he,
   id,
   it: itLocale,
   ja_JP,
@@ -157,6 +159,7 @@ describe("i18n", () => {
     for (const [locale, value] of Object.entries({
       ar,
       fa,
+      he,
       it: itLocale,
       nl,
       vi: viLocale,

@@ -1,0 +1,18 @@
+{
+  "language": "he",
+  "tabs": [
+    {
+      "tab": "התחלה",
+      "groups": [
+        {
+          "group": "סקירה כללית",
+          "pages": ["he/index"]
+        },
+        {
+          "group": "צעדים ראשונים",
+          "pages": ["he/start/getting-started", "he/start/wizard"]
+        }
+      ]
+    }
+  ]
+}

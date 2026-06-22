@@ -30,6 +30,7 @@ const LAZY_LOCALES: readonly LazyLocale[] = [
   "vi",
   "nl",
   "fa",
+  "he",
 ];
 
 const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
@@ -105,6 +106,10 @@ const LAZY_LOCALE_REGISTRY: Record<LazyLocale, LazyLocaleRegistration> = {
     exportName: "fa",
     loader: () => import("../locales/fa.ts"),
   },
+  he: {
+    exportName: "he",
+    loader: () => import("../locales/he.ts"),
+  },
 };
 
 export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = [DEFAULT_LOCALE, ...LAZY_LOCALES];
@@ -168,6 +173,9 @@ export function resolveNavigatorLocale(navLang: string): Locale {
   }
   if (navLang.startsWith("fa")) {
     return "fa";
+  }
+  if (navLang.startsWith("he") || navLang.startsWith("iw")) {
+    return "he";
   }
   return DEFAULT_LOCALE;
 }

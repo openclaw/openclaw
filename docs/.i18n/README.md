@@ -32,7 +32,7 @@ Generated locale trees and live translation memory now live in the publish repo:
 
 ## Locale visibility
 
-- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `ar`, `it`, `tr`, `uk`, `id`, `pl`, `th`, `vi`, `nl`, and `fa`.
+- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `ar`, `it`, `tr`, `uk`, `id`, `pl`, `th`, `vi`, `nl`, `fa`, and `he`.
 - Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
 - The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`; today that includes Vietnamese (`vi`) and Dutch (`nl`), but not Thai (`th`) or Persian (`fa`).
 - Do not treat missing `th` or `fa` entries in generated `docs/docs.json` as a pipeline failure. Verify their generated folders in `openclaw/docs` instead.

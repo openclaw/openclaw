@@ -1455,6 +1455,7 @@ export const uk: TranslationMap = {
     vi: "Tiếng Việt (вʼєтнамська)",
     nl: "Nederlands (нідерландська)",
     fa: "فارسی (перська)",
+    he: "עברית (Hebrew)",
   },
   cron: {
     quickCreate: {

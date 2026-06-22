@@ -1458,6 +1458,7 @@ export const nl: TranslationMap = {
     vi: "Tiếng Việt (Vietnamees)",
     nl: "Nederlands",
     fa: "فارسی (Perzisch)",
+    he: "עברית (Hebrew)",
   },
   cron: {
     quickCreate: {
