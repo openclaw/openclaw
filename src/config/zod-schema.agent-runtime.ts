@@ -106,6 +106,9 @@ export const HeartbeatSchema = z
     lightContext: z.boolean().optional(),
     isolatedSession: z.boolean().optional(),
     skipWhenBusy: z.boolean().optional(),
+    transcriptArtifactMode: z
+      .union([z.literal("strip-all"), z.literal("keep-result"), z.literal("keep-all")])
+      .optional(),
   })
   .strict()
   .superRefine((val, ctx) => {

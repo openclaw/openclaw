@@ -450,8 +450,10 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
   messages: T[],
   ackMaxChars?: number,
   heartbeatPrompt?: string,
+  mode?: "strip-all" | "keep-result" | "keep-all",
 ): T[] {
-  if (messages.length === 0) {
+  const resolvedMode = mode ?? "strip-all";
+  if (messages.length === 0 || resolvedMode === "keep-all") {
     return messages;
   }
 
@@ -469,6 +471,37 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
       result.push(messages[i]);
       i++;
       continue;
+    }
+
+    if (resolvedMode === "keep-result") {
+      let lastAssistantMessage: T | undefined;
+      for (let j = next - 1; j > i; j--) {
+        if (messages[j].role === "assistant") {
+          lastAssistantMessage = messages[j];
+          break;
+        }
+      }
+
+      if (lastAssistantMessage) {
+        const { text } = resolveMessageText(lastAssistantMessage.content);
+        const { text: cleanText } = stripHeartbeatToken(text, {
+          mode: "message",
+          maxAckChars: ackMaxChars,
+        });
+        const cleanTrimmed = cleanText.trim();
+        if (cleanTrimmed) {
+          const summaryContent = `[Heartbeat summary: ${cleanTrimmed}]`;
+          result.push({
+            ...lastAssistantMessage,
+            content:
+              typeof lastAssistantMessage.content === "string"
+                ? summaryContent
+                : Array.isArray(lastAssistantMessage.content)
+                  ? [{ type: "text", text: summaryContent }]
+                  : summaryContent,
+          });
+        }
+      }
     }
 
     i = next;

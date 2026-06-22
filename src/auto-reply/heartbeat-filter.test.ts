@@ -989,4 +989,74 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       messages,
     );
   });
+
+  describe("transcriptArtifactMode overrides", () => {
+    it("preserves everything when mode is keep-all", () => {
+      const messages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        { role: "assistant", content: "HEARTBEAT_OK" },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-all"),
+      ).toEqual(messages);
+    });
+
+    it("strips no-op heartbeats when mode is keep-result", () => {
+      const messages = [
+        { role: "user", content: "Hello" },
+        { role: "user", content: HEARTBEAT_PROMPT },
+        { role: "assistant", content: "HEARTBEAT_OK" },
+        { role: "user", content: "Hi" },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
+      ).toEqual([
+        { role: "user", content: "Hello" },
+        { role: "user", content: "Hi" },
+      ]);
+    });
+
+    it("summarizes heartbeats with useful output when mode is keep-result", () => {
+      const messages = [
+        { role: "user", content: "Hello" },
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          content: "Done",
+        },
+        { role: "assistant", content: "Checked mail. Found nothing. HEARTBEAT_OK" },
+        { role: "user", content: "Hi" },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
+      ).toEqual([
+        { role: "user", content: "Hello" },
+        { role: "assistant", content: "[Heartbeat summary: Checked mail. Found nothing.]" },
+        { role: "user", content: "Hi" },
+      ]);
+    });
+
+    it("supports array-block content format in keep-result", () => {
+      const messages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "Report: All clear. HEARTBEAT_OK" }],
+        },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
+      ).toEqual([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "[Heartbeat summary: Report: All clear.]" }],
+        },
+      ]);
+    });
+  });
 });

@@ -455,6 +455,13 @@ export type AgentDefaultsConfig = {
      * Default: false (only the final heartbeat payload is delivered).
      */
     includeReasoning?: boolean;
+    /**
+     * Controls how heartbeat history is filtered in the model context:
+     * - "strip-all" (default): remove all heartbeat messages, tool calls/results, and acks.
+     * - "keep-result": keep a single summarized assistant turn from heartbeats with non-empty results/output.
+     * - "keep-all": do not filter heartbeat history (keeps everything).
+     */
+    transcriptArtifactMode?: "strip-all" | "keep-result" | "keep-all";
   };
   /** Max concurrent agent runs across all conversations. Default: 4. */
   maxConcurrent?: number;

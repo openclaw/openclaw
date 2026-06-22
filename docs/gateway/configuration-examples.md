@@ -280,6 +280,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         to: "+15555550123",
         prompt: "HEARTBEAT",
         ackMaxChars: 300,
+        transcriptArtifactMode: "keep-result",
       },
       memorySearch: {
         provider: "gemini",
