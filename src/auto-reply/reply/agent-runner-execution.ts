@@ -841,6 +841,24 @@ const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
   /\bcodex app-server client closed before turn completed\b/iu;
 const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
   /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+const PROVIDER_MODEL_IDLE_TIMEOUT_RE =
+  /\b(?:LLM|model)\s+idle\s+timeout\s*\(\s*(\d+)\s*s\s*\)\s*:\s*no\s+response\s+from\s+model\b/iu;
+const PROVIDER_MODEL_REQUEST_TIMEOUT_RE =
+  /\b(?:LLM|model)\s+request\s+timed\s+out\b|\brequest\s+timed\s+out\s+waiting\s+for\s+(?:LLM|model)\b/iu;
+
+function buildProviderModelTimeoutFailureText(message: string): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const idle = normalizedMessage.match(PROVIDER_MODEL_IDLE_TIMEOUT_RE);
+  if (idle) {
+    const seconds = idle[1];
+    const duration = seconds ? ` after ${seconds}s without output` : " before replying";
+    return `⚠️ The model timed out${duration}. The gateway session is still usable; please try again, switch model, or use /new if this conversation stays stuck.`;
+  }
+  if (PROVIDER_MODEL_REQUEST_TIMEOUT_RE.test(normalizedMessage)) {
+    return "⚠️ The model request timed out before a reply arrived. The gateway session is still usable; please try again, switch model, or use /new if this conversation stays stuck.";
+  }
+  return null;
+}
 
 function buildCodexAppServerFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
@@ -986,6 +1004,10 @@ function buildExternalRunFailureReply(
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
+  }
+  const providerModelTimeoutFailure = buildProviderModelTimeoutFailureText(normalizedMessage);
+  if (providerModelTimeoutFailure) {
+    return { text: providerModelTimeoutFailure, isGenericRunnerFailure: false };
   }
   const cliBackendTimeoutFailure = buildCliBackendTimeoutFailureText(normalizedMessage);
   if (cliBackendTimeoutFailure) {
@@ -3109,6 +3131,11 @@ export async function runAgentTurnWithFallback(params: {
         !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
+      const failReplyOperationAfterVisibleFailure = (cause: unknown) => {
+        params.replyOperation?.retainFailureUntilComplete();
+        params.replyOperation?.fail("run_failed", cause);
+      };
+
       if (isReplyOperationRestartAbort(params.replyOperation)) {
         takePendingLifecycleTerminal()?.emit("end", err);
         return {
@@ -3177,7 +3204,7 @@ export async function runAgentTurnWithFallback(params: {
       }
       if (providerRequestError) {
         takePendingLifecycleTerminal()?.emit("error", err);
-        params.replyOperation?.fail("run_failed", err);
+        failReplyOperationAfterVisibleFailure(err);
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
@@ -3291,7 +3318,7 @@ export async function runAgentTurnWithFallback(params: {
           },
         });
       }
-      params.replyOperation?.fail("run_failed", err);
+      failReplyOperationAfterVisibleFailure(err);
       return {
         kind: "final",
         payload: markAgentRunFailureReplyPayload({

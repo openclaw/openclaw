@@ -2624,6 +2624,7 @@ export async function runReplyAgent(params: {
       cfg,
     });
     if (knownFailurePayload) {
+      replyOperation.retainFailureUntilComplete();
       replyOperation.fail("run_failed", error);
       return returnWithQueuedFollowupDrain(knownFailurePayload);
     }

@@ -6158,6 +6158,37 @@ describe("runAgentTurnWithFallback", () => {
     expect(terminalFailureEvent).toBeDefined();
   });
 
+  it("surfaces model idle timeouts without generic reset guidance and retains the lane until delivery", async () => {
+    const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error("LLM idle timeout (120s): no response from model"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        replyOperation,
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+      opts: { runId: "run-model-timeout" } as GetReplyOptions,
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
+      expect(result.payload.text).toContain("model timed out after 120s");
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).not.toContain("Something went wrong");
+    }
+    expect(retainFailureUntilCompleteMock).toHaveBeenCalledTimes(1);
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
+  });
+
   it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error('Command lane "main" task timed out after 120000ms'),
