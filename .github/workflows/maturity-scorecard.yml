@@ -21,7 +21,7 @@ on:
     branches: [main]
     paths:
       - "taxonomy.yaml"
-      - "qa/maturity-scores.yaml"
+      - "docs/maturity-scores.yaml"
       - "docs/maturity/scorecard.md"
       - "docs/maturity/taxonomy.md"
       - "extensions/qa-lab/src/scorecard-taxonomy.ts"
@@ -31,7 +31,7 @@ on:
   pull_request:
     paths:
       - "taxonomy.yaml"
-      - "qa/maturity-scores.yaml"
+      - "docs/maturity-scores.yaml"
       - "docs/maturity/scorecard.md"
       - "docs/maturity/taxonomy.md"
       - "extensions/qa-lab/src/scorecard-taxonomy.ts"
@@ -83,8 +83,8 @@ jobs:
           } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
 
           const taxonomy = parseQaMaturityTaxonomy(YAML.parse(fs.readFileSync("taxonomy.yaml", "utf8")), "taxonomy.yaml");
-          const scores = parseQaMaturityScores(YAML.parse(fs.readFileSync("qa/maturity-scores.yaml", "utf8")), "qa/maturity-scores.yaml");
-          const warnings = validateQaMaturityScoresAgainstTaxonomy({ scores, taxonomy, scoresPath: "qa/maturity-scores.yaml" });
+          const scores = parseQaMaturityScores(YAML.parse(fs.readFileSync("docs/maturity-scores.yaml", "utf8")), "docs/maturity-scores.yaml");
+          const warnings = validateQaMaturityScoresAgainstTaxonomy({ scores, taxonomy, scoresPath: "docs/maturity-scores.yaml" });
           for (const warning of warnings) {
             console.error(`warning: ${warning}`);
           }

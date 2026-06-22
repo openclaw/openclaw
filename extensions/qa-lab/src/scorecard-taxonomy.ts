@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
-export const QA_MATURITY_SCORES_PATH = "qa/maturity-scores.yaml";
+export const QA_MATURITY_SCORES_PATH = "docs/maturity-scores.yaml";
 export const QA_MATURITY_SCORE_KEYS = ["quality", "completeness"] as const;
 export const QA_MATURITY_SCORE_LABELS = [
   "Lovable",
@@ -90,7 +90,16 @@ const qaMaturityScoreBundleShape = {
   completeness: qaMaturityScoreObjectSchema,
 } satisfies z.ZodRawShape;
 
-const qaMaturityScoreBundleSchema = z.object(qaMaturityScoreBundleShape).strict();
+const qaMaturityLegacyCoverageShape = {
+  coverage: qaMaturityScoreObjectSchema.optional(),
+} satisfies z.ZodRawShape;
+
+const qaMaturityScoreBundleSchema = z
+  .object({
+    ...qaMaturityLegacyCoverageShape,
+    ...qaMaturityScoreBundleShape,
+  })
+  .strict();
 
 const qaMaturityScoreLastRunSchema = z
   .object({
@@ -121,6 +130,7 @@ const qaMaturityScoreSurfaceLtsSchema = z
 const qaMaturityScoreCategorySchema = z
   .object({
     name: z.string().trim().min(1),
+    ...qaMaturityLegacyCoverageShape,
     ...qaMaturityScoreBundleShape,
     lts: qaMaturityScoreCategoryLtsSchema,
   })
