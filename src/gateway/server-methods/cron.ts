@@ -27,11 +27,11 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { listConfiguredMessageChannels } from "../../infra/outbound/channel-selection.js";
 import {
   resolveTargetPrefixedChannel,
   validateTargetProviderPrefix,
 } from "../../infra/outbound/channel-target-prefix.js";
-import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -63,14 +63,11 @@ function compactCronListJob(job: CronJob) {
   };
 }
 
-function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
-  return listConfiguredAnnounceChannelIdsForConfig({
-    config: cfg,
-    env: process.env,
-  });
+async function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): Promise<string[]> {
+  return await listConfiguredMessageChannels(cfg);
 }
 
-function assertConfiguredAnnounceChannel(params: {
+async function assertConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
   field: "delivery.channel" | "delivery.failureDestination.channel";
@@ -81,7 +78,7 @@ function assertConfiguredAnnounceChannel(params: {
     return;
   }
 
-  const configuredChannels = listConfiguredAnnounceChannelIds(params.cfg).toSorted();
+  const configuredChannels = (await listConfiguredAnnounceChannelIds(params.cfg)).toSorted();
   const normalizedChannel = normalizeMessageChannel(params.channel);
   if (!normalizedChannel) {
     if (configuredChannels.length <= 1) {
@@ -93,7 +90,7 @@ function assertConfiguredAnnounceChannel(params: {
   }
 
   if (configuredChannels.length === 0) {
-    return;
+    throw new Error(`${params.field} is not configured: ${normalizedChannel}`);
   }
 
   if (configuredChannels.includes(normalizedChannel)) {
@@ -132,14 +129,17 @@ function assertCompatibleAnnounceTarget(params: {
   }
 }
 
-function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery?: CronDelivery }) {
+async function assertValidCronAnnounceDelivery(params: {
+  cfg: OpenClawConfig;
+  delivery?: CronDelivery;
+}) {
   if (params.delivery && (params.delivery.mode ?? "announce") === "announce") {
     assertCompatibleAnnounceTarget({
       channel: params.delivery.channel,
       to: params.delivery.to,
       field: "delivery.channel",
     });
-    assertConfiguredAnnounceChannel({
+    await assertConfiguredAnnounceChannel({
       cfg: params.cfg,
       channel: resolveAnnounceValidationChannel({
         channel: params.delivery.channel,
@@ -164,7 +164,7 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
       to: failureDestination.to,
       field: "delivery.failureDestination.channel",
     });
-    assertConfiguredAnnounceChannel({
+    await assertConfiguredAnnounceChannel({
       cfg: params.cfg,
       channel: resolveAnnounceValidationChannel({
         channel: failureDestination.channel,
@@ -175,14 +175,14 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
   }
 }
 
-function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCreate) {
-  assertValidCronAnnounceDelivery({
+async function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCreate) {
+  await assertValidCronAnnounceDelivery({
     cfg,
     delivery: jobCreate.delivery,
   });
 }
 
-function assertValidCronUpdatePatch(params: {
+async function assertValidCronUpdatePatch(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
   currentJob: CronJob;
@@ -204,7 +204,7 @@ function assertValidCronUpdatePatch(params: {
       resolveTargetPrefixedChannel(nextJob.delivery.to) === undefined
         ? { ...nextJob.delivery, channel: "last" as const }
         : nextJob.delivery;
-    assertValidCronAnnounceDelivery({
+    await assertValidCronAnnounceDelivery({
       cfg: params.cfg,
       delivery,
     });
@@ -459,7 +459,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      assertValidCronCreateDelivery(cfg, jobCreate);
+      await assertValidCronCreateDelivery(cfg, jobCreate);
     } catch (err) {
       respond(
         false,
@@ -564,7 +564,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
     }
     try {
-      assertValidCronUpdatePatch({
+      await assertValidCronUpdatePatch({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
         currentJob,

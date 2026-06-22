@@ -5,7 +5,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { registerCapabilityCli } from "./capability-cli.js";
+import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
@@ -1891,6 +1891,37 @@ describe("capability cli", () => {
       "--output",
       "--json",
     ]);
+  });
+
+  it("keeps capability inspect metadata flags in sync with each command's registered options", () => {
+    const program = new Command();
+    registerCapabilityCli(program);
+    const capability =
+      program.commands.find((command) => command.name() === "infer") ??
+      program.commands.find((command) => command.aliases().includes("capability"));
+    expect(capability).toBeDefined();
+
+    const registeredFlags = (id: string): string[] => {
+      let command: Command | undefined = capability;
+      for (const segment of id.split(".")) {
+        command = command?.commands.find((child) => child.name() === segment);
+      }
+      if (!command) {
+        throw new Error(`no registered command for capability id ${id}`);
+      }
+      return command.options
+        .map((option) => option.long)
+        .filter((long): long is string => Boolean(long));
+    };
+
+    // CAPABILITY_METADATA.flags is the inspect/list contract; it must list exactly what each
+    // command actually registers, or `infer inspect` reports working flags as unsupported.
+    for (const entry of CAPABILITY_METADATA) {
+      expect({ id: entry.id, flags: entry.flags }).toEqual({
+        id: entry.id,
+        flags: registeredFlags(entry.id),
+      });
+    }
   });
 
   it("streams url-only generated videos to --output paths", async () => {

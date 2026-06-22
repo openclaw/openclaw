@@ -509,6 +509,22 @@ async function failedUpdateIds(spoolDir: string): Promise<number[]> {
   return rows.map((row) => Number(row.event_id));
 }
 
+async function failedUpdateReasons(
+  spoolDir: string,
+): Promise<Array<{ id: number; reason: string }>> {
+  const { database, kysely } = openTelegramSpoolTestKysely(spoolDir);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    kysely
+      .selectFrom("channel_ingress_events")
+      .select(["event_id", "failed_reason"])
+      .where("queue_name", "=", telegramTestQueueName(spoolDir))
+      .where("status", "=", "failed")
+      .orderBy("event_id", "asc"),
+  ).rows;
+  return rows.map((row) => ({ id: Number(row.event_id), reason: String(row.failed_reason) }));
+}
+
 async function adoptClaimOwner(params: {
   spoolDir: string;
   updateId: number;
@@ -1957,6 +1973,58 @@ describe("TelegramPollingSession", () => {
           (claim) => claim.updateId,
         ),
       ).toEqual([42]);
+    });
+  });
+
+  it("fails timed-out current-process claims before draining later same-lane updates", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const events: string[] = [];
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "wedged topic 10 turn"),
+        topicUpdate(43, 10, "later topic 10 turn"),
+      ]);
+      const interrupted = (await listTelegramSpooledUpdates({ spoolDir: tempDir })).find(
+        (update) => update.updateId === 42,
+      );
+      if (!interrupted) {
+        throw new Error("Expected interrupted update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(interrupted);
+      if (!claimed) {
+        throw new Error("Expected claimed update");
+      }
+      await adoptClaimOwner({
+        spoolDir: tempDir,
+        updateId: 42,
+        ownerId: `${process.pid}:other-process`,
+        claimedAt: Date.now() - 101,
+      });
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        spooledUpdateHandlerTimeoutMs: 100,
+        handleUpdate: async (update) => {
+          events.push(`handled:${update.update_id}`);
+          abort.abort();
+        },
+      });
+
+      await vi.waitFor(() => expect(events).toEqual(["handled:43"]));
+      await runPromise;
+      expect(await failedUpdateReasons(tempDir)).toEqual([
+        { id: 42, reason: "lane-released-on-stuck" },
+      ]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
+      expectLogIncludes(
+        log,
+        "spooled update 42 Telegram spooled update claim owned by this process",
+      );
+      stopWorker();
     });
   });
 
