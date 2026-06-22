@@ -38,6 +38,25 @@ export function resolveModelFallbackOptions(
   };
 }
 
+/** Resolves whether final-answer tags should be enforced for an embedded follow-up run. */
+export function resolveEnforceFinalTagWithResolver(
+  run: FollowupRun["run"],
+  provider: string,
+  model: string,
+  isReasoningTagProvider?: ReasoningTagProviderResolver,
+): boolean {
+  return (
+    (run.skipProviderRuntimeHints ? false : undefined) ??
+    (run.enforceFinalTag ||
+      isReasoningTagProvider?.(provider, {
+        config: run.config,
+        workspaceDir: run.workspaceDir,
+        modelId: model,
+      }) ||
+      false)
+  );
+}
+
 /** Builds the shared embedded-agent run params from a queued follow-up run. */
 export function buildEmbeddedRunBaseParams(params: {
   run: FollowupRun["run"];
@@ -58,15 +77,12 @@ export function buildEmbeddedRunBaseParams(params: {
     modelOverrideSource: params.run.modelOverrideSource,
     hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
   });
-  const enforceFinalTag =
-    (params.run.skipProviderRuntimeHints ? false : undefined) ??
-    (params.run.enforceFinalTag ||
-      params.isReasoningTagProvider?.(params.provider, {
-        config,
-        workspaceDir: params.run.workspaceDir,
-        modelId: params.model,
-      }) ||
-      false);
+  const enforceFinalTag = resolveEnforceFinalTagWithResolver(
+    params.run,
+    params.provider,
+    params.model,
+    params.isReasoningTagProvider,
+  );
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
     sessionFile: params.run.sessionFile,
@@ -89,6 +105,8 @@ export function buildEmbeddedRunBaseParams(params: {
     modelFallbacksOverride,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,
+    fastMode: params.run.fastMode,
+    fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
     verboseLevel: params.run.verboseLevel,
     reasoningLevel: params.run.reasoningLevel,
     execOverrides: params.run.execOverrides,

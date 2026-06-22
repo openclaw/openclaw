@@ -32,6 +32,8 @@ type AgentRunParams = {
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
+  shouldEmitToolResult?: () => boolean;
+  shouldEmitToolOutput?: () => boolean;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   silentExpected?: boolean;
 };
@@ -1079,6 +1081,31 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expect(onToolResult).not.toHaveBeenCalled();
       }
     }
+  });
+
+  it("enables channel-owned tool summaries when default tool messages are suppressed", async () => {
+    const onToolResult = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      expect(params.shouldEmitToolResult?.()).toBe(true);
+      expect(params.shouldEmitToolOutput?.()).toBe(false);
+      await params.onToolResult?.({ text: "🛠️ `run ruby`", mediaUrls: [] });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      opts: {
+        suppressDefaultToolProgressMessages: true,
+        forceToolResultProgress: true,
+        onToolResult,
+      },
+      resolvedVerboseLevel: "off",
+    });
+    await run();
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "🛠️ `run ruby`",
+      mediaUrls: [],
+    });
   });
 
   it("preserves channelData on forwarded tool results", async () => {

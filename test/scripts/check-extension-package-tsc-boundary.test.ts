@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   acquireBoundaryCheckLock,
@@ -431,6 +432,19 @@ describe("check-extension-package-tsc-boundary", () => {
     }
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
   }, 30_000);
+
+  it("clamps oversized async node step timers before scheduling", async () => {
+    await expect(
+      runNodeStepAsync(
+        "slow-success",
+        ["--eval", "setTimeout(() => process.exit(0), 25);"],
+        MAX_TIMER_TIMEOUT_MS + 1,
+      ),
+    ).resolves.toMatchObject({
+      stderr: "",
+      stdout: "",
+    });
+  });
 
   it("keeps async node step failure output bounded", async () => {
     const child = new EventEmitter() as EventEmitter & {

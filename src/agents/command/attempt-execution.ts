@@ -2,6 +2,7 @@
  * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
  */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import {
@@ -483,7 +484,10 @@ export async function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
+  isFinalFallbackAttempt?: boolean;
   timeoutMs: number;
   runTimeoutOverrideMs?: number;
   runId: string;
@@ -924,6 +928,9 @@ export async function runAgentAttempt(params: {
       authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
       thinkLevel: params.resolvedThinkLevel,
       fastMode: params.fastMode,
+      fastModeStartedAtMs: params.fastModeStartedAtMs,
+      fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
+      isFinalFallbackAttempt: params.isFinalFallbackAttempt,
       verboseLevel: params.resolvedVerboseLevel,
       bashElevated: params.opts.bashElevated,
       approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,

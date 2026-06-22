@@ -253,6 +253,41 @@ describe("plugin lifecycle resource sampler", () => {
     },
   );
 
+  it.runIf(process.platform === "linux")("clamps oversized timer env values", () => {
+    const dir = makeTempDir();
+    const summary = path.join(dir, "summary.tsv");
+    const oversizedTimerMs = "2147000001";
+    const result = spawnSync(
+      "node",
+      [
+        scriptPath,
+        summary,
+        "oversized-timers",
+        "--",
+        "node",
+        "-e",
+        "setTimeout(() => process.exit(0), 25)",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS: oversizedTimerMs,
+          OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: oversizedTimerMs,
+          OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: oversizedTimerMs,
+        },
+        timeout: 5000,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("TimeoutOverflowWarning");
+    expect(readFileSync(summary, "utf8")).toMatch(
+      /^oversized-timers\t\d+\t[\d.]+\t\d+\t[\d.]+\t$/mu,
+    );
+  });
+
   it.runIf(process.platform === "linux")(
     "kills stubborn descendants after the timeout grace period",
     () => {

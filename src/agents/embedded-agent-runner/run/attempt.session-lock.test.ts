@@ -3,6 +3,7 @@ import { appendFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionTranscriptPathInDir } from "../../../config/sessions/paths.js";
 import {
@@ -172,6 +173,24 @@ describe("embedded attempt session lock lifecycle", () => {
     const symlinkOwner = await symlinkOwnerPromise;
     expect(symlinkOwnerAcquired).toBe(true);
     symlinkOwner.release();
+  });
+
+  it("clamps oversized session file owner wait timeouts before arming timers", async () => {
+    const sessionFile = await createTempSessionFile();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const firstOwner = await acquireEmbeddedAttemptSessionFileOwner({ sessionFile });
+    const secondOwnerPromise = acquireEmbeddedAttemptSessionFileOwner({
+      sessionFile,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+    });
+
+    await Promise.resolve();
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    firstOwner.release();
+    const secondOwner = await secondOwnerPromise;
+    secondOwner.release();
   });
 
   it("releases the coarse attempt lock before prompt submission and reacquires for cleanup", async () => {

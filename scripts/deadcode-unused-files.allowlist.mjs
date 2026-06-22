@@ -2,10 +2,6 @@
 // generated/build inputs, manifest-discovered plugin surfaces, live-test
 // helpers, or package bridge files that static production scanning cannot see.
 export const KNIP_UNUSED_FILE_ALLOWLIST = [
-  // Per-agent SQLite scaffold is intentionally ahead of mainline runtime callers.
-  // The pending SQLite session/runtime branch wires these files into production.
-  "src/agents/cache/agent-cache-store.sqlite.ts",
-  "src/agents/cache/agent-cache-store.ts",
   // Continuation-rail post-compaction release helper, extracted for testability
   // in isolation; agent-runner-execution.ts:154-238 still has inline
   // releaseQueuedCompactionCompletion implementation. TODO: refactor call-site
@@ -57,4 +53,5 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "ui/src/ui/browser-redact.ts",
   "extensions/qa-lab/src/auth-profile.fixture.ts",
   "extensions/qa-lab/src/codex-plugin.fixture.ts",
+  "extensions/qa-lab/src/mantis-phase-timer.runtime.ts",
 ];

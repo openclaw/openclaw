@@ -2,6 +2,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import {
   collectProdResolvedPackagesFromLockfile,
@@ -26,6 +27,7 @@ describe("pnpm-audit-prod", () => {
     expect(() => parseArgs(["--min-severity", "--audit-level", "critical"])).toThrow(
       "--min-severity requires a value",
     );
+    expect(() => parseArgs(["--min-severity", "-h"])).toThrow("--min-severity requires a value");
     expect(() => parseArgs(["--audit-level="])).toThrow("--audit-level requires a value");
   });
 
@@ -271,6 +273,32 @@ snapshots:
 
     await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
     expect(signal?.aborted).toBe(true);
+  });
+
+  it("clamps oversized bulk advisory request timers before scheduling", async () => {
+    let signal: AbortSignal | undefined;
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      fetchImpl: (async (_url, init) => {
+        signal = init?.signal ?? undefined;
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 25);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        });
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch,
+    });
+
+    await expect(request).resolves.toEqual({});
+    expect(signal?.aborted).toBe(false);
   });
 
   it("cancels stalled successful bulk advisory response bodies on request timeout", async () => {

@@ -30,10 +30,17 @@ function runNode(args: string[], env: NodeJS.ProcessEnv = {}) {
     const e = error as { stdout?: unknown; stderr?: unknown };
     return {
       ok: false,
-      stdout: Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf8") : String(e.stdout ?? ""),
-      stderr: Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : String(e.stderr ?? ""),
+      stdout: formatProcessOutput(e.stdout),
+      stderr: formatProcessOutput(e.stderr),
     };
   }
+}
+
+function formatProcessOutput(value: unknown): string {
+  if (Buffer.isBuffer(value)) {
+    return value.toString("utf8");
+  }
+  return typeof value === "string" ? value : "";
 }
 
 function runGit(args: string[], cwd?: string, env: NodeJS.ProcessEnv = {}) {
@@ -127,11 +134,17 @@ describe("scripts/android-release-signing.mjs", () => {
   it.each([
     ["--mode"],
     ["--mode", "--manifest"],
+    ["--mode", "-h"],
     ["--manifest"],
+    ["--manifest", "-h"],
     ["--workspace", "--mode"],
+    ["--workspace", "-h"],
     ["--materialized-dir", "--mode"],
+    ["--materialized-dir", "-h"],
     ["--keystore", "--mode"],
+    ["--keystore", "-h"],
     ["--properties", "--mode"],
+    ["--properties", "-h"],
   ])("rejects missing values for %s before release signing work", (...args) => {
     const result = runNode(args);
 

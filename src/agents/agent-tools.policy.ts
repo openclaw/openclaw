@@ -575,5 +575,3 @@ export function resolveGroupToolPolicy(params: {
   });
   return pickSandboxToolPolicy(configTools);
 }
-
-export { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";

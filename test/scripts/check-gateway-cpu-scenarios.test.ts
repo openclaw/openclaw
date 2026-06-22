@@ -105,7 +105,9 @@ describe("gateway CPU scenario guard", () => {
       "--cpu-core-warn",
       "--hot-wall-warn-ms",
     ]) {
-      expect(() => testing.parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+      for (const value of ["--skip-qa", "-h"]) {
+        expect(() => testing.parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
     }
   });
 

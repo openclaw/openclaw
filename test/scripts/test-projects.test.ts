@@ -3336,7 +3336,7 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(
       resolveChangedTestTargetPlan([
         "src/commands/doctor-memory-search.ts",
-        "src/memory-host-sdk/host/embedding-defaults.ts",
+        "packages/memory-host-sdk/src/host/embedding-defaults.ts",
       ]),
     ).toEqual({
       mode: "targets",

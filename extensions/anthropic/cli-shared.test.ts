@@ -10,10 +10,13 @@ import {
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
+const CLAUDE_CLI_DISALLOWED_TOOLS =
+  "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
+
 function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
   const disallowedIndex = args?.indexOf("--disallowedTools") ?? -1;
   expect(disallowedIndex).toBeGreaterThanOrEqual(0);
-  expect(args?.[disallowedIndex + 1]).toBe("ScheduleWakeup,CronCreate");
+  expect(args?.[disallowedIndex + 1]).toBe(CLAUDE_CLI_DISALLOWED_TOOLS);
 }
 
 describe("normalizeClaudePermissionArgs", () => {
@@ -381,5 +384,12 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("OTEL_METRICS_EXPORTER");
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
+  });
+
+  it("disables native background Bash and Monitor tools in args and resumeArgs", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expectDefaultDisallowedTools(backend.config.args);
+    expectDefaultDisallowedTools(backend.config.resumeArgs);
   });
 });
