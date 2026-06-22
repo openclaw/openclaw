@@ -96,10 +96,10 @@ if (hasAbortSignalAny && hasTimeoutInCompose && hasReplyOpInCompose && preflight
   console.log("Issue #95553 is resolved.");
 } else {
   console.log("=== VERDICT: FIX NOT FULLY APPLIED ===");
-  if (!hasAbortSignalAny) console.log("  - Missing AbortSignal.any compose");
-  if (!hasTimeoutInCompose) console.log("  - Missing config timeout in compose");
-  if (!hasReplyOpInCompose) console.log("  - Missing replyOp signal in compose");
-  if (hasBareOldSignal) console.log("  - Bare old signal still present");
-  if (!hasNewImport) console.log("  - Missing resolveCompactionTimeoutMs import");
-  if (allReplyOpOccurrences !== 2) console.log(`  - Unexpected replyOperation.abortSignal count: ${allReplyOpOccurrences}`);
+  if (!hasAbortSignalAny) { console.log("  - Missing AbortSignal.any compose"); }
+  if (!hasTimeoutInCompose) { console.log("  - Missing config timeout in compose"); }
+  if (!hasReplyOpInCompose) { console.log("  - Missing replyOp signal in compose"); }
+  if (hasBareOldSignal) { console.log("  - Bare old signal still present"); }
+  if (!hasNewImport) { console.log("  - Missing resolveCompactionTimeoutMs import"); }
+  if (allReplyOpOccurrences !== 2) { console.log(`  - Unexpected replyOperation.abortSignal count: ${allReplyOpOccurrences}`); }
 }
