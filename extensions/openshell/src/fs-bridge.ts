@@ -184,6 +184,22 @@ class OpenShellFsBridge implements SandboxFsBridge {
       );
     }
     if (path.resolve(from.mountHostRoot) === path.resolve(to.mountHostRoot)) {
+      const fromStats = await fromRoot.stat(fromRelativePath);
+      if (!fromStats.isDirectory && fromStats.nlink > 1) {
+        await moveBetweenRoots({
+          fromRoot,
+          fromRelativePath,
+          toRoot: fromRoot,
+          toRelativePath,
+          runRemoteRename: async () =>
+            await this.backend.renameRemotePath(
+              from.containerPath,
+              to.containerPath,
+              params.signal,
+            ),
+        });
+        return;
+      }
       await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
       await mkdirRootRelative(fromRoot, path.dirname(toRelativePath));
       await fromRoot.move(fromRelativePath, toRelativePath, { overwrite: true });

@@ -816,6 +816,47 @@ describe("openshell fs bridges", () => {
     await expectPathMissing(sourcePath);
   });
 
+  it("renames hardlinked local mirror files inside one writable mount root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    const sourcePath = path.join(workspaceDir, "source.txt");
+    await fs.writeFile(sourcePath, "payload", "utf8");
+    try {
+      await fs.link(sourcePath, path.join(workspaceDir, "other-link.txt"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+        workspaceAccess: "rw",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await bridge.rename({ from: "/sandbox/source.txt", to: "/sandbox/target.txt" });
+    await expect(fs.readFile(path.join(workspaceDir, "target.txt"), "utf8")).resolves.toBe(
+      "payload",
+    );
+    await expectPathMissing(sourcePath);
+    await expect(fs.readFile(path.join(workspaceDir, "other-link.txt"), "utf8")).resolves.toBe(
+      "payload",
+    );
+    expect(backend["renameRemotePath"]).toHaveBeenCalledWith(
+      "/sandbox/source.txt",
+      "/sandbox/target.txt",
+      undefined,
+    );
+  });
+
   it("rejects cross-root renames to a mount root before remote mutation", async () => {
     const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
     const agentWorkspaceDir = await makeTempDir("openclaw-openshell-agent-");
