@@ -193,6 +193,7 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     description: "Generate raster images with configured image providers.",
     transports: ["local"],
     flags: [
+      "--file",
       "--prompt",
       "--model",
       "--count",
@@ -2251,8 +2252,9 @@ export function registerCapabilityCli(program: Command) {
 
   image
     .command("generate")
-    .description("Generate images")
+    .description("Generate images from a prompt and optional input images")
     .requiredOption("--prompt <text>", "Prompt text")
+    .option("--file <path>", "Reference image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--count <n>", "Number of images")
     .option("--size <size>", "Size hint like 1024x1024")
@@ -2268,6 +2270,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
+        const files = Array.isArray(opts.file) ? (opts.file as string[]) : opts.file ? [String(opts.file)] : [];
         const result = await runImageGenerate({
           capability: "image.generate",
           prompt: String(opts.prompt),
@@ -2284,6 +2287,7 @@ export function registerCapabilityCli(program: Command) {
           ),
           openaiModeration: normalizeOpenAIModeration(opts.openaiModeration as string | undefined),
           quality: normalizeImageQuality(opts.quality as string | undefined),
+          file: files.length > 0 ? files : undefined,
           timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
           output: opts.output as string | undefined,
         });
