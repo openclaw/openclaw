@@ -1,15 +1,14 @@
-import { appRouter, getVisibleRouteId, routeLoadContext, startAppRouter } from "../app-routes.ts";
-import type { SettingsHost } from "../app/app-host.ts";
+import {
+  appRouter,
+  type ApplicationContext,
+  createApplicationContext,
+  startAppRouter,
+} from "../app-routes.ts";
 import { createBrowserHistory } from "../app/browser.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
 import { stopLogsPolling, stopNodesPolling, stopDebugPolling } from "./app-polling.ts";
-import {
-  observeTopbar,
-  scheduleActivityScroll,
-  scheduleChatScroll,
-  scheduleLogsScroll,
-} from "./app-scroll.ts";
+import { observeTopbar } from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
   detachThemeListener,
@@ -87,10 +86,14 @@ type LifecycleHost = {
   controlUiBootstrapReady?: Promise<void> | null;
   topbarObserver: ResizeObserver | null;
   requestUpdate?: () => void;
-  sessionLocationSubscription?: () => void;
 };
 
-export function handleConnected(host: LifecycleHost) {
+export function handleConnected(
+  host: LifecycleHost,
+  application = createApplicationContext(
+    host as unknown as Parameters<typeof createApplicationContext>[0],
+  ),
+) {
   const connectGeneration = ++host.connectGeneration;
   host.basePath = inferBasePath();
   const history = createBrowserHistory();
@@ -111,14 +114,13 @@ export function handleConnected(host: LifecycleHost) {
     host.chatComposerProvisionalRestore = null;
   }
   syncThemeWithSettings(host as unknown as Parameters<typeof syncThemeWithSettings>[0]);
-  host.sessionLocationSubscription = history.listen(() =>
-    syncSessionWithLocation(host as unknown as Parameters<typeof syncSessionWithLocation>[0]),
-  );
   if (host.connectGeneration === connectGeneration) {
     connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
   }
   void Promise.resolve(
-    startAppRouter(history, host.basePath, routeLoadContext(host as unknown as SettingsHost)),
+    startAppRouter(history, host.basePath, application.routeLoadContext, () =>
+      syncSessionWithLocation(host as unknown as Parameters<typeof syncSessionWithLocation>[0]),
+    ),
   ).catch(() => undefined);
   host.controlUiResponsivenessObserver ??= startControlUiResponsivenessObserver(
     host as unknown as Parameters<typeof startControlUiResponsivenessObserver>[0],
@@ -192,8 +194,6 @@ function clearPendingSessionsChangedReload(host: LifecycleHost) {
 
 export function handleDisconnected(host: LifecycleHost) {
   host.connectGeneration += 1;
-  host.sessionLocationSubscription?.();
-  host.sessionLocationSubscription = undefined;
   appRouter.stop();
   flushPendingChatComposerPersistence(host);
   stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]);
@@ -228,12 +228,15 @@ export function handleDisconnected(host: LifecycleHost) {
   host.controlUiResponsivenessObserver = null;
 }
 
-export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
-  const routeId = getVisibleRouteId();
+export function handleUpdated(
+  host: LifecycleHost,
+  changed: Map<PropertyKey, unknown>,
+  application = createApplicationContext(
+    host as unknown as Parameters<typeof createApplicationContext>[0],
+  ),
+) {
   if (changed.has("connected") && host.connected) {
-    void appRouter
-      .revalidate(routeLoadContext(host as unknown as SettingsHost))
-      .catch(() => undefined);
+    void appRouter.revalidate(application.routeLoadContext).catch(() => undefined);
   }
   if (changed.has("chatQueue")) {
     clearPendingChatComposerPersistence(host);
@@ -246,47 +249,8 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
   } else if (changed.has("chatMessage")) {
     scheduleChatComposerDraftPersistence(host);
   }
-  if (routeId === "chat" && host.chatManualRefreshInFlight) {
-    return;
-  }
-  if (
-    routeId === "chat" &&
-    (changed.has("chatMessages") ||
-      changed.has("chatToolMessages") ||
-      changed.has("chatStream") ||
-      changed.has("chatLoading") ||
-      changed.has("realtimeTalkConversation"))
-  ) {
-    const forcedByLoad =
-      changed.has("chatLoading") && changed.get("chatLoading") === true && !host.chatLoading;
-    // Detect streaming start: chatStream changed from null/undefined to a string value
-    const previousStream = changed.get("chatStream") as string | null | undefined;
-    const streamJustStarted =
-      changed.has("chatStream") &&
-      (previousStream === null || previousStream === undefined) &&
-      typeof host.chatStream === "string";
-    scheduleChatScroll(
-      host as unknown as Parameters<typeof scheduleChatScroll>[0],
-      forcedByLoad || streamJustStarted || !host.chatHasAutoScrolled,
-    );
-  }
-  if (routeId === "logs" && (changed.has("logsEntries") || changed.has("logsAutoFollow"))) {
-    if (host.logsAutoFollow && host.logsAtBottom) {
-      scheduleLogsScroll(
-        host as unknown as Parameters<typeof scheduleLogsScroll>[0],
-        changed.has("logsAutoFollow"),
-      );
-    }
-  }
-  if (
-    routeId === "activity" &&
-    (changed.has("activityEntries") || changed.has("activityAutoFollow"))
-  ) {
-    if (host.activityAutoFollow && host.activityAtBottom) {
-      scheduleActivityScroll(
-        host as unknown as Parameters<typeof scheduleActivityScroll>[0],
-        changed.has("activityAutoFollow"),
-      );
-    }
-  }
+  application.notifyStateChange(
+    host as unknown as Parameters<ApplicationContext["notifyStateChange"]>[0],
+    changed,
+  );
 }

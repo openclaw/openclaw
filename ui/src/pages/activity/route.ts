@@ -52,5 +52,14 @@ export const page = definePage({
           },
           onScroll: (event) => state.handleActivityScroll(event),
         }),
+      onStateChange: ({ state }: ActivityRenderContext, changed) => {
+        if (
+          state.activityAutoFollow &&
+          state.activityAtBottom &&
+          (changed.has("activityEntries") || changed.has("activityAutoFollow"))
+        ) {
+          state.scheduleActivityScroll(changed.has("activityAutoFollow"));
+        }
+      },
     })),
 });

@@ -2,8 +2,7 @@ import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
 // Control UI module implements app behavior.
 import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/control-ui-contract.js";
-import { appRouter, getVisibleRouteId, routeLoadContext, type RouteId } from "../app-routes.ts";
-import type { SettingsHost } from "../app/app-host.ts";
+import { createApplicationContext, type ApplicationContext } from "../app-routes.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import { loadCron as loadCronPage, loadOverview as loadOverviewPage } from "../pages/loaders.ts";
 import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
@@ -110,10 +109,7 @@ import {
   type ExecApprovalRequest,
 } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
-import {
-  loadSkillWorkshopProposals,
-  type SkillWorkshopState,
-} from "./controllers/skill-workshop.ts";
+import { type SkillWorkshopState } from "./controllers/skill-workshop.ts";
 import type {
   ClawHubSearchResult,
   ClawHubSkillSecurityVerdict,
@@ -215,6 +211,9 @@ function resolveOnboardingMode(): boolean {
 
 export class OpenClawApp extends LitElement {
   readonly i18nController = new I18nController(this);
+  readonly applicationContext: ApplicationContext = createApplicationContext(
+    this as unknown as Parameters<typeof createApplicationContext>[0],
+  );
   clientInstanceId = generateUUID();
   connectGeneration = 0;
 
@@ -880,7 +879,10 @@ export class OpenClawApp extends LitElement {
     this.addEventListener("pointerout", this.nativeTitleTooltipPointerOutHandler);
     this.addEventListener("focusin", this.nativeTitleTooltipFocusInHandler);
     this.addEventListener("focusout", this.nativeTitleTooltipFocusOutHandler);
-    handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
+    handleConnected(
+      this as unknown as Parameters<typeof handleConnected>[0],
+      this.applicationContext,
+    );
     this.nativeBridgeCleanup = initNativeBridge(this);
     void this.initWebPushState();
   }
@@ -918,18 +920,12 @@ export class OpenClawApp extends LitElement {
   }
 
   protected override updated(changed: Map<PropertyKey, unknown>) {
-    handleUpdated(this as unknown as Parameters<typeof handleUpdated>[0], changed);
+    handleUpdated(
+      this as unknown as Parameters<typeof handleUpdated>[0],
+      changed,
+      this.applicationContext,
+    );
     refreshActiveFloatingTooltip(this);
-    // Some render callbacks assign the active route while preparing nested panel state.
-    if (getVisibleRouteId() !== "chat" && this.chatMobileControlsOpen) {
-      this.setChatMobileControlsOpen(false);
-    }
-    if (
-      getVisibleRouteId() === "skill-workshop" &&
-      (changed.has("sessionKey") || changed.has("assistantAgentId"))
-    ) {
-      void loadSkillWorkshopProposals(this, { force: true });
-    }
     if (!changed.has("sessionKey") || this.agentsPanel !== "tools") {
       return;
     }
@@ -1019,38 +1015,6 @@ export class OpenClawApp extends LitElement {
       this as unknown as Parameters<typeof applyLocalUserIdentityInternal>[0],
       next,
     );
-  }
-
-  setRoute(next: RouteId) {
-    const location = {
-      pathname: appRouter.pathForRoute(next, this.basePath),
-      search:
-        next === "chat" && this.sessionKey ? `?session=${encodeURIComponent(this.sessionKey)}` : "",
-      hash: "",
-    };
-    const routeState = appRouter.getState();
-    const activeMatch = routeState.matches[0];
-    const revalidate = routeState.status === "success" && activeMatch?.routeId === next;
-    const browserLocation = typeof window === "undefined" ? null : window.location;
-    const sameLocation =
-      (browserLocation?.pathname ?? routeState.resolvedLocation?.pathname) === location.pathname &&
-      (browserLocation?.search ?? routeState.resolvedLocation?.search) === location.search &&
-      (browserLocation?.hash ?? routeState.resolvedLocation?.hash) === location.hash;
-    void appRouter
-      .navigate(
-        next,
-        routeLoadContext(this as unknown as SettingsHost),
-        {
-          history: revalidate && sameLocation ? "none" : "push",
-          revalidate,
-        },
-        location,
-      )
-      .catch(() => undefined);
-    if (next !== "chat") {
-      this.setChatMobileControlsOpen(false);
-    }
-    this.navDrawerOpen = false;
   }
 
   setChatMobileControlsOpen(
@@ -1725,7 +1689,7 @@ export class OpenClawApp extends LitElement {
   }
 
   override render() {
-    return renderApp(this as unknown as AppViewState);
+    return renderApp(this as unknown as AppViewState, this.applicationContext);
   }
 }
 

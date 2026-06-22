@@ -163,6 +163,7 @@ export function renderRouteNavItem(
     activeRouteId?: RouteId;
     collapsed?: boolean;
     onNavigate?: (routeId: RouteId) => void;
+    preloadRoute?: (routeId: RouteId) => Promise<void>;
   },
 ) {
   const href = pathForRoute(routeId, state.basePath);
@@ -182,9 +183,11 @@ export function renderRouteNavItem(
     }
     const start = () => {
       routePreloadTimers.delete(target);
-      void appRouter
-        .preloadRoute(routeId, routeLoadContext(state as unknown as SettingsHost))
-        .catch(() => undefined);
+      void (
+        opts?.preloadRoute ??
+        ((nextRouteId: RouteId) =>
+          appRouter.preloadRoute(nextRouteId, routeLoadContext(state as unknown as SettingsHost)))
+      )(routeId).catch(() => undefined);
     };
     if (immediate) {
       start();

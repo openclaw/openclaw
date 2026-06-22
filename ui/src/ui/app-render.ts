@@ -5,12 +5,11 @@ import { SIDEBAR_SECTIONS, subtitleForRoute, titleForRoute } from "../app-naviga
 import {
   appRouter,
   pathForRoute,
-  routeLoadContext,
   resolveAppNotFound,
+  type ApplicationContext,
   type AppRouteModule,
   type RouteId,
 } from "../app-routes.ts";
-import type { SettingsHost } from "../app/app-host.ts";
 import {
   renderRouterOutlet,
   routerOutlet,
@@ -293,24 +292,22 @@ function dismissUpdateBanner(updateAvailable: unknown) {
   }
 }
 
-export function renderApp(state: AppViewState) {
+export function renderApp(state: AppViewState, application: ApplicationContext) {
   if (!state.connected) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
   const context = {
     state,
-    navigate: (routeId: RouteId) => state.setRoute(routeId),
+    navigate: application.navigate,
   };
   return routerOutlet(
     appRouter,
     context,
     {
       onNotFound: () =>
-        void resolveAppNotFound(routeLoadContext(state as unknown as SettingsHost)).catch(
-          () => undefined,
-        ),
+        void resolveAppNotFound(application.routeLoadContext).catch(() => undefined),
     },
-    (selection) => renderConnectedApp(context, selection),
+    (selection) => renderConnectedApp(context, application, selection),
   );
 }
 
@@ -319,6 +316,7 @@ function renderConnectedApp(
     state: AppViewState;
     navigate: (routeId: RouteId) => void;
   },
+  application: ApplicationContext,
   routeView: RouterOutletSelection<RouteId, AppRouteModule, unknown>,
 ) {
   const { state, navigate } = context;
@@ -342,7 +340,7 @@ function renderConnectedApp(
     "header" in activeRouteModule &&
     activeRouteModule.header === true;
   const routedPage = renderRouterOutlet(appRouter, context, routeView, {
-    retryContext: routeLoadContext(state as unknown as SettingsHost),
+    retryContext: application.routeLoadContext,
   });
   const headerError = !isChat && state.lastError !== state.chatError ? state.lastError : null;
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
@@ -518,6 +516,7 @@ function renderConnectedApp(
                             activeRouteId: renderedRouteId,
                             collapsed: navCollapsed,
                             onNavigate: navigate,
+                            preloadRoute: application.preload,
                           }),
                         )}
                       </div>

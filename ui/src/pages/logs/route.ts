@@ -51,6 +51,18 @@ export const page = definePage({
         </section>
       `,
       header: true,
+      onStateChange: ({ state }: LogsRenderContext, changed) => {
+        if (
+          state.logsAutoFollow &&
+          state.logsAtBottom &&
+          (changed.has("logsEntries") || changed.has("logsAutoFollow"))
+        ) {
+          scheduleLogsScroll(
+            state as unknown as Parameters<typeof scheduleLogsScroll>[0],
+            changed.has("logsAutoFollow"),
+          );
+        }
+      },
     })),
   loader: async ({ host, app }: LogsLoadContext) => {
     await loadLogs(app, { reset: true });

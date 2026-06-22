@@ -51,14 +51,12 @@ describe("handleDisconnected", () => {
 
   it("stops and clears gateway client on teardown", () => {
     const host = createHost();
-    const sessionLocationSubscription = host.sessionLocationSubscription;
     const disconnectSpy = (
       host.topbarObserver as unknown as { disconnect: ReturnType<typeof vi.fn> }
     ).disconnect;
 
     handleDisconnected(host as unknown as Parameters<typeof handleDisconnected>[0]);
 
-    expect(sessionLocationSubscription).toHaveBeenCalledTimes(1);
     expect(host.connectGeneration).toBe(1);
     expect(host.client).toBeNull();
     expect(host.connected).toBe(false);

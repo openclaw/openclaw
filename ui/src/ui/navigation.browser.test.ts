@@ -699,7 +699,7 @@ describe("control UI routing", () => {
     await app.updateComplete;
     expect(app.chatMobileControlsOpen).toBe(true);
 
-    app.setRoute("channels");
+    app.applicationContext.navigate("channels");
     await app.updateComplete;
     expect(app.chatMobileControlsOpen).toBe(false);
   });
@@ -740,7 +740,7 @@ describe("control UI routing", () => {
     expect(topbar.hasAttribute("aria-hidden")).toBe(false);
     expect(app.querySelector(".content-header")).toBeNull();
 
-    app.setRoute("channels");
+    app.applicationContext.navigate("channels");
 
     await app.updateComplete;
     expect(getVisibleRouteId()).toBe("channels");
@@ -759,6 +759,7 @@ describe("control UI routing", () => {
     chatRow.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
+    await nextFrame();
     expect(getVisibleRouteId()).toBe("chat");
     expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
     expect(topbar.hasAttribute("inert")).toBe(false);

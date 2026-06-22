@@ -17,7 +17,6 @@ const {
 }));
 
 vi.mock("../app-routes.ts", () => ({
-  getVisibleRouteId: vi.fn(() => "chat"),
   startAppRouter: appRouterStartMock,
   appRouter: {
     subscribe: vi.fn(() => vi.fn()),
@@ -26,7 +25,12 @@ vi.mock("../app-routes.ts", () => ({
     start: appRouterStartMock,
     stop: vi.fn(),
   },
-  routeLoadContext: (host: unknown) => host,
+  createApplicationContext: (host: unknown) => ({
+    routeLoadContext: host,
+    navigate: vi.fn(),
+    preload: vi.fn(),
+    notifyStateChange: vi.fn(),
+  }),
 }));
 
 vi.mock("./app-gateway.ts", () => ({
@@ -61,14 +65,9 @@ vi.mock("./app-polling.ts", () => ({
 
 vi.mock("./app-scroll.ts", () => ({
   observeTopbar: vi.fn(),
-  scheduleChatScroll: vi.fn(),
-  scheduleLogsScroll: vi.fn(),
 }));
 
-import { handleConnected, handleUpdated } from "./app-lifecycle.ts";
-import { scheduleChatScroll } from "./app-scroll.ts";
-
-const scheduleChatScrollMock = vi.mocked(scheduleChatScroll);
+import { handleConnected } from "./app-lifecycle.ts";
 
 function createDeferred() {
   let resolve: (() => void) | undefined;
@@ -121,7 +120,6 @@ describe("handleConnected", () => {
     appRouterStartMock.mockReset();
     restoreComposerMock.mockReset();
     restoreComposerMock.mockReturnValue(false);
-    scheduleChatScrollMock.mockReset();
     vi.stubGlobal("window", {
       addEventListener: vi.fn(),
       location: { pathname: "/chat", search: "", hash: "" },
@@ -221,7 +219,12 @@ describe("handleConnected", () => {
     const chatHost = createHost();
 
     handleConnected(chatHost as never);
-    expect(appRouterStartMock).toHaveBeenCalledWith(expect.anything(), chatHost.basePath, chatHost);
+    expect(appRouterStartMock).toHaveBeenCalledWith(
+      expect.anything(),
+      chatHost.basePath,
+      chatHost,
+      expect.any(Function),
+    );
 
     const nodesHost = createHost();
     handleConnected(nodesHost as never);
@@ -230,17 +233,5 @@ describe("handleConnected", () => {
     const logsHost = createHost();
     handleConnected(logsHost as never);
     expect(appRouterStartMock).toHaveBeenCalledTimes(3);
-  });
-
-  it("keeps realtime Talk turns pinned in the chat flow", () => {
-    const host = createHost();
-    host.chatStream = null;
-
-    handleUpdated(
-      host as unknown as Parameters<typeof handleUpdated>[0],
-      new Map<PropertyKey, unknown>([["realtimeTalkConversation", []]]),
-    );
-
-    expect(scheduleChatScrollMock).toHaveBeenCalledWith(host, true);
   });
 });

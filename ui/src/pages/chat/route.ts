@@ -20,6 +20,7 @@ import {
   resolveAssistantAttachmentAuthToken,
   switchChatSession,
 } from "../../ui/app-render.helpers.ts";
+import { scheduleChatScroll } from "../../ui/app-scroll.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadSessions } from "../../ui/controllers/sessions.ts";
 import {
@@ -231,5 +232,30 @@ export const page = definePage({
         assistantAttachmentAuthToken: resolveAssistantAttachmentAuthToken(state),
         basePath: state.basePath ?? "",
       }),
+    onStateChange: ({ state }: ChatRenderContext, changed) => {
+      if (state.chatManualRefreshInFlight) {
+        return;
+      }
+      if (
+        !changed.has("chatMessages") &&
+        !changed.has("chatToolMessages") &&
+        !changed.has("chatStream") &&
+        !changed.has("chatLoading") &&
+        !changed.has("realtimeTalkConversation")
+      ) {
+        return;
+      }
+      const forcedByLoad =
+        changed.has("chatLoading") && changed.get("chatLoading") === true && !state.chatLoading;
+      const previousStream = changed.get("chatStream") as string | null | undefined;
+      const streamJustStarted =
+        changed.has("chatStream") &&
+        (previousStream === null || previousStream === undefined) &&
+        typeof state.chatStream === "string";
+      scheduleChatScroll(
+        state as unknown as Parameters<typeof scheduleChatScroll>[0],
+        forcedByLoad || streamJustStarted || !state.chatHasAutoScrolled,
+      );
+    },
   }),
 });

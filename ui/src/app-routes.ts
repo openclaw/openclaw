@@ -27,6 +27,22 @@ export type RouteLoadContext = {
   app: SettingsAppHost;
 };
 
+type ApplicationHost = SettingsHost & {
+  navDrawerOpen: boolean;
+  sessionKey: string;
+  setChatMobileControlsOpen: (
+    open: boolean,
+    options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
+  ) => void;
+};
+
+export type ApplicationContext = {
+  routeLoadContext: RouteLoadContext;
+  navigate: (routeId: RouteId) => void;
+  preload: (routeId: RouteId) => Promise<void>;
+  notifyStateChange: (state: AppViewState, changed: ReadonlyMap<PropertyKey, unknown>) => void;
+};
+
 export type RouteRenderContext = {
   state: AppViewState;
   navigate: (routeId: RouteId) => void;
@@ -38,6 +54,7 @@ export function routeLoadContext(host: SettingsHost): RouteLoadContext {
 
 export type AppRouteModule = {
   render: (context: RouteRenderContext, data: unknown) => unknown;
+  onStateChange?: (context: RouteRenderContext, changed: ReadonlyMap<PropertyKey, unknown>) => void;
   shell?: "chat" | "page";
   header?: boolean;
   contentClass?: string;
@@ -75,6 +92,44 @@ export const appRouter = createRouter<RouteId, RouteLoadContext, AppRouteModule>
   routes: appRoutes,
 });
 
+export function createApplicationContext(host: SettingsHost): ApplicationContext {
+  const applicationHost = host as ApplicationHost;
+  const loadContext = routeLoadContext(host);
+  const navigate = (next: RouteId) => {
+    const location = {
+      pathname: appRouter.pathForRoute(next, host.basePath),
+      search:
+        next === "chat" && applicationHost.sessionKey
+          ? `?session=${encodeURIComponent(applicationHost.sessionKey)}`
+          : "",
+      hash: "",
+    };
+    const currentLocation = appRouter.getState().location;
+    const sameLocation =
+      currentLocation.pathname === location.pathname &&
+      currentLocation.search === location.search &&
+      currentLocation.hash === location.hash;
+    void appRouter
+      .navigate(next, loadContext, { history: sameLocation ? "none" : "push" }, location)
+      .catch(() => undefined);
+    if (next !== "chat") {
+      applicationHost.setChatMobileControlsOpen(false);
+    }
+    applicationHost.navDrawerOpen = false;
+  };
+  return {
+    routeLoadContext: loadContext,
+    navigate,
+    preload: (routeId) => appRouter.preloadRoute(routeId, loadContext),
+    notifyStateChange: (state, changed) => {
+      const active = appRouter.getState().matches[0]?.module;
+      if (active && "onStateChange" in active && typeof active.onStateChange === "function") {
+        active.onStateChange({ state, navigate }, changed);
+      }
+    },
+  };
+}
+
 export function normalizeBasePath(basePath: string): string {
   return normalizeRouteBasePath(basePath);
 }
@@ -107,6 +162,7 @@ export function startAppRouter(
   history: RouterHistory,
   basePath: string,
   context: RouteLoadContext,
+  onLocation?: (location: RouteLocation) => void,
 ): Promise<void> {
   const resolveLocation = (location: RouteLocation): RouteLocation => {
     if (routeIdFromPath(location.pathname, basePath) !== null) {
@@ -123,7 +179,12 @@ export function startAppRouter(
     location: () => resolveLocation(history.location()),
     push: history.push,
     replace: history.replace,
-    listen: (listener) => history.listen((location) => listener(resolveLocation(location))),
+    listen: (listener) =>
+      history.listen((location) => {
+        const resolvedLocation = resolveLocation(location);
+        onLocation?.(resolvedLocation);
+        listener(resolvedLocation);
+      }),
   };
   return appRouter.start(appHistory, basePath, context);
 }
