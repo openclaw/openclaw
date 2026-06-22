@@ -13,7 +13,14 @@ const NATIVE_KIMI_TOOL_CALL_ID_RE = /^functions\.[A-Za-z0-9_-]+:\d+$/;
 const OPENAI_TOOL_CALL_ID_RE = /^call_[A-Za-z0-9_-]+$/;
 
 const STRICT9_LEN = 9;
-const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+const TOOL_CALL_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
 
 type ToolCallLike = {
   id: string;
@@ -23,6 +30,11 @@ type ToolCallLike = {
 type ReplaySafeToolCallBlock = {
   type?: unknown;
   id?: unknown;
+  call_id?: unknown;
+  toolCallId?: unknown;
+  toolUseId?: unknown;
+  tool_call_id?: unknown;
+  tool_use_id?: unknown;
   name?: unknown;
   input?: unknown;
   arguments?: unknown;
@@ -62,6 +74,26 @@ export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"):
   return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
 }
 
+function getToolCallBlockId(block: ReplaySafeToolCallBlock): string | undefined {
+  for (const candidate of [
+    block.id,
+    block.call_id,
+    block.toolCallId,
+    block.toolUseId,
+    block.tool_call_id,
+    block.tool_use_id,
+  ]) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const trimmed = candidate.trim();
+    if (trimmed) {
+      return trimmed;
+    }
+  }
+  return undefined;
+}
+
 export function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
@@ -75,16 +107,18 @@ export function extractToolCallsFromAssistant(
     if (!block || typeof block !== "object") {
       continue;
     }
-    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (typeof rec.id !== "string" || !rec.id) {
+    const rec = block as ReplaySafeToolCallBlock;
+    if (typeof rec.type !== "string" || !TOOL_CALL_TYPES.has(rec.type)) {
       continue;
     }
-    if (typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type)) {
-      toolCalls.push({
-        id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
-      });
+    const id = getToolCallBlockId(rec);
+    if (!id) {
+      continue;
     }
+    toolCalls.push({
+      id,
+      name: typeof rec.name === "string" ? rec.name : undefined,
+    });
   }
   return toolCalls;
 }
@@ -170,7 +204,7 @@ function isReplaySafeThinkingAssistantMessage(
       continue;
     }
     sawToolCall = true;
-    const toolCallId = typeof typedBlock.id === "string" ? typedBlock.id.trim() : "";
+    const toolCallId = getToolCallBlockId(typedBlock) ?? "";
     if (
       !hasToolCallInput(typedBlock) ||
       !toolCallId ||
@@ -408,14 +442,13 @@ function rewriteAssistantToolCallIds(params: {
     if (!block || typeof block !== "object") {
       return block;
     }
-    const rec = block as { type?: unknown; id?: unknown };
+    const rec = block as ReplaySafeToolCallBlock;
     const type = rec.type;
-    const id = rec.id;
-    if (
-      (type !== "functionCall" && type !== "toolUse" && type !== "toolCall") ||
-      typeof id !== "string" ||
-      !id
-    ) {
+    if (typeof type !== "string" || !TOOL_CALL_TYPES.has(type)) {
+      return block;
+    }
+    const id = getToolCallBlockId(rec);
+    if (!id) {
       return block;
     }
     const nextId = params.resolveId(id);
@@ -423,7 +456,23 @@ function rewriteAssistantToolCallIds(params: {
       return block;
     }
     changed = true;
-    return Object.assign({}, block as unknown as Record<string, unknown>, { id: nextId });
+    const nextBlock = { ...(block as Record<string, unknown>) };
+    if (typeof rec.id === "string" && rec.id.trim()) {
+      nextBlock.id = nextId;
+    } else if (typeof rec.call_id === "string" && rec.call_id.trim()) {
+      nextBlock.call_id = nextId;
+    } else if (typeof rec.toolCallId === "string" && rec.toolCallId.trim()) {
+      nextBlock.toolCallId = nextId;
+    } else if (typeof rec.toolUseId === "string" && rec.toolUseId.trim()) {
+      nextBlock.toolUseId = nextId;
+    } else if (typeof rec.tool_call_id === "string" && rec.tool_call_id.trim()) {
+      nextBlock.tool_call_id = nextId;
+    } else if (typeof rec.tool_use_id === "string" && rec.tool_use_id.trim()) {
+      nextBlock.tool_use_id = nextId;
+    } else {
+      nextBlock.id = nextId;
+    }
+    return nextBlock;
   });
 
   if (!changed) {
@@ -436,30 +485,44 @@ function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
   resolveId: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {
-  const toolCallId =
-    typeof params.message.toolCallId === "string" && params.message.toolCallId
-      ? params.message.toolCallId
-      : undefined;
-  const toolUseId = (params.message as { toolUseId?: unknown }).toolUseId;
-  const toolUseIdStr = typeof toolUseId === "string" && toolUseId ? toolUseId : undefined;
-  const sharedRawId =
-    toolCallId && toolUseIdStr && toolCallId === toolUseIdStr ? toolCallId : undefined;
-
-  const sharedResolvedId = sharedRawId ? params.resolveId(sharedRawId) : undefined;
-  const nextToolCallId =
-    sharedResolvedId ?? (toolCallId ? params.resolveId(toolCallId) : undefined);
-  const nextToolUseId =
-    sharedResolvedId ?? (toolUseIdStr ? params.resolveId(toolUseIdStr) : undefined);
-
-  if (nextToolCallId === toolCallId && nextToolUseId === toolUseIdStr) {
+  const record = params.message as Extract<AgentMessage, { role: "toolResult" }> & {
+    toolUseId?: unknown;
+    tool_call_id?: unknown;
+    tool_use_id?: unknown;
+    callId?: unknown;
+    call_id?: unknown;
+  };
+  const rawEntries = [
+    ["toolCallId", record.toolCallId],
+    ["toolUseId", record.toolUseId],
+    ["tool_call_id", record.tool_call_id],
+    ["tool_use_id", record.tool_use_id],
+    ["callId", record.callId],
+    ["call_id", record.call_id],
+  ] as const;
+  const presentEntries = rawEntries.filter(
+    (entry): entry is [(typeof rawEntries)[number][0], string] =>
+      typeof entry[1] === "string" && entry[1].trim().length > 0,
+  );
+  if (presentEntries.length === 0) {
     return params.message;
   }
 
-  return {
-    ...params.message,
-    ...(nextToolCallId && { toolCallId: nextToolCallId }),
-    ...(nextToolUseId && { toolUseId: nextToolUseId }),
-  } as Extract<AgentMessage, { role: "toolResult" }>;
+  const uniqueRawIds = [...new Set(presentEntries.map(([, value]) => value.trim()))];
+  const resolvedByRawId = new Map(uniqueRawIds.map((rawId) => [rawId, params.resolveId(rawId)]));
+
+  let changed = false;
+  const nextMessage = { ...(params.message as Record<string, unknown>) };
+  for (const [key, rawValue] of presentEntries) {
+    const trimmed = rawValue.trim();
+    const nextId = resolvedByRawId.get(trimmed) ?? trimmed;
+    if (nextId !== rawValue) {
+      changed = true;
+      nextMessage[key] = nextId;
+    }
+  }
+
+  return changed ? (nextMessage as Extract<AgentMessage, { role: "toolResult" }>) : params.message;
 }
 
 /**
