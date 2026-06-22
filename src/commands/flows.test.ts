@@ -134,7 +134,12 @@ describe("flows commands", () => {
         flows: [
           {
             ...jsonRoundTrip(flow),
-            tasks: [jsonRoundTrip(childTask)],
+            tasks: [
+              {
+                ...jsonRoundTrip(childTask),
+                lastEventAt: expect.any(Number),
+              },
+            ],
             taskSummary: {
               total: 1,
               active: 1,

@@ -248,6 +248,8 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
+  loadSessionStore: () => state.sessionStoreMock ?? {},
+  resolveStorePath: () => state.storePathMock ?? "/tmp/sessions.json",
   resolveAgentIdFromSessionKey: () => "default",
   mergeSessionEntry: (a: unknown, b: unknown) => ({ ...(a as object), ...(b as object) }),
   updateSessionStore: vi.fn(
@@ -278,6 +280,7 @@ vi.mock("../infra/agent-events.js", () => ({
   captureAgentRunLifecycleGeneration: () => "test-generation",
   clearAgentRunContext: (...args: unknown[]) => state.clearAgentRunContextMock(...args),
   emitAgentEvent: (...args: unknown[]) => state.emitAgentEventMock(...args),
+  getAgentRunContext: vi.fn(() => null),
   getAgentEventLifecycleGeneration: () => "test-generation",
   onAgentEvent: vi.fn(),
   registerAgentRunContext: (...args: unknown[]) => state.registerAgentRunContextMock(...args),

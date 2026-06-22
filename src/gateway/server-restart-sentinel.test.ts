@@ -196,6 +196,8 @@ vi.mock("../infra/session-delivery-queue.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
+  loadSessionStore: vi.fn(() => ({})),
+  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
   resolveMainSessionKeyFromConfig: mocks.resolveMainSessionKeyFromConfig,
 }));
 

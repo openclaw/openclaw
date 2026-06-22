@@ -492,6 +492,7 @@ vi.mock("../../bindings/records.js", () => ({
 }));
 vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
+  getAgentRunContext: vi.fn(() => null),
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
 }));
 vi.mock("../../plugins/conversation-binding.js", () => ({

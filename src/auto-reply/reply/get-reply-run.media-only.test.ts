@@ -50,6 +50,7 @@ vi.mock("../../globals.js", () => ({
 
 vi.mock("../../process/command-queue.js", () => ({
   clearCommandLane: vi.fn().mockReturnValue(0),
+  getTotalQueueSize: vi.fn().mockReturnValue(0),
   getQueueSize: vi.fn().mockReturnValue(0),
 }));
 

@@ -26,6 +26,7 @@ const agentEventMocks = vi.hoisted(() => {
       }
     }),
     getAgentEventLifecycleGeneration: vi.fn(() => "test-generation"),
+    getAgentRunContext: vi.fn(() => null),
     onAgentEvent: vi.fn((handler: (event: AgentEvent) => void) => {
       handlers.add(handler);
       return () => handlers.delete(handler);

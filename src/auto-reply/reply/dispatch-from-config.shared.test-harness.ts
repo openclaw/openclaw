@@ -278,6 +278,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => ({
 }));
 vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
+  getAgentRunContext: vi.fn(() => null),
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
 }));
 vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
