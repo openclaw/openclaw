@@ -44,7 +44,6 @@ vi.mock("playwright-core", () => ({
 }));
 
 import {
-  closeAllQaWebSessions,
   closeQaWebSessions,
   qaWebEvaluate,
   qaWebOpenPage,
@@ -114,7 +113,7 @@ describe("qa web runtime", () => {
     });
     const snapshot = await qaWebSnapshot({ pageId: opened.pageId, maxChars: 5 });
     const evaluated = await qaWebEvaluate({ pageId: opened.pageId, expression: "'ok'" });
-    await closeAllQaWebSessions();
+    await closeQaWebSessions();
 
     const launchOptions = requireLaunchOptions();
     expect(launchOptions?.channel).toBe("chrome");
@@ -144,7 +143,7 @@ describe("qa web runtime", () => {
     );
     const snapshot = await qaWebSnapshot({ pageId: second.pageId });
     expect(snapshot.text).toBe("hello from body");
-    await closeAllQaWebSessions();
+    await closeQaWebSessions();
   });
 
   it("caps oversized web runtime timeouts", async () => {
@@ -166,7 +165,7 @@ describe("qa web runtime", () => {
         expression: "'ok'",
         timeoutMs: Number.MAX_SAFE_INTEGER,
       });
-      await closeAllQaWebSessions();
+      await closeQaWebSessions();
 
       expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", {
         waitUntil: "domcontentloaded",
