@@ -13,10 +13,13 @@ import {
   QA_MATURITY_SCORE_LABEL_BANDS,
   activeQaMaturityTaxonomySurfaces,
   qaMaturityFamilyOrder,
+  qaMaturityCoverageCategoryKey,
+  qaMaturityScoreObjectForScore,
   qaMaturityTaxonomyLevelMap,
   parseQaMaturityTaxonomy,
   parseQaMaturityScores,
   validateQaMaturityScoresAgainstTaxonomy,
+  type QaMaturityCoverageScores,
   type QaMaturityScoreObject,
   type QaMaturityScoreSurface,
   type QaMaturityScoreSurfaceLts,
@@ -63,6 +66,7 @@ const EMPTY_STATUS_COUNTS: StatusCounts = {
 type RenderInputs = {
   taxonomy: QaMaturityTaxonomy;
   scores: QaMaturityScores;
+  coverage: DerivedCoverageScores;
 };
 
 type DocsRouteIndex = {
@@ -70,8 +74,17 @@ type DocsRouteIndex = {
   redirects: Map<string, string>;
 };
 
-type RenderMaturityScorecardInputs = Pick<RenderInputs, "taxonomy" | "scores"> & {
+type RenderMaturityScorecardInputs = Pick<RenderInputs, "taxonomy" | "scores" | "coverage"> & {
   evidenceSummaries: EvidenceSummary[];
+};
+
+type DerivedCoverageScores = QaMaturityCoverageScores & {
+  surfaces: Map<string, QaMaturityScoreObject>;
+  rollups: {
+    surface_average?: QaMaturityScoreObject;
+    category_average?: QaMaturityScoreObject;
+  };
+  warnings: string[];
 };
 
 function parseArgs(argv: string[]): Args {
@@ -390,6 +403,16 @@ function countText(counts?: QaEvidenceScorecardJson["categories"]): string {
   return `${counts.fulfilled ?? 0} of ${counts.total ?? 0} (${numberText(counts.fulfillmentPercent)}%)`;
 }
 
+function averageScores(
+  scores: readonly QaMaturityScoreObject[],
+): QaMaturityScoreObject | undefined {
+  if (scores.length === 0) {
+    return undefined;
+  }
+  const average = Math.round(scores.reduce((sum, score) => sum + score.score, 0) / scores.length);
+  return qaMaturityScoreObjectForScore(average);
+}
+
 function checkSetTitle(profile: string): string {
   const normalized = profile.trim();
   if (!normalized || normalized === "release") {
@@ -442,13 +465,104 @@ function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
   });
 }
 
-function evidenceScorecardWarnings(evidenceSummaries: EvidenceSummary[]): string[] {
+function latestReleaseScorecard(evidenceSummaries: EvidenceSummary[]): EvidenceSummary | undefined {
   return evidenceSummaries
-    .filter((item) => !item.scorecard)
-    .map(
-      (item) =>
-        `${item.path}: qa-evidence.json does not include a scorecard field; run pnpm openclaw qa run --qa-profile <id> to produce deterministic scorecard rows`,
+    .filter((item) => item.profile === "release" && item.scorecard)
+    .toSorted((left, right) => left.generatedAt.localeCompare(right.generatedAt))
+    .at(-1);
+}
+
+function deriveCoverageScores(
+  taxonomy: QaMaturityTaxonomy,
+  evidenceSummaries: EvidenceSummary[],
+): DerivedCoverageScores {
+  const warnings: string[] = [];
+  const releaseSummary = latestReleaseScorecard(evidenceSummaries);
+  const releaseScorecardSummaries = evidenceSummaries.filter(
+    (item) => item.profile === "release" && item.scorecard,
+  );
+  if (!releaseSummary) {
+    if (evidenceSummaries.length > 0) {
+      warnings.push(
+        "coverage scores require a release profile qa-evidence.json artifact with a scorecard field",
+      );
+    }
+    return {
+      categories: new Map(),
+      surfaces: new Map(),
+      rollups: {},
+      warnings,
+    };
+  }
+  if (releaseScorecardSummaries.length > 1) {
+    warnings.push(
+      `multiple release profile evidence scorecards found; using latest from ${releaseSummary.path}`,
     );
+  }
+
+  const categories = new Map<string, QaMaturityScoreObject>();
+  for (const report of releaseSummary.scorecard?.categoryReports ?? []) {
+    categories.set(
+      qaMaturityCoverageCategoryKey(report.surfaceId, report.name),
+      qaMaturityScoreObjectForScore(Math.round(report.features.fulfillmentPercent)),
+    );
+  }
+
+  const surfaces = new Map<string, QaMaturityScoreObject>();
+  for (const surface of activeQaMaturityTaxonomySurfaces(taxonomy)) {
+    const categoryScores = surface.categories
+      .map((category) => {
+        const key = qaMaturityCoverageCategoryKey(surface.id, category.name);
+        const score = categories.get(key);
+        if (!score) {
+          warnings.push(
+            `${releaseSummary.path}: release evidence is missing scorecard coverage for ${surface.name} / ${category.name}`,
+          );
+        }
+        return score;
+      })
+      .filter((score): score is QaMaturityScoreObject => Boolean(score));
+    if (categoryScores.length === surface.categories.length) {
+      const surfaceScore = averageScores(categoryScores);
+      if (surfaceScore) {
+        surfaces.set(surface.id, surfaceScore);
+      }
+    }
+  }
+
+  const activeSurfaces = activeQaMaturityTaxonomySurfaces(taxonomy);
+  const expectedCategoryCount = activeSurfaces.reduce(
+    (count, surface) => count + surface.categories.length,
+    0,
+  );
+  const categoryScores = Array.from(categories.values());
+  const surfaceScores = Array.from(surfaces.values());
+  return {
+    categories,
+    surfaces,
+    rollups: {
+      category_average:
+        categoryScores.length === expectedCategoryCount ? averageScores(categoryScores) : undefined,
+      surface_average:
+        surfaceScores.length === activeSurfaces.length ? averageScores(surfaceScores) : undefined,
+    },
+    warnings,
+  };
+}
+
+function evidenceScorecardWarnings(
+  evidenceSummaries: EvidenceSummary[],
+  coverage: DerivedCoverageScores,
+): string[] {
+  return [
+    ...evidenceSummaries
+      .filter((item) => item.profile === "release" && !item.scorecard)
+      .map(
+        (item) =>
+          `${item.path}: release profile qa-evidence.json does not include a scorecard field; run pnpm openclaw qa run --qa-profile release to produce deterministic scorecard rows`,
+      ),
+    ...coverage.warnings,
+  ];
 }
 
 function writeInputWarnings(warnings: string[]): void {
@@ -558,6 +672,7 @@ function renderEvidenceSection(
 }
 
 function renderMaturityScorecard({
+  coverage,
   taxonomy,
   scores,
   evidenceSummaries,
@@ -584,19 +699,19 @@ function renderMaturityScorecard({
       ["Basis", "Coverage", "Quality", "Completeness"],
       [
         "Surface average",
-        scoreText(scores.rollups.surface_average.coverage),
+        scoreText(coverage.rollups.surface_average),
         scoreText(scores.rollups.surface_average.quality),
         scoreText(scores.rollups.surface_average.completeness),
       ],
       [
         "Category average",
-        scoreText(scores.rollups.category_average.coverage),
+        scoreText(coverage.rollups.category_average),
         scoreText(scores.rollups.category_average.quality),
         scoreText(scores.rollups.category_average.completeness),
       ],
     ]),
     "",
-    "- Coverage measures how much of the area has release proof.",
+    "- Coverage is derived from release validation results.",
     "- Quality measures reliability and operational confidence.",
     "- Completeness measures how much of the expected user workflow is available.",
     "",
@@ -622,7 +737,7 @@ function renderMaturityScorecard({
       `[${markdownEscape(surfaceName)}](/maturity/taxonomy#${markdownSlug(surfaceName)})`,
       markdownEscape(familyTitle(surface.family)),
       markdownEscape(levelText(surface, levels)),
-      scoreText(scoreSurface?.scores?.coverage),
+      scoreText(coverage.surfaces.get(surface.id)),
       scoreText(scoreSurface?.scores?.quality),
       scoreText(scoreSurface?.scores?.completeness),
       markdownEscape(ltsText(scoreSurface?.lts)),
@@ -643,10 +758,11 @@ function renderMaturityScorecard({
 }
 
 function renderTaxonomy({
+  coverage,
   docsRouteIndex,
   scores,
   taxonomy,
-}: Pick<RenderInputs, "taxonomy" | "scores"> & { docsRouteIndex: DocsRouteIndex }): string {
+}: RenderInputs & { docsRouteIndex: DocsRouteIndex }): string {
   const levels = qaMaturityTaxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
   const surfaces = activeQaMaturityTaxonomySurfaces(taxonomy);
@@ -708,11 +824,14 @@ function renderTaxonomy({
           .filter((doc): doc is string => Boolean(doc))
           .join(", ");
         const scoreCategory = categoryScores.get(category.name);
+        const coverageScore = coverage.categories.get(
+          qaMaturityCoverageCategoryKey(surface.id, category.name),
+        );
         categoryRows.push([
           markdownEscape(category.name),
           category.features.length,
           docs,
-          scoreText(scoreCategory?.coverage),
+          scoreText(coverageScore),
           scoreText(scoreCategory?.quality),
           scoreText(scoreCategory?.completeness),
           markdownEscape(scoreCategory?.lts?.supported ? "Yes" : "No"),
@@ -756,13 +875,15 @@ function main(): void {
   const outputDir = path.normalize(args.outputDir);
   const taxonomy = parseQaMaturityTaxonomy(readYaml(taxonomyPath), taxonomyPath);
   const scores = parseQaMaturityScores(readYaml(scoresPath), scoresPath);
+  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
+  const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const scoreWarnings = validateQaMaturityScoresAgainstTaxonomy({
+    coverageScores: coverage,
     scores,
     taxonomy,
     scoresPath,
   });
-  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
-  const evidenceWarnings = evidenceScorecardWarnings(evidenceSummaries);
+  const evidenceWarnings = evidenceScorecardWarnings(evidenceSummaries, coverage);
   const inputWarnings = [...scoreWarnings, ...evidenceWarnings];
   writeInputWarnings(inputWarnings);
   if (args.strictInputs) {
@@ -781,6 +902,7 @@ function main(): void {
     [
       "maturity/scorecard.md",
       renderMaturityScorecard({
+        coverage,
         taxonomy,
         scores,
         evidenceSummaries,
@@ -788,7 +910,12 @@ function main(): void {
     ],
     [
       "maturity/taxonomy.md",
-      renderTaxonomy({ docsRouteIndex: collectDocsRouteIndex(docsRoot), taxonomy, scores }),
+      renderTaxonomy({
+        coverage,
+        docsRouteIndex: collectDocsRouteIndex(docsRoot),
+        taxonomy,
+        scores,
+      }),
     ],
   ]);
   const changed: string[] = [];

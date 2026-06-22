@@ -37,9 +37,8 @@ out of this repo. If a score needs private evidence, use the redacted
   coverage IDs. Do not promote generic IDs into standalone feature names.
 - Avoid duplicate coverage-ID bundles under different feature names in one
   category.
-- `qa/maturity-scores.yaml` is the aggregate score source committed in this
-  repo. It is the only committed score data; do not add generated inventory
-  directories.
+- `qa/maturity-scores.yaml` is the committed aggregate source for Quality,
+  Completeness, and LTS review state.
 - `extensions/qa-lab/src/scorecard-taxonomy.ts` exports
   `qaMaturityScoresSchema` and `parseQaMaturityScores`; use that schema to
   validate score output instead of duplicating score labels, bands, or object
@@ -47,8 +46,9 @@ out of this repo. If a score needs private evidence, use the redacted
 - Generated public docs are `docs/maturity/scorecard.md` and
   `docs/maturity/taxonomy.md`; both come from `pnpm maturity:render`. Do not
   hand-edit generated Markdown to change score results.
-- `qa-evidence.json` artifacts provide per-run QA scorecard evidence. They can
-  enrich generated artifact docs, but they are not committed as inventory.
+- `qa-evidence.json` artifacts provide per-run QA scorecard evidence. Release
+  profile artifacts are the source of truth for Coverage. They can enrich
+  generated artifact docs, but they are not committed as inventory.
 
 ## Commands
 
@@ -91,10 +91,10 @@ When asked to score or refresh a surface:
    `.agents/skills/claw-score/references/completeness/`.
 3. Gather public repo evidence from docs, source, tests, and QA scenario
    metadata.
-4. Prefer existing `qa-evidence.json` artifacts for executed proof. Do not use
-   discrawl or unredacted private archives.
-5. Update `qa/maturity-scores.yaml` only when the score change is backed by
-   public or redacted artifact evidence.
+4. Prefer existing release profile `qa-evidence.json` artifacts for executed
+   proof. Do not use discrawl or unredacted private archives.
+5. Update `qa/maturity-scores.yaml` only for Quality, Completeness, and LTS
+   review state backed by public or redacted artifact evidence.
 6. Run the schema validation command from this skill.
 7. Run `pnpm check:docs` if docs prose changed, and focused QA coverage checks
    if coverage IDs or profile membership changed.
@@ -160,15 +160,16 @@ Default Completeness bands:
 
 ## Score Semantics
 
-- Coverage: public or redacted proof that the feature is exercised by docs,
-  tests, QA scenarios, live lanes, or release evidence.
+- Coverage: deterministic release validation coverage derived from the release
+  profile `qa-evidence.json.scorecard` feature fulfillment data.
 - Quality: reliability, maintainability, operator safety, and regression
   confidence for the category.
 - Completeness: how much of the intended operator-visible workflow exists for
   the category. Use the default completeness process plus any surface-specific
   variation before changing this score.
-- LTS: derived from score thresholds and `human_lts_override`; do not hand-edit
-  generated Markdown to change LTS status.
+- LTS: derived from Quality, release-evidence Coverage, and
+  `human_lts_override`; do not hand-edit generated Markdown to change LTS
+  status.
 
 Bands:
 

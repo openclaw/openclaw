@@ -7,7 +7,7 @@ import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
 export const QA_MATURITY_SCORES_PATH = "qa/maturity-scores.yaml";
-export const QA_MATURITY_SCORE_KEYS = ["coverage", "quality", "completeness"] as const;
+export const QA_MATURITY_SCORE_KEYS = ["quality", "completeness"] as const;
 export const QA_MATURITY_SCORE_LABELS = [
   "Lovable",
   "Stable",
@@ -78,8 +78,14 @@ const qaMaturityScoreObjectSchema = z
     }
   });
 
+export function qaMaturityScoreObjectForScore(score: number): QaMaturityScoreObject {
+  return qaMaturityScoreObjectSchema.parse({
+    score,
+    label: maturityScoreLabelForScore(score),
+  });
+}
+
 const qaMaturityScoreBundleShape = {
-  coverage: qaMaturityScoreObjectSchema,
   quality: qaMaturityScoreObjectSchema,
   completeness: qaMaturityScoreObjectSchema,
 } satisfies z.ZodRawShape;
@@ -306,6 +312,10 @@ export type QaMaturityTaxonomySurface = z.infer<typeof qaMaturitySurfaceSchema>;
 export type QaMaturityTaxonomyProfile = z.infer<typeof qaScorecardProfileSchema>;
 export type QaMaturityTaxonomy = z.infer<typeof qaMaturityTaxonomySchema>;
 type QaCoverageEvidenceRole = z.infer<typeof qaCoverageEvidenceRoleSchema>;
+
+export type QaMaturityCoverageScores = {
+  categories: Map<string, QaMaturityScoreObject>;
+};
 
 export type QaScorecardValidationIssueCode =
   | "coverage-id-missing-primary-evidence"
@@ -593,12 +603,17 @@ function averageCategoryScore(rows: readonly QaMaturityScoreCategory[], key: QaM
   return Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
 }
 
+export function qaMaturityCoverageCategoryKey(surfaceId: string, categoryName: string) {
+  return `${surfaceId}\u0000${categoryName}`;
+}
+
 function expectedMaturityLtsSupported(params: {
+  coverage?: QaMaturityScoreObject;
   scoreCategory: QaMaturityScoreCategory;
   taxonomyCategory: QaMaturityTaxonomyCategory;
 }) {
   return (
-    (params.scoreCategory.quality.score > 80 && params.scoreCategory.coverage.score > 90) ||
+    (params.scoreCategory.quality.score > 80 && (params.coverage?.score ?? -1) > 90) ||
     params.taxonomyCategory.human_lts_override === true
   );
 }
@@ -611,6 +626,7 @@ function expectedMaturitySurfaceLtsStatus(supportedCategories: number, totalCate
 }
 
 export function validateQaMaturityScoresAgainstTaxonomy(params: {
+  coverageScores?: QaMaturityCoverageScores;
   scores: QaMaturityScores;
   taxonomy: QaMaturityTaxonomy;
   scoresPath?: string;
@@ -682,14 +698,20 @@ export function validateQaMaturityScoresAgainstTaxonomy(params: {
             `${scoresPath}.${surfaceId}.${categoryName}.lts.human_override must match taxonomy human_lts_override`,
           );
         }
-        const expectedSupported = expectedMaturityLtsSupported({
-          scoreCategory,
-          taxonomyCategory,
-        });
-        if (lts.supported !== expectedSupported) {
-          throw new Error(
-            `${scoresPath}.${surfaceId}.${categoryName}.lts.supported must match score threshold or taxonomy human_lts_override`,
-          );
+        const coverage = params.coverageScores?.categories.get(
+          qaMaturityCoverageCategoryKey(surfaceId, categoryName),
+        );
+        if (coverage || taxonomyCategory.human_lts_override === true) {
+          const expectedSupported = expectedMaturityLtsSupported({
+            coverage,
+            scoreCategory,
+            taxonomyCategory,
+          });
+          if (lts.supported !== expectedSupported) {
+            throw new Error(
+              `${scoresPath}.${surfaceId}.${categoryName}.lts.supported must match quality, release evidence coverage, or taxonomy human_lts_override`,
+            );
+          }
         }
       }
       if (lts.supported) {
