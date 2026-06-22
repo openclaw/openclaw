@@ -1,7 +1,7 @@
 /**
  * Classifies embedded-agent run results for model fallback decisions.
  */
-import { isGenericExternalRunFailureText } from "../../auto-reply/reply/agent-runner-failure-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers/errors.js";
 import type { FailoverReason } from "../embedded-agent-helpers/types.js";
@@ -104,7 +104,7 @@ function classifyGenericExternalRunFailurePayload(params: {
     payload?.isError === true ||
     payload?.isReasoning === true ||
     typeof text !== "string" ||
-    !isGenericExternalRunFailureText(text) ||
+    text.trim() !== GENERIC_EXTERNAL_RUN_FAILURE_TEXT ||
     hasNonTextVisiblePayloadContent(payload)
   ) {
     return null;
