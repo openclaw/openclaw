@@ -410,6 +410,72 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
   });
 
+  it("does not reopen a completed session matched by current-generation abort controller", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: 3_000,
+        status: "done",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "maintenance-expired-run",
+          lifecycleGeneration,
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+          observedAt: 5_000,
+        },
+      ],
+      isActiveRun: () => true,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 0, skipped: 0 });
+    expect(store["agent:main:main"]?.status).toBe("done");
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
+  });
+
+  it("still reopens a running session matched by current-generation abort controller", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: 3_000,
+        status: "running",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "maintenance-expired-run",
+          lifecycleGeneration,
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+          observedAt: 5_000,
+        },
+      ],
+      isActiveRun: () => true,
+    });
+
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.status).toBe("running");
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+  });
+
   it("preserves current-generation markers across repeated restart marking", async () => {
     const sessionsDir = await makeSessionsDir();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
