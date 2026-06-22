@@ -1,13 +1,11 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentSoft
 import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
 import ai.openclaw.app.ui.mobileCaption2
@@ -15,18 +13,24 @@ import ai.openclaw.app.ui.mobileCardSurface
 import ai.openclaw.app.ui.mobileCodeBg
 import ai.openclaw.app.ui.mobileCodeBorder
 import ai.openclaw.app.ui.mobileCodeText
+import ai.openclaw.app.ui.mobileHeadline
 import ai.openclaw.app.ui.mobileText
 import ai.openclaw.app.ui.mobileTextSecondary
 import ai.openclaw.app.ui.mobileWarning
 import ai.openclaw.app.ui.mobileWarningSoft
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
@@ -54,11 +58,9 @@ private data class ChatBubbleStyle(
 
 /** Renders one persisted chat message as text and image parts. */
 @Composable
-fun ChatMessageBubble(message: ChatMessage) {
+fun ChatMessageBubble(message: ai.openclaw.app.chat.ChatMessage) {
   val role = message.role.trim().lowercase(Locale.US)
-  val style = bubbleStyle(role)
 
-  // Filter to only displayable content parts (text with content, or base64 images).
   val displayableContent =
     message.content.filter { part ->
       when (part.type) {
@@ -70,39 +72,45 @@ fun ChatMessageBubble(message: ChatMessage) {
 
   if (displayableContent.isEmpty()) return
 
-  ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
+  val style = bubbleStyle(role)
+
+  ChatBubbleContainer(style = style) {
     ChatMessageBody(content = displayableContent, textColor = mobileText)
   }
 }
 
+// ── ChatGPT-style bubble container ────────────────────────────────────────
+
 @Composable
 private fun ChatBubbleContainer(
   style: ChatBubbleStyle,
-  roleLabel: String,
   modifier: Modifier = Modifier,
   content: @Composable () -> Unit,
 ) {
+  val bubbleShape =
+    RoundedCornerShape(
+      topStart = if (style.alignEnd) 20.dp else 4.dp,
+      topEnd = if (style.alignEnd) 4.dp else 20.dp,
+      bottomStart = 20.dp,
+      bottomEnd = 20.dp,
+    )
+
   Row(
-    modifier = modifier.fillMaxWidth(),
+    modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp),
     horizontalArrangement = if (style.alignEnd) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
-      shape = RoundedCornerShape(12.dp),
-      border = BorderStroke(1.dp, style.borderColor),
+      shape = bubbleShape,
+      border = if (style.borderColor != Color.Transparent) BorderStroke(1.dp, style.borderColor) else null,
       color = style.containerColor,
       tonalElevation = 0.dp,
       shadowElevation = 0.dp,
-      modifier = Modifier.fillMaxWidth(0.90f),
+      modifier = Modifier.widthIn(max = 520.dp),
     ) {
       Column(
-        modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        Text(
-          text = roleLabel,
-          style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
-          color = style.roleColor,
-        )
         content()
       }
     }
@@ -130,24 +138,23 @@ private fun ChatMessageBody(
   }
 }
 
-/** Assistant placeholder shown while a run is active but no text has streamed yet. */
+// ── Thinking indicator (animated pulsing dots) ─────────────────────────────
+
 @Composable
 fun ChatTypingIndicatorBubble() {
-  ChatBubbleContainer(
-    style = bubbleStyle("assistant"),
-    roleLabel = roleLabel("assistant"),
+  Row(
+    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
   ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      DotPulse(color = mobileTextSecondary)
-      Text("Thinking...", style = mobileCallout, color = mobileTextSecondary)
-    }
+    PulseDot(alpha = 0.38f, color = mobileTextSecondary)
+    PulseDot(alpha = 0.62f, color = mobileTextSecondary)
+    PulseDot(alpha = 0.90f, color = mobileTextSecondary)
   }
 }
 
-/** Tool progress bubble resolved through Android's tool display registry. */
+// ── Pending tools (grouped, compact, non-intrusive) ───────────────────────
+
 @Composable
 fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
   val context = LocalContext.current
@@ -156,51 +163,89 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
       toolCalls.map { ToolDisplayRegistry.resolve(context, it.name, it.args) }
     }
 
-  ChatBubbleContainer(
-    style = bubbleStyle("assistant"),
-    roleLabel = "Tools",
+  val total = toolCalls.size
+  val collapsed = total > 2
+  val visibleDisplays = if (collapsed) displays.take(2) else displays
+
+  Row(
+    modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp),
+    horizontalArrangement = Arrangement.Start,
   ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      Text("Running tools...", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
-      for (display in displays.take(6)) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text(
-            "${display.emoji} ${display.label}",
-            style = mobileCallout,
-            color = mobileTextSecondary,
-            fontFamily = FontFamily.Monospace,
+    Surface(
+      shape = RoundedCornerShape(topStart = 4.dp, topEnd = 16.dp, bottomStart = 16.dp, bottomEnd = 16.dp),
+      border = BorderStroke(1.dp, mobileBorder.copy(alpha = 0.25f)),
+      color = mobileCardSurface.copy(alpha = 0.6f),
+      modifier = Modifier.widthIn(max = 420.dp),
+    ) {
+      Column(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+      ) {
+        // Header
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Box(
+            modifier =
+              Modifier
+                .size(5.dp)
+                .background(mobileWarning, RoundedCornerShape(999.dp)),
           )
-          display.detailLine?.let { detail ->
+          Text(
+            text = "Ran $total tool${if (total != 1) "s" else ""}",
+            style = mobileCaption1.copy(fontWeight = FontWeight.Medium),
+            color = mobileTextSecondary,
+          )
+        }
+
+        // Tool names (compact, monospace)
+        visibleDisplays.forEach { display ->
+          Row(
+            modifier = Modifier.padding(start = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
             Text(
-              detail,
-              style = mobileCaption1,
+              text = "·",
+              style = mobileCaption1.copy(fontSize = 12.sp),
+              color = mobileTextSecondary.copy(alpha = 0.5f),
+            )
+            Text(
+              text = display.label,
+              style = mobileCaption1.copy(fontFamily = FontFamily.Monospace),
               color = mobileTextSecondary,
-              fontFamily = FontFamily.Monospace,
+              maxLines = 1,
             )
           }
         }
-      }
-      if (toolCalls.size > 6) {
-        Text(
-          text = "... +${toolCalls.size - 6} more",
-          style = mobileCaption1,
-          color = mobileTextSecondary,
-        )
+
+        // Expand/collapse for >2 tools
+        if (total > 2) {
+          Text(
+            text = if (collapsed) "… +${total - 2} more" else "Show less",
+            style = mobileCaption1.copy(fontSize = 11.sp),
+            color = mobileTextSecondary.copy(alpha = 0.6f),
+            modifier = Modifier.padding(start = 11.dp),
+          )
+        }
       }
     }
   }
 }
 
-/** Live assistant stream bubble shown before the final message is committed. */
+// ── Streaming assistant bubble ─────────────────────────────────────────────
+
 @Composable
 fun ChatStreamingAssistantBubble(text: String) {
   ChatBubbleContainer(
-    style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
-    roleLabel = "OpenClaw · Live",
+    style = bubbleStyle("assistant").copy(borderColor = mobileAccent.copy(alpha = 0.4f)),
   ) {
     ChatMarkdown(text = text, textColor = mobileText)
   }
 }
+
+// ── Bubble style mapping ──────────────────────────────────────────────────
 
 @Composable
 private fun bubbleStyle(role: String): ChatBubbleStyle =
@@ -208,8 +253,8 @@ private fun bubbleStyle(role: String): ChatBubbleStyle =
     "user" ->
       ChatBubbleStyle(
         alignEnd = true,
-        containerColor = mobileAccentSoft,
-        borderColor = mobileAccent,
+        containerColor = mobileAccentSoft.copy(alpha = 0.8f),
+        borderColor = Color.Transparent,
         roleColor = mobileAccent,
       )
 
@@ -217,25 +262,20 @@ private fun bubbleStyle(role: String): ChatBubbleStyle =
       ChatBubbleStyle(
         alignEnd = false,
         containerColor = mobileWarningSoft,
-        borderColor = mobileWarning.copy(alpha = 0.45f),
+        borderColor = mobileWarning.copy(alpha = 0.30f),
         roleColor = mobileWarning,
       )
 
     else ->
       ChatBubbleStyle(
         alignEnd = false,
-        containerColor = mobileCardSurface,
-        borderColor = mobileBorderStrong,
+        containerColor = Color.Transparent,
+        borderColor = mobileBorder.copy(alpha = 0.3f),
         roleColor = mobileTextSecondary,
       )
   }
 
-private fun roleLabel(role: String): String =
-  when (role) {
-    "user" -> "You"
-    "system" -> "System"
-    else -> "OpenClaw"
-  }
+// ── Inline base64 image ──────────────────────────────────────────────────
 
 @Composable
 private fun ChatBase64Image(
@@ -264,8 +304,10 @@ private fun ChatBase64Image(
   }
 }
 
+// ── Dot pulse (used by typing indicator) ──────────────────────────────────
+
 @Composable
-private fun DotPulse(color: Color) {
+fun DotPulse(color: Color) {
   Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
     PulseDot(alpha = 0.38f, color = color)
     PulseDot(alpha = 0.62f, color = color)
@@ -285,7 +327,8 @@ private fun PulseDot(
   ) {}
 }
 
-/** Shared code block renderer used by chat Markdown. */
+// ── Code block (used by ChatMarkdown) ─────────────────────────────────────
+
 @Composable
 fun ChatCodeBlock(
   code: String,
