@@ -1,143 +1,112 @@
-import type { SettingsAppHost, SettingsHost } from "./app/app-host.ts";
-import type { RouterOutletSnapshotStore } from "./app/router-outlet.ts";
-import { page as activityPage } from "./pages/activity/route.ts";
-import { page as agentsPage } from "./pages/agents/route.ts";
-import { page as channelsPage } from "./pages/channels/route.ts";
-import { page as chatPage } from "./pages/chat/route.ts";
-import { pages as configPages } from "./pages/config/route.ts";
-import { page as cronPage } from "./pages/cron/route.ts";
-import { page as debugPage } from "./pages/debug/route.ts";
-import { page as dreamsPage } from "./pages/dreams/route.ts";
-import { page as instancesPage } from "./pages/instances/route.ts";
-import { page as logsPage } from "./pages/logs/route.ts";
-import { page as nodesPage } from "./pages/nodes/route.ts";
-import { page as overviewPage } from "./pages/overview/route.ts";
-import { page as sessionsPage } from "./pages/sessions/route.ts";
+import type {
+  ApplicationGateway,
+  ApplicationTheme,
+  StableApplicationContext,
+} from "./app/context.ts";
+import { createRouterOutletSnapshot } from "./app/router-outlet.ts";
+// Keep these imports disabled until each page uses the final application context.
+// import { page as activityPage } from "./pages/activity/route.ts";
+// import { page as agentsPage } from "./pages/agents/route.ts";
+// import { page as channelsPage } from "./pages/channels/route.ts";
+// import { page as chatPage } from "./pages/chat/route.ts";
+// import { pages as configPages } from "./pages/config/route.ts";
+// import { page as cronPage } from "./pages/cron/route.ts";
+// import { page as debugPage } from "./pages/debug/route.ts";
+// import { page as dreamsPage } from "./pages/dreams/route.ts";
+// import { page as instancesPage } from "./pages/instances/route.ts";
+// import { page as logsPage } from "./pages/logs/route.ts";
+// import { page as nodesPage } from "./pages/nodes/route.ts";
+// import { page as overviewPage } from "./pages/overview/route.ts";
+// import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
-import { page as skillsPage } from "./pages/skills/route.ts";
-import { page as usagePage } from "./pages/usage/route.ts";
-import { page as workboardPage } from "./pages/workboard/route.ts";
-// Application route catalog consumed by the generic router.
+// import { page as skillsPage } from "./pages/skills/route.ts";
+// import { page as usagePage } from "./pages/usage/route.ts";
+// import { page as workboardPage } from "./pages/workboard/route.ts";
 import { createRouter, normalizeRouteBasePath, normalizeRoutePath } from "./router/index.ts";
-import type { PageDefinition } from "./router/index.ts";
-import type { RouteLocation, RouterHistory } from "./router/index.ts";
-import type { AppViewState } from "./ui/app-view-state.ts";
-
-export type RouteLoadContext = {
-  host: SettingsHost;
-  app: SettingsAppHost;
-};
-
-type ApplicationHost = SettingsHost & {
-  navDrawerOpen: boolean;
-  sessionKey: string;
-  setChatMobileControlsOpen: (
-    open: boolean,
-    options?: { trigger?: HTMLElement | null; restoreFocus?: boolean },
-  ) => void;
-};
-
-export type ApplicationContext = {
-  routeLoadContext: RouteLoadContext;
-  routeSnapshot: RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>;
-  navigate: (routeId: RouteId) => void;
-  preload: (routeId: RouteId) => Promise<void>;
-  notifyStateChange: (state: AppViewState, changed: ReadonlyMap<PropertyKey, unknown>) => void;
-  dispose: () => void;
-};
-
-export type RouteRenderContext = {
-  state: AppViewState;
-  navigate: (routeId: RouteId) => void;
-};
-
-export function routeLoadContext(host: SettingsHost): RouteLoadContext {
-  return { host, app: host as SettingsAppHost };
-}
+import type { PageDefinition, RouteLocation, RouterHistory } from "./router/index.ts";
 
 export type AppRouteModule = {
-  render: (context: RouteRenderContext, data: unknown) => unknown;
-  onStateChange?: (context: RouteRenderContext, changed: ReadonlyMap<PropertyKey, unknown>) => void;
-  shell?: "chat" | "page";
-  header?: boolean;
-  contentClass?: string;
+  render: (context: ApplicationContext, data: unknown) => unknown;
 };
 
-export const APP_ROUTE_TREE = [
-  agentsPage,
-  activityPage,
-  overviewPage,
-  workboardPage,
-  channelsPage,
-  instancesPage,
-  sessionsPage,
-  usagePage,
-  cronPage,
-  skillsPage,
-  skillWorkshopPage,
-  nodesPage,
-  chatPage,
-  ...configPages,
-  dreamsPage,
-  debugPage,
-  logsPage,
-] as const;
+export type ApplicationContext = StableApplicationContext<RouteId, AppRouteModule, unknown>;
+export type AppRoute = PageDefinition<RouteId, ApplicationContext, AppRouteModule, unknown>;
+export type ApplicationRouter = ApplicationContext["router"];
 
+// Only the migrated page is active. The old catalog and its paths remain available
+// for mount-path inference and can be re-enabled one page at a time.
+export const APP_ROUTE_TREE = [skillWorkshopPage] as const;
 export type RouteId = (typeof APP_ROUTE_TREE)[number]["id"];
 
-const appRoutes = APP_ROUTE_TREE as readonly PageDefinition<
-  RouteId,
-  RouteLoadContext,
-  AppRouteModule
->[];
+const APP_ROUTE_PATHS = [
+  "/chat",
+  "/overview",
+  "/activity",
+  "/workboard",
+  "/instances",
+  "/sessions",
+  "/usage",
+  "/cron",
+  "/agents",
+  "/skills",
+  "/skills/workshop",
+  "/nodes",
+  "/dreaming",
+  "/config",
+  "/communications",
+  "/appearance",
+  "/automation",
+  "/mcp",
+  "/infrastructure",
+  "/ai-agents",
+  "/channels",
+  "/debug",
+  "/logs",
+] as const;
 
-export const appRouter = createRouter<RouteId, RouteLoadContext, AppRouteModule>({
-  routes: appRoutes,
-});
+const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
+
+export function createApplicationRouter(): ApplicationRouter {
+  return createRouter<RouteId, ApplicationContext, AppRouteModule, unknown>({
+    routes: appRoutes,
+  });
+}
 
 export function createApplicationContext(
-  host: SettingsHost,
-  routeSnapshot: RouterOutletSnapshotStore<RouteId, AppRouteModule, unknown>,
+  router: ApplicationRouter,
+  gateway: ApplicationGateway,
+  theme: ApplicationTheme,
+  basePath: string,
+  assistantName = "OpenClaw",
 ): ApplicationContext {
-  const applicationHost = host as ApplicationHost;
-  const loadContext = routeLoadContext(host);
-  const navigate = (next: RouteId) => {
+  const routeSnapshot = createRouterOutletSnapshot(router);
+  let context!: ApplicationContext;
+  const navigate = (routeId: RouteId) => {
     const location = {
-      pathname: appRouter.pathForRoute(next, host.basePath),
-      search:
-        next === "chat" && applicationHost.sessionKey
-          ? `?session=${encodeURIComponent(applicationHost.sessionKey)}`
-          : "",
+      pathname: router.pathForRoute(routeId, basePath),
+      search: "",
       hash: "",
     };
-    const currentLocation = appRouter.getState().location;
-    const sameLocation =
-      currentLocation.pathname === location.pathname &&
-      currentLocation.search === location.search &&
-      currentLocation.hash === location.hash;
-    void appRouter
-      .navigate(next, loadContext, { history: sameLocation ? "none" : "push" }, location)
-      .catch(() => undefined);
-    if (next !== "chat") {
-      applicationHost.setChatMobileControlsOpen(false);
-    }
-    applicationHost.navDrawerOpen = false;
+    void router.navigate(routeId, context, { history: "push" }, location).catch((error) => {
+      console.error("[openclaw] route navigation failed", error);
+    });
   };
-  return {
-    routeLoadContext: loadContext,
+  context = {
+    basePath,
+    assistantName,
+    gateway,
+    theme,
+    router,
     routeSnapshot,
     navigate,
-    preload: (routeId) => appRouter.preloadRoute(routeId, loadContext),
-    notifyStateChange: (state, changed) => {
-      const active = routeSnapshot.get().active?.module;
-      if (active && "onStateChange" in active && typeof active.onStateChange === "function") {
-        active.onStateChange({ state, navigate }, changed);
-      }
-    },
+    preload: (routeId) => router.preloadRoute(routeId, context),
     dispose: () => {
       routeSnapshot.dispose();
+      router.stop();
+      gateway.stop();
     },
   };
+  return context;
 }
 
 export function normalizeBasePath(basePath: string): string {
@@ -149,54 +118,46 @@ export function normalizePath(path: string): string {
 }
 
 export function pathForRoute(routeId: RouteId, basePath = ""): string {
-  return appRouter.pathForRoute(routeId, basePath);
+  const route = appRoutes.find((candidate) => candidate.id === routeId);
+  if (!route) {
+    throw new Error(`Unknown route id "${routeId}".`);
+  }
+  const normalizedBasePath = normalizeBasePath(basePath);
+  return normalizedBasePath ? `${normalizedBasePath}${route.path}` : route.path;
 }
 
 export function routeIdFromPath(pathname: string, basePath = ""): RouteId | null {
-  return (
-    appRouter.routeIdFromPath(pathname, basePath) ??
-    (normalizePath(pathname) === normalizePath(basePath) ? "chat" : null)
-  );
+  const normalizedPath = normalizePath(pathname);
+  const normalizedBasePath = normalizeBasePath(basePath);
+  const routePath = normalizedBasePath
+    ? normalizedPath.slice(normalizedBasePath.length) || "/"
+    : normalizedPath;
+  return appRoutes.find((route) => normalizePath(route.path) === routePath)?.id ?? null;
 }
 
-export function getVisibleRouteId(): RouteId | null {
-  const state = appRouter.getState();
-  return state.pendingMatches[0]?.routeId ?? state.matches[0]?.routeId ?? null;
-}
-
-export function resolveAppNotFound(context: RouteLoadContext): Promise<void> {
-  return appRouter.navigate("chat", context, { history: "replace" });
+export async function startApplicationRouter(
+  router: ApplicationRouter,
+  history: RouterHistory,
+  basePath: string,
+  context: ApplicationContext,
+): Promise<void> {
+  const location = history.location();
+  if (routeIdFromPath(location.pathname, basePath) === null) {
+    history.replace({
+      ...location,
+      pathname: router.pathForRoute("skill-workshop", basePath),
+    });
+  }
+  await router.start(history, basePath, context);
 }
 
 export function startAppRouter(
+  router: ApplicationRouter,
   history: RouterHistory,
   basePath: string,
-  context: RouteLoadContext,
-  onLocation?: (location: RouteLocation) => void,
+  context: ApplicationContext,
 ): Promise<void> {
-  const resolveLocation = (location: RouteLocation): RouteLocation => {
-    if (routeIdFromPath(location.pathname, basePath) !== null) {
-      return location;
-    }
-    const fallback = {
-      ...location,
-      pathname: appRouter.pathForRoute("chat", basePath),
-    };
-    history.replace(fallback);
-    return fallback;
-  };
-  const appHistory: RouterHistory = {
-    location: () => resolveLocation(history.location()),
-    push: history.push,
-    replace: history.replace,
-    listen: (listener) =>
-      history.listen((location) => {
-        const resolvedLocation = resolveLocation(location);
-        onLocation?.(resolvedLocation);
-        listener(resolvedLocation);
-      }),
-  };
-  return appRouter.start(appHistory, basePath, context);
+  return startApplicationRouter(router, history, basePath, context);
 }
 
 export function inferBasePathFromPathname(pathname: string): string {
@@ -209,9 +170,25 @@ export function inferBasePathFromPathname(pathname: string): string {
   }
   const segments = normalized.split("/").filter(Boolean);
   for (let index = 0; index < segments.length; index += 1) {
-    if (routeIdFromPath(`/${segments.slice(index).join("/")}`)) {
-      return index ? `/${segments.slice(0, index).join("/")}` : "";
+    const candidate = `/${segments.slice(index).join("/")}`;
+    const routePath = APP_ROUTE_PATHS.find((path) => normalizePath(path) === candidate);
+    if (!routePath) {
+      continue;
     }
+    const previousSegment = segments[index - 1];
+    const firstRouteSegment = routePath.split("/").filter(Boolean)[0];
+    if (index > 0 && previousSegment === firstRouteSegment && candidate === routePath) {
+      return "";
+    }
+    return index ? `/${segments.slice(0, index).join("/")}` : "";
   }
   return normalized;
+}
+
+export function locationForRoute(routeId: RouteId, basePath: string): RouteLocation {
+  return {
+    pathname: pathForRoute(routeId, basePath),
+    search: "",
+    hash: "",
+  };
 }
