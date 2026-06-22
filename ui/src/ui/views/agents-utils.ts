@@ -14,6 +14,11 @@ import type {
   ToolsCatalogResult,
 } from "../../api/types.ts";
 import {
+  isRenderableControlUiAvatarUrl,
+  resolveAgentAvatarUrl,
+  resolveChatAvatarRenderUrl,
+} from "../../lib/avatar.ts";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
@@ -204,48 +209,6 @@ export function normalizeAgentLabel(agent: {
   return (
     normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
   );
-}
-
-const CONTROL_UI_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
-
-export function isRenderableControlUiAvatarUrl(value: string): boolean {
-  return CONTROL_UI_AVATAR_URL_RE.test(value);
-}
-
-export function resolveAgentAvatarUrl(
-  agent: { identity?: { avatar?: string; avatarUrl?: string } },
-  agentIdentity?: AgentIdentityResult | null,
-): string | null {
-  const candidates = [
-    normalizeOptionalString(agentIdentity?.avatar),
-    normalizeOptionalString(agent.identity?.avatarUrl),
-    normalizeOptionalString(agent.identity?.avatar),
-  ];
-  for (const candidate of candidates) {
-    if (!candidate) {
-      continue;
-    }
-    if (isRenderableControlUiAvatarUrl(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
-// Chat-render variant: accept `blob:` URLs (produced locally by
-// `URL.createObjectURL` after an authenticated avatar fetch) in addition to
-// config-sanitized candidates. The config path still gates untrusted
-// http(s)/data sources through `resolveAgentAvatarUrl`.
-export function resolveChatAvatarRenderUrl(
-  candidate: string | null | undefined,
-  agent: { identity?: { avatar?: string; avatarUrl?: string } },
-  agentIdentity?: AgentIdentityResult | null,
-): string | null {
-  const trimmed = normalizeOptionalString(candidate);
-  if (trimmed?.startsWith("blob:")) {
-    return trimmed;
-  }
-  return resolveAgentAvatarUrl(agent, agentIdentity);
 }
 
 export function agentLogoUrl(basePath: string): string {

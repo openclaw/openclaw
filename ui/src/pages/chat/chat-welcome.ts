@@ -1,10 +1,10 @@
 // Control UI chat module implements chat welcome behavior.
 import { html } from "lit";
 import { t } from "../../i18n/index.ts";
+import { resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import {
   agentLogoUrl,
   assistantAvatarFallbackUrl,
-  resolveChatAvatarRenderUrl,
   resolveAssistantTextAvatar,
 } from "../../ui/views/agents-utils.ts";
 

@@ -13,6 +13,7 @@ import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import {
   normalizeLocalUserIdentity,
@@ -21,7 +22,6 @@ import {
 } from "../../ui/user-identity.ts";
 import {
   assistantAvatarFallbackUrl,
-  resolveChatAvatarRenderUrl,
   resolveAssistantTextAvatar,
 } from "../../ui/views/agents-utils.ts";
 import {

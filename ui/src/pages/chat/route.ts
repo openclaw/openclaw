@@ -3,6 +3,7 @@ import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { i18n } from "../../i18n/index.ts";
+import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -19,7 +20,6 @@ import {
   switchChatSession,
 } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import { loadChatPage } from "../loaders.ts";
 import { loadSessions } from "../sessions/data.ts";
 import {

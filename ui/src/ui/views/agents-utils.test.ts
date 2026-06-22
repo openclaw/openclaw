@@ -1,13 +1,12 @@
 // Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
+import { resolveAgentAvatarUrl, resolveChatAvatarRenderUrl } from "../../lib/avatar.ts";
 import {
   agentLogoUrl,
   assistantAvatarFallbackUrl,
   buildAgentContext,
   resolveConfiguredCronModelSuggestions,
-  resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
-  resolveChatAvatarRenderUrl,
   resolveEffectiveModelFallbacks,
   sortLocaleStrings,
 } from "./agents-utils.ts";

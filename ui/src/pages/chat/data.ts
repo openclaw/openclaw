@@ -6,6 +6,7 @@ import type {
 } from "../../api/types.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { normalizeBasePath } from "../../app-routes.ts";
+import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -47,7 +48,6 @@ import {
   type GatewayBrowserClient,
   type GatewayHelloOk,
 } from "../../ui/gateway.ts";
-import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import {
   applyChatHistorySessionInfo,
   loadSessions,

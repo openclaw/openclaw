@@ -1,5 +1,6 @@
 // Control UI chat module implements chat avatar behavior.
 import { html } from "lit";
+import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { AssistantIdentity } from "../../ui/assistant-identity.ts";
 import {
   resolveLocalUserAvatarText,
@@ -8,7 +9,6 @@ import {
 } from "../../ui/user-identity.ts";
 import {
   assistantAvatarFallbackUrl,
-  isRenderableControlUiAvatarUrl,
   resolveAssistantTextAvatar,
 } from "../../ui/views/agents-utils.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";

@@ -1,10 +1,7 @@
 // Control UI module implements user identity behavior.
 import { coerceIdentityValue } from "../../../src/shared/assistant-identity-values.js";
+import { isRenderableControlUiAvatarUrl, resolveChatAvatarRenderUrl } from "../lib/avatar.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import {
-  isRenderableControlUiAvatarUrl,
-  resolveChatAvatarRenderUrl,
-} from "./views/agents-utils.ts";
 
 const MAX_LOCAL_USER_NAME = 50;
 const MAX_LOCAL_USER_TEXT_AVATAR = 16;
