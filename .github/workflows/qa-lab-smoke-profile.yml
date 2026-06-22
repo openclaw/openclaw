@@ -65,7 +65,7 @@ jobs:
     name: Run QA Lab smoke profile
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -81,6 +81,11 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: node scripts/build-all.mjs qaRuntime
 
       - name: Run QA evidence lane
         id: run_qa
