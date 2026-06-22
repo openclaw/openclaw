@@ -65,7 +65,6 @@ import {
   evaluateMattermostMentionGate,
   mapMattermostChannelTypeToChatType,
   resolveMattermostTrustedChatKind,
-  setMattermostChannelKindCache,
 } from "./monitor-gating.js";
 import {
   formatInboundFromLabel,

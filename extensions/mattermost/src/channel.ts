@@ -34,7 +34,6 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mattermostApprovalAuth } from "./approval-auth.js";
-import type { ChatType } from "openclaw/plugin-sdk/chat-type";
 import {
   chunkTextForOutbound,
   createAccountStatusSink,
@@ -42,7 +41,6 @@ import {
   type ChannelPlugin,
 } from "./channel-api.js";
 import {
-  mapMattermostChannelTypeToChatType,
   mattermostChannelKindCache,
 } from "./mattermost/monitor-gating.js";
 import {
