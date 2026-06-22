@@ -25,7 +25,7 @@ import type {
 import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config/config.js";
 import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeSecretInputString } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 import { defaultGatewayBindMode } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -58,6 +58,38 @@ import type { QuickstartGatewayDefaults, WizardFlow } from "./setup.types.js";
 
 type SetupFlowChoice = WizardFlow | "import";
 const SETUP_MODEL_SEPARATELY = "__setup_model_separately__";
+
+function resolveQuickstartGatewayAuthMode(config: OpenClawConfig): GatewayAuthMode {
+  const auth = config.gateway?.auth;
+  if (auth?.mode) {
+    return auth.mode;
+  }
+  if (auth?.token) {
+    return "token";
+  }
+  if (auth?.password) {
+    return "password";
+  }
+  return "token";
+}
+
+function canUseAgentAssistedGatewayPolicy(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const auth = config.gateway?.auth;
+  const authMode = resolveQuickstartGatewayAuthMode(config);
+  if (authMode !== "none" && auth?.rateLimit?.exemptLoopback === false) {
+    return false;
+  }
+  if (authMode !== "trusted-proxy") {
+    return true;
+  }
+  return (
+    hasConfiguredSecretInput(auth?.password, config.secrets?.defaults) ||
+    Boolean(normalizeSecretInputString(env.OPENCLAW_GATEWAY_PASSWORD))
+  );
+}
 
 type AuthChoiceModule = typeof import("../commands/auth-choice.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
@@ -372,7 +404,8 @@ export async function runSetupWizard(
   const useAgentAssistedSetup =
     flow === "quickstart" &&
     baseConfig.gateway?.mode !== "remote" &&
-    !hasExplicitFullWizardIntent(opts);
+    !hasExplicitFullWizardIntent(opts) &&
+    canUseAgentAssistedGatewayPolicy(baseConfig);
 
   if (snapshot.exists && !useAgentAssistedSetup) {
     await prompter.note(
@@ -440,14 +473,7 @@ export async function runSetupWizard(
         ? tailscaleRaw
         : "off";
 
-    let authMode: GatewayAuthMode = "token";
-    if (baseConfig.gateway?.auth?.mode) {
-      authMode = baseConfig.gateway.auth.mode;
-    } else if (baseConfig.gateway?.auth?.token) {
-      authMode = "token";
-    } else if (baseConfig.gateway?.auth?.password) {
-      authMode = "password";
-    }
+    const authMode = resolveQuickstartGatewayAuthMode(baseConfig);
 
     const bindRaw = baseConfig.gateway?.bind;
     const bind =

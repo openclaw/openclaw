@@ -662,7 +662,103 @@ describe("runSetupWizard", () => {
     vi.clearAllMocks();
   });
 
-  it("preserves existing trusted-proxy auth for assisted setup", async () => {
+  it("keeps trusted-proxy auth without a password fallback out of assisted setup", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: { userHeader: "x-forwarded-user" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    configureGatewayForSetup.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quickstartGateway: expect.objectContaining({
+          authMode: "trusted-proxy",
+        }),
+      }),
+    );
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
+  it("keeps auth policies that cannot be safely probed out of assisted setup", async () => {
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          auth: {
+            mode: "token",
+            rateLimit: { exemptLoopback: false },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    configureGatewayForSetup.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quickstartGateway: expect.objectContaining({
+          authMode: "token",
+        }),
+      }),
+    );
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
+  it("allows trusted-proxy assisted setup with an environment password fallback", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "fallback-password"; // pragma: allowlist secret
     readConfigFileSnapshot.mockResolvedValueOnce({
       path: "/tmp/.openclaw/openclaw.json",
       exists: true,
@@ -684,8 +780,17 @@ describe("runSetupWizard", () => {
     });
     hasRunnableLocalAgent.mockResolvedValueOnce(true);
     configureGatewayForSetup.mockClear();
+    finishAgentAssistedSetup.mockClear();
 
-    await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({}));
+    try {
+      await runSetupWizard({ acceptRisk: true }, createRuntime(), buildWizardPrompter({}));
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = previous;
+      }
+    }
 
     expect(configureGatewayForSetup).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -694,6 +799,8 @@ describe("runSetupWizard", () => {
         }),
       }),
     );
+    expect(finishAgentAssistedSetup).toHaveBeenCalledOnce();
+    vi.clearAllMocks();
   });
 
   it("hands off immediately when a selected migration produces a runnable agent", async () => {
