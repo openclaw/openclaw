@@ -1,6 +1,6 @@
 import { cloneConfigObject, removePathValue, setPathValue } from "../../lib/config-form-utils.ts";
-// Control UI controller manages exec approvals gateway state.
-import type { GatewayBrowserClient } from "../gateway.ts";
+// Nodes page data owns exec-approval configuration and mutations.
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 
 export type ExecApprovalsDefaults = {
   security?: string;

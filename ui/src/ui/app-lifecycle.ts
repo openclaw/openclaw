@@ -2,10 +2,10 @@ import { appRouter, type ApplicationContext, startAppRouter } from "../app-route
 import { createBrowserHistory } from "../app/browser.ts";
 import { stopDebugPolling } from "../pages/debug/polling.ts";
 import { stopLogsPolling } from "../pages/logs/polling.ts";
+import { stopNodesPolling } from "../pages/nodes/polling.ts";
 import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "../pages/workboard/data.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
-import { stopNodesPolling } from "./app-polling.ts";
 import { observeTopbar } from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
@@ -17,7 +17,6 @@ import {
 import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
-import { closeDevicePairSetup } from "./controllers/devices.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
 const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
@@ -210,7 +209,6 @@ export function handleDisconnected(host: LifecycleHost) {
   host.realtimeTalkTranscript = null;
   host.resetRealtimeTalkConversation?.();
   host.client?.stop();
-  closeDevicePairSetup(host as unknown as Parameters<typeof closeDevicePairSetup>[0]);
   host.client = null;
   host.connected = false;
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);

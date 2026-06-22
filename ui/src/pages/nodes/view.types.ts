@@ -1,6 +1,6 @@
-// Control UI type declarations define nodes contracts.
-import type { DevicePairingList, DevicePairSetup } from "../controllers/devices.ts";
-import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "../controllers/exec-approvals.ts";
+// Nodes page view contracts.
+import type { DevicePairingList } from "./devices.ts";
+import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./exec-approvals.ts";
 
 export type NodesProps = {
   loading: boolean;
@@ -8,11 +8,6 @@ export type NodesProps = {
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
-  devicePairSetupOpen: boolean;
-  devicePairSetupLoading: boolean;
-  devicePairSetupError: string | null;
-  devicePairSetup: DevicePairSetup | null;
-  canPairDevice: boolean;
   configForm: Record<string, unknown> | null;
   configLoading: boolean;
   configSaving: boolean;
@@ -28,10 +23,6 @@ export type NodesProps = {
   execApprovalsTargetNodeId: string | null;
   onRefresh: () => void;
   onDevicesRefresh: () => void;
-  onDevicePairSetupOpen: () => void;
-  onDevicePairSetupRefresh: () => void;
-  onDevicePairSetupClose: () => void;
-  onDevicePairSetupCopy: (setupCode: string) => void;
   onDeviceApprove: (requestId: string) => void;
   onDeviceReject: (requestId: string) => void;
   onDeviceRotate: (deviceId: string, role: string, scopes?: string[]) => void;

@@ -1,5 +1,5 @@
-// Control UI controller manages nodes gateway state.
-import type { GatewayBrowserClient } from "../gateway.ts";
+// Nodes page data owns the node list request and its loading state.
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 
 export type NodesState = {
   client: GatewayBrowserClient | null;

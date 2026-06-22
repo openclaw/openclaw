@@ -49,7 +49,7 @@ vi.mock("./app-settings.ts", () => ({
   syncThemeWithSettings: vi.fn(),
 }));
 
-vi.mock("./app-polling.ts", () => ({
+vi.mock("../pages/nodes/polling.ts", () => ({
   stopNodesPolling: vi.fn(),
 }));
 

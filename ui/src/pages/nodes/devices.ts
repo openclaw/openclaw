@@ -1,8 +1,7 @@
-// Control UI controller manages devices gateway state.
-import type { DevicePairSetupCodeResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { clearDeviceAuthToken, storeDeviceAuthToken } from "../device-auth.ts";
-import { loadOrCreateDeviceIdentity } from "../device-identity.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
+// Nodes page data owns device pairing and token operations.
+import { clearDeviceAuthToken, storeDeviceAuthToken } from "../../ui/device-auth.ts";
+import { loadOrCreateDeviceIdentity } from "../../ui/device-identity.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 
 export type DeviceTokenSummary = {
   role: string;
@@ -43,71 +42,13 @@ export type DevicePairingList = {
   paired: PairedDevice[];
 };
 
-export type DevicePairSetup = DevicePairSetupCodeResult;
-
 export type DevicesState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
-  devicePairSetupOpen: boolean;
-  devicePairSetupLoading: boolean;
-  devicePairSetupError: string | null;
-  devicePairSetup: DevicePairSetup | null;
 };
-
-const devicePairSetupRequests = new WeakMap<DevicesState, object>();
-
-export async function openDevicePairSetup(state: DevicesState) {
-  state.devicePairSetupOpen = true;
-  await refreshDevicePairSetup(state);
-}
-
-export async function refreshDevicePairSetup(state: DevicesState) {
-  const client = state.client;
-  if (!client || !state.connected || state.devicePairSetupLoading) {
-    return;
-  }
-  const requestToken = {};
-  devicePairSetupRequests.set(state, requestToken);
-  state.devicePairSetupLoading = true;
-  state.devicePairSetupError = null;
-  try {
-    const result = await client.request<DevicePairSetup>("device.pair.setupCode", {});
-    if (
-      devicePairSetupRequests.get(state) !== requestToken ||
-      state.client !== client ||
-      !state.connected ||
-      !state.devicePairSetupOpen
-    ) {
-      return;
-    }
-    state.devicePairSetup = result;
-  } catch (err) {
-    if (
-      devicePairSetupRequests.get(state) === requestToken &&
-      state.client === client &&
-      state.devicePairSetupOpen
-    ) {
-      state.devicePairSetupError = String(err);
-    }
-  } finally {
-    // A retired request must not clear the loading state of a replacement request.
-    if (devicePairSetupRequests.get(state) === requestToken) {
-      devicePairSetupRequests.delete(state);
-      state.devicePairSetupLoading = false;
-    }
-  }
-}
-
-export function closeDevicePairSetup(state: DevicesState) {
-  devicePairSetupRequests.delete(state);
-  state.devicePairSetupOpen = false;
-  state.devicePairSetupLoading = false;
-  state.devicePairSetupError = null;
-  state.devicePairSetup = null;
-}
 
 export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean }) {
   if (!state.client || !state.connected) {

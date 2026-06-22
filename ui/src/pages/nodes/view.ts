@@ -1,4 +1,4 @@
-// Control UI view renders nodes screen content.
+// Nodes page renders its screen content.
 import { html, nothing } from "lit";
 import {
   resolvePendingDeviceApprovalState,
@@ -6,21 +6,19 @@ import {
   type PendingDeviceApprovalKind,
 } from "../../../../src/shared/device-pairing-access.js";
 import { t } from "../../i18n/index.ts";
-import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "../controllers/devices.ts";
-import { formatRelativeTimestamp, formatList } from "../format.ts";
-import { icons } from "../icons.ts";
-import { normalizeOptionalString } from "../string-coerce.ts";
-import { renderExecApprovals, resolveExecApprovalsState } from "./nodes-exec-approvals.ts";
-import { renderDevicePairSetup } from "./nodes-pairing.ts";
-import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./nodes-shared.ts";
-export type { NodesProps } from "./nodes.types.ts";
-import type { NodesProps } from "./nodes.types.ts";
+import { formatRelativeTimestamp, formatList } from "../../ui/format.ts";
+import { normalizeOptionalString } from "../../ui/string-coerce.ts";
+import type { DeviceTokenSummary, PairedDevice, PendingDevice } from "./devices.ts";
+import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
+import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./view-shared.ts";
+export type { NodesProps } from "./view.types.ts";
+import type { NodesProps } from "./view.types.ts";
 
 export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
   return html`
-    ${renderDevicePairSetup(props)} ${renderDevices(props)}
+    ${renderExecApprovals(approvalsState)} ${renderBindings(bindingState)} ${renderDevices(props)}
     <section class="card">
       <div class="row" style="justify-content: space-between;">
         <div>
@@ -37,7 +35,6 @@ export function renderNodes(props: NodesProps) {
           : props.nodes.map((n) => renderNode(n))}
       </div>
     </section>
-    ${renderExecApprovals(approvalsState)} ${renderBindings(bindingState)}
   `;
 }
 
@@ -57,19 +54,9 @@ function renderDevices(props: NodesProps) {
           <div class="card-title">Devices</div>
           <div class="card-sub">Pairing requests + role tokens.</div>
         </div>
-        <div class="row" style="gap: 8px; flex-wrap: wrap; justify-content: flex-end;">
-          <button
-            class="btn primary"
-            title=${props.canPairDevice ? "" : t("nodes.pairing.adminRequired")}
-            ?disabled=${!props.canPairDevice || props.devicePairSetupLoading}
-            @click=${props.onDevicePairSetupOpen}
-          >
-            ${icons.smartphone} ${t("nodes.pairing.button")}
-          </button>
-          <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
-            ${props.devicesLoading ? t("common.loading") : t("common.refresh")}
-          </button>
-        </div>
+        <button class="btn" ?disabled=${props.devicesLoading} @click=${props.onDevicesRefresh}>
+          ${props.devicesLoading ? t("common.loading") : t("common.refresh")}
+        </button>
       </div>
       ${props.devicesError
         ? html`<div class="callout danger" style="margin-top: 12px;">${props.devicesError}</div>`

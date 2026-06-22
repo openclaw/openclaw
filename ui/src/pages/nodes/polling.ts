@@ -1,6 +1,6 @@
-// Control UI module implements app polling behavior.
-import type { NodesState } from "./controllers/nodes.ts";
-import { loadNodes } from "./controllers/nodes.ts";
+// Nodes page owns its active polling lifecycle.
+import type { NodesState } from "./data.ts";
+import { loadNodes } from "./data.ts";
 
 type PollingHost = {
   nodesPollInterval: number | null;

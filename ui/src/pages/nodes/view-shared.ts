@@ -1,5 +1,5 @@
-// Control UI view renders nodes shared screen content.
-import { normalizeOptionalString } from "../string-coerce.ts";
+// Nodes page owns these pure view helpers.
+import { normalizeOptionalString } from "../../ui/string-coerce.ts";
 
 export type NodeTargetOption = {
   id: string;

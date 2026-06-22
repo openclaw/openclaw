@@ -133,7 +133,7 @@ vi.mock("./app-settings.ts", () => ({
   syncUrlWithSessionKey: syncUrlWithSessionKeyMock,
 }));
 
-vi.mock("./controllers/agents.ts", () => ({
+vi.mock("../pages/agents/data.ts", () => ({
   loadAgents: loadAgentsMock,
 }));
 
@@ -145,8 +145,7 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
   loadControlUiBootstrapConfig: loadControlUiBootstrapConfigMock,
 }));
 
-vi.mock("./controllers/devices.ts", () => ({
-  closeDevicePairSetup: vi.fn(),
+vi.mock("../pages/nodes/devices.ts", () => ({
   loadDevices: loadDevicesMock,
 }));
 
@@ -169,7 +168,7 @@ vi.mock("./controllers/model-auth-status.ts", () => ({
   loadModelAuthStatusState: loadModelAuthStatusStateMock,
 }));
 
-vi.mock("./controllers/nodes.ts", () => ({
+vi.mock("../pages/nodes/data.ts", () => ({
   loadNodes: loadNodesMock,
 }));
 
@@ -186,14 +185,14 @@ afterAll(() => {
   vi.doUnmock("../pages/chat/data.ts");
   vi.doUnmock("./app-scroll.ts");
   vi.doUnmock("./app-settings.ts");
-  vi.doUnmock("./controllers/agents.ts");
+  vi.doUnmock("../pages/agents/data.ts");
   vi.doUnmock("./controllers/assistant-identity.ts");
   vi.doUnmock("./controllers/control-ui-bootstrap.ts");
-  vi.doUnmock("./controllers/devices.ts");
+  vi.doUnmock("../pages/nodes/devices.ts");
   vi.doUnmock("./controllers/exec-approval.ts");
   vi.doUnmock("./controllers/health.ts");
   vi.doUnmock("./controllers/model-auth-status.ts");
-  vi.doUnmock("./controllers/nodes.ts");
+  vi.doUnmock("../pages/nodes/data.ts");
   vi.doUnmock("../pages/sessions/data.ts");
   vi.resetModules();
 });

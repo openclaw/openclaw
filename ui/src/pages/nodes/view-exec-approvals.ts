@@ -1,17 +1,14 @@
 // Control UI view renders nodes exec approvals screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import type {
-  ExecApprovalsAllowlistEntry,
-  ExecApprovalsFile,
-} from "../controllers/exec-approvals.ts";
-import { clampText, formatRelativeTimestamp } from "../format.ts";
+import { clampText, formatRelativeTimestamp } from "../../ui/format.ts";
+import type { ExecApprovalsAllowlistEntry, ExecApprovalsFile } from "./exec-approvals.ts";
 import {
   resolveConfigAgents as resolveSharedConfigAgents,
   resolveNodeTargets,
   type NodeTargetOption,
-} from "./nodes-shared.ts";
-import type { NodesProps } from "./nodes.types.ts";
+} from "./view-shared.ts";
+import type { NodesProps } from "./view.types.ts";
 
 type ExecSecurity = "deny" | "allowlist" | "full";
 type ExecAsk = "off" | "on-miss" | "always";

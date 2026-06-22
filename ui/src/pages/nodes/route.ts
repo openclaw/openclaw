@@ -2,28 +2,28 @@ import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
-import { startNodesPolling, stopNodesPolling } from "../../ui/app-polling.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import {
-  approveDevicePairing,
-  loadDevices,
-  rejectDevicePairing,
-  revokeDeviceToken,
-  rotateDeviceToken,
-} from "../../ui/controllers/devices.ts";
-import {
-  loadExecApprovals,
-  removeExecApprovalsFormValue,
-  saveExecApprovals,
-  updateExecApprovalsFormValue,
-} from "../../ui/controllers/exec-approvals.ts";
-import { loadNodes } from "../../ui/controllers/nodes.ts";
 import {
   loadConfig,
   removeConfigFormValue,
   saveConfig,
   updateConfigFormValue,
 } from "../config/data.ts";
+import { loadNodes } from "./data.ts";
+import {
+  approveDevicePairing,
+  loadDevices,
+  rejectDevicePairing,
+  revokeDeviceToken,
+  rotateDeviceToken,
+} from "./devices.ts";
+import {
+  loadExecApprovals,
+  removeExecApprovalsFormValue,
+  saveExecApprovals,
+  updateExecApprovalsFormValue,
+} from "./exec-approvals.ts";
+import { startNodesPolling, stopNodesPolling } from "./polling.ts";
 
 type NodesLoadContext = { host: SettingsHost; app: SettingsAppHost };
 type NodesRenderContext = { state: AppViewState };
@@ -42,7 +42,7 @@ export const page = definePage({
   onLeave: ({ host }: NodesLoadContext) =>
     stopNodesPolling(host as unknown as Parameters<typeof stopNodesPolling>[0]),
   component: () =>
-    import("../../ui/views/nodes.ts").then((module) => ({
+    import("./view.ts").then((module) => ({
       shell: "page" as const,
       header: true,
       render: ({ state }: NodesRenderContext) => html`
