@@ -265,12 +265,8 @@ export const streamOpenAICompletions: StreamFunction<
           thinkingBlock = null;
         }
       };
-      const appendTextDelta = (delta: string, hasNativeReasoning = false) => {
-        // Compatible endpoints can co-emit content and native reasoning in one chunk.
-        // Keep that reasoning block open; a later text-only chunk closes it.
-        if (!hasNativeReasoning) {
-          sealNativeReasoningBeforeText();
-        }
+      const appendTextDelta = (delta: string) => {
+        sealNativeReasoningBeforeText();
         const block = ensureTextBlock();
         block.text += delta;
         stream.push({
@@ -403,14 +399,6 @@ export const streamOpenAICompletions: StreamFunction<
           if (foundReasoningField) {
             reasoningTagTextPartitioner.markStrict();
           }
-          if (
-            choice.delta.content !== null &&
-            choice.delta.content !== undefined &&
-            choice.delta.content.length > 0
-          ) {
-            appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
-          }
-
           if (shouldEmitReasoning && foundReasoningField) {
             const delta = deltaFields[foundReasoningField];
             if (typeof delta === "string" && delta.length > 0) {
@@ -420,6 +408,13 @@ export const streamOpenAICompletions: StreamFunction<
                   : foundReasoningField;
               appendThinkingDelta(thinkingSignature, delta);
             }
+          }
+          if (
+            choice.delta.content !== null &&
+            choice.delta.content !== undefined &&
+            choice.delta.content.length > 0
+          ) {
+            appendPartitionedContent(choice.delta.content, Boolean(foundReasoningField));
           }
 
           if (choice?.delta?.tool_calls) {

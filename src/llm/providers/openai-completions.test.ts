@@ -908,6 +908,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
 
     expect(eventTypes.filter((type) => type === "thinking_start")).toHaveLength(1);
     expect(eventTypes.filter((type) => type === "thinking_end")).toHaveLength(1);
+    expect(eventTypes.indexOf("thinking_end")).toBeLessThan(eventTypes.indexOf("text_start"));
     expect(result.content).toContainEqual({
       type: "thinking",
       thinking: "First thought. Second thought.",
