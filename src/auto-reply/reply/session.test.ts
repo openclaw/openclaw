@@ -3073,6 +3073,21 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       modelProvider: "openai",
       model: "gpt-5.4-mini",
       contextTokens: 400_000,
+      cacheRead: 1_000,
+      cacheWrite: 2_000,
+      fallbackNoticeSelectedModel: "openai/gpt-5.4-mini",
+      fallbackNoticeActiveModel: "minimax/m2.7",
+      fallbackNoticeReason: "rate limit",
+      systemPromptReport: {
+        source: "run",
+        generatedAt: 1,
+        provider: "openai",
+        model: "gpt-5.4-mini",
+        systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      },
       verboseLevel: "on",
     } as const;
     const explicitUserOverride = {
@@ -3126,6 +3141,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
       expect(result.sessionEntry.modelProvider, testCase.name).toBeUndefined();
       expect(result.sessionEntry.model, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.cacheRead, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.cacheWrite, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeSelectedModel, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeActiveModel, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.fallbackNoticeReason, testCase.name).toBeUndefined();
+      expect(result.sessionEntry.systemPromptReport, testCase.name).toBeUndefined();
       expect(result.sessionEntry.providerOverride, testCase.name).toBe(
         explicitUserOverride.providerOverride,
       );
@@ -3144,6 +3165,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       >;
       expect(stored[sessionKey].modelProvider, testCase.name).toBeUndefined();
       expect(stored[sessionKey].model, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].cacheRead, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].cacheWrite, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].fallbackNoticeSelectedModel, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].fallbackNoticeActiveModel, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].fallbackNoticeReason, testCase.name).toBeUndefined();
+      expect(stored[sessionKey].systemPromptReport, testCase.name).toBeUndefined();
       expect(stored[sessionKey].providerOverride, testCase.name).toBe(
         explicitUserOverride.providerOverride,
       );
