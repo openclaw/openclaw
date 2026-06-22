@@ -645,28 +645,23 @@ function buildAggregateToolResultReplacements(params: {
       textLength: getToolResultTextLength(item.entry.message),
       aggregateEligible: item.entry.aggregateEligible !== false,
     }))
-    .filter((item) => item.textLength > 0)
-    // FIX #95219: Skip tool results that already had a truncation marker
-    // *before* the current oversized truncation pass.  Once a historical tool
-    // result has been projected into model-facing form across turns, re-truncating
-    // it changes its byte representation and breaks prompt cache prefix stability.
-    // Messages whose marker was added by the current oversized step (i.e. the
-    // original message had no marker) are still eligible for aggregate reduction.
-    .filter((item) => {
-      if (!params.originalBranchById) {
-        return true; // No original-branch info → always eligible (legacy behavior)
-      }
-      const originalEntry = params.originalBranchById.get(item.entryId);
-      if (!originalEntry?.message) {
-        return true; // No original message found → cannot determine → eligible
-      }
-      // Only skip if the original message ALREADY had a truncation marker
-      // (meaning this is a historical projection, not a freshly-truncated one).
-      return !messageHasTruncationMarker(originalEntry.message);
-    });
+    .filter((item) => item.textLength > 0);
 
   if (candidates.length < 2) {
     return [];
+  }
+
+  // FIX #95219: Separate already-truncated (historical) tool results from eligible ones.
+  // Historical results must remain byte-stable to preserve prompt cache prefix stability,
+  // but their text length still counts against the aggregate budget so we do not
+  // underestimate prompt pressure.
+  const skippedTruncated: typeof candidates = [];
+  const eligible: typeof candidates = [];
+  for (const item of candidates) {
+    const originalEntry = params.originalBranchById?.get(item.entryId);
+    const isAlreadyTruncated =
+      !!originalEntry?.message && messageHasTruncationMarker(originalEntry.message);
+    (isAlreadyTruncated ? skippedTruncated : eligible).push(item);
   }
 
   const suffixFactory =
@@ -676,7 +671,8 @@ function buildAggregateToolResultReplacements(params: {
       : DEFAULT_SUFFIX;
   const minTruncatedTextChars = minKeepChars + suffixFactory(1).length;
 
-  const totalChars = candidates.reduce((sum, item) => sum + item.textLength, 0);
+  const totalChars = skippedTruncated.reduce((sum, item) => sum + item.textLength, 0) +
+    eligible.reduce((sum, item) => sum + item.textLength, 0);
   if (totalChars <= params.aggregateBudgetChars) {
     return [];
   }
@@ -684,8 +680,9 @@ function buildAggregateToolResultReplacements(params: {
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements: Array<{ entryId: string; message: AgentMessage }> = [];
 
-  // Spend aggregate reduction on older entries first so fresh tool output stays intact.
-  for (const candidate of candidates
+  // Spend aggregate reduction on older eligible (non-historical) entries first
+  // so fresh tool output stays intact and historical projections remain stable.
+  for (const candidate of eligible
     .filter((item) => item.aggregateEligible)
     .toSorted((a, b) => {
       if (a.index !== b.index) {
@@ -718,7 +715,7 @@ function buildAggregateToolResultReplacements(params: {
   }
 
   if (remainingReduction > 0) {
-    for (const candidate of candidates.filter((item) => item.aggregateEligible)) {
+    for (const candidate of eligible.filter((item) => item.aggregateEligible)) {
       if (remainingReduction <= 0) {
         break;
       }
