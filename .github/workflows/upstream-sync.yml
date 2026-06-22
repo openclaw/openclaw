@@ -1,28 +1,24 @@
+---
 name: Upstream sync (Railway-safe)
-
-# Automatically pulls the newest OpenClaw release, re-applies the Railway
-# Dockerfile patches, and PROVES it builds (real `docker build`) before letting
-# it reach `main` (which is what Railway deploys). If the build fails, `main`
-# is left untouched and a PR is opened for review — Railway can never break
-# from an upstream update.
-
-on:
+# Pulls the newest OpenClaw release, takes upstream's Dockerfile as-is (Railway
+# supports BuildKit mounts), appends only the PaaS Control UI config, and PROVES
+# it builds before promoting to main (what Railway deploys). On any failure main
+# is left untouched and an issue is opened. Railway can never break from a sync.
+"on":
   schedule:
-    - cron: '0 8 * * 1'        # Mondays 08:00 UTC
+    - cron: '0 8 * * 1'  # Mondays 08:00 UTC
   workflow_dispatch:
     inputs:
       ref:
         description: 'Upstream tag/branch to sync (blank = latest release tag)'
         required: false
-
 permissions:
   contents: write
   pull-requests: write
-
+  issues: write
 concurrency:
   group: upstream-sync
   cancel-in-progress: false
-
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -32,38 +28,40 @@ jobs:
         with:
           fetch-depth: 0
           ref: main
-
       - name: Free up runner disk (the OpenClaw image is large)
         run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL || true
+          sudo rm -rf /usr/share/dotnet /opt/ghc || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
           docker image prune -af || true
           df -h | head -3
-
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Add upstream and fetch tags
         run: |
-          git remote add upstream https://github.com/openclaw/openclaw.git 2>/dev/null \
-            || git remote set-url upstream https://github.com/openclaw/openclaw.git
+          git remote add upstream https://github.com/openclaw/openclaw.git \
+            2>/dev/null \
+            || git remote set-url upstream \
+                 https://github.com/openclaw/openclaw.git
           git fetch --tags --prune upstream
-
       - name: Resolve target release
         id: pick
         run: |
           REF="${{ github.event.inputs.ref }}"
           if [ -z "$REF" ]; then
-            # newest calendar-version release tag, excluding pre-releases (no hyphen)
-            REF=$(git tag -l --sort=-version:refname | grep -E '^v?[0-9]{4}\.[0-9]+\.[0-9]+$' | head -1)
+            REF=$(git tag -l --sort=-version:refname \
+              | grep -E '^v?[0-9]{4}\.[0-9]+\.[0-9]+$' | head -1)
           fi
-          if [ -z "$REF" ]; then echo "No upstream release tag found"; exit 1; fi
-          CUR=$(node -p "require('./package.json').version" 2>/dev/null || echo "unknown")
+          if [ -z "$REF" ]; then
+            echo "No upstream release tag found"; exit 1
+          fi
+          CUR=$(node -p "require('./package.json').version" \
+            2>/dev/null || echo "unknown")
           echo "ref=$REF"     >> "$GITHUB_OUTPUT"
           echo "current=$CUR" >> "$GITHUB_OUTPUT"
           echo "Target upstream release: $REF (current $CUR)"
-
       - name: Skip if already up to date
         id: check
         run: |
@@ -74,65 +72,98 @@ jobs:
           else
             echo "uptodate=false" >> "$GITHUB_OUTPUT"
           fi
-
-      - name: Merge upstream + re-apply Railway patches
+      - name: Merge upstream + re-apply Railway config
         if: steps.check.outputs.uptodate == 'false'
         id: merge
         run: |
           REF="${{ steps.pick.outputs.ref }}"
           BR="sync/${REF}"
           git checkout -B "$BR" main
-          # don't auto-commit; we resolve known files deterministically first
           git merge --no-commit --no-ff "$REF" || true
-          # Dockerfile: start from upstream's fresh version, then re-patch idempotently
+
+          # 1) Dockerfile: take upstream's fresh version, then append config.
           git checkout --theirs -- Dockerfile 2>/dev/null || true
-          # Our infra files always win over upstream
-          git checkout --ours -- .github/workflows CLAUDE.md scripts 2>/dev/null || true
-          git add -A
+          git add Dockerfile 2>/dev/null || true
+
+          # 2) Our infra always wins over upstream.
+          for f in CLAUDE.md railway.toml; do
+            git checkout --ours -- "$f" 2>/dev/null && git add "$f" || true
+          done
+          git checkout --ours -- scripts 2>/dev/null || true
+          git add scripts 2>/dev/null || true
+
+          # 3) Strip any upstream-added/changed workflow files — pushing them
+          #    needs a 'workflows'-scoped token GITHUB_TOKEN lacks.
+          git rm -rf --cached --ignore-unmatch .github/workflows \
+            >/dev/null 2>&1 || true
+          rm -rf .github/workflows
+          git checkout HEAD -- .github/workflows
+          git add .github/workflows
+
+          # 4) Railway is config-driven; prefer upstream gateway source.
+          for f in src/gateway/startup-control-ui-origins.ts \
+                   src/gateway/startup-control-ui-origins.test.ts \
+                   src/gateway/server.impl.ts; do
+            git checkout --theirs -- "$f" 2>/dev/null && git add "$f" || true
+          done
+
+          # 5) Append the Railway PaaS config + entrypoint (idempotent).
           bash scripts/railway-patch-dockerfile.sh
           git add Dockerfile
-          # any genuine code conflicts left?
+
+          # 6) Only NOW check for genuine unresolved conflicts.
           if git ls-files -u | grep -q .; then
             echo "conflicts=true" >> "$GITHUB_OUTPUT"
-            echo "Unresolved conflicts in:"; git ls-files -u | awk '{print $4}' | sort -u
+            echo "Unresolved conflicts in:"
+            git ls-files -u | awk '{print $4}' | sort -u
             git merge --abort || true
             exit 0
           fi
-          git commit --no-edit -m "sync: merge upstream ${REF} (Railway-patched)" || echo "nothing to commit"
+          git commit --no-edit \
+            -m "sync: merge upstream ${REF} (Railway config-as-code)" \
+            || echo "nothing to commit"
           echo "branch=$BR" >> "$GITHUB_OUTPUT"
           echo "conflicts=false" >> "$GITHUB_OUTPUT"
-
-      - name: Open PR for manual review (merge conflicts)
-        if: steps.check.outputs.uptodate == 'false' && steps.merge.outputs.conflicts == 'true'
+      - name: Open issue for manual review (merge conflicts)
+        if: >
+          steps.check.outputs.uptodate == 'false' &&
+          steps.merge.outputs.conflicts == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           REF="${{ steps.pick.outputs.ref }}"
           gh issue create \
             --title "Upstream sync ${REF} needs manual merge" \
-            --body "The automated sync to upstream ${REF} hit code conflicts that need a human. \`main\` and Railway are untouched. Run the sync locally, resolve, and push." \
+            --body "Automated sync to upstream ${REF} hit code conflicts \
+          that need a human. main and Railway are untouched. Run the sync \
+          locally, resolve, and push." \
             || true
-
       - name: Build gate — prove the image builds (what Railway will do)
-        if: steps.check.outputs.uptodate == 'false' && steps.merge.outputs.conflicts == 'false'
+        if: >
+          steps.check.outputs.uptodate == 'false' &&
+          steps.merge.outputs.conflicts == 'false'
         run: |
           DOCKER_BUILDKIT=1 docker build -t openclaw-railway-test .
-
       - name: Promote to main (build passed → safe for Railway)
-        if: steps.check.outputs.uptodate == 'false' && steps.merge.outputs.conflicts == 'false'
+        if: >
+          steps.check.outputs.uptodate == 'false' &&
+          steps.merge.outputs.conflicts == 'false'
         run: |
           git checkout main
           git merge --ff-only "${{ steps.merge.outputs.branch }}"
           git push origin main
-          echo "Promoted ${{ steps.pick.outputs.ref }} to main; Railway will deploy a known-building image."
-
-      - name: Build failed → open PR, leave main/Railway untouched
+          echo "Promoted ${{ steps.pick.outputs.ref }} to main."
+      - name: Build failed → push branch + open issue, keep main untouched
         if: failure() && steps.merge.outputs.branch != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git push origin "${{ steps.merge.outputs.branch }}" || true
-          gh pr create --base main --head "${{ steps.merge.outputs.branch }}" \
-            --title "Upstream sync ${{ steps.pick.outputs.ref }} — BUILD FAILED, review needed" \
-            --body "Automated sync built **failed** in CI, so it was NOT promoted to main. Railway stays on the last good version. Inspect the build log before merging." \
+          gh issue create \
+            --title "Upstream sync ${{ steps.pick.outputs.ref }} — \
+          BUILD FAILED" \
+            --body "Automated sync build FAILED in CI, so it was NOT \
+          promoted to main. Railway stays on the last good version. Branch \
+          \`${{ steps.merge.outputs.branch }}\` was pushed; inspect the \
+          build log before merging." \
             || true
