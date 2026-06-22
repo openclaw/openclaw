@@ -257,7 +257,9 @@ describe("embedded attempt session lock lifecycle", () => {
     });
 
     // Give the write time to acquire the retained lock.
-    await new Promise((r) => setTimeout(r, 50));
+    await new Promise<void>((r) => {
+      setTimeout(r, 50);
+    });
 
     // Dispose while the write is stuck. The bounded wait should time out
     // and force-release rather than hanging.
