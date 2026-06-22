@@ -2854,16 +2854,16 @@ describe("active-memory plugin", () => {
     );
 
     const prependContext = requirePrependContext(result);
-    expect(prependContext).toContain("alpha beta gamma delta epsilon zeta");
+    expect(prependContext).toContain("alpha beta gamma delta epsilon zeta eta…");
     expect(prependContext).toContain("<active_memory_plugin>");
     expect(prependContext).not.toContain("theta");
     expect(prependContext).not.toContain("ignore this user text");
     const lines = getActiveMemoryLines(sessionKey);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
-    expectLinesToContain(lines, "summary=35 chars");
+    expectLinesToContain(lines, "summary=40 chars");
     expectLinesToContain(
       lines,
-      "🔎 Active Memory Debug: timeout_partial: 35 chars recovered (not persisted)",
+      "🔎 Active Memory Debug: timeout_partial: 40 chars recovered (not persisted)",
     );
     expect(lines.join("\n")).not.toContain("alpha beta gamma delta");
   });
@@ -5329,9 +5329,26 @@ describe("active-memory plugin", () => {
 
     const prependContext = requirePrependContext(result);
     expect(prependContext).toContain("alpha beta gamma");
-    expect(prependContext).toContain("alpha beta gamma delta epsilon");
+    expect(prependContext).toContain("alpha beta gamma delta epsilon…");
     expect(prependContext).not.toContain("zetalo");
     expect(prependContext).not.toContain("zetalongword");
+  });
+
+  it("asks recall subagents to mark mutable operational facts stale unless source status is current", async () => {
+    await hooks.before_prompt_build(
+      { prompt: "is autonomous pickup running?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = lastEmbeddedPrompt();
+    expect(prompt).toContain("Mutable operational facts");
+    expect(prompt).toContain("source timestamp");
+    expect(prompt).toContain("verify live");
   });
 
   it("uses the configured maxSummaryChars value in the subagent prompt", async () => {
