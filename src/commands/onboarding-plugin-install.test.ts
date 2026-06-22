@@ -105,6 +105,11 @@ vi.mock("../utils/with-timeout.js", () => ({
   withTimeout,
 }));
 
+const clearPluginMetadataLifecycleCaches = vi.hoisted(() => vi.fn());
+vi.mock("../plugins/plugin-metadata-lifecycle.js", () => ({
+  clearPluginMetadataLifecycleCaches,
+}));
+
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 
 function requireCapturedPrompt<T>(captured: T | undefined): T {
@@ -636,6 +641,9 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(installed?.source).toBe("npm");
     expect(installed?.spec).toBe("@wecom/wecom-openclaw-plugin@1.2.3");
     expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
+    // A successful install must invalidate the process-stable plugin metadata snapshot
+    // so the same onboarding run can discover and resolve the freshly installed provider.
+    expect(clearPluginMetadataLifecycleCaches).toHaveBeenCalledOnce();
   });
 
   it("logs npm install warnings once while shortening the progress label", async () => {
@@ -708,6 +716,8 @@ describe("ensureOnboardingPluginInstalled", () => {
       pluginId: "demo-plugin",
       status: "timed_out",
     });
+    // No on-disk plugin landed, so the metadata snapshot must stay intact.
+    expect(clearPluginMetadataLifecycleCaches).not.toHaveBeenCalled();
     expect(stop).toHaveBeenCalledWith("Install timed out: Demo Plugin");
     expect(note).toHaveBeenCalledWith(
       "Installing @demo/plugin@1.2.3 timed out after 5 minutes.\nReturning to selection.",
