@@ -124,6 +124,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           twilio: {
             accountSid: "ACxxxxxxxx",
             authToken: "...",
+            // region: "ie1", // optional: us1 | ie1 | au1; defaults to us1
           },
           telnyx: {
             apiKey: "...",
