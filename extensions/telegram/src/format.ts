@@ -8,6 +8,7 @@ import {
   markdownToIRWithMeta,
   type MarkdownLinkSpan,
   type MarkdownIR,
+  type MarkdownTableAlignment,
   type MarkdownTableCell,
   type MarkdownTableMeta,
   renderMarkdownIRChunksWithinLimit,
@@ -972,19 +973,25 @@ function renderTelegramRichHtmlTable(table: MarkdownTableMeta): string {
   }
   const renderCellValue = (cell: MarkdownTableCell | undefined) =>
     cell ? renderTelegramHtml(cell) : "";
-  const renderCell = (tag: "td" | "th", value: MarkdownTableCell | undefined) =>
-    `<${tag}>${renderCellValue(value)}</${tag}>`;
+  const renderCell = (
+    tag: "td" | "th",
+    value: MarkdownTableCell | undefined,
+    align: MarkdownTableAlignment | undefined,
+  ) => {
+    const alignAttr = align ? ` align="${align}"` : "";
+    return `<${tag}${alignAttr}>${renderCellValue(value)}</${tag}>`;
+  };
   const head = table.headers.length
-    ? `<thead><tr>${table.headerCells.map((cell) => renderCell("th", cell)).join("")}</tr></thead>`
+    ? `<thead><tr>${table.headerCells.map((cell, index) => renderCell("th", cell, table.aligns?.[index])).join("")}</tr></thead>`
     : "";
   const bodyRows = table.rowCells
     .map(
       (row) =>
-        `<tr>${Array.from({ length: columnCount }, (_value, index) => renderCell("td", row[index])).join("")}</tr>`,
+        `<tr>${Array.from({ length: columnCount }, (_value, index) => renderCell("td", row[index], table.aligns?.[index])).join("")}</tr>`,
     )
     .join("");
   const body = bodyRows ? `<tbody>${bodyRows}</tbody>` : "";
-  return `<table>${head}${body}</table>\n\n`;
+  return `<table bordered striped>${head}${body}</table>\n\n`;
 }
 
 function renderTelegramRichHtmlDocument(
