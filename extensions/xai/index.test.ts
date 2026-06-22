@@ -188,6 +188,33 @@ describe("xai provider plugin", () => {
       "grok-composer-2.5-fast",
       "grok-build",
     ]);
+    const composer = result.provider.models.find((model) => model.id === "grok-composer-2.5-fast");
+    if (!composer) {
+      throw new Error("expected OAuth Composer model");
+    }
+    expect(composer.reasoning).toBe(true);
+    expect(result.provider.models.find((model) => model.id === "grok-build")?.reasoning).toBe(true);
+    const normalizedComposer = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: composer.id,
+      model: { ...composer, provider: "xai" },
+    } as never);
+    if (!normalizedComposer) {
+      throw new Error("expected normalized OAuth Composer model");
+    }
+    const capture = createXaiPayloadCaptureStream();
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "xai",
+      modelId: normalizedComposer.id,
+      extraParams: {},
+      streamFn: capture.streamFn,
+    } as never);
+    if (!wrapped) {
+      throw new Error("expected xAI stream wrapper");
+    }
+    void wrapped(normalizedComposer as never, { messages: [] } as never, {});
+    expect(capture.getCapturedPayload()).not.toHaveProperty("reasoning");
+    expect(capture.getCapturedPayload()?.include).toEqual(["reasoning.encrypted_content"]);
     expect(providerAuthRuntimeMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
       provider: "xai",
       cfg: { models: {} },
