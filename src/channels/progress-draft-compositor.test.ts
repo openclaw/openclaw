@@ -46,7 +46,23 @@ describe("createChannelProgressDraftCompositor", () => {
     });
   });
 
-  it("keeps reasoning details hidden when tool progress lines are hidden", async () => {
+  it("gates window thinking on its own flag, independent of tool progress", async () => {
+    // thinking: false hides thoughts even though toolProgress stays on…
+    const hiddenUpdate = vi.fn();
+    const hidden = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { label: "Shelling", thinking: false } },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update: hiddenUpdate,
+    });
+    await hidden.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await hidden.pushReasoningProgress("Reading files");
+    expect(hiddenUpdate).not.toHaveBeenCalledWith(expect.stringContaining("Reading"), undefined);
+
+    // …and a tools-quiet window can still show thoughts (no piggybacking).
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
       entry: {
@@ -57,12 +73,31 @@ describe("createChannelProgressDraftCompositor", () => {
       seed: "test",
       update,
     });
-
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
     await progress.pushReasoningProgress("Reading files");
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🧠 _Reading files_", undefined);
+  });
 
-    expect(update).toHaveBeenCalledWith("Shelling", { flush: true, lines: [] });
-    expect(update.mock.calls.every(([text]) => !String(text).includes("Reading"))).toBe(true);
+  it("re-arms the draft for a queued turn after the primary final settled", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    progress.markFinalReplyStarted();
+    progress.markFinalReplyDelivered();
+    expect(await progress.pushReasoningProgress("queued-turn thinking")).toBe(false);
+
+    // New assistant message boundary on a queued/followup turn.
+    progress.beginNewTurn();
+    await progress.start();
+    await progress.pushReasoningProgress("queued-turn thinking", { snapshot: true });
+
+    expect(update).toHaveBeenCalled();
   });
 
   it("does not resurrect progress after suppression", async () => {
@@ -95,34 +130,45 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress("Reading");
     await progress.pushReasoningProgress(" files");
 
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n• _Reading files_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "_Reading files_"],
-      }),
-    );
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🧠 _Reading files_", undefined);
   });
 
-  it("resets reasoning deltas without clearing tool progress", async () => {
+  it("labels window narration with a 💬 prefix", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
-      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } } },
       mode: "progress",
       active: true,
       seed: "test",
       update,
     });
 
-    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
-    await progress.pushReasoningProgress("Checking files");
-    progress.resetReasoningProgress();
-    await progress.pushReasoningProgress("Now testing");
+    await progress.pushCommentaryProgress("Checking the workspace", { itemId: "c1" });
+
+    const rendered = update.mock.calls.map((call) => call[0]);
+    expect(rendered).toContain("Shelling\n\n💬 _Checking the workspace_");
+  });
+
+  it("interleaves reasoning bursts with tool calls in arrival order", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling", maxLines: 8 } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    // thought1 → tool1 → thought2 → tool2: each thought is its own line,
+    // appended in order, not collapsed into a single replaced line.
+    await progress.pushReasoningProgress("Listing the workspace");
+    await progress.pushToolProgress("🛠️ ls", { startImmediately: true });
+    await progress.pushReasoningProgress("Picking the largest");
+    await progress.pushToolProgress("🛠️ wc", { startImmediately: true });
 
     expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n• _Now testing_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "_Now testing_"],
-      }),
+      "Shelling\n\n🧠 _Listing the workspace_\n🛠️ ls\n🧠 _Picking the largest_\n🛠️ wc",
+      undefined,
     );
   });
 
@@ -139,12 +185,7 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
     await progress.pushReasoningProgress("<think>Checking files</think>Final answer prose");
 
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n• _Checking files_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "_Checking files_"],
-      }),
-    );
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🧠 _Checking files_", undefined);
   });
 
   it("waits for complete reasoning tags before showing tagged progress", async () => {
@@ -178,12 +219,7 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress("<thin");
     await progress.pushReasoningProgress("k>Checking files</think>Final answer prose");
 
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n• _Checking files_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "_Checking files_"],
-      }),
-    );
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🧠 _Checking files_", undefined);
   });
 
   it("keeps literal reasoning tags inside code blocks", async () => {
@@ -200,10 +236,8 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress("```html\n<think>literal</think>\n```");
 
     expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n• _```html <think>literal</think> ```_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "_```html <think>literal</think> ```_"],
-      }),
+      "Shelling\n\n🛠️ Exec\n🧠 _```html <think>literal</think> ```_",
+      undefined,
     );
   });
 
@@ -221,12 +255,7 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress("Thinking\n\n_Reading_");
     await progress.pushReasoningProgress("Thinking\n\n_Reading files_");
 
-    expect(update).toHaveBeenLastCalledWith(
-      "Shelling\n\n🛠️ Exec\n• _Reading files_",
-      expect.objectContaining({
-        lines: ["🛠️ Exec", "_Reading files_"],
-      }),
-    );
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🧠 _Reading files_", undefined);
   });
 
   it("logs a timer-fired start failure via the gate's default boundary logger", async () => {

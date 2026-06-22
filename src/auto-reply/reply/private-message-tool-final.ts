@@ -46,7 +46,9 @@ export function shouldWarnAboutPrivateMessageToolFinal(params: {
 
 /**
  * Emit metadata-only operator signal. The body is intentionally omitted:
- * `message_tool_only` keeps normal final text private by design.
+ * `message_tool_only` keeps normal final text private by design. The
+ * substantive final is now delivered to the source channel as a fallback
+ * (see markReplyPayloadForMessageToolOnlyFinalFallback) so it is not dropped.
  */
 export function warnPrivateMessageToolFinal(params: {
   sessionKey: string | undefined;
@@ -54,7 +56,7 @@ export function warnPrivateMessageToolFinal(params: {
   finalTextLength: number;
 }): void {
   privateFinalReplyLogger.warn(
-    "agent produced a long private final reply without calling the configured delivery tool (message_tool_only); response kept private and not delivered to the source channel",
+    "agent produced a long final reply without calling the configured delivery tool (message_tool_only); delivering it to the source channel as a fallback to avoid silently dropping it",
     {
       sessionKey: params.sessionKey,
       channel: params.channel,

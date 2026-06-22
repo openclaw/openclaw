@@ -3101,17 +3101,22 @@ export async function dispatchReplyFromConfig(
                 if (suppressDelivery) {
                   return;
                 }
-                // Suppress reasoning payloads — channels using this generic dispatch
-                // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
-                // Telegram has its own dispatch path that handles reasoning splitting.
-                if (payload.isReasoning === true) {
+                // Suppress reasoning payloads unless the channel declared it
+                // renders them (reasoningPayloadsEnabled). Channels without a
+                // reasoning lane (WhatsApp, web, etc.) keep the drop; Telegram
+                // has its own dispatch path that handles reasoning splitting.
+                if (
+                  payload.isReasoning === true &&
+                  params.replyOptions?.reasoningPayloadsEnabled !== true
+                ) {
                   return;
                 }
                 // Accumulate block text for TTS generation after streaming.
                 // Exclude status notices — they are informational UI signals
-                // and must not be synthesised into the spoken reply.
+                // and must not be synthesised into the spoken reply. Reasoning
+                // stays out too: it is a presentation lane, never final text.
                 const isStatusNotice = isReplyPayloadStatusNotice(payload);
-                if (payload.text && !isStatusNotice) {
+                if (payload.text && !isStatusNotice && payload.isReasoning !== true) {
                   const joinsBufferedTtsDirective =
                     cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                   if (accumulatedBlockText.length > 0) {
@@ -3272,14 +3277,29 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    // #85714 follow-up: deliver a substantive plain final that message_tool_only
+    // suppressed when the model never called the delivery tool, instead of
+    // dropping it silently. agent-runner marks the payload only when its warn
+    // predicate held (no successful tool send, not sendPolicy-denied, not
+    // trivial/silent), so this gate just re-confirms the suppression context.
+    // sendPolicy deny still wins; room_event keeps its intended silence.
+    const shouldDeliverMessageToolOnlyFinalFallback = (reply: ReplyPayload) =>
+      suppressAutomaticSourceDelivery &&
+      !sendPolicyDenied &&
+      ctx.InboundEventKind !== "room_event" &&
+      getReplyPayloadMetadata(reply)?.deliverMessageToolOnlyFinalFallback === true;
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
-      // Suppress reasoning payloads from channel delivery — channels using this
-      // generic dispatch path do not have a dedicated reasoning lane.
-      if (reply.isReasoning === true) {
+      // Suppress reasoning payloads from channel delivery unless the channel
+      // declared it renders them (reasoningPayloadsEnabled).
+      if (reply.isReasoning === true && params.replyOptions?.reasoningPayloadsEnabled !== true) {
         continue;
       }
-      if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+      if (
+        suppressDelivery &&
+        !shouldDeliverDespiteSourceReplySuppression(reply) &&
+        !shouldDeliverMessageToolOnlyFinalFallback(reply)
+      ) {
         if (hasOutboundReplyContent(reply, { trimText: true })) {
           logVerbose(
             [

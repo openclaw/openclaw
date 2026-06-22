@@ -445,6 +445,10 @@ describe("loadGatewayPlugins", () => {
     });
     expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["discord", "telegram"]);
     expect(getLastPluginLoadOption("preferBuiltPluginArtifacts")).toBe(true);
+    // Gateway startup hands the loader a prepared runtime config that already
+    // went through env substitution; re-resolving would turn escaped $${VAR}
+    // literals into real env values, so the raw-resolution flag must stay off.
+    expect(getLastPluginLoadOption("resolveRawConfigEnvVars")).toBeUndefined();
   });
 
   test("routes plugin registration logs through the plugin logger", () => {

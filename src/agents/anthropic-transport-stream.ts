@@ -53,6 +53,7 @@ import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
+  encodeAssistantTextSignatureV1,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -111,7 +112,7 @@ function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string 
 }
 
 type TransportContentBlock =
-  | { type: "text"; text: string; index?: number }
+  | { type: "text"; text: string; index?: number; textSignature?: string }
   | {
       type: "thinking";
       thinking: string;
@@ -1582,6 +1583,35 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
         }
         refusalBuffer?.flush();
+        // A tool-using turn's visible text is narration/preamble, not the final
+        // answer. Tag it commentary so it routes to the narration lane (💬 with
+        // /verbose) and stays out of the final reply — same contract as the
+        // openai transport.
+        //
+        // Gate on the turn actually CONTAINING a tool call, not on the provider's
+        // stop_reason label. Bedrock/Vertex-proxied routes (e.g. pioneer, whose
+        // tool ids are "toolu_vrtx_…") report stop_reason "end_turn" on turns that
+        // DO carry a toolCall, so a stopReason-only gate left their narration text
+        // untagged → no 💬 on any channel. Inspecting output.content is the ground
+        // truth and is a no-op for direct Anthropic, which already maps such turns
+        // to stopReason "toolUse" whenever a tool call is present.
+        const turnHasToolCall = output.content.some((block) => block.type === "toolCall");
+        if (output.stopReason === "toolUse" || turnHasToolCall) {
+          let commentaryTextIndex = 0;
+          for (const block of output.content) {
+            if (
+              block.type === "text" &&
+              block.text.trim().length > 0 &&
+              block.textSignature === undefined
+            ) {
+              block.textSignature = encodeAssistantTextSignatureV1(
+                `commentary-${commentaryTextIndex}`,
+                "commentary",
+              );
+              commentaryTextIndex += 1;
+            }
+          }
+        }
         finalizeTransportStream({ stream, output });
       } catch (error) {
         if (refusalBuffer) {

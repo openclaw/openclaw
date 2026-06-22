@@ -35,6 +35,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import {
   buildAgentMessageFromConversationEntries,
@@ -1226,6 +1227,10 @@ export async function handleOpenAiHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+      // Commentary-phase narration never belongs to the final answer surface.
+      if (resolveAssistantEventPhase(evt.data) === "commentary") {
+        return;
+      }
       const content = resolveAssistantStreamDeltaText(evt) ?? "";
       if (!content) {
         return;

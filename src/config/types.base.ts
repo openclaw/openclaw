@@ -68,8 +68,10 @@ export type ChannelStreamingProgressConfig = {
   toolProgress?: boolean;
   /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
   commandText?: ChannelStreamingCommandTextMode;
-  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
+  /** Include assistant commentary/preamble text in the progress draft. Default: true. */
   commentary?: boolean;
+  /** Include a compact rolling thinking line in the progress draft. Default: true. */
+  thinking?: boolean;
 };
 
 export type ChannelStreamingPreviewConfig = {

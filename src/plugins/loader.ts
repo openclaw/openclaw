@@ -193,6 +193,11 @@ export type PluginLoadOptions = {
   // Direct raw-config callers can opt into the same single env-substitution pass
   // config IO normally performs before plugin validation.
   resolveRawConfigEnvVars?: boolean;
+  // Set when a runtime caller already performed that single substitution pass on
+  // a raw source config. Keeps raw-mode cache rules (no active-registry reuse,
+  // registry cache disabled, plugin config redacted from cache keys) without
+  // resolving escaped placeholders a second time.
+  rawConfigEnvVarsResolved?: boolean;
   logger?: PluginLogger;
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
@@ -1015,6 +1020,7 @@ function buildCacheKey(params: {
   forceFullRuntimeForChannelPlugins?: boolean;
   preferBuiltPluginArtifacts?: boolean;
   resolveRawConfigEnvVars?: boolean;
+  rawConfigEnvVarsResolved?: boolean;
   toolDiscovery?: boolean;
   loadModules?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
@@ -1063,7 +1069,11 @@ function buildCacheKey(params: {
   const bundledArtifactMode =
     params.preferBuiltPluginArtifacts === true ? "prefer-built-artifacts" : "source-default";
   const rawConfigEnvMode =
-    params.resolveRawConfigEnvVars === true ? "resolve-raw-env" : "runtime-config";
+    params.resolveRawConfigEnvVars === true
+      ? "resolve-raw-env"
+      : params.rawConfigEnvVarsResolved === true
+        ? "raw-env-resolved"
+        : "runtime-config";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
@@ -1158,6 +1168,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.workspaceDir !== undefined ||
     options.env !== undefined ||
     options.resolveRawConfigEnvVars !== undefined ||
+    options.rawConfigEnvVarsResolved !== undefined ||
     hasExplicitPluginIdScope(options.onlyPluginIds) ||
     options.runtimeOptions !== undefined ||
     options.pluginSdkResolution !== undefined ||
@@ -1349,6 +1360,11 @@ function applyManifestSnapshotMetadata(
 
 function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const shouldResolveRawConfigEnvVars = options.resolveRawConfigEnvVars === true;
+  // Raw-config cache mode covers both the loader-side substitution pass and
+  // configs a runtime caller already substituted: either way the plugin config
+  // may hold resolved secrets, so it must stay out of cache key material.
+  const rawConfigCacheMode =
+    shouldResolveRawConfigEnvVars || options.rawConfigEnvVarsResolved === true;
   const baseEnv = options.env ?? process.env;
   const rawConfig = options.config ?? {};
   const rawActivationSourceConfig = resolvePluginActivationSourceConfig({
@@ -1394,9 +1410,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const devSourceRoot = resolveOpenClawDevSourceRoot(env);
   const cacheKey = buildCacheKey({
     workspaceDir: options.workspaceDir,
-    plugins: shouldResolveRawConfigEnvVars
-      ? redactPluginConfigForCacheKey(trustNormalized)
-      : trustNormalized,
+    plugins: rawConfigCacheMode ? redactPluginConfigForCacheKey(trustNormalized) : trustNormalized,
     activationMetadataKey: buildActivationMetadataHash({
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
@@ -1412,6 +1426,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceFullRuntimeForChannelPlugins,
     preferBuiltPluginArtifacts,
     resolveRawConfigEnvVars: options.resolveRawConfigEnvVars,
+    rawConfigEnvVarsResolved: options.rawConfigEnvVarsResolved,
     toolDiscovery: options.toolDiscovery,
     loadModules: options.loadModules,
     runtimeSubagentMode,
@@ -1483,7 +1498,9 @@ function mergePluginTrustList(runtimeList: string[], sourceList: readonly string
 function getCompatibleActivePluginRegistry(
   options: PluginLoadOptions = {},
 ): PluginRegistry | undefined {
-  if (options.resolveRawConfigEnvVars === true) {
+  // Raw-config loads depend on env values that are invisible to cache-key
+  // compatibility checks once plugin config is redacted, so never reuse.
+  if (options.resolveRawConfigEnvVars === true || options.rawConfigEnvVarsResolved === true) {
     return undefined;
   }
   const activeRegistry = getActivePluginRegistry() ?? undefined;
@@ -1859,7 +1876,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
 
-  const cacheEnabled = options.cache !== false && options.resolveRawConfigEnvVars !== true;
+  const cacheEnabled =
+    options.cache !== false &&
+    options.resolveRawConfigEnvVars !== true &&
+    options.rawConfigEnvVarsResolved !== true;
   if (cacheEnabled) {
     const cached = getReusableCachedPluginRegistry({
       cacheKey,

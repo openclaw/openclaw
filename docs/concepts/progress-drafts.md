@@ -329,6 +329,12 @@ With `toolProgress: false`, OpenClaw still suppresses the older standalone
 tool-progress messages for that turn. The channel stays visually quiet until the
 final answer, except for the label if one is configured.
 
+The model's thinking stream renders as its own compact rolling draft line
+(prefixed with 🧠) and is gated independently by `streaming.progress.thinking`
+(default `true`). Set it to `false` to keep the draft tools-only. When
+`/reasoning on` persists thoughts as durable messages, the draft yields its
+thinking line so thoughts never render twice.
+
 ## Channel behavior
 
 Each channel uses the cleanest transport it supports:

@@ -127,15 +127,20 @@ type RouteReplyResult = {
  * are set.
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
-  const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
-  if (shouldSuppressReasoningPayload(payload)) {
-    return { ok: true };
-  }
+  const { channel, to, accountId, threadId, cfg, abortSignal } = params;
+  let payload = params.payload;
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
     normalizeChannelId(channel) ?? normalizeOptionalLowercaseString(channel) ?? null;
   const loadedPlugin = channelId ? getLoadedChannelPlugin(channelId) : undefined;
   const bundledPlugin = channelId && !loadedPlugin ? getBundledChannelPlugin(channelId) : undefined;
+  // Reasoning payloads are rendered by channel monitors on the dispatch path.
+  // The routed outbound path has no channel renderer, so reasoning drops here
+  // regardless of capability: fail-closed beats leaking raw thinking text,
+  // and core never pre-formats for a channel.
+  if (shouldSuppressReasoningPayload(payload)) {
+    return { ok: true };
+  }
   const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
   const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
   const resolvedAgentId = params.sessionKey

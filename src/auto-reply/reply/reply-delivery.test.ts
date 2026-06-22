@@ -193,6 +193,36 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("delivers text-only reasoning block replies directly when block streaming is disabled", async () => {
+    // Regression for D1: under Discord progress mode block streaming is OFF, so
+    // a reasoning payload must NOT be folded into the accumulated final text
+    // (it is a separate 🧠 lane). It has to be delivered directly via
+    // onBlockReply even though a non-reasoning text-only block stays buffered.
+    const onBlockReply = vi.fn(async () => {});
+    const directlySentBlockKeys = new Set<string>();
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply,
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: false,
+      blockReplyPipeline: null,
+      directlySentBlockKeys,
+      directlySentBlockPayloads: [],
+    });
+
+    await handler({ text: "the user wants three commands run", isReasoning: true });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const delivered = onBlockReply.mock.calls[0][0] as ReplyPayload;
+    expect(delivered.isReasoning).toBe(true);
+    expect(delivered.text).toBe("the user wants three commands run");
+    expect(directlySentBlockKeys.size).toBe(1);
+  });
+
   it("trims leading whitespace in block-streamed replies", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),

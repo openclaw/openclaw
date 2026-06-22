@@ -23,6 +23,7 @@ function createMessageUpdateContext(
   params: {
     onAgentEvent?: ReturnType<typeof vi.fn>;
     onPartialReply?: ReturnType<typeof vi.fn>;
+    onReasoningEnd?: ReturnType<typeof vi.fn>;
     flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
     resetAssistantMessageState?: ReturnType<typeof vi.fn>;
     debug?: ReturnType<typeof vi.fn>;
@@ -43,6 +44,7 @@ function createMessageUpdateContext(
       session: { id: "session-1" },
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onPartialReply ? { onPartialReply: params.onPartialReply } : {}),
+      ...(params.onReasoningEnd ? { onReasoningEnd: params.onReasoningEnd } : {}),
     },
     state: {
       deterministicApprovalPromptPending: false,
@@ -254,6 +256,70 @@ describe("pending assistant reply directives", () => {
   });
 });
 
+describe("handleMessageUpdate native reasoning boundary", () => {
+  const createThinkingEvent = (content: string) =>
+    ({
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "thinking_delta", delta: content, content },
+    }) as never;
+  const createTextEvent = (text: string, delta: string) =>
+    ({
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta,
+        partial: {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          stopReason: "stop",
+          provider: "test",
+          model: "local",
+          usage: {},
+          timestamp: 0,
+        },
+      },
+    }) as never;
+
+  it("closes the reasoning stream when text begins without a thinking_end (deepseek)", () => {
+    // deepseek streams reasoning via thinking_* events but switches to the answer
+    // without a discrete thinking_end. The text lane opening must close the
+    // thought so the channel does not merge the answer into the last 🧠 block.
+    const onReasoningEnd = vi.fn();
+    const context = createMessageUpdateContext({ onReasoningEnd });
+
+    handleMessageUpdate(context, createThinkingEvent("Planning the answer"));
+    expect(onReasoningEnd).not.toHaveBeenCalled();
+    expect(context.state.reasoningStreamOpen).toBe(true);
+
+    handleMessageUpdate(context, createTextEvent("Done.", "Done."));
+
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+    expect(context.state.reasoningStreamOpen).toBe(false);
+  });
+
+  it("does not re-fire the boundary when a thinking_end already closed it", () => {
+    // Providers with a clean thinking_end close on that event; the text lane must
+    // not double-fire the boundary.
+    const onReasoningEnd = vi.fn();
+    const context = createMessageUpdateContext({ onReasoningEnd });
+
+    handleMessageUpdate(context, createThinkingEvent("Planning the answer"));
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "thinking_end", content: "Planning the answer" },
+    } as never);
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+
+    handleMessageUpdate(context, createTextEvent("Done.", "Done."));
+
+    expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+    expect(context.state.reasoningStreamOpen).toBe(false);
+  });
+});
+
 describe("handleMessageUpdate text signatures", () => {
   it("uses incremental text deltas for non-phase streams", () => {
     const onAgentEvent = vi.fn();
@@ -402,6 +468,12 @@ describe("handleMessageUpdate text signatures", () => {
     );
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      // Emit-always: the commentary delta reaches the bus tagged with its
+      // phase; reply lanes still exclude it (covered below).
+      {
+        stream: "assistant",
+        data: { delta: "Hello", phase: "commentary", itemId: "item-commentary" },
+      },
       {
         stream: "assistant",
         data: { text: "Hello world", delta: "Hello world", phase: "final_answer" },
@@ -818,14 +890,16 @@ describe("handleMessageUpdate commentary phase", () => {
 
     await Promise.resolve();
 
-    expect(onAgentEvent).not.toHaveBeenCalled();
+    // Archive-always: commentary (textSignature-only phase — the F3 shape) is
+    // emitted on the bus for archival + window, but kept out of the reply lanes.
+    expect(onAgentEvent).toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
     expect(ctx.state.deltaBuffer).toBe("");
     expect(ctx.state.blockBuffer).toBe("");
   });
 
-  it("suppresses commentary partials even when they contain visible text", () => {
+  it("keeps commentary partials out of reply lanes while emitting them on the bus", () => {
     const onAgentEvent = vi.fn();
     const ctx = createMessageUpdateContext({
       onAgentEvent,
@@ -846,7 +920,15 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     );
 
-    expect(onAgentEvent).not.toHaveBeenCalled();
+    // Emit-always: the bus sees the commentary delta with its phase tag, but
+    // reply-text buffers stay untouched.
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    const commentaryEvent = firstMockArg(onAgentEvent, "agent event") as
+      | { stream?: string; data?: { delta?: string; phase?: string } }
+      | undefined;
+    expect(commentaryEvent?.stream).toBe("assistant");
+    expect(commentaryEvent?.data?.phase).toBe("commentary");
+    expect(commentaryEvent?.data?.delta).toBe("Working...");
     expect(ctx.state.deltaBuffer).toBe("");
     expect(ctx.state.blockBuffer).toBe("");
 
@@ -864,8 +946,8 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     );
 
-    expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    const event = firstMockArg(onAgentEvent, "agent event") as
+    expect(onAgentEvent).toHaveBeenCalledTimes(2);
+    const event = onAgentEvent.mock.calls[1]?.[0] as
       | { stream?: string; data?: { text?: string; delta?: string } }
       | undefined;
     expect(event?.stream).toBe("assistant");
@@ -1011,7 +1093,8 @@ describe("handleMessageEnd", () => {
       },
     } as never);
 
-    expect(onAgentEvent).not.toHaveBeenCalled();
+    // Archive-always: commentary reaches the bus/archive but not the visible reply.
+    expect(onAgentEvent).toHaveBeenCalled();
     expect(emitBlockReply).not.toHaveBeenCalled();
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
   });
@@ -1041,9 +1124,122 @@ describe("handleMessageEnd", () => {
       },
     } as never);
 
-    expect(onAgentEvent).not.toHaveBeenCalled();
+    // Archive-always: commentary (textSignature-only phase) reaches the
+    // bus/archive but not the visible reply.
+    expect(onAgentEvent).toHaveBeenCalled();
     expect(emitBlockReply).not.toHaveBeenCalled();
     expect(finalizeAssistantTexts).not.toHaveBeenCalled();
+  });
+
+  it("emits the reasoning lane for a commentary-tagged tool turn under /reasoning on (D1)", () => {
+    // anthropic tags a tool-using turn's pre-tool message as phase "commentary",
+    // so it lands in the suppressed-output branch — but it also carries the signed
+    // thinking block. Under /reasoning on the thinking must still surface as its
+    // own persistent 🧠 (isReasoning) block reply, even though the commentary body
+    // text stays suppressed.
+    const onAgentEvent = vi.fn();
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      emitBlockReply,
+      state: { includeReasoning: true },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "thinking",
+            thinking: "The user wants me to run date once, then wrap up.",
+            thinkingSignature: "sig-abc",
+          },
+          createOpenAiResponsesTextBlock({
+            text: "Running date to confirm the clock.",
+            id: "msg_sig",
+            phase: "commentary",
+          }),
+        ],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(emitBlockReply).toHaveBeenCalledTimes(1);
+    const payload = firstMockArg(emitBlockReply, "reasoning block reply") as {
+      isReasoning?: boolean;
+      text?: string;
+    };
+    expect(payload.isReasoning).toBe(true);
+    expect(payload.text).toBe("The user wants me to run date once, then wrap up.");
+  });
+
+  it("discards an empty thinking block on a commentary turn (D4 — opus-4-8 empty summary)", () => {
+    // opus-4-8 returns a thinking block with a valid signature but an EMPTY
+    // summary. extractAssistantThinking returns "" for it, so the reasoning lane
+    // must be discarded: no 🧠 block reply (and nothing for the bar to count).
+    const onAgentEvent = vi.fn();
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      emitBlockReply,
+      state: { includeReasoning: true },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          { type: "thinking", thinking: "", thinkingSignature: "sig-empty" },
+          createOpenAiResponsesTextBlock({
+            text: "Running date to confirm the clock.",
+            id: "msg_sig",
+            phase: "commentary",
+          }),
+        ],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not emit the reasoning lane on a commentary turn when /reasoning is off (D1 gate)", () => {
+    // Same commentary+thinking shape, but reasoning is OFF: nothing persists here
+    // (the window-stream path owns the bar count instead).
+    const onAgentEvent = vi.fn();
+    const emitBlockReply = vi.fn();
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      emitBlockReply,
+      state: { includeReasoning: false },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "thinking",
+            thinking: "The user wants me to run date once, then wrap up.",
+            thinkingSignature: "sig-abc",
+          },
+          createOpenAiResponsesTextBlock({
+            text: "Running date to confirm the clock.",
+            id: "msg_sig",
+            phase: "commentary",
+          }),
+        ],
+        usage: { input: 1, output: 1, total: 2 },
+      },
+    } as never);
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
   });
 
   it("does not duplicate block reply for text_end channels when text was already delivered", () => {

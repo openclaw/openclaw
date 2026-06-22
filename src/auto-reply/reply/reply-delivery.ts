@@ -175,7 +175,10 @@ export function createBlockReplyDeliveryHandler(params: {
         trackingPayload: blockPayload,
         payload: blockPayload,
       });
-    } else if (blockHasNonTextContent) {
+    } else if (blockHasNonTextContent || blockPayload.isReasoning === true) {
+      // Reasoning is a separate lane that never merges into the assistant's
+      // final text, so it must be delivered directly even when block streaming
+      // is off; presentation gating stays downstream (dispatch capability gate).
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,

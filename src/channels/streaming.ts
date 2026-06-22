@@ -400,10 +400,13 @@ function resolveProgressDraftLineId(
 ): string | undefined {
   const itemId = input.itemId?.trim();
   const toolCallId = input.toolCallId?.trim();
-  if (itemId) {
-    return itemId;
+  // pipeline(A2): prefer the shared call identity (toolCallId) so a call's
+  // tool/item/command-output/patch phases collapse to one draft line; itemId is
+  // envelope-specific (tool:X, cmd:X) and would split one call across lines.
+  if (toolCallId) {
+    return toolCallId;
   }
-  return params?.useToolCallIdFallback === true ? toolCallId : undefined;
+  return params?.useToolCallIdFallback === false ? undefined : itemId;
 }
 
 function resolveCommandProgressCorrelationKey(input: { toolCallId?: string }): string | undefined {
@@ -531,21 +534,25 @@ export function buildChannelProgressDraftLine(
   switch (input.event) {
     case "tool": {
       const itemId = input.itemId ?? (input.toolCallId ? `tool:${input.toolCallId}` : undefined);
+      const meta =
+        options?.commandText === "status" && isCommandToolName(input.name)
+          ? undefined
+          : inferToolMeta(input.name, input.args, options?.detailMode);
+      if (input.name && !meta && input.phase && input.phase !== "start") {
+        // Mid-call phases without tool detail carry no new information; a bare
+        // label here would replace the richer line already keyed to this call.
+        return undefined;
+      }
       return buildNamedProgressLine(
         input.event,
         input.name,
-        [
-          options?.commandText === "status" && isCommandToolName(input.name)
-            ? undefined
-            : inferToolMeta(input.name, input.args, options?.detailMode),
-          input.phase && !input.name ? input.phase : undefined,
-        ],
+        [meta, input.phase && !input.name ? input.phase : undefined],
         options,
         {
           correlationKey: isCommandToolName(input.name)
             ? resolveCommandProgressCorrelationKey(input)
             : undefined,
-          id: itemId,
+          id: input.toolCallId ?? itemId,
         },
       );
     }
@@ -631,7 +638,7 @@ export function buildChannelProgressDraftLine(
         input.name ?? "apply_patch",
         patchMetas(input),
         options,
-        { id: input.itemId ?? input.toolCallId },
+        { id: input.toolCallId ?? input.itemId },
       );
     }
   }
@@ -814,7 +821,7 @@ export function resolveChannelStreamingPreviewToolProgress(
 
 export function resolveChannelStreamingProgressCommentary(
   entry: StreamingCompatEntry | null | undefined,
-  defaultValue = false,
+  defaultValue = true,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
   if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
@@ -822,6 +829,18 @@ export function resolveChannelStreamingProgressCommentary(
   }
   const progress = asObjectRecord(config?.progress);
   return asBoolean(progress?.commentary) ?? defaultValue;
+}
+
+export function resolveChannelStreamingProgressThinking(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = true,
+): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  if (resolveChannelPreviewStreamMode(entry, "partial") !== "progress") {
+    return false;
+  }
+  const progress = asObjectRecord(config?.progress);
+  return asBoolean(progress?.thinking) ?? defaultValue;
 }
 
 export function resolveChannelStreamingPreviewCommandText(

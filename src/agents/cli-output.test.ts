@@ -755,6 +755,100 @@ describe("parseCliJsonl", () => {
 });
 
 describe("createCliJsonlStreamingParser", () => {
+  it("streams thinking deltas, skips signature deltas, and dedupes the snapshot", () => {
+    const thinking: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "Let me think" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: " harder." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "signature_delta", signature: "opaque-signature" },
+          },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            id: "msg-1",
+            content: [
+              { type: "thinking", thinking: "Let me think harder.", signature: "opaque-signature" },
+              { type: "text", text: "Answer." },
+            ],
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "Let me think", delta: "Let me think" },
+      { text: "Let me think harder.", delta: " harder." },
+    ]);
+  });
+
+  it("emits snapshot thinking blocks when no thinking deltas streamed", () => {
+    const thinking: Array<{ text: string; delta: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "assistant",
+        message: {
+          id: "msg-1",
+          content: [
+            { type: "thinking", thinking: "Snapshot-only reasoning.", signature: "sig" },
+            { type: "redacted_thinking", data: "opaque-blob" },
+            { type: "text", text: "Answer." },
+          ],
+        },
+      }),
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "Snapshot-only reasoning.", delta: "Snapshot-only reasoning." },
+    ]);
+  });
+
   it("streams Claude stream-json deltas for an explicit backend dialect", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
     const parser = createCliJsonlStreamingParser({

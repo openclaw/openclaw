@@ -475,6 +475,53 @@ describe("openai transport stream", () => {
     ]);
   });
 
+  it("tags Responses tool-turn preamble text as commentary, preserving the wire id", async () => {
+    // The Responses wire has no phase field, so preamble text arrives with an id
+    // signature but no phase. In a tool-using turn it must be tagged commentary
+    // so it leaves the final reply, rides the narration lane, and is archived.
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-preamble-tool",
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                id: "msg_pre",
+                role: "assistant",
+                content: [{ type: "text", text: "I'll check the workspace first." }],
+              },
+              {
+                type: "function_call",
+                id: "fc_1",
+                call_id: "call_1",
+                name: "exec",
+                arguments: "{}",
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    const textBlock = output.content.find((block) => block.type === "text") as {
+      text: string;
+      textSignature?: string;
+    };
+    expect(textBlock.text).toBe("I'll check the workspace first.");
+    // id from the wire (msg_pre) preserved, commentary phase added.
+    expect(textBlock.textSignature).toBe('{"v":1,"id":"msg_pre","phase":"commentary"}');
+  });
+
   it("summarizes model payload tools with full names when requested", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
@@ -1572,50 +1619,6 @@ describe("openai transport stream", () => {
     }
   });
 
-  it("does not emit thinking streams when reasoning is disabled", () => {
-    const model = {
-      id: "grok-4.20-beta-latest-reasoning",
-      name: "Grok 4.20 Beta Latest (Reasoning)",
-      api: "openai-completions",
-      provider: "xai",
-      baseUrl: "https://api.x.ai/v1",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 2_000_000,
-      maxTokens: 30_000,
-    } satisfies Model<"openai-completions">;
-
-    expect(
-      testing.shouldEmitOpenAICompletionsReasoningForModel(model, {
-        apiKey: "test-key",
-        reasoning: "off",
-      } as never),
-    ).toBe(false);
-  });
-
-  it("emits Z.ai thinking streams when enabled without reasoning_effort support", () => {
-    const model = {
-      id: "glm-4.7",
-      name: "GLM 4.7",
-      api: "openai-completions",
-      provider: "zai",
-      baseUrl: "",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 8192,
-    } satisfies Model<"openai-completions">;
-
-    expect(
-      testing.shouldEmitOpenAICompletionsReasoningForModel(model, {
-        apiKey: "test-key",
-        reasoning: "medium",
-      } as never),
-    ).toBe(true);
-  });
-
   it("preserves OpenAI-compatible error metadata on failed chat requests", async () => {
     const server = createServer((req, res) => {
       req.resume();
@@ -2357,7 +2360,8 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "before  after" },
+      // Tool-using turn: visible text is tagged commentary (extra textSignature).
+      expect.objectContaining({ type: "text", text: "before  after" }),
       {
         type: "toolCall",
         id: "call_native_1",
@@ -2406,7 +2410,7 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "I'll check" },
+      expect.objectContaining({ type: "text", text: "I'll check" }),
       {
         type: "toolCall",
         id: "call_native_1",
@@ -2477,7 +2481,7 @@ describe("openai transport stream", () => {
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
       },
-      { type: "text", text: " visible" },
+      expect.objectContaining({ type: "text", text: " visible" }),
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
@@ -2536,7 +2540,7 @@ describe("openai transport stream", () => {
     );
 
     expect(output.content).toEqual([
-      { type: "text", text: "before " },
+      expect.objectContaining({ type: "text", text: "before " }),
       {
         type: "toolCall",
         id: "call_native_1",
@@ -2544,7 +2548,7 @@ describe("openai transport stream", () => {
         arguments: { path: "/tmp/native.md" },
         partialArgs: '{"path":"/tmp/native.md"}',
       },
-      { type: "text", text: " after" },
+      expect.objectContaining({ type: "text", text: " after" }),
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
@@ -8711,7 +8715,10 @@ describe("openai transport stream", () => {
       { push() {} },
     );
 
-    expect(output.content[0]).toEqual({ type: "text", text: "Use <" });
+    // Visible text in a tool-using turn is narration: preserved verbatim and
+    // tagged commentary so it routes to the narration lane, not the final reply.
+    expectRecordFields(output.content[0], { type: "text", text: "Use <" });
+    expect(String(output.content[0]?.textSignature)).toContain('"phase":"commentary"');
     expectRecordFields(output.content[1], {
       type: "toolCall",
       id: "call_0",
@@ -8806,7 +8813,7 @@ describe("openai transport stream", () => {
     expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(1);
   });
 
-  it("drops mirrored reasoning when disabled without recovering hidden reasoning tags", async () => {
+  it("emits mirrored reasoning once and keeps tag text out of the visible lane", async () => {
     const model = {
       id: "MiniMax-M2.7",
       name: "MiniMax M2.7",
@@ -8860,17 +8867,22 @@ describe("openai transport stream", () => {
       output,
       model,
       { push: (event) => events.push(event as CapturedStreamEvent) },
-      { emitReasoning: false },
     );
 
     const visibleText = output.content
       .filter((block): block is { type: "text"; text: string } => block.type === "text")
       .map((block) => block.text)
       .join("");
+    const thinkingText = output.content
+      .filter((block): block is { type: "thinking"; thinking: string } => block.type === "thinking")
+      .map((block) => block.thinking)
+      .join("");
 
+    // Emit-always: the structured reasoning lane survives; structured-wins
+    // dedup still keeps the mirrored <think> tag text out of the visible lane.
     expect(visibleText).toBe("");
-    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
-    expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
+    expect(thinkingText).toBe("private reasoning");
+    expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(1);
   });
 
   it("keeps literal reasoning tag examples visible without mirrored reasoning", async () => {

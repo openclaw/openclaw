@@ -519,7 +519,7 @@ export class CodexAppServerEventProjector {
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
     if (this.isCommentaryAssistantItem(itemId)) {
-      this.emitCommentaryProgress({ itemId, text });
+      this.emitCommentaryProgress({ itemId, text, delta });
     } else if (this.shouldStreamAssistantPartial(itemId)) {
       await this.params.onPartialReply?.({ text, delta });
     }
@@ -1065,7 +1065,7 @@ export class CodexAppServerEventProjector {
     return this.assistantPhaseByItem.get(itemId) === "final_answer";
   }
 
-  private emitCommentaryProgress(params: { itemId: string; text: string }): void {
+  private emitCommentaryProgress(params: { itemId: string; text: string; delta?: string }): void {
     const progressText = params.text.replace(/\s+/g, " ").trim();
     if (
       !progressText ||
@@ -1074,14 +1074,17 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.lastCommentaryProgressTextByItem.set(params.itemId, progressText);
+    // I/O contract: commentary is assistant-lane content (phase "commentary"),
+    // not a preamble item. Final-text surfaces filter it by phase
+    // (resolveAssistantEventPhase); channel progress payloads are rebuilt from
+    // this lane in agent-runner-execution.
     this.emitAgentEvent({
-      stream: "item",
+      stream: "assistant",
       data: {
         itemId: params.itemId,
-        kind: "preamble",
-        title: "Preamble",
-        phase: "update",
-        progressText,
+        phase: "commentary",
+        text: params.text,
+        ...(params.delta ? { delta: params.delta } : { replace: true }),
         source: "codex-app-server",
       },
     });

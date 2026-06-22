@@ -174,7 +174,17 @@ export function resolveEmbeddedAgentStreamFn(params: {
 
   if (
     isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn) ||
-    hasResolvedRuntimeApiKey(params.resolvedApiKey)
+    hasResolvedRuntimeApiKey(params.resolvedApiKey) ||
+    // PROXIED anthropic-messages providers (provider !== "anthropic", e.g. pioneer)
+    // must use OpenClaw's managed transport even when they would otherwise fall
+    // through to the session-custom strategy (no proxy/TLS requirement, no resolved
+    // runtime key). The managed transport is the only place commentary on a
+    // tool-using turn gets tagged (phase:commentary -> 💬); the base SDK stream never
+    // tags it, so proxied anthropic providers silently lost their narration lane.
+    // Scoped to non-"anthropic" providers so the direct-anthropic session-custom
+    // edge cases (e.g. thinking-replay repair without a resolved key) are unchanged.
+    // The wrap below injects the resolved key (fallback options.apiKey), preserving auth.
+    (params.model.api === "anthropic-messages" && params.model.provider !== "anthropic")
   ) {
     const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
     if (boundaryAwareStreamFn) {

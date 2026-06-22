@@ -2,7 +2,10 @@
 // not become replies or assistantTexts before tool use.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
+import {
+  createSubscribedSessionHarness,
+  extractAgentEventPayloads,
+} from "./embedded-agent-subscribe.e2e-harness.js";
 
 type AssistantMessageWithPhase = AssistantMessage & {
   // Some providers expose phase on the assistant message, while others only
@@ -69,5 +72,37 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(subscription.assistantTexts).toStrictEqual([]);
+  });
+
+  it("carries the textSignature item id on snapshot commentary so it dedupes", () => {
+    const onAgentEvent = vi.fn();
+    const { emit } = createSubscribedSessionHarness({ runId: "run", onAgentEvent });
+
+    const commentaryMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Running the pipeline.",
+          textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+        },
+      ],
+      stopReason: "toolUse",
+    } as AssistantMessage;
+
+    // Snapshot producers re-emit the same commentary item on every partial
+    // update; each emit must carry the stable item id so the durable verbose
+    // lane buffers by item instead of posting a new channel message per snapshot.
+    emit({ type: "message_start", message: commentaryMessage });
+    emit({ type: "message_update", message: commentaryMessage });
+    emit({ type: "message_end", message: commentaryMessage });
+
+    const commentaryEvents = extractAgentEventPayloads(onAgentEvent.mock.calls).filter(
+      (data) => data.phase === "commentary",
+    );
+    expect(commentaryEvents.length).toBeGreaterThan(0);
+    for (const data of commentaryEvents) {
+      expect(data.itemId).toBe("msg_commentary");
+    }
   });
 });

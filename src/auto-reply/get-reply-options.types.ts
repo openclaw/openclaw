@@ -150,6 +150,9 @@ export type GetReplyOptions = {
   }) => Promise<void> | void;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
+  /** True when the channel renders reasoning payloads itself (e.g. Discord 🧠
+   * blockquote); dispatch then forwards them instead of suppressing. */
+  reasoningPayloadsEnabled?: boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;

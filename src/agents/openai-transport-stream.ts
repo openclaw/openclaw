@@ -96,9 +96,11 @@ import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.j
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
+  encodeAssistantTextSignatureV1,
   mergeTransportMetadata,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+import { parseAssistantTextSignature } from "../shared/chat-message-content.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -1030,8 +1032,31 @@ function isSafeResponsesReplayItemId(id: unknown): id is string {
   );
 }
 
-function encodeTextSignatureV1(id: string, phase?: "commentary" | "final_answer"): string {
-  return JSON.stringify({ v: 1, id, ...(phase ? { phase } : {}) });
+const encodeTextSignatureV1 = encodeAssistantTextSignatureV1;
+
+// Tool-turn assistant text is preamble narration, not the final answer. Tag it
+// commentary so it leaves the final reply, rides the 💬 lane, and is archived.
+// Completions text arrives with no signature; direct openai-responses arrives
+// with an id signature but NO phase (the Responses wire carries no phase field —
+// only the codex app-server envelope does), so re-tag those too, preserving the
+// wire id. Already-phased blocks (e.g. codex commentary/final_answer) are left
+// untouched. Shared by the completions and responses finalizers.
+function tagToolTurnTextAsCommentary(content: Array<Record<string, unknown>>): void {
+  let commentaryTextIndex = 0;
+  for (const block of content) {
+    if (block.type !== "text" || typeof block.text !== "string" || block.text.trim().length === 0) {
+      continue;
+    }
+    const existing = parseAssistantTextSignature(block.textSignature);
+    if (existing?.phase) {
+      continue;
+    }
+    block.textSignature = encodeTextSignatureV1(
+      existing?.id ?? `commentary-${commentaryTextIndex}`,
+      "commentary",
+    );
+    commentaryTextIndex += 1;
+  }
 }
 
 function parseTextSignature(
@@ -1752,6 +1777,9 @@ async function processResponsesStream(
       throw new Error(failure.message);
     }
     await cooperativeScheduler.afterEvent();
+  }
+  if (output.stopReason === "toolUse") {
+    tagToolTurnTextAsCommentary(output.content);
   }
   const eventTypeSummary = [...eventTypes.entries()]
     .slice(0, 12)
@@ -2679,10 +2707,6 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         if (compat.requiresNonEmptyUserOrAssistantMessage) {
           assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }
-        const emitReasoning = shouldEmitOpenAICompletionsReasoning(
-          model as OpenAIModeModel,
-          options as OpenAICompletionsOptions | undefined,
-        );
         const responseStream = (await client.chat.completions.create(
           params as never,
           buildOpenAISdkRequestOptions(model, options?.signal),
@@ -2690,7 +2714,6 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
-          emitReasoning,
         });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
@@ -2712,11 +2735,10 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: unknown): void },
-  options?: { signal?: AbortSignal; emitReasoning?: boolean },
+  options?: { signal?: AbortSignal },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
-  const emitReasoning = options?.emitReasoning ?? true;
   const compat = getCompat(model as OpenAIModeModel);
   const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
     ? createDeepSeekTextFilter()
@@ -2835,7 +2857,7 @@ async function processOpenAICompletionsStream(
     for (const delta of bufferedDeltas) {
       if (delta.kind === "text") {
         appendTextDeltaInternal(delta.text);
-      } else if (emitReasoning) {
+      } else {
         appendThinkingDeltaInternal(delta);
       }
     }
@@ -2934,9 +2956,6 @@ async function processOpenAICompletionsStream(
       appendFilteredVisibleTextDelta(delta.text);
       return;
     }
-    if (!emitReasoning) {
-      return;
-    }
     if (currentBlock?.type === "toolCall") {
       queuePostToolCallDelta(delta);
     } else {
@@ -2949,7 +2968,7 @@ async function processOpenAICompletionsStream(
     }
   };
   const emitReasoningUsageActivity = (hasReasoningUsageActivity: boolean) => {
-    if (!hasReasoningUsageActivity || chunkPushedEvent || !emitReasoning) {
+    if (!hasReasoningUsageActivity || chunkPushedEvent) {
       return;
     }
     const latestBlock = output.content[output.content.length - 1];
@@ -3036,17 +3055,17 @@ async function processOpenAICompletionsStream(
         }
       }
     }
+    // Emit-always: received reasoning deltas are never discarded here. The
+    // thinkingLevel knob shapes the request (reasoning_effort); presentation
+    // settings gate display downstream.
     for (const reasoningDelta of reasoningDeltas) {
-      if (reasoningDelta.kind === "thinking" && !emitReasoning) {
-        continue;
-      }
       if (currentBlock?.type === "toolCall") {
         queuePostToolCallDelta({ ...reasoningDelta });
         continue;
       }
       if (reasoningDelta.kind === "text") {
         appendTextDelta(reasoningDelta.text);
-      } else if (emitReasoning) {
+      } else {
         appendThinkingDelta(reasoningDelta);
       }
     }
@@ -3134,6 +3153,14 @@ async function processOpenAICompletionsStream(
   }
   if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
     output.stopReason = "toolUse";
+  }
+  // A tool-using turn's visible text is narration/preamble, not the final
+  // answer: chat-completions gives no per-message phase, so derive it
+  // positionally and tag the text commentary. This keeps it out of the final
+  // reply and routes it to the narration lane (💬 with /verbose). The
+  // openai-responses path applies the same tagging in processResponsesStream.
+  if (output.stopReason === "toolUse") {
+    tagToolTurnTextAsCommentary(output.content);
   }
   if (hasToolCalls && output.stopReason !== "toolUse") {
     output.content = output.content.filter((block) => block.type !== "toolCall");
@@ -3562,27 +3589,6 @@ type OpenAIResponsesRequestParams = {
 
 function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptions | undefined) {
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
-}
-
-function shouldEmitOpenAICompletionsReasoning(
-  model: OpenAIModeModel,
-  options: OpenAICompletionsOptions | undefined,
-) {
-  if (!model.reasoning) {
-    return false;
-  }
-  const effort = resolveOpenAICompletionsReasoningEffort(options);
-  if (!effort || !isOpenAICompletionsThinkingEnabled(effort)) {
-    return false;
-  }
-  return true;
-}
-
-function shouldEmitOpenAICompletionsReasoningForModel(
-  model: OpenAIModeModel,
-  options: OpenAICompletionsOptions | undefined,
-) {
-  return shouldEmitOpenAICompletionsReasoning(model, options);
 }
 
 function resolveOpenAICompletionsMaxTokens(
@@ -4410,7 +4416,6 @@ export const testing = {
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
   processResponsesStream,
-  shouldEmitOpenAICompletionsReasoningForModel,
   formatModelTransportDebugBaseUrl,
   buildResponsesFailedNoDetailsObservation,
   buildOpenAIResponsesReasoningReplayMetadata,

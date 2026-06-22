@@ -844,6 +844,64 @@ describe("anthropic transport stream", () => {
     });
   });
 
+  it("tags pre-tool narration as commentary when a proxy mislabels stop_reason (pioneer/Bedrock)", async () => {
+    // Bedrock/Vertex-proxied routes (e.g. pioneer; tool ids "toolu_vrtx_…") report
+    // stop_reason "end_turn" on turns that DO carry a tool call. Commentary tagging
+    // must key on the turn CONTAINING a toolCall, not on the stop_reason label, or
+    // the narration text stays untagged (textSignature=None) and never reaches the
+    // 💬 lane — exactly the pioneer commentary gap.
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_pio", usage: { input_tokens: 10, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "I'll start by checking the current date." },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "tool_use", id: "toolu_vrtx_01S4", name: "exec", input: {} },
+        },
+        {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "input_json_delta", partial_json: '{"command":"date"}' },
+        },
+        { type: "content_block_stop", index: 1 },
+        {
+          // The proxy mislabel: a tool-using turn reported as end_turn, NOT tool_use.
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 10, output_tokens: 7 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "run date" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    // Despite stop_reason=end_turn, the turn carries a toolCall, so the narration
+    // text must be tagged commentary (phase:commentary) and route to 💬.
+    const textBlock = findRecord(result.content, (record) => record.type === "text");
+    expect(textBlock.textSignature).toBeDefined();
+    expect(String(textBlock.textSignature)).toContain('"phase":"commentary"');
+    expect(result.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
+      true,
+    );
+  });
+
   it("preserves Anthropic OAuth identity and tool-name remapping with transport overrides", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

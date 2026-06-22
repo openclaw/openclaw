@@ -53,6 +53,7 @@
           {
             "id": "kimi-k2.6",
             "name": "Kimi K2.6",
+            "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
             "maxTokens": 262144,
@@ -80,6 +81,7 @@
           {
             "id": "kimi-k2.5",
             "name": "Kimi K2.5",
+            "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 262144,
             "maxTokens": 262144,

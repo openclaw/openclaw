@@ -181,6 +181,15 @@ export type ReplyPayloadMetadata = {
    */
   deliverDespiteSourceReplySuppression?: boolean;
   /**
+   * Fallback delivery for a substantive plain final produced under
+   * message_tool_only when the model never called the configured delivery tool
+   * (e.g. Codex/openai non-compliance). Dispatch delivers the marked final to
+   * the source channel instead of silently dropping it. Gated identically to
+   * shouldWarnAboutPrivateMessageToolFinal (excludes successful tool sends,
+   * sendPolicy denials, and trivial/silent finals). sendPolicy deny still wins.
+   */
+  deliverMessageToolOnlyFinalFallback?: boolean;
+  /**
    * A message-tool reply to the active internal UI source. The final payload is
    * still the live delivery vehicle; this mirror makes the reply durable for
    * chat.history and page reloads without turning the internal UI into an
@@ -230,6 +239,16 @@ export function copyReplyPayloadMetadata<T extends object>(source: object, paylo
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
+  });
+}
+
+/**
+ * Marks a substantive plain final for fallback delivery when message_tool_only
+ * suppressed automatic delivery and the model never called the delivery tool.
+ */
+export function markReplyPayloadForMessageToolOnlyFinalFallback<T extends object>(payload: T): T {
+  return setReplyPayloadMetadata(payload, {
+    deliverMessageToolOnlyFinalFallback: true,
   });
 }
 

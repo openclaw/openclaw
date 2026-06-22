@@ -316,6 +316,8 @@ export type ChannelCapabilities = {
   };
   nativeCommands?: boolean;
   blockStreaming?: boolean;
+  /** Channel renders reasoning payloads itself; routing must not suppress them. */
+  reasoningPayloads?: boolean;
 };
 
 export type ChannelSecurityDmPolicy = {

@@ -256,7 +256,13 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(onAgentEvent.mock.calls.some((call) => call[0]?.stream === "assistant")).toBe(false);
   });
 
-  it("suppresses later reasoning streams after message-tool-only delivery", async () => {
+  // Emit-always contract (#92738): the subscribe layer forwards reasoning to the
+  // raw rendering hook regardless of delivery mode. message_tool_only suppression
+  // moved downstream to dispatch (wrapProgressCallback: shouldForwardProgressCallback
+  // returns !suppressAutomaticSourceDelivery for reasoning callbacks), so the
+  // ephemeral thinking window never double-renders the message-tool-owned final.
+  // The downstream suppression itself is guarded in dispatch-from-config.test.ts.
+  it("emits later reasoning streams after message-tool-only delivery (suppression gated downstream)", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();
     const { emit } = createBlockReplyHarness("message_end", {
@@ -285,11 +291,11 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
     await Promise.resolve();
 
-    expect(onReasoningStream).not.toHaveBeenCalled();
-    expect(onReasoningEnd).not.toHaveBeenCalled();
+    expect(onReasoningStream).toHaveBeenCalledWith({ text: "private" });
+    expect(onReasoningEnd).toHaveBeenCalled();
   });
 
-  it("suppresses later tagged reasoning streams after message-tool-only delivery", async () => {
+  it("emits later tagged reasoning streams after message-tool-only delivery (suppression gated downstream)", async () => {
     const onReasoningStream = vi.fn();
     const onReasoningEnd = vi.fn();
     const { emit } = createBlockReplyHarness("message_end", {
@@ -311,8 +317,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAssistantTextDelta({ emit, delta: "</think>Done." });
     await Promise.resolve();
 
-    expect(onReasoningStream).not.toHaveBeenCalled();
-    expect(onReasoningEnd).not.toHaveBeenCalled();
+    expect(onReasoningStream).toHaveBeenCalledWith({ text: "private reasoning" });
   });
 
   it("uses runner-level delivery evidence when tool result details were rewritten", async () => {

@@ -33,6 +33,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -1028,6 +1029,10 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+      // Commentary-phase narration never belongs to the final answer surface.
+      if (resolveAssistantEventPhase(evt.data) === "commentary") {
+        return;
+      }
       const text = evt.data?.text;
       const replace = evt.data?.replace === true;
       if (replace && typeof text === "string") {

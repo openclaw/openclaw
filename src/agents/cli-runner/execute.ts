@@ -1042,6 +1042,15 @@ export async function executePreparedCliRun(
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: emitCliAssistantDelta,
+            onThinkingDelta: ({ text, delta }) => {
+              // Emit-always: thinking always reaches the agent-event bus and the
+              // session archive; /reasoning and /verbose gate only presentation.
+              emitAgentEvent({
+                runId: params.runId,
+                stream: "thinking",
+                data: { text, delta },
+              });
+            },
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
             onCommentaryText:
@@ -1075,6 +1084,13 @@ export async function executePreparedCliRun(
                 backend,
                 providerId: context.backendResolved.id,
                 onAssistantDelta: emitCliAssistantDelta,
+                onThinkingDelta: ({ text, delta }) => {
+                  emitAgentEvent({
+                    runId: params.runId,
+                    stream: "thinking",
+                    data: { text, delta },
+                  });
+                },
                 onToolUseStart: emitCliToolUseStart,
                 onToolResult: emitCliToolResult,
                 onCommentaryText:

@@ -61,6 +61,7 @@ import {
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
   isReplyPayloadStatusNotice,
+  markReplyPayloadForMessageToolOnlyFinalFallback,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -2516,6 +2517,12 @@ export async function runReplyAgent(params: {
       // message_tool_only, no tool call can be intentional silence, and
       // finalDeliveryText also includes verbose/status/usage metadata.
       const assistantFinalText = rawAssistantText ?? "";
+      // #85714 follow-up: under message_tool_only, a substantive plain final
+      // produced without a successful delivery-tool send used to be dropped
+      // silently (Codex/openai non-compliance). Deliver it as a fallback
+      // instead. Gated identically to the original warn predicate, which
+      // already excludes successful tool sends, sendPolicy denials, and
+      // trivial/silent finals. sendPolicy deny still suppresses everything.
       if (
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
@@ -2524,6 +2531,9 @@ export async function runReplyAgent(params: {
           finalText: assistantFinalText,
         })
       ) {
+        for (const finalPayload of finalPayloads) {
+          markReplyPayloadForMessageToolOnlyFinalFallback(finalPayload);
+        }
         warnPrivateMessageToolFinal({
           sessionKey,
           channel:

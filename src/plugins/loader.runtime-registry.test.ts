@@ -385,6 +385,48 @@ describe("getCompatibleActivePluginRegistry", () => {
     expect(cacheKey).not.toContain("apiKey");
   });
 
+  it("keeps already-resolved raw plugin config out of the loader cache key", () => {
+    const resolvedOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          entries: {
+            demo: { config: { apiKey: "resolved-demo-secret" } },
+          },
+        },
+      },
+      rawConfigEnvVarsResolved: true,
+    };
+
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(resolvedOptions);
+    expect(cacheKey).not.toContain("resolved-demo-secret");
+    expect(cacheKey).not.toContain("apiKey");
+    // The already-resolved mode stays distinct from prepared runtime config
+    // (unredacted) and loader-side raw substitution, so redacted keys cannot
+    // collide across modes.
+    const plain = testing.resolvePluginLoadCacheContext({
+      ...resolvedOptions,
+      rawConfigEnvVarsResolved: undefined,
+    }).cacheKey;
+    const resolving = testing.resolvePluginLoadCacheContext({
+      ...resolvedOptions,
+      rawConfigEnvVarsResolved: undefined,
+      resolveRawConfigEnvVars: true,
+    }).cacheKey;
+    expect(cacheKey).not.toBe(plain);
+    expect(cacheKey).not.toBe(resolving);
+  });
+
+  it("does not reuse the active registry for already-resolved raw config loads", () => {
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry, "startup-registry");
+
+    expect(testing.getCompatibleActivePluginRegistry()).toBe(registry);
+    expect(
+      testing.getCompatibleActivePluginRegistry({ rawConfigEnvVarsResolved: true }),
+    ).toBeUndefined();
+  });
+
   it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry, "startup-registry");

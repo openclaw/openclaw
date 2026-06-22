@@ -62,6 +62,12 @@ export type CliStreamingDelta = {
   usage?: CliUsage;
 };
 
+/** Incremental thinking text emitted while parsing a streaming CLI response. */
+export type CliThinkingDelta = {
+  text: string;
+  delta: string;
+};
+
 /** Tool-call start event reconstructed from CLI stream output. */
 export type CliToolUseStartDelta = {
   toolCallId: string;
@@ -464,6 +470,66 @@ function parseClaudeCliStreamingDelta(params: {
   };
 }
 
+type ThinkingTracker = {
+  // Accumulated thinking text already delivered, used to dedupe the assistant
+  // snapshot frames that repeat text previously streamed via thinking_delta.
+  streamedText: string;
+};
+
+function dispatchClaudeCliThinking(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+  tracker: ThinkingTracker;
+  onThinkingDelta: (delta: CliThinkingDelta) => void;
+}): void {
+  if (!supportsCliJsonlToolEvents(params)) {
+    return;
+  }
+  const tracker = params.tracker;
+
+  if (params.parsed.type === "stream_event" && isRecord(params.parsed.event)) {
+    const event = params.parsed.event;
+    if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+      return;
+    }
+    // signature_delta carries opaque continuation material; the Claude CLI owns
+    // its own session transcript, so it never enters the thinking text lane.
+    if (event.delta.type !== "thinking_delta" || typeof event.delta.thinking !== "string") {
+      return;
+    }
+    if (!event.delta.thinking) {
+      return;
+    }
+    tracker.streamedText = `${tracker.streamedText}${event.delta.thinking}`;
+    params.onThinkingDelta({ text: tracker.streamedText, delta: event.delta.thinking });
+    return;
+  }
+
+  if (params.parsed.type === "assistant" && isRecord(params.parsed.message)) {
+    const content = Array.isArray(params.parsed.message.content)
+      ? params.parsed.message.content
+      : [];
+    for (const block of content) {
+      // redacted_thinking blocks are opaque provider material with no text lane.
+      if (!isRecord(block) || block.type !== "thinking" || typeof block.thinking !== "string") {
+        continue;
+      }
+      // Snapshot frames repeat streamed thinking; emit only unseen text so runs
+      // without stream_event thinking deltas (no include-partial flag) still
+      // surface reasoning exactly once.
+      const remainder = block.thinking.startsWith(tracker.streamedText)
+        ? block.thinking.slice(tracker.streamedText.length)
+        : block.thinking;
+      if (!remainder) {
+        continue;
+      }
+      tracker.streamedText = `${tracker.streamedText}${remainder}`;
+      params.onThinkingDelta({ text: tracker.streamedText, delta: remainder });
+    }
+  }
+}
+
 type PendingToolUse = {
   toolCallId: string;
   name: string;
@@ -744,6 +810,7 @@ export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
@@ -760,6 +827,7 @@ export function createCliJsonlStreamingParser(params: {
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
+  const thinkingTracker: ThinkingTracker = { streamedText: "" };
 
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
@@ -850,6 +918,16 @@ export function createCliJsonlStreamingParser(params: {
       } else if (evt.type === "content_block_start" || evt.type === "message_stop") {
         flushPendingClaudeAssistantText();
       }
+    }
+
+    if (params.onThinkingDelta) {
+      dispatchClaudeCliThinking({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+        tracker: thinkingTracker,
+        onThinkingDelta: params.onThinkingDelta,
+      });
     }
 
     if (params.onToolUseStart || params.onToolResult) {

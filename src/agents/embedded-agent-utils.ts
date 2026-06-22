@@ -133,6 +133,11 @@ export function extractAssistantVisibleText(msg: AssistantMessage): string {
   return extractAssistantTextForPhase(msg).text;
 }
 
+/** Extract the commentary/narration text of a commentary-phase assistant message. */
+export function extractAssistantCommentaryText(msg: AssistantMessage): string {
+  return extractAssistantTextForPhase(msg, "commentary").text;
+}
+
 /** Extract sanitized assistant text across all text content blocks. */
 export function extractAssistantText(msg: AssistantMessage): string {
   const extracted =
@@ -164,8 +169,11 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
         if (thinking) {
           return thinking;
         }
+        // Signature-only thinking blocks (Anthropic display:"omitted", e.g. Opus 4.7+/Fable 5):
+        // valid signature, no summary text. Surface nothing so the .filter(Boolean) below drops
+        // the bubble — a diagnostic placeholder is not reasoning content and must not be shown.
         if (typeof record.thinkingSignature === "string" && record.thinkingSignature.trim()) {
-          return "Native reasoning was produced; no summary text was returned.";
+          return "";
         }
       }
       return "";
