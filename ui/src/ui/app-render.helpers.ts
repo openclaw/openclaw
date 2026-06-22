@@ -9,6 +9,11 @@ import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-
 import type { SettingsHost } from "../app/app-host.ts";
 import { t } from "../i18n/index.ts";
 import {
+  isCronSessionKey,
+  parseSessionKey,
+  resolveSessionDisplayName,
+} from "../lib/session-display.ts";
+import {
   isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
@@ -36,7 +41,6 @@ import {
 } from "./chat/session-controls.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { icons } from "./icons.ts";
-import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";

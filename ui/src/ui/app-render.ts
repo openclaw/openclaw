@@ -18,6 +18,7 @@ import {
 import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   isSessionKeyTiedToAgent,
   normalizeAgentId,
@@ -37,10 +38,9 @@ import {
   switchChatSession,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { renderChatSessionSelect } from "./chat/session-controls.ts";
 import "../components/dashboard-header.ts";
+import { renderChatSessionSelect } from "./chat/session-controls.ts";
 import { icons } from "./icons.ts";
-import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import type { GatewaySessionRow } from "./types.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";
