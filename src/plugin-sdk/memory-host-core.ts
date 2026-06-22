@@ -19,8 +19,18 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
+// A memory-wiki vault marks its root with a `.openclaw-wiki` directory. When a
+// vault lives inside `memory/` (the default bridge layout), its `sources/`
+// pages are bridge-generated artifacts, not user memory. Indexing them as
+// memory would feed the wiki bridge import its own output, an unbounded
+// self-import loop (#95657). Skip any vault subtree during the memory scan.
+const WIKI_VAULT_MARKER = ".openclaw-wiki";
+
 async function listMarkdownFilesRecursive(rootDir: string): Promise<string[]> {
   const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => []);
+  if (entries.some((entry) => entry.isDirectory() && entry.name === WIKI_VAULT_MARKER)) {
+    return [];
+  }
   const files: string[] = [];
   for (const entry of entries) {
     const fullPath = path.join(rootDir, entry.name);

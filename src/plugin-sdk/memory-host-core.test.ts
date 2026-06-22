@@ -139,6 +139,35 @@ describe("memory-host-core helpers", () => {
     }
   });
 
+  it("skips a memory-wiki vault nested under memory/ to avoid the bridge self-import loop (#95657)", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-wiki-skip-"));
+    try {
+      const workspaceDir = path.join(fixtureRoot, "workspace");
+      const wikiSources = path.join(workspaceDir, "memory", "wiki", "sources");
+      const wikiMarker = path.join(workspaceDir, "memory", "wiki", ".openclaw-wiki");
+      await fs.mkdir(wikiSources, { recursive: true });
+      await fs.mkdir(wikiMarker, { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "memory", "real-note.md"), "# Note\n", "utf8");
+      // Bridge-generated source pages that must NOT be re-indexed as memory.
+      await fs.writeFile(
+        path.join(wikiSources, "bridge-workspace-abc-memory-real-note.md"),
+        "# Imported\n",
+        "utf8",
+      );
+
+      const artifacts = await listMemoryHostPublicArtifacts({
+        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+      });
+      const relativePaths = artifacts.map((artifact) => artifact.relativePath);
+      expect(relativePaths).toContain("memory/real-note.md");
+      expect(relativePaths.some((relativePath) => relativePath.includes("wiki/sources"))).toBe(
+        false,
+      );
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the deprecated memory-core alias wired to memory-host-core", () => {
     expect(memoryCoreAlias.buildActiveMemoryPromptSection).toBe(buildActiveMemoryPromptSection);
     expect(memoryCoreAlias.listActiveMemoryPublicArtifacts).toBe(listActiveMemoryPublicArtifacts);
