@@ -76,10 +76,7 @@ describe("Codex app inventory cache", () => {
 
     expect(snapshot.apps.map((item) => item.id)).toEqual(["app-1", "google-calendar-app"]);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request.mock.calls.map(([, params]) => params.cursor ?? null)).toEqual([
-      null,
-      "page-2",
-    ]);
+    expect(request.mock.calls.map(([, params]) => params.cursor ?? null)).toEqual([null, "page-2"]);
   });
 
   it("uses stale inventory for the current read while still refreshing asynchronously", async () => {

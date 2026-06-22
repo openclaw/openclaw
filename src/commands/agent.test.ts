@@ -96,6 +96,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
     persistAcpTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
       kind: "persisted",
       sessionEntry: params.sessionEntry,
+      saveOutcome: "saved",
     })),
     persistCliTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
       kind: "persisted",

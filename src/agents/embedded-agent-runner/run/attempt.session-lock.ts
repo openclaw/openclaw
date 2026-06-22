@@ -919,17 +919,11 @@ function waitForSessionFileOwnerRelease(params: {
     };
     const timeoutMs = resolveSessionFileOwnerWaitTimeoutMs(params.timeoutMs);
     if (timeoutMs !== undefined) {
-      waiter.timer = setTimeout(
-        () => {
-          waiter.reject(
-            new EmbeddedAttemptSessionFileOwnerTimeoutError(
-              params.sessionFile,
-              timeoutMs,
-            ),
-          );
-        },
-        timeoutMs,
-      );
+      waiter.timer = setTimeout(() => {
+        waiter.reject(
+          new EmbeddedAttemptSessionFileOwnerTimeoutError(params.sessionFile, timeoutMs),
+        );
+      }, timeoutMs);
       waiter.timer.unref?.();
     }
     if (params.signal) {

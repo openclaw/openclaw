@@ -2,16 +2,23 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import {
+  persistAcpTurnTranscript,
   persistCliTurnTranscript,
   runAgentAttempt as runAgentAttemptImpl,
 } from "./attempt-execution.js";
@@ -223,6 +230,7 @@ describe("CLI attempt execution", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    resetGlobalHookRunner();
     homeEnvSnapshot?.restore();
     homeEnvSnapshot = undefined;
     await fs.rm(tmpDir, { recursive: true, force: true });
@@ -1264,6 +1272,103 @@ describe("CLI attempt execution", () => {
     expect(sessionStore[sessionKey]?.updatedAt).toBe(persisted[sessionKey]?.updatedAt);
   });
 
+  it("reports skipped ACP transcript persistence when message write hooks block the only message", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: () => ({ block: true }),
+        },
+      ]),
+    );
+    const sessionKey = "agent:main:acp:blocked-transcript";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-acp-blocked-transcript",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const result = await persistAcpTurnTranscript({
+      body: "blocked by before_message_write",
+      finalText: "",
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    expect(result.saveOutcome).toBe("skipped");
+    expect(result.saveSkipReason).toBe("no_transcript_write");
+    const sessionFile = result.sessionEntry?.sessionFile;
+    if (!sessionFile) {
+      throw new Error("expected ACP transcript persistence to resolve a session file");
+    }
+    expect(await readSessionMessages(sessionFile)).toEqual([]);
+  });
+
+  it("reports skipped ACP transcript persistence when idempotency replay writes no new message", async () => {
+    const sessionKey = "agent:main:acp:idempotent-transcript";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-acp-idempotent-transcript",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    const userMessage = {
+      role: "user",
+      content: "replayed prompt",
+      timestamp: Date.now(),
+      idempotencyKey: "acp-transcript-replay:user",
+    } as PersistedUserTurnMessage;
+
+    const first = await persistAcpTurnTranscript({
+      body: "",
+      finalText: "",
+      userMessage,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+    expect(first.saveOutcome).toBe("saved");
+
+    const second = await persistAcpTurnTranscript({
+      body: "",
+      finalText: "",
+      userMessage,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry: first.sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+    });
+
+    expect(second.saveOutcome).toBe("skipped");
+    expect(second.saveSkipReason).toBe("no_transcript_write");
+    const sessionFile = second.sessionEntry?.sessionFile;
+    if (!sessionFile) {
+      throw new Error("expected ACP transcript persistence to resolve a session file");
+    }
+    const messages = await readSessionMessages(sessionFile);
+    expect(messages).toHaveLength(1);
+    expectRecordFields(requireRecord(messages[0], "idempotent user message"), {
+      role: "user",
+      content: "replayed prompt",
+    });
+  });
+
   it("does not append a CLI transcript after the session is deleted", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript-deleted";
     const staleSessionFile = path.join(tmpDir, "session-cli-stale.jsonl");
@@ -1289,7 +1394,12 @@ describe("CLI attempt execution", () => {
       config: {},
     });
 
-    expect(result).toEqual({ kind: "session-rebound", sessionEntry: undefined });
+    expect(result).toEqual({
+      kind: "session-rebound",
+      sessionEntry: undefined,
+      appendedMessages: 0,
+      skipReason: "session_rebound",
+    });
     await expect(fs.stat(staleSessionFile)).rejects.toMatchObject({ code: "ENOENT" });
     const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,

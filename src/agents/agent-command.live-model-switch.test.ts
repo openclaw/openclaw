@@ -978,9 +978,25 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return parent ? { channel, model: parent, matchKey: parentChannel } : null;
     });
     state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
-      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
+      const runTurnParams = params as {
+        onBeforeTurnSaveHook?: (completion: {
+          durationMs: number;
+          success: boolean;
+        }) =>
+          | { saveOutcome: "saved" }
+          | { saveOutcome: "skipped"; saveSkipReason?: string }
+          | boolean
+          | Promise<
+              | { saveOutcome: "saved" }
+              | { saveOutcome: "skipped"; saveSkipReason?: string }
+              | boolean
+            >;
+        onEvent?: (event: unknown) => void;
+      };
+      const onEvent = runTurnParams.onEvent;
       onEvent?.({ type: "text_delta", stream: "output", text: "done" });
       onEvent?.({ type: "done", stopReason: "end_turn" });
+      await runTurnParams.onBeforeTurnSaveHook?.({ durationMs: 0, success: true });
     });
     state.createAcpVisibleTextAccumulatorMock.mockImplementation(() => {
       let text = "";
@@ -1007,6 +1023,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       async (params: { sessionEntry?: unknown }) => ({
         kind: "persisted",
         sessionEntry: params.sessionEntry,
+        saveOutcome: "saved",
       }),
     );
     state.runCliTurnCompactionLifecycleMock.mockImplementation(

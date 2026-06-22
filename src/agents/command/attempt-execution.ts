@@ -129,8 +129,25 @@ type PersistTextTurnTranscriptParams = {
 };
 
 type PersistTextTurnTranscriptResult =
-  | { kind: "persisted"; sessionEntry: SessionEntry | undefined }
-  | { kind: "session-rebound"; sessionEntry: undefined };
+  | {
+      kind: "persisted";
+      sessionEntry: SessionEntry | undefined;
+      appendedMessages: number;
+      skipReason?: "empty_turn" | "no_transcript_write";
+    }
+  | {
+      kind: "session-rebound";
+      sessionEntry: undefined;
+      appendedMessages: 0;
+      skipReason: "session_rebound";
+    };
+
+export type AcpTurnTranscriptPersistResult = {
+  kind: PersistTextTurnTranscriptResult["kind"];
+  sessionEntry: SessionEntry | undefined;
+  saveOutcome: "saved" | "skipped";
+  saveSkipReason?: string;
+};
 
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
@@ -297,8 +314,13 @@ async function persistTextTurnTranscript(
 ): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
-  if (!promptText && !replyText) {
-    return { kind: "persisted", sessionEntry: params.sessionEntry };
+  if (!params.userMessage && !promptText && !replyText) {
+    return {
+      kind: "persisted",
+      sessionEntry: params.sessionEntry,
+      appendedMessages: 0,
+      skipReason: "empty_turn",
+    };
   }
 
   const messages = [];
@@ -369,9 +391,19 @@ async function persistTextTurnTranscript(
     },
   );
   if (turn.rejectedReason === "session-rebound") {
-    return { kind: "session-rebound", sessionEntry: undefined };
+    return {
+      kind: "session-rebound",
+      sessionEntry: undefined,
+      appendedMessages: 0,
+      skipReason: "session_rebound",
+    };
   }
-  return { kind: "persisted", sessionEntry: turn.sessionEntry };
+  return {
+    kind: "persisted",
+    sessionEntry: turn.sessionEntry,
+    appendedMessages: turn.appendedCount,
+    ...(turn.appendedCount > 0 ? {} : { skipReason: "no_transcript_write" }),
+  };
 }
 
 function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
@@ -394,6 +426,7 @@ function isClaudeCliProvider(provider: string): boolean {
 export async function persistAcpTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
+  userMessage?: PersistedUserTurnMessage;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -404,8 +437,8 @@ export async function persistAcpTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-}): Promise<PersistTextTurnTranscriptResult> {
-  return await persistTextTurnTranscript({
+}): Promise<AcpTurnTranscriptPersistResult> {
+  const result = await persistTextTurnTranscript({
     ...params,
     assistant: {
       api: "openai-responses",
@@ -413,6 +446,16 @@ export async function persistAcpTurnTranscript(params: {
       model: "acp-runtime",
     },
   });
+  return {
+    kind: result.kind,
+    sessionEntry: result.sessionEntry,
+    ...(result.appendedMessages > 0
+      ? { saveOutcome: "saved" as const }
+      : {
+          saveOutcome: "skipped" as const,
+          saveSkipReason: result.skipReason ?? "no_transcript_write",
+        }),
+  };
 }
 
 export async function persistCliTurnTranscript(params: {
@@ -436,7 +479,7 @@ export async function persistCliTurnTranscript(params: {
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
   const gapFill = params.embeddedAssistantGapFill ?? false;
 
-  return await persistTextTurnTranscript({
+  const result = await persistTextTurnTranscript({
     body: gapFill ? "" : params.body,
     transcriptBody: gapFill ? undefined : params.transcriptBody,
     ...(!gapFill && params.userMessage ? { userMessage: params.userMessage } : {}),
@@ -458,6 +501,7 @@ export async function persistCliTurnTranscript(params: {
       usage: params.result.meta.agentMeta?.usage,
     },
   });
+  return result;
 }
 
 export function runAgentAttempt(params: {

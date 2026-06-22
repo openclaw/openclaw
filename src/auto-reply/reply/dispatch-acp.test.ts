@@ -96,7 +96,7 @@ const sessionMetaMocks = vi.hoisted(() => ({
 }));
 
 const transcriptMocks = vi.hoisted(() => ({
-  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
+  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => ({ saveOutcome: "saved" })),
 }));
 
 const bindingServiceMocks = vi.hoisted(() => ({
@@ -348,8 +348,32 @@ async function runDispatch(params: {
   });
 }
 
+type MockRunTurnInput = {
+  onEvent?: (event: unknown) => Promise<void> | void;
+  onBeforeTurnSaveHook?: (context: {
+    sessionKey: string;
+    success: boolean;
+    durationMs: number;
+    errorCode?: string;
+  }) =>
+    | Promise<{ saveOutcome: "saved" } | { saveOutcome: "skipped"; saveSkipReason?: string }>
+    | { saveOutcome: "saved" }
+    | { saveOutcome: "skipped"; saveSkipReason?: string }
+    | boolean
+    | void;
+};
+
+async function completeMockAcpTurn(input: MockRunTurnInput, errorCode?: string): Promise<void> {
+  await input.onBeforeTurnSaveHook?.({
+    sessionKey,
+    success: !errorCode,
+    durationMs: 1,
+    ...(errorCode ? { errorCode } : {}),
+  });
+}
+
 async function emitToolLifecycleEvents(
-  onEvent: (event: unknown) => Promise<void>,
+  onEvent: (event: unknown) => Promise<void> | void,
   toolCallId: string,
 ) {
   await onEvent({
@@ -372,29 +396,29 @@ async function emitToolLifecycleEvents(
 }
 
 function mockToolLifecycleTurn(toolCallId: string) {
-  managerMocks.runTurn.mockImplementation(
-    async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-      await emitToolLifecycleEvents(onEvent, toolCallId);
-    },
-  );
+  managerMocks.runTurn.mockImplementation(async (input: MockRunTurnInput) => {
+    if (!input.onEvent) {
+      throw new Error("expected ACP onEvent handler");
+    }
+    await emitToolLifecycleEvents(input.onEvent, toolCallId);
+    await completeMockAcpTurn(input);
+  });
 }
 
 function mockVisibleTextTurn(text = "visible") {
-  managerMocks.runTurn.mockImplementationOnce(
-    async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-      await onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
-      await onEvent({ type: "done" });
-    },
-  );
+  managerMocks.runTurn.mockImplementationOnce(async (input: MockRunTurnInput) => {
+    await input.onEvent?.({ type: "text_delta", text, tag: "agent_message_chunk" });
+    await input.onEvent?.({ type: "done" });
+    await completeMockAcpTurn(input);
+  });
 }
 
 function mockRoutedTextTurn(text: string) {
-  managerMocks.runTurn.mockImplementation(
-    async ({ onEvent }: { onEvent: (event: unknown) => Promise<void> }) => {
-      await onEvent({ type: "text_delta", text, tag: "agent_message_chunk" });
-      await onEvent({ type: "done" });
-    },
-  );
+  managerMocks.runTurn.mockImplementation(async (input: MockRunTurnInput) => {
+    await input.onEvent?.({ type: "text_delta", text, tag: "agent_message_chunk" });
+    await input.onEvent?.({ type: "done" });
+    await completeMockAcpTurn(input);
+  });
 }
 
 async function dispatchVisibleTurn(onReplyStart: () => void) {
@@ -433,11 +457,10 @@ describe("tryDispatchAcpReply", () => {
   beforeEach(() => {
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
-    managerMocks.runTurn.mockImplementation(
-      async ({ onEvent }: { onEvent?: (event: unknown) => Promise<void> }) => {
-        await onEvent?.({ type: "done" });
-      },
-    );
+    managerMocks.runTurn.mockImplementation(async (input: MockRunTurnInput) => {
+      await input.onEvent?.({ type: "done" });
+      await completeMockAcpTurn(input);
+    });
     managerMocks.getObservabilitySnapshot.mockReset();
     managerMocks.getObservabilitySnapshot.mockReturnValue({
       turns: { queueDepth: 0 },
@@ -511,6 +534,69 @@ describe("tryDispatchAcpReply", () => {
     expect(transcript.promptText).toBe("reply");
     expect(transcript.finalText).toBe("hello");
     expect(routeCall().mirror).toBe(false);
+  });
+
+  it("persists the ACP transcript before the manager emits successful agent:turn:transcript:save", async () => {
+    setReadyAcpResolution();
+    const order: string[] = [];
+    transcriptMocks.persistAcpDispatchTranscript.mockImplementationOnce(async () => {
+      order.push("transcript");
+      return { saveOutcome: "saved" };
+    });
+    managerMocks.runTurn.mockImplementationOnce(async (input: MockRunTurnInput) => {
+      await input.onEvent?.({ type: "text_delta", text: "memory", tag: "agent_message_chunk" });
+      await input.onEvent?.({ type: "done" });
+      const saveResult = await input.onBeforeTurnSaveHook?.({
+        sessionKey,
+        success: true,
+        durationMs: 1,
+      });
+      if (saveResult && typeof saveResult === "object" && saveResult.saveOutcome === "saved") {
+        order.push("save-success");
+      }
+    });
+
+    await runDispatch({
+      bodyForAgent: "remember this",
+      shouldRouteToOriginating: true,
+    });
+
+    expect(order).toEqual(["transcript", "save-success"]);
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        promptText: "remember this",
+        finalText: "memory",
+      }),
+    );
+  });
+
+  it("surfaces ACP transcript persistence failures before successful agent:turn:transcript:save", async () => {
+    setReadyAcpResolution();
+    const order: string[] = [];
+    transcriptMocks.persistAcpDispatchTranscript.mockRejectedValueOnce(new Error("disk full"));
+    managerMocks.runTurn.mockImplementationOnce(async (input: MockRunTurnInput) => {
+      await input.onEvent?.({ type: "text_delta", text: "memory", tag: "agent_message_chunk" });
+      await input.onEvent?.({ type: "done" });
+      await expect(
+        input.onBeforeTurnSaveHook?.({ sessionKey, success: true, durationMs: 1 }),
+      ).rejects.toThrow("disk full");
+      order.push("save failed");
+    });
+
+    await runDispatch({
+      bodyForAgent: "remember this",
+      shouldRouteToOriginating: true,
+    });
+
+    expect(order).toEqual(["save failed"]);
+    expect(transcriptMocks.persistAcpDispatchTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        promptText: "remember this",
+        finalText: "memory",
+      }),
+    );
   });
 
   it("adds source delivery guidance to tool-only ACP turns", async () => {

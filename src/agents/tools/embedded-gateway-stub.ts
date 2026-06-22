@@ -1,3 +1,4 @@
+import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
 /**
  * Embedded-mode Gateway method stub.
  *
@@ -15,10 +16,6 @@ import type {
 } from "../../gateway/session-transcript-readers.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
-import {
-  normalizeFastMode,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { readPositiveIntegerParam } from "./common.js";
 

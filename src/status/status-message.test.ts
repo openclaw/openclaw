@@ -127,5 +127,4 @@ describe("buildStatusMessage context window", () => {
     expect(text).toContain("Context: 36k/1.0m");
     expect(text).not.toContain("Context: 36k/200k");
   });
-
 });

@@ -160,10 +160,7 @@ export async function minimaxUnderstandImage(params: {
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
   ensureGlobalUndiciEnvProxyDispatcher();
 
-  const timeoutMs = resolvePositiveTimerTimeoutMs(
-    params.timeoutMs,
-    DEFAULT_MINIMAX_VLM_TIMEOUT_MS,
-  );
+  const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, DEFAULT_MINIMAX_VLM_TIMEOUT_MS);
 
   const res = await fetch(url, {
     method: "POST",

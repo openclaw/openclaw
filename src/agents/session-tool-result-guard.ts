@@ -728,7 +728,9 @@ export function installSessionToolResultGuard(
             capToolResultForPersistence(flushed.message, maxToolResultChars, redactionConfig),
             {
               invalidateSerializedPrefixCache:
-                persistedSynthetic !== synthetic || toolResultTransformerMayMutate || flushed.changed,
+                persistedSynthetic !== synthetic ||
+                toolResultTransformerMayMutate ||
+                flushed.changed,
             },
           );
         }

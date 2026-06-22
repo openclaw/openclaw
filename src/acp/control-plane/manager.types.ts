@@ -58,6 +58,36 @@ export type AcpTurnAttachment = {
 };
 
 /** Input for one ACP prompt turn routed through the manager. */
+
+export type AcpTurnCompletionHookContext = {
+  sessionKey: string;
+  success: boolean;
+  durationMs: number;
+  errorCode?: AcpRuntimeError["code"];
+};
+
+export type AcpTurnSaveOutcome = "saved" | "skipped" | "failed";
+
+export type AcpTurnSaveHookResult =
+  | {
+      saveOutcome: "saved";
+    }
+  | {
+      saveOutcome: "skipped";
+      saveSkipReason?: string;
+    };
+
+export type AcpTurnSaveHookContext = {
+  sessionKey: string;
+  success: boolean;
+  saveOutcome: AcpTurnSaveOutcome;
+  turnSuccess: boolean;
+  durationMs: number;
+  turnErrorCode?: AcpRuntimeError["code"];
+  saveError?: string;
+  saveSkipReason?: string;
+};
+
 export type AcpRunTurnInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -68,6 +98,9 @@ export type AcpRunTurnInput = {
   signal?: AbortSignal;
   onLifecycle?: (event: AcpTurnLifecycleEvent) => Promise<void> | void;
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
+  onBeforeTurnSaveHook?: (
+    context: AcpTurnCompletionHookContext,
+  ) => Promise<AcpTurnSaveHookResult | false | void> | AcpTurnSaveHookResult | false | void;
 };
 
 type AcpTurnLifecycleEvent = {

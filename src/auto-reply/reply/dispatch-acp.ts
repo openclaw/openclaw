@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { AcpTurnSaveHookResult } from "../../acp/control-plane/manager.types.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../../acp/policy.js";
 import { AcpRuntimeError, toAcpRuntimeError } from "../../acp/runtime/errors.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
@@ -605,6 +606,34 @@ export async function tryDispatchAcpReply(params: {
       requestId: resolveAcpRequestId(params.ctx),
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
       onEvent: async (event) => await projector.onEvent(event),
+      onBeforeTurnSaveHook: async (completion) => {
+        await projector.flush(true);
+        if (!completion.success) {
+          return { saveOutcome: "skipped", saveSkipReason: "turn_failed" };
+        }
+        if (params.abortSignal?.aborted) {
+          return { saveOutcome: "skipped", saveSkipReason: "aborted" };
+        }
+        try {
+          const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
+          const saveResult: AcpTurnSaveHookResult = await persistAcpDispatchTranscript({
+            cfg: params.cfg,
+            sessionKey: canonicalSessionKey,
+            promptText: turnPromptText,
+            finalText: delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
+            meta: acpResolution.meta,
+            threadId: params.ctx.MessageThreadId,
+          });
+          return saveResult;
+        } catch (error) {
+          logVerbose(
+            `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
+              error,
+            )}`,
+          );
+          throw error;
+        }
+      },
     });
 
     await projector.flush(true);
@@ -614,23 +643,6 @@ export async function tryDispatchAcpReply(params: {
       params.recordProcessed("completed", { reason: "acp_aborted" });
       params.markIdle("message_aborted");
       return { queuedFinal, counts };
-    }
-    try {
-      const { persistAcpDispatchTranscript } = await loadDispatchAcpTranscriptRuntime();
-      await persistAcpDispatchTranscript({
-        cfg: params.cfg,
-        sessionKey: canonicalSessionKey,
-        promptText: turnPromptText,
-        finalText: delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
-        meta: acpResolution.meta,
-        threadId: params.ctx.MessageThreadId,
-      });
-    } catch (error) {
-      logVerbose(
-        `dispatch-acp: transcript persistence failed for ${canonicalSessionKey}: ${formatErrorMessage(
-          error,
-        )}`,
-      );
     }
     queuedFinal =
       (await finalizeAcpTurnOutput({

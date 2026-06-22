@@ -332,6 +332,7 @@ export async function appendUserTurnTranscriptMessage(
       sessionFile: string;
       messageId: string;
       message: PersistedUserTurnMessage;
+      appended: boolean;
     }
   | undefined
 > {
@@ -368,6 +369,7 @@ export async function appendUserTurnTranscriptMessage(
     | {
         messageId: string;
         message: PersistedUserTurnMessage;
+        appended: boolean;
       }
     | undefined;
   if (!appended) {
@@ -378,6 +380,7 @@ export async function appendUserTurnTranscriptMessage(
     sessionFile: params.transcriptPath,
     messageId: appended.messageId,
     message: appended.message,
+    appended: appended.appended,
   };
 }
 
@@ -422,6 +425,7 @@ export async function persistUserTurnTranscript(
     | {
         messageId: string;
         message: PersistedUserTurnMessage;
+        appended: boolean;
       }
     | undefined;
   if (!appended) {

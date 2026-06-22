@@ -242,9 +242,7 @@ describe("channelsCapabilitiesCommand", () => {
 
     await channelsCapabilitiesCommand({ channel: "slack", timeout: "999999" }, runtime);
 
-    expect(probeAccount).toHaveBeenCalledWith(
-      expect.objectContaining({ timeoutMs: 30_000 }),
-    );
+    expect(probeAccount).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000 }));
     expect(buildCapabilitiesDiagnostics).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 30_000 }),
     );
@@ -274,10 +272,7 @@ describe("channelsCapabilitiesCommand", () => {
       configChanged: false,
     });
 
-    await channelsCapabilitiesCommand(
-      { channel: "slack", json: true, timeout: "1" },
-      runtime,
-    );
+    await channelsCapabilitiesCommand({ channel: "slack", json: true, timeout: "1" }, runtime);
 
     const payload = JSON.parse(logs[0] ?? "{}") as {
       channels?: Array<{ probe?: unknown }>;
@@ -343,10 +338,7 @@ describe("channelsCapabilitiesCommand", () => {
       configChanged: false,
     });
 
-    await channelsCapabilitiesCommand(
-      { channel: "slack", json: true, timeout: "1" },
-      runtime,
-    );
+    await channelsCapabilitiesCommand({ channel: "slack", json: true, timeout: "1" }, runtime);
 
     const payload = JSON.parse(logs[0] ?? "{}") as {
       channels?: Array<{ diagnostics?: unknown }>;

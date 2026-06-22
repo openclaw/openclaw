@@ -66,6 +66,7 @@ export type UserTurnTranscriptPersistResult = {
   sessionEntry: UserTurnSessionEntry | undefined;
   messageId: string;
   message: PersistedUserTurnMessage;
+  appended: boolean;
 };
 
 export type UserTurnTranscriptTargetResolver =
