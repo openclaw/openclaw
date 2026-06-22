@@ -16,7 +16,9 @@ The current scorecard covers 50 surfaces and 281 capability areas.
 | Surface average  | `Alpha (68%)` | `Alpha (66%)` | `Alpha (68%)` |
 | Category average | `Alpha (69%)` | `Alpha (66%)` | `Alpha (69%)` |
 
-Coverage measures how much of the area has release proof. Quality measures reliability and operational confidence. Completeness measures how much of the expected user workflow is available.
+- Coverage measures how much of the area has release proof.
+- Quality measures reliability and operational confidence.
+- Completeness measures how much of the expected user workflow is available.
 
 ## Score bands
 

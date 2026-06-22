@@ -596,7 +596,9 @@ function renderMaturityScorecard({
       ],
     ]),
     "",
-    "Coverage measures how much of the area has release proof. Quality measures reliability and operational confidence. Completeness measures how much of the expected user workflow is available.",
+    "- Coverage measures how much of the area has release proof.",
+    "- Quality measures reliability and operational confidence.",
+    "- Completeness measures how much of the expected user workflow is available.",
     "",
     ...renderScoreBands(),
   ];
