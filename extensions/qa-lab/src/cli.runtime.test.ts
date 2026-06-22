@@ -606,18 +606,28 @@ describe("qa cli runtime", () => {
     });
   });
 
-  it("keeps Crabline channel-driver independent from the VM runner", async () => {
-    await expect(
-      runQaSuiteCommand({
-        repoRoot: "/tmp/openclaw-repo",
-        providerMode: "mock-openai",
-        channelDriver: "crabline",
-        channel: "telegram",
-        runner: "multipass",
+  it("passes Crabline channel-driver selection through to the multipass runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      channelDriver: "crabline",
+      channel: "telegram",
+      runner: "multipass",
+      scenarioIds: ["channel-chat-baseline"],
+      allowFailures: true,
+    });
+
+    expect(runQaMultipass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelDriverSelection: {
+          capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+          channel: "telegram",
+          channelDriver: "crabline",
+          smokeArtifactPath: "crabline-fake-provider-smoke.json",
+        },
       }),
-    ).rejects.toThrow("--channel-driver crabline requires --runner host.");
+    );
     expect(runQaSuite).not.toHaveBeenCalled();
-    expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
   it("passes explicit suite plugin enablements into the host gateway run", async () => {
@@ -641,6 +651,24 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline"],
       enabledPluginIds: ["browser", "memory-core"],
     });
+  });
+
+  it("passes explicit suite plugin enablements through to the multipass runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      runner: "multipass",
+      providerMode: "mock-openai",
+      scenarioIds: ["channel-chat-baseline"],
+      enabledPluginIds: ["browser", "memory-core"],
+      allowFailures: true,
+    });
+
+    expect(runQaMultipass).toHaveBeenCalledWith(
+      expect.objectContaining({
+        enabledPluginIds: ["browser", "memory-core"],
+      }),
+    );
+    expect(runQaSuite).not.toHaveBeenCalled();
   });
 
   it("passes runtime-pair suite selection through to the host runner", async () => {
