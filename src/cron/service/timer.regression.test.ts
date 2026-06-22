@@ -43,7 +43,6 @@ import { createCronServiceState, type CronEvent } from "./state.js";
 import {
   DEFAULT_JOB_TIMEOUT_MS,
   applyJobResult,
-  executeJob,
   executeJobCore,
   executeJobCoreWithTimeout,
   onTimer,
@@ -1738,6 +1737,7 @@ describe("cron service timer regressions", () => {
   });
 
   it("retries recurring wake-now main jobs until temporary lane pressure clears (#75964)", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
     let now = 0;
     const nowMs = () => {
       now += 10;
@@ -1759,11 +1759,11 @@ describe("cron service timer regressions", () => {
       sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
-      state: { nextRunAtMs: 0 },
+      state: { nextRunAtMs: 1 },
     };
     const state = createCronServiceState({
       cronEnabled: true,
-      storePath: "/tmp/openclaw-cron-busy-main-test/jobs.json",
+      storePath: store.storePath,
       log: noopLogger,
       nowMs,
       enqueueSystemEvent,
@@ -1774,16 +1774,20 @@ describe("cron service timer regressions", () => {
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     state.store = { version: 1, jobs: [job] };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
 
-    const runPromise = executeJob(state, job, nowMs(), { forced: false });
+    const runPromise = runMissedJobs(state);
     await vi.advanceTimersByTimeAsync(1);
     await runPromise;
 
+    const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
+      (candidate) => candidate.id === job.id,
+    );
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(2);
     expect(requestHeartbeat).not.toHaveBeenCalled();
-    expect(job.state.lastStatus).toBe("ok");
-    expect(job.state.runningAtMs).toBeUndefined();
+    expect(persistedJob?.state.lastStatus).toBe("ok");
+    expect(persistedJob?.state.runningAtMs).toBeUndefined();
   });
 
   it("retries cron schedule computation from the next second when the first attempt returns undefined (#17821)", () => {

@@ -502,18 +502,25 @@ async function runQaTestFileScenario(params: {
   return {
     ...result,
     ...producerEvidenceResult,
-    ...statusFromProducerEvidence(producerEvidenceResult.producerEvidence),
+    ...statusFromProducerEvidence({
+      allowBlockedEvidence: params.scenario.execution.allowBlockedEvidence === true,
+      producerEvidence: producerEvidenceResult.producerEvidence,
+    }),
   };
 }
 
-function statusFromProducerEvidence(
-  producerEvidence: QaEvidenceSummaryJson | undefined,
-): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
+function statusFromProducerEvidence(params: {
+  allowBlockedEvidence: boolean;
+  producerEvidence: QaEvidenceSummaryJson | undefined;
+}): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
+  const { allowBlockedEvidence, producerEvidence } = params;
   if (!producerEvidence || producerEvidence.entries.length === 0) {
     return { status: "pass" };
   }
   const blockingEntry = producerEvidence.entries.find(
-    (entry) => entry.result.status === "fail" || entry.result.status === "blocked",
+    (entry) =>
+      entry.result.status === "fail" ||
+      (!allowBlockedEvidence && entry.result.status === "blocked"),
   );
   if (blockingEntry) {
     return {
