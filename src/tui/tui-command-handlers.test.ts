@@ -1186,6 +1186,36 @@ describe("tui command handlers", () => {
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
   });
 
+  it("patches and reports auto fast mode", async () => {
+    const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
+    const applySessionInfoFromPatch = vi.fn();
+    const patchSession = vi.fn().mockResolvedValue({ fastMode: "auto" });
+    const {
+      handleCommand,
+      patchSession: patch,
+      addSystem,
+      state,
+    } = createHarness({
+      patchSession,
+      refreshSessionInfo,
+      applySessionInfoFromPatch,
+    });
+
+    await handleCommand("/fast auto");
+
+    expect(patch).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      fastMode: "auto",
+    });
+    expect(addSystem).toHaveBeenCalledWith("fast mode set to auto");
+    expect(applySessionInfoFromPatch).toHaveBeenCalledWith({ fastMode: "auto" });
+    expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
+
+    (state.sessionInfo as { fastMode?: "auto" }).fastMode = "auto";
+    await handleCommand("/fast status");
+    expect(addSystem).toHaveBeenCalledWith("fast mode: auto");
+  });
+
   it("uses canonical model refs in the model selector", async () => {
     const listModels = vi.fn().mockResolvedValue([
       {

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server as HttpServer } from "node:http";
 import { createServer as createTcpServer, type Server as TcpServer, type Socket } from "node:net";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { createBoundedChildOutput } from "../../../helpers/bounded-child-output.js";
 
@@ -361,11 +362,13 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
   it("passes in models mode when Open WebUI exposes the OpenClaw model", async () => {
     const server = createServer((request, response) => {
       if (request.url === "/api/v1/auths/signin") {
-        response.writeHead(200, {
-          "content-type": "application/json",
-          "set-cookie": "openwebui-session=test; Path=/",
-        });
-        response.end(JSON.stringify({ token: "test-token" }));
+        setTimeout(() => {
+          response.writeHead(200, {
+            "content-type": "application/json",
+            "set-cookie": "openwebui-session=test; Path=/",
+          });
+          response.end(JSON.stringify({ token: "test-token" }));
+        }, 25);
         return;
       }
       if (request.url === "/api/models") {
@@ -379,7 +382,10 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
     });
     const baseUrl = await listen(server);
     try {
-      const result = await runProbe(baseUrl);
+      const result = await runProbe(baseUrl, {
+        OPENWEBUI_CONTROL_TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
+        OPENWEBUI_FETCH_TIMEOUT_MS: String(MAX_TIMER_TIMEOUT_MS + 1),
+      });
 
       expect(result.status).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({

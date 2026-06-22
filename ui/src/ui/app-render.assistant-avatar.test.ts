@@ -505,6 +505,29 @@ describe("renderApp assistant avatar routing", () => {
     expect(tools?.exec?.security).toBe("full");
   });
 
+  it("passes effective fast mode to Quick Settings", () => {
+    const state = createState({
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {},
+        sessions: [
+          {
+            key: "main",
+            kind: "direct",
+            updatedAt: null,
+            effectiveFastMode: "auto",
+          },
+        ],
+      } as AppViewState["sessionsResult"],
+    });
+
+    renderApp(state);
+
+    expect(quickSettingsProps.current?.fastMode).toBe("auto");
+  });
+
   it("renders stale cron state containing a job without a payload", () => {
     const container = document.createElement("div");
 

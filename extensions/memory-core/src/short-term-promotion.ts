@@ -834,17 +834,6 @@ function isProcessLikelyAlive(pid: number): boolean {
   }
 }
 
-async function canStealStaleLock(lockPath: string): Promise<boolean> {
-  const ownerPid = await fs
-    .readFile(lockPath, "utf-8")
-    .then((raw) => parseLockOwnerPid(raw))
-    .catch(() => null);
-  if (ownerPid === null) {
-    return true;
-  }
-  return !isProcessLikelyAlive(ownerPid);
-}
-
 async function sleep(ms: number): Promise<void> {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -2813,7 +2802,6 @@ export async function removeGroundedShortTermCandidates(params: {
 
 export const testing = {
   parseLockOwnerPid,
-  canStealStaleLock,
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,

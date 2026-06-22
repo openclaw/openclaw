@@ -22,6 +22,7 @@ let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncatio
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
+let createToolResultPromptProjectionState: typeof import("./tool-result-truncation.js").createToolResultPromptProjectionState;
 let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
@@ -40,6 +41,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
+    createToolResultPromptProjectionState,
   } = await import("./tool-result-truncation.js"));
 }
 
@@ -448,22 +450,140 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeToolResult("y".repeat(15_000), "current_2"),
     ];
     const messages = [...prefix, ...suffix];
+    const projectionState = createToolResultPromptProjectionState();
 
-    const first = truncateOversizedToolResultsInMessages(messages, 128_000, 12_000, null);
+    const first = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+      12_000,
+      12_000,
+      projectionState,
+    );
     const second = truncateOversizedToolResultsInMessages(
       [...messages, makeToolResult("z".repeat(15_000), "current_3")],
       128_000,
       12_000,
-      null,
+      12_000,
+      projectionState,
     );
 
     expect(first.truncatedCount).toBe(4);
-    expect(second.truncatedCount).toBe(5);
+    expect(second.truncatedCount).toBe(1);
     expect(second.messages.slice(0, messages.length)).toEqual(first.messages);
     expect(second.messages.every((message) => getToolResultTextLength(message) <= 12_000)).toBe(
       true,
     );
     expect(messages).toEqual([...prefix, ...suffix]);
+
+    const stableState = createToolResultPromptProjectionState();
+    const stableHistory = [
+      makeToolResult("a".repeat(4_000), "stable_1"),
+      makeToolResult("b".repeat(4_000), "stable_2"),
+    ];
+    const stableFirst = truncateOversizedToolResultsInMessages(
+      stableHistory,
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    const stableSecond = truncateOversizedToolResultsInMessages(
+      [...stableHistory, makeToolResult("c".repeat(15_000), "stable_3")],
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    expect(stableFirst.truncatedCount).toBe(0);
+    expect(stableSecond.messages.slice(0, stableHistory.length)).toEqual(stableFirst.messages);
+    const stableThird = truncateOversizedToolResultsInMessages(
+      [
+        ...stableHistory,
+        makeToolResult("c".repeat(15_000), "stable_3"),
+        makeToolResult("d".repeat(15_000), "stable_4"),
+      ],
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    expect(stableThird.messages).toHaveLength(4);
+    const stableFourth = truncateOversizedToolResultsInMessages(
+      [
+        ...stableHistory,
+        makeToolResult("c".repeat(15_000), "stable_3"),
+        makeToolResult("d".repeat(15_000), "stable_4"),
+        makeToolResult("e".repeat(15_000), "stable_5"),
+      ],
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    const lastText = stableFourth.messages.at(-1);
+    expect(lastText && getToolResultTextLength(lastText)).toBeLessThanOrEqual(12_000);
+  });
+
+  it("does not restore filtered image blocks when reusing a projection", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const source = makeToolResult("x".repeat(15_000), "image_call");
+    source.content = [
+      { type: "image", data: "filtered-after-conversion" },
+      { type: "text", text: "x".repeat(15_000) },
+    ] as never;
+    truncateOversizedToolResultsInMessages([source], 128_000, 12_000, 12_000, projectionState);
+
+    const providerMessage: ToolResultMessage = {
+      ...source,
+      content: [
+        { type: "text" as const, text: "Image reading is disabled." },
+        { type: "text" as const, text: "x".repeat(15_000) },
+      ],
+    };
+    const result = truncateOversizedToolResultsInMessages(
+      [providerMessage],
+      128_000,
+      12_000,
+      12_000,
+      projectionState,
+    ).messages[0] as ToolResultMessage | undefined;
+
+    expect(result?.content?.[0]).toEqual({
+      type: "text",
+      text: "Image reading is disabled.",
+    });
+    expect(
+      result?.content?.[1] && "text" in result.content[1] ? result.content[1].text.length : 0,
+    ).toBeLessThan(15_000);
+  });
+
+  it("does not reuse ambiguous projections across filtered history", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const duplicate = (text: string) => ({
+      role: "toolResult" as const,
+      toolCallId: "duplicate-call",
+      toolName: "duplicate",
+      isError: false,
+      timestamp: 1,
+      content: [{ type: "text" as const, text }],
+    });
+    const first = truncateOversizedToolResultsInMessages(
+      [duplicate("a".repeat(100)), duplicate("b".repeat(100))],
+      128_000,
+      100,
+      100,
+      projectionState,
+    );
+    const filtered = truncateOversizedToolResultsInMessages(
+      [duplicate("b".repeat(100))],
+      128_000,
+      100,
+      100,
+      projectionState,
+    );
+
+    expect(first.messages[0]).not.toEqual(first.messages[1]);
+    expect(filtered.messages[0]).toEqual(duplicate("b".repeat(100)));
   });
 });
 

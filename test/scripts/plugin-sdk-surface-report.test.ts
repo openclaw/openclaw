@@ -51,11 +51,11 @@ describe("plugin SDK surface report", () => {
 
   it("keeps generated package declarations out of source surface counts", () => {
     const result = runSurfaceReport({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: "5174",
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: "5184",
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("public callable exports 5175 > 5174");
+    expect(result.stderr).toContain("public callable exports 5185 > 5184");
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {
