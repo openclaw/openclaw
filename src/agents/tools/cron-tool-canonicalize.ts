@@ -243,12 +243,36 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Normalizes whitespace-padded cron object keys. Some tool-call
+ * extraction/serialization pipelines can produce keys with trailing spaces
+ * (e.g. "schedule " instead of "schedule"), which causes strict gateway
+ * validation to reject the job with "unexpected property" errors.
+ *
+ * Only recognized CRON_RECOVERABLE_OBJECT_KEYS are trimmed — arbitrary keys
+ * (including special ones like "__proto__") are never mutated. If both the
+ * padded and canonical form of a key exist (e.g. "schedule " and "schedule"),
+ * the canonical key wins and the padded variant is discarded.
+ */
+function repairPaddedCronKeys(value: Record<string, unknown>): void {
+  for (const key of Object.keys(value)) {
+    const trimmed = key.trim();
+    if (trimmed !== key && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) {
+      if (!(trimmed in value)) {
+        value[trimmed] = value[key];
+      }
+      delete value[key];
+    }
+  }
+}
+
 /** Converts model-friendly cron tool shorthands into the nested gateway job/patch shape. */
 export function canonicalizeCronToolObject(
   value: Record<string, unknown>,
 ): Record<string, unknown> {
   const unwrapped = isRecord(value.data) ? value.data : isRecord(value.job) ? value.job : value;
   const next = { ...unwrapped };
+  repairPaddedCronKeys(next);
   repairConcatenatedCronToolKeys(next);
   canonicalizeCronToolSchedule(next);
   canonicalizeCronToolPayload(next);
