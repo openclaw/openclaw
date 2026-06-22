@@ -698,7 +698,7 @@ describe("qa suite runtime agent process helpers", () => {
 
     expect(gatewayCall).toHaveBeenCalledWith(
       "agent.wait",
-      { runId: "run-oversized", timeoutMs: 9e15 },
+      { runId: "run-oversized", timeoutMs: MAX_TIMER_TIMEOUT_MS },
       { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });

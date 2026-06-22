@@ -117,8 +117,6 @@ async function isRequesterSpawnedSessionVisible(params: {
   return keys.has(params.targetSessionKey);
 }
 
-export { looksLikeSessionId };
-
 export function looksLikeSessionKey(value: string): boolean {
   const raw = normalizeOptionalString(value) ?? "";
   if (!raw) {

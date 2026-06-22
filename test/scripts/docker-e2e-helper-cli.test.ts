@@ -103,13 +103,16 @@ describe("Docker E2E helper CLIs", () => {
   });
 
   it("rejects missing timings limits without a Node stack trace", () => {
-    const result = runHelper("scripts/docker-e2e-timings.mjs", "summary.json", "--limit");
+    for (const limit of [undefined, "-h"]) {
+      const args = ["scripts/docker-e2e-timings.mjs", "summary.json", "--limit"];
+      const result = runHelper(...(limit === undefined ? args : [...args, limit]));
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("--limit requires a value");
-    expect(result.stderr).not.toContain("Error:");
-    expect(result.stderr).not.toContain("at file:");
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("--limit requires a value");
+      expect(result.stderr).not.toContain("Error:");
+      expect(result.stderr).not.toContain("at file:");
+    }
   });
 
   it("prints rerun help without detecting the GitHub repository", () => {

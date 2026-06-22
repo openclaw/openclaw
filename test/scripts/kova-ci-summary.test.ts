@@ -38,6 +38,20 @@ describe("scripts/kova-ci-summary", () => {
     expect(result.stdout).toContain("usage: node scripts/kova-ci-summary.mjs --report");
   });
 
+  it.each([
+    ["flag-shaped value", ["--report", "-h"]],
+    ["option separator before help", ["--report", "--", "--help"]],
+  ])("rejects %s before help handling", (_name, args) => {
+    const result = spawnSync(process.execPath, ["scripts/kova-ci-summary.mjs", ...args], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: --report requires a value");
+  });
+
   it("rejects empty Kova reports instead of rendering unknown summaries", () => {
     const empty = runSummary({});
     expect(empty.result.status).toBe(1);

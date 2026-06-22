@@ -36,7 +36,7 @@ type Options = {
 
 function readValue(raw: string | undefined, flag: string): string {
   const value = raw?.trim() ?? "";
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     fail(`${flag} requires a value`);
   }
   return value;
@@ -69,14 +69,15 @@ function parseArgs(argv: string[]): Options {
         opts.snapDir = readValue(next, arg);
         i += 1;
         break;
-      case "--mode":
+      case "--mode": {
+        const mode = readValue(next, arg);
         if (
-          next === "production" ||
-          next === "closure-extracted" ||
-          next === "closure-inline" ||
-          next === "synthetic-leak"
+          mode === "production" ||
+          mode === "closure-extracted" ||
+          mode === "closure-inline" ||
+          mode === "synthetic-leak"
         ) {
-          opts.mode = next;
+          opts.mode = mode;
         } else {
           fail(
             `--mode must be one of: production, closure-extracted, closure-inline, synthetic-leak`,
@@ -84,6 +85,7 @@ function parseArgs(argv: string[]): Options {
         }
         i += 1;
         break;
+      }
       case "--max-rss-growth-mb":
         opts.maxRssGrowthMb = parseNonNegativeInt(next, arg);
         i += 1;
@@ -139,6 +141,9 @@ function parseStrictInt(
   label: "positive" | "non-negative",
 ): number {
   const text = (raw ?? "").trim();
+  if (!text || text.startsWith("-")) {
+    fail(`${flag} requires a value`);
+  }
   if (!/^\d+$/u.test(text)) {
     fail(`${flag} must be a ${label} integer`);
   }

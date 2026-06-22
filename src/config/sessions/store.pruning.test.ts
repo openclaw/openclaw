@@ -2,10 +2,7 @@
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import {
-  applyFileBackedSessionStoreMaintenance,
-  applyQuotaSuspensionTtlMaintenance,
-} from "./store-maintenance-operations.js";
+import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
   collectSessionMaintenancePreserveKeys,
   registerSessionMaintenancePreserveKeysProvider,
@@ -13,6 +10,7 @@ import {
 import {
   isProtectedSessionMaintenanceEntry,
   resolveMaintenanceConfigFromInput,
+  pruneQuotaSuspensions,
   resolveQuotaSuspensionEntryMaintenance,
   resolveSessionEntryMaintenanceHighWater,
 } from "./store-maintenance.js";
@@ -148,7 +146,7 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
   });
 });
 
-describe("applyQuotaSuspensionTtlMaintenance", () => {
+describe("pruneQuotaSuspensions", () => {
   it("returns whole-store resume and clear results from the storage-neutral operation", () => {
     const now = Date.now();
     const store = makeStore([
@@ -186,7 +184,7 @@ describe("applyQuotaSuspensionTtlMaintenance", () => {
       ],
     ]);
 
-    const result = applyQuotaSuspensionTtlMaintenance({
+    const result = pruneQuotaSuspensions({
       store,
       now,
       ttlMs: 30_000,

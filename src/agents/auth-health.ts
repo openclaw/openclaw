@@ -62,10 +62,6 @@ export type AuthHealthSummary = {
 
 export const DEFAULT_OAUTH_WARN_MS = 24 * 60 * 60 * 1000;
 
-function resolveAuthProfileSource(_profileId: string): AuthProfileSource {
-  return "store";
-}
-
 /** Format a remaining-duration value for compact auth status displays. */
 export function formatRemainingShort(
   remainingMs?: number,
@@ -141,7 +137,7 @@ function buildProfileHealth(params: {
     allowKeychainPrompt,
   } = params;
   const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
-  const source = resolveAuthProfileSource(profileId);
+  const source: AuthProfileSource = "store";
   const healthCredential = runtimeCredential ?? credential;
   const provider = normalizeProviderId(healthCredential.provider);
 

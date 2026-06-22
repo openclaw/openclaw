@@ -39,6 +39,7 @@ import {
   findErrorLogFindings,
   findDistCallGatewayModuleFiles,
   hasChildExited,
+  MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
   listKitchenSinkToolInvokeNames,
   listKitchenSinkAuthorizationRpcProbeNames,
   listKitchenSinkReadOnlyRpcProbeNames,
@@ -46,7 +47,9 @@ import {
   parseJsonOutput,
   parseGatewayCliRequestFailure,
   readPositiveInt,
+  readPositiveTimerMs,
   readBoundedResponseText,
+  resolveKitchenSinkRpcConfig,
   resolveKitchenSinkRpcPort,
   runCommand,
   sampleProcess,
@@ -169,6 +172,33 @@ describe("kitchen-sink RPC isolated state", () => {
     expect(() => readPositiveInt("0", 60_000, "OPENCLAW_KITCHEN_SINK_RPC_PORT")).toThrow(
       'OPENCLAW_KITCHEN_SINK_RPC_PORT must be a positive integer. Got: "0"',
     );
+  });
+
+  it("clamps timer env values before they reach Node timers", () => {
+    expect(readPositiveTimerMs(String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1), 60_000)).toBe(
+      MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
+    );
+
+    const config = resolveKitchenSinkRpcConfig({
+      OPENCLAW_KITCHEN_SINK_RPC_CALL_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
+      OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
+      OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
+      OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
+      OPENCLAW_KITCHEN_SINK_RPC_READY_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS + 1),
+    });
+
+    expect(config.rpcTimeoutMs).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
+    expect(config.commandTimeoutMs).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
+    expect(config.fetchTimeoutMs).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
+    expect(config.installTimeoutMs).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
+    expect(config.readyTimeoutMs).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
+    expect(
+      createRpcCliRunOptions("kitchen_sink_text", {
+        env: {
+          OPENCLAW_KITCHEN_SINK_RPC_CALL_MS: String(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS),
+        },
+      }).timeoutMs,
+    ).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
   });
 
   it("uses an explicit RPC port or asks the OS for an available fallback", async () => {
@@ -2029,6 +2059,23 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(sample).toEqual({
       aggregateRssMiB: 256,
       cpuPercent: null,
+      processId: 4321,
+      rssMiB: 256,
+    });
+  });
+
+  it("does not loop forever on self-parenting POSIX process rows", async () => {
+    const sample = await sampleProcess(4321, {
+      platform: "linux",
+      runCommand: async () => ({
+        stdout: " 4321  4321  262144  12.5 node dist/index.js gateway --port 19080",
+        stderr: "",
+      }),
+    });
+
+    expect(sample).toEqual({
+      aggregateRssMiB: 256,
+      cpuPercent: 12.5,
       processId: 4321,
       rssMiB: 256,
     });

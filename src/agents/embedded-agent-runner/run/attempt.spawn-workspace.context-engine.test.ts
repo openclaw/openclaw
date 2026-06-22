@@ -2926,9 +2926,8 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     expect(sumToolResultTextChars(sessionMessages)).toBeGreaterThan(4_000);
     expect(sumToolResultTextChars(promptHandlerMessages)).toBeGreaterThan(4_000);
     const submittedCurrentPromptMessages = submittedMessages.slice(sessionMessages.length);
-    expect(submittedMessages.slice(0, sessionMessages.length)).toEqual(sessionMessages);
     expect(
-      submittedCurrentPromptMessages
+      submittedMessages
         .filter((message) => message.role === "toolResult")
         .every((message) => sumToolResultTextChars([message]) <= 2_000),
     ).toBe(true);

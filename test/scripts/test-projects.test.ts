@@ -269,6 +269,21 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes release wrapper changes through their owner tests", () => {
+    expect(resolveChangedTestTargetPlan(["scripts/android-release.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/android-release-wrapper-args.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan(["scripts/android-release-upload.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/android-release-wrapper-args.test.ts"],
+    });
+    expect(resolveChangedTestTargetPlan(["scripts/release-fast-pretag-check.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/package-acceptance-workflow.test.ts"],
+    });
+  });
+
   it("routes control UI i18n script changes through its regression test", () => {
     expect(resolveChangedTestTargetPlan(["scripts/control-ui-i18n.ts"])).toEqual({
       mode: "targets",
@@ -423,6 +438,10 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         "scripts/e2e/lib/openwebui/http-probe.mjs",
         ["test/e2e/qa-lab/runtime/openwebui-probe.e2e.test.ts"],
+      ],
+      [
+        "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
+        ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"],
       ],
       ["scripts/e2e/lib/text-file-utils.mjs", ["test/scripts/e2e-text-file-utils.test.ts"]],
       [
@@ -3317,7 +3336,7 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(
       resolveChangedTestTargetPlan([
         "src/commands/doctor-memory-search.ts",
-        "src/memory-host-sdk/host/embedding-defaults.ts",
+        "packages/memory-host-sdk/src/host/embedding-defaults.ts",
       ]),
     ).toEqual({
       mode: "targets",

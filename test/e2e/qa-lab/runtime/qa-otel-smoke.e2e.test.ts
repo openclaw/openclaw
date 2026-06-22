@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import { testing } from "./qa-otel-smoke-runtime.js";
@@ -133,6 +134,18 @@ describe("qa-otel-smoke receiver bounds", () => {
       providerMode: "mock-openai",
       scenarioId: "otel-stdout-log-smoke",
     });
+  });
+
+  it.each([
+    ["--collector", ["--collector", "--logs-exporter"]],
+    ["--logs-exporter", ["--logs-exporter", "--collector"]],
+    ["--output-dir", ["--output-dir", "--collector"]],
+    ["--provider-mode", ["--provider-mode", "--collector"]],
+    ["--scenario", ["--scenario", "--collector"]],
+    ["--model", ["--model", "--collector"]],
+    ["--alt-model", ["--alt-model", "--collector"]],
+  ])("rejects missing values for %s before shifting parser state", (flag, args) => {
+    expect(() => testing.parseArgs(args)).toThrow(`${flag} requires a value`);
   });
 
   it("selects the matching scenario for the requested log exporter", () => {
@@ -648,6 +661,16 @@ describe("qa-otel-smoke receiver bounds", () => {
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it("clamps oversized QA suite child timers before scheduling", async () => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "--eval", "setTimeout(() => process.exit(0), 25);"],
+      { stdio: "ignore" },
+    );
+
+    await expect(testing.waitForChild(child, MAX_TIMER_TIMEOUT_MS + 1, 100)).resolves.toBe(0);
   });
 
   it("uses taskkill for Windows QA suite timeout cleanup", () => {

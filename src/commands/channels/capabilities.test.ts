@@ -218,6 +218,150 @@ describe("channelsCapabilitiesCommand", () => {
     expect(probeAccount).not.toHaveBeenCalled();
   });
 
+  it("caps oversized timeouts before invoking capability probes", async () => {
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    const buildCapabilitiesDiagnostics = vi.fn(async () => ({
+      lines: [{ text: "Diagnostics: ok" }],
+    }));
+    const plugin = buildPlugin({
+      id: "slack",
+      account: {
+        accountId: "default",
+        botToken: "xoxb-bot",
+      },
+    });
+    plugin.status = { probeAccount, buildCapabilitiesDiagnostics };
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await channelsCapabilitiesCommand({ channel: "slack", timeout: "999999" }, runtime);
+
+    expect(probeAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
+    expect(buildCapabilitiesDiagnostics).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 30_000 }),
+    );
+  });
+
+  it("serializes a failed probe when a capability probe exceeds its timeout", async () => {
+    const probeAccount = vi.fn(
+      () =>
+        new Promise<never>(() => {
+          // Intentionally never settles; command timeout should win.
+        }),
+    );
+    const plugin = buildPlugin({
+      id: "slack",
+      account: {
+        accountId: "default",
+        botToken: "xoxb-bot",
+      },
+    });
+    plugin.status = { probeAccount };
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await channelsCapabilitiesCommand(
+      { channel: "slack", json: true, timeout: "1" },
+      runtime,
+    );
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      channels?: Array<{ probe?: unknown }>;
+    };
+    expect(payload.channels?.[0]?.probe).toStrictEqual({
+      ok: false,
+      timedOut: true,
+      error: "probe timed out after 1ms",
+    });
+  });
+
+  it("prints timed-out probes when a channel formatter has no custom output", async () => {
+    const probeAccount = vi.fn(
+      () =>
+        new Promise<never>(() => {
+          // Intentionally never settles; command timeout should win.
+        }),
+    );
+    const plugin = buildPlugin({
+      id: "telegram",
+      account: {
+        accountId: "default",
+        botToken: "bot-token",
+      },
+    });
+    plugin.status = { probeAccount, formatCapabilitiesProbe: () => [] };
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "telegram",
+      plugin,
+      configChanged: false,
+    });
+
+    await channelsCapabilitiesCommand({ channel: "telegram", timeout: "1" }, runtime);
+
+    expect(logs[0]?.split("\n")).toContain("Probe: failed (probe timed out after 1ms)");
+  });
+
+  it("serializes diagnostics when capability diagnostics exceed their timeout", async () => {
+    const buildCapabilitiesDiagnostics = vi.fn(
+      () =>
+        new Promise<never>(() => {
+          // Intentionally never settles; command timeout should win.
+        }),
+    );
+    const plugin = buildPlugin({
+      id: "slack",
+      account: {
+        accountId: "default",
+        botToken: "xoxb-bot",
+      },
+      probe: { ok: true },
+    });
+    plugin.status = { ...plugin.status, buildCapabilitiesDiagnostics };
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await channelsCapabilitiesCommand(
+      { channel: "slack", json: true, timeout: "1" },
+      runtime,
+    );
+
+    const payload = JSON.parse(logs[0] ?? "{}") as {
+      channels?: Array<{ diagnostics?: unknown }>;
+    };
+    expect(payload.channels?.[0]?.diagnostics).toStrictEqual({
+      lines: [
+        {
+          text: "Diagnostics: timed out after 1ms",
+          tone: "error",
+        },
+      ],
+      details: { timedOut: true },
+    });
+  });
+
   it("prints Teams Graph permission hints when present", async () => {
     const plugin = buildPlugin({
       id: "msteams",

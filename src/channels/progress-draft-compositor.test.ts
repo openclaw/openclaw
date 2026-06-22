@@ -1,7 +1,10 @@
 // Progress draft compositor tests cover streamed draft composition for channel progress updates.
 import { describe, expect, it, vi } from "vitest";
 import { createChannelProgressDraftCompositor } from "./progress-draft-compositor.js";
-import { DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS } from "./streaming.js";
+import {
+  DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS,
+  mergeChannelProgressDraftLine,
+} from "./streaming.js";
 
 describe("createChannelProgressDraftCompositor", () => {
   it("keeps the progress label visible when tool lines are hidden", async () => {
@@ -143,6 +146,28 @@ describe("createChannelProgressDraftCompositor", () => {
     await progress.pushReasoningProgress("Reading files");
 
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit post-final progress notices", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    progress.markFinalReplyDelivered();
+
+    expect(await progress.pushToolProgress("🛠️ Hidden", { startImmediately: true })).toBe(false);
+    expect(
+      await progress.pushToolProgress("💨Fast: auto-on", {
+        startImmediately: true,
+        allowAfterFinal: true,
+      }),
+    ).toBe(true);
+    expect(update).toHaveBeenCalledWith("Shelling\n\n💨Fast: auto-on", { flush: true });
   });
 
   it("composes reasoning deltas with tool progress", async () => {
@@ -291,6 +316,14 @@ describe("createChannelProgressDraftCompositor", () => {
         lines: ["🛠️ Exec", "_Reading files_"],
       }),
     );
+  });
+
+  it("preserves repeated plain progress lines when separated by another event", () => {
+    const lines = mergeChannelProgressDraftLine(["Starting", "Finished"], "Starting", {
+      maxLines: 4,
+    });
+
+    expect(lines).toEqual(["Starting", "Finished", "Starting"]);
   });
 
   it("logs a timer-fired start failure via the gate's default boundary logger", async () => {

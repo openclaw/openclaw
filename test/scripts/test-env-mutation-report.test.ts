@@ -163,24 +163,26 @@ describe("collectTestEnvMutationReport", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("rejects missing CLI repo roots instead of scanning zero files", () => {
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
-        "--",
-        "--repo-root",
-        "--json",
-      ],
-      {
-        encoding: "utf8",
-      },
-    );
+  it("rejects missing or flag-shaped CLI repo roots instead of scanning zero files", () => {
+    for (const value of ["--json", "-h"]) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
+          "--",
+          "--repo-root",
+          value,
+        ],
+        {
+          encoding: "utf8",
+        },
+      );
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("--repo-root expects a path");
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("--repo-root expects a path");
+    }
   });
 
   it("rejects loose CLI limits before scanning the repository", () => {

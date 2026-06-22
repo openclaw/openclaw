@@ -20,7 +20,7 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`Expected ${optionName} <value>.`);
   }
   return value;
