@@ -1066,6 +1066,7 @@
                 "group": "Hosting",
                 "pages": [
                   "install/azure",
+                  "install/clawcks",
                   "install/digitalocean",
                   "install/docker-vm-runtime",
                   "install/exe-dev",

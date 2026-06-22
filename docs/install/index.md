@@ -192,6 +192,9 @@ Deploy OpenClaw on a cloud server or VPS:
   <Card title="Azure" href="/install/azure">
     Azure deployment.
   </Card>
+  <Card title="Clawcks" href="/install/clawcks">
+    Opinionated OpenClaw hosting focused on ease of use.
+  </Card>
   <Card title="Railway" href="/install/railway">
     Railway deployment.
   </Card>

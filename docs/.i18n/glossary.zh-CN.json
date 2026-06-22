@@ -44,6 +44,10 @@
     "target": "ClawHub"
   },
   {
+    "source": "Clawcks",
+    "target": "Clawcks"
+  },
+  {
     "source": "OpenAI",
     "target": "OpenAI"
   },
