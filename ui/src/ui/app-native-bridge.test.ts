@@ -1,11 +1,11 @@
 // Control UI tests cover app native bridge behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { initNativeBridge, isWebView2, sendToNative } from "./app-native-bridge.ts";
 import {
   handleChatDraftChange as applyDraftChange,
   navigateChatInputHistory,
   type ChatInputHistoryState,
-} from "./chat/input-history.ts";
+} from "../pages/chat/input-history.ts";
+import { initNativeBridge, isWebView2, sendToNative } from "./app-native-bridge.ts";
 
 type FakeBridge = {
   postMessage: ReturnType<typeof vi.fn>;

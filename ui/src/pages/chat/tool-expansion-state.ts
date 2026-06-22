@@ -1,7 +1,7 @@
-import { getOrCreateSessionCacheValue } from "../../ui/chat/session-cache.ts";
 // Control UI chat module implements tool expansion state behavior.
 import type { ChatItem, MessageGroup } from "./chat-types.ts";
 import { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
+import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { extractToolCardsCached } from "./tool-cards.ts";
 
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();

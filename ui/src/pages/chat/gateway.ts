@@ -9,25 +9,6 @@ import {
 } from "../../lib/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { reconcileChatRunLifecycle } from "../../ui/chat/run-lifecycle.ts";
-import {
-  appendChatMessageToCache,
-  cacheChatMessages,
-  type ChatMessageCache,
-} from "../../ui/chat/session-message-cache.ts";
-import {
-  appendTerminalAssistantMessage,
-  clearToolStreamSegments,
-  currentLiveToolCallIds,
-  hasVisibleStreamParts,
-  historyReplacedVisibleStream,
-  materializeVisibleStreamState,
-  messageTimestampMs,
-  maybeResetToolStream,
-  persistedCurrentToolStreamIds,
-  prunePersistedToolStreamMessages,
-  visibleCurrentAssistantStreamTail,
-} from "../../ui/chat/stream-reconciliation.ts";
 import { formatConnectError } from "../../ui/connect-error.ts";
 import {
   controlUiNowMs,
@@ -56,6 +37,25 @@ import {
   stripHeartbeatTokenForDisplay,
 } from "./heartbeat-display.ts";
 import { extractText } from "./message-extract.ts";
+import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
+import {
+  appendChatMessageToCache,
+  cacheChatMessages,
+  type ChatMessageCache,
+} from "./session-message-cache.ts";
+import {
+  appendTerminalAssistantMessage,
+  clearToolStreamSegments,
+  currentLiveToolCallIds,
+  hasVisibleStreamParts,
+  historyReplacedVisibleStream,
+  materializeVisibleStreamState,
+  messageTimestampMs,
+  maybeResetToolStream,
+  persistedCurrentToolStreamIds,
+  prunePersistedToolStreamMessages,
+  visibleCurrentAssistantStreamTail,
+} from "./stream-reconciliation.ts";
 import type { ChatAttachment } from "./types.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
