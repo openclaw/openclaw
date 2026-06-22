@@ -76,11 +76,12 @@ function removePromptContextAroundOccurrence(params: {
 }): string | null {
   const hiddenBefore = params.hiddenBefore.trim();
   const hiddenAfter = params.hiddenAfter.trim();
+  let stripped: string | null = null;
   let searchFrom = 0;
   while (searchFrom <= params.text.length) {
     const index = params.text.indexOf(params.prompt, searchFrom);
     if (index === -1) {
-      return null;
+      return stripped;
     }
     const before = params.text.slice(0, index).trimEnd();
     const after = params.text.slice(index + params.prompt.length).trimStart();
@@ -92,14 +93,13 @@ function removePromptContextAroundOccurrence(params: {
         ? before.slice(0, before.length - hiddenBefore.length).trimEnd()
         : before;
       const keptAfter = hiddenAfter ? after.slice(hiddenAfter.length).trimStart() : after;
-      return [keptBefore, params.prompt, keptAfter]
+      stripped = [keptBefore, params.prompt, keptAfter]
         .filter((part) => part.length > 0)
         .join("\n\n")
         .trim();
     }
     searchFrom = index + Math.max(1, params.prompt.length);
   }
-  return null;
 }
 
 /**
