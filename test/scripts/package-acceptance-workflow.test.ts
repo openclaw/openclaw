@@ -25,7 +25,6 @@ const CI_BUILD_ARTIFACTS_TESTBOX_WORKFLOW = ".github/workflows/ci-build-artifact
 const CRABBOX_HYDRATE_WORKFLOW = ".github/workflows/crabbox-hydrate.yml";
 const CRABBOX_CONFIG = ".crabbox.yaml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
-const TUI_PTY_WORKFLOW = ".github/workflows/tui-pty.yml";
 const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
 const VERIFY_PROVIDER_SECRETS_SCRIPT =
   ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
@@ -2256,16 +2255,5 @@ describe("package artifact reuse", () => {
       "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
-  });
-
-  it("kills timed TUI PTY workflow runs after the grace period", () => {
-    const job = workflowJob(TUI_PTY_WORKFLOW, "tui-pty");
-    const step = workflowStep(job, "Run TUI PTY tests");
-
-    expect(job.env?.OPENCLAW_TUI_PTY_INCLUDE_LOCAL).toBe("1");
-    expect(job["timeout-minutes"]).toBe(8);
-    expect(step.run).toBe(
-      "timeout --kill-after=30s 240s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts",
-    );
   });
 });

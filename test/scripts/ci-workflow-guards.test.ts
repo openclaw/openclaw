@@ -465,6 +465,10 @@ describe("ci workflow guards", () => {
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
+    expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
+    expect(runStep.run).toContain("env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON");
+    expect(runStep.run).toContain("if (plan.env && typeof plan.env === \"object\"");
+    expect(runStep.run).toContain("childEnv[key] = value");
   });
 
   it("uploads a CI timing summary after the run lanes finish", () => {
