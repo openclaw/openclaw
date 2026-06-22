@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import { clampText } from "../../lib/format.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
@@ -13,7 +14,6 @@ import {
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import { toSanitizedMarkdownHtml } from "../../ui/markdown.ts";
 import { resolveSafeExternalUrl } from "../../ui/open-external-url.ts";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../ui/types.ts";
 import type {

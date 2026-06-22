@@ -2,8 +2,8 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
-import { toSanitizedMarkdownHtml } from "../../ui/markdown.ts";
 import type { DreamingEntry, WikiImportInsights, WikiMemoryPalace } from "./data.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────
