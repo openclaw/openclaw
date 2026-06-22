@@ -38,9 +38,6 @@ function getCompat(model: Model<"openai-responses">): ResolvedOpenAIResponsesCom
   return {
     sendSessionIdHeader: model.compat?.sendSessionIdHeader ?? true,
     supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
-    supportsReasoningEffort: model.compat?.supportsReasoningEffort ?? true,
-    supportedReasoningEfforts: model.compat?.supportedReasoningEfforts ?? [],
-    reasoningEffortMap: model.compat?.reasoningEffortMap ?? {},
   };
 }
 
