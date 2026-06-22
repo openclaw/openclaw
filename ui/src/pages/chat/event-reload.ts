@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-// Control UI module implements chat event reload behavior.
-import { extractText } from "../../ui/chat/message-extract.ts";
 import type { ChatEventPayload } from "./gateway.ts";
+// Control UI module implements chat event reload behavior.
+import { extractText } from "./message-extract.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 

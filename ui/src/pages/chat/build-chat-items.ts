@@ -1,28 +1,22 @@
 // Control UI chat module implements build chat items behavior.
 import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "./chat-types.ts";
-import type { ChatQueueItem } from "./types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
-} from "../../ui/chat/heartbeat-display.ts";
-import {
-  CHAT_HISTORY_RENDER_CHAR_BUDGET,
-  CHAT_HISTORY_RENDER_LIMIT,
-} from "../../ui/chat/history-limits.ts";
-import { extractTextCached } from "../../ui/chat/message-extract.ts";
-import {
-  normalizeMessage,
-  stripMessageDisplayMetadataText,
-} from "../../ui/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../ui/chat/role-normalizer.ts";
-import { messageMatchesSearchQuery } from "../../ui/chat/search-match.ts";
+} from "./heartbeat-display.ts";
+import { CHAT_HISTORY_RENDER_CHAR_BUDGET, CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
+import { extractTextCached } from "./message-extract.ts";
+import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
+import { normalizeRoleForGrouping } from "./role-normalizer.ts";
+import { messageMatchesSearchQuery } from "./search-match.ts";
 import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
-} from "../../ui/chat/stream-text.ts";
-import { extractToolCardsCached, extractToolPreview } from "../../ui/chat/tool-cards.ts";
+} from "./stream-text.ts";
+import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
+import type { ChatQueueItem } from "./types.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {

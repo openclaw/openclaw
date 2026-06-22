@@ -3,16 +3,16 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import { icons } from "../../components/icons.ts";
+import { isMarkdownBlockArtText } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
-import type { ToolCard } from "../../pages/chat/chat-types.ts";
-import { resolveCanvasIframeUrl } from "../canvas-url.ts";
-import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
-import { isMarkdownBlockArtText } from "../markdown.ts";
-import type { SidebarContent } from "../sidebar-content.ts";
-import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
+import { resolveCanvasIframeUrl } from "../../ui/canvas-url.ts";
+import { formatToolOutputForSidebar, getTruncatedPreview } from "../../ui/chat/tool-helpers.ts";
+import { resolveEmbedSandbox, type EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
+import type { SidebarContent } from "../../ui/sidebar-content.ts";
+import { formatToolDetail, resolveToolDisplay } from "../../ui/tool-display.ts";
+import type { ToolCard } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./role-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 

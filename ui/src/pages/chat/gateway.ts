@@ -9,11 +9,6 @@ import {
 } from "../../lib/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import {
-  isAssistantHeartbeatAckForDisplay,
-  stripHeartbeatTokenForDisplay,
-} from "../../ui/chat/heartbeat-display.ts";
-import { extractText } from "../../ui/chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../../ui/chat/run-lifecycle.ts";
 import {
   appendChatMessageToCache,
@@ -56,6 +51,11 @@ import type {
   ModelCatalogEntry,
 } from "../../ui/types.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import {
+  isAssistantHeartbeatAckForDisplay,
+  stripHeartbeatTokenForDisplay,
+} from "./heartbeat-display.ts";
+import { extractText } from "./message-extract.ts";
 import type { ChatAttachment } from "./types.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 

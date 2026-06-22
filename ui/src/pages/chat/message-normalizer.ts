@@ -12,7 +12,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
-import type { NormalizedMessage, MessageContentItem } from "../../pages/chat/chat-types.ts";
+import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 export { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
 
 function isTextContentBlock(
