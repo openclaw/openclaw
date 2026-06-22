@@ -31,6 +31,7 @@ import {
   normalizeProviderStatus,
 } from "./shared/call-status.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
+import type { TwilioRegion } from "./twilio-region.js";
 import type { TwilioProviderOptions } from "./twilio.types.js";
 import {
   createTwilioApiTarget,
@@ -77,8 +78,7 @@ type StreamSendResult = {
 type TwilioProviderConfig = {
   accountSid?: string;
   authToken?: string;
-  edge?: string;
-  region?: string;
+  region?: TwilioRegion;
 };
 
 export class TwilioProvider implements VoiceCallProvider {
@@ -153,7 +153,6 @@ export class TwilioProvider implements VoiceCallProvider {
     this.authToken = config.authToken;
     this.apiTarget = createTwilioApiTarget({
       accountSid: this.accountSid,
-      edge: config.edge,
       region: config.region,
     });
     this.options = options;

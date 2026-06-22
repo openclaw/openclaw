@@ -90,7 +90,7 @@ describe("validateProviderConfig", () => {
   });
 
   describe("twilio provider", () => {
-    it("requires Twilio Edge and Region together", () => {
+    it("accepts supported Twilio Regions and rejects unknown ones", () => {
       const baseConfig = {
         enabled: true,
         provider: "twilio",
@@ -101,24 +101,17 @@ describe("validateProviderConfig", () => {
         },
       } as const;
 
-      expect(
-        VoiceCallConfigSchema.safeParse({
-          ...baseConfig,
-          twilio: { ...baseConfig.twilio, edge: "dublin" },
-        }).success,
-      ).toBe(false);
-      expect(
-        VoiceCallConfigSchema.safeParse({
-          ...baseConfig,
-          twilio: { ...baseConfig.twilio, region: "ie1" },
-        }).success,
-      ).toBe(false);
-
       const regional = VoiceCallConfigSchema.parse({
         ...baseConfig,
-        twilio: { ...baseConfig.twilio, edge: "dublin", region: "ie1" },
+        twilio: { ...baseConfig.twilio, region: "ie1" },
       });
-      expect(regional.twilio).toMatchObject({ edge: "dublin", region: "ie1" });
+      expect(regional.twilio?.region).toBe("ie1");
+      expect(
+        VoiceCallConfigSchema.safeParse({
+          ...baseConfig,
+          twilio: { ...baseConfig.twilio, region: "de1" },
+        }).success,
+      ).toBe(false);
     });
 
     it("accepts SecretRef-backed auth tokens before runtime resolution", () => {

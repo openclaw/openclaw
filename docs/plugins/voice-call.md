@@ -124,8 +124,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           twilio: {
             accountSid: "ACxxxxxxxx",
             authToken: "...",
-            // Optional non-US routing; configure both fields together.
-            edge: "dublin",
+            // Optional; defaults to us1.
             region: "ie1",
           },
           telnyx: {
@@ -171,10 +170,11 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
 ```
 
 Twilio defaults to its US1 REST endpoint. To process calls in a supported
-non-US Region, configure both `twilio.edge` and `twilio.region` using Twilio's
-current Edge and Region labels. For Ireland, use `edge: "dublin"` with
-`region: "ie1"`. Credentials are Region-specific, so `twilio.authToken` must
-also belong to IE1. See [Twilio's non-US REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
+non-US Region, set `twilio.region` to `ie1` or `au1`. OpenClaw derives Twilio's
+required regional hostname; for example, `ie1` uses
+`api.dublin.ie1.twilio.com`. Credentials are Region-specific, so
+`twilio.authToken` must also belong to the selected Region. See
+[Twilio's non-US REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 
 <AccordionGroup>
   <Accordion title="Provider exposure and security notes">

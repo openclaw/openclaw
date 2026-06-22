@@ -5,6 +5,7 @@ import {
   readProviderErrorResponseSnippet,
   readProviderJsonResponseText,
 } from "../shared/response-body.js";
+import { resolveTwilioApiHostname, type TwilioRegion } from "../twilio-region.js";
 
 // Guarded Twilio REST API client helpers.
 
@@ -24,16 +25,9 @@ export type TwilioApiTarget = {
 /** Build the exact Twilio REST target shared by requests and their SSRF policy. */
 export function createTwilioApiTarget(params: {
   accountSid: string;
-  edge?: string;
-  region?: string;
+  region?: TwilioRegion;
 }): TwilioApiTarget {
-  if (Boolean(params.edge) !== Boolean(params.region)) {
-    throw new Error("Twilio Edge and Region must be configured together");
-  }
-  const hostname =
-    params.edge && params.region
-      ? `api.${params.edge}.${params.region}.twilio.com`
-      : "api.twilio.com";
+  const hostname = resolveTwilioApiHostname(params.region);
   return {
     baseUrl: `https://${hostname}/2010-04-01/Accounts/${params.accountSid}`,
     hostname,

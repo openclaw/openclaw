@@ -123,12 +123,11 @@ function configureTelephonyTwiMlFallback(params: { providerCallId: string; strea
 }
 
 describe("TwilioProvider", () => {
-  it("uses the configured Twilio Edge and Region for call status", async () => {
+  it("uses the derived regional hostname for call status", async () => {
     guardedJsonApiRequestMock.mockResolvedValue({ status: "completed" });
     const provider = new TwilioProvider({
       accountSid: "AC123",
       authToken: "secret",
-      edge: "dublin",
       region: "ie1",
     });
 

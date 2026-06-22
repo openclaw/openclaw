@@ -100,7 +100,7 @@ describe("twilioApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the configured Twilio Edge and Region for the request and SSRF policy", async () => {
+  it("derives the regional hostname for the request and SSRF policy", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(JSON.stringify({ sid: "CA123" }), { status: 200 }),
@@ -108,7 +108,6 @@ describe("twilioApiRequest", () => {
     });
     const target = createTwilioApiTarget({
       accountSid: "AC123",
-      edge: "dublin",
       region: "ie1",
     });
 
@@ -126,13 +125,11 @@ describe("twilioApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects partial Twilio regional routing", () => {
-    expect(() => createTwilioApiTarget({ accountSid: "AC123", edge: "dublin" })).toThrow(
-      "Twilio Edge and Region must be configured together",
-    );
-    expect(() => createTwilioApiTarget({ accountSid: "AC123", region: "ie1" })).toThrow(
-      "Twilio Edge and Region must be configured together",
-    );
+  it("maps AU1 to Twilio's Sydney regional hostname", () => {
+    expect(createTwilioApiTarget({ accountSid: "AC123", region: "au1" })).toEqual({
+      baseUrl: "https://api.sydney.au1.twilio.com/2010-04-01/Accounts/AC123",
+      hostname: "api.sydney.au1.twilio.com",
+    });
   });
 
   it("passes through URLSearchParams, allows 404s, and returns undefined for empty bodies", async () => {

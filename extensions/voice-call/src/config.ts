@@ -10,6 +10,7 @@ import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
 import { normalizePath } from "./path-utils.js";
+import { TWILIO_REGIONS } from "./providers/twilio-region.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 // -----------------------------------------------------------------------------
@@ -55,39 +56,16 @@ const TelnyxConfigSchema = z
   .strict();
 export type TelnyxConfig = z.infer<typeof TelnyxConfigSchema>;
 
-const TwilioRoutingLabelSchema = z
-  .string()
-  .max(63)
-  .regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/, "must be a lowercase Twilio Edge or Region label");
-
 const TwilioConfigSchema = z
   .object({
     /** Twilio Account SID */
     accountSid: z.string().min(1).optional(),
     /** Twilio Auth Token */
     authToken: SecretInputSchema.optional(),
-    /** Twilio Edge Location (for example, dublin) */
-    edge: TwilioRoutingLabelSchema.optional(),
     /** Twilio processing Region (for example, ie1) */
-    region: TwilioRoutingLabelSchema.optional(),
+    region: z.enum(TWILIO_REGIONS).optional(),
   })
-  .strict()
-  .superRefine((value, ctx) => {
-    if (value.edge && !value.region) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["region"],
-        message: "is required when twilio.edge is configured",
-      });
-    }
-    if (value.region && !value.edge) {
-      ctx.addIssue({
-        code: "custom",
-        path: ["edge"],
-        message: "is required when twilio.region is configured",
-      });
-    }
-  });
+  .strict();
 
 const PlivoConfigSchema = z
   .object({

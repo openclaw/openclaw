@@ -71,10 +71,6 @@
       "label": "Twilio Auth Token",
       "sensitive": true
     },
-    "twilio.edge": {
-      "label": "Twilio Edge",
-      "advanced": true
-    },
     "twilio.region": {
       "label": "Twilio Region",
       "advanced": true
@@ -288,10 +284,6 @@
       "twilio": {
         "type": "object",
         "additionalProperties": false,
-        "dependencies": {
-          "edge": ["region"],
-          "region": ["edge"]
-        },
         "properties": {
           "accountSid": {
             "type": "string"
@@ -299,15 +291,9 @@
           "authToken": {
             "type": ["string", "object"]
           },
-          "edge": {
-            "type": "string",
-            "maxLength": 63,
-            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
-          },
           "region": {
             "type": "string",
-            "maxLength": 63,
-            "pattern": "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$"
+            "enum": ["us1", "ie1", "au1"]
           }
         }
       },
