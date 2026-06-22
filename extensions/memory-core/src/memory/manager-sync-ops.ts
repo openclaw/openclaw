@@ -12,7 +12,6 @@ import {
   onSessionTranscriptUpdate,
   resolveAgentDir,
   resolveSessionTranscriptsDirForAgent,
-  resolveStateDir,
   resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -756,10 +755,6 @@ export abstract class MemoryManagerSyncOps {
     return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
   }
 
-  protected resolveLegacySidecarDatabasePath(): string {
-    return path.join(resolveStateDir(process.env), "memory", `${this.agentId}.sqlite`);
-  }
-
   private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
     if (!this.cache.enabled) {
       return;
@@ -829,7 +824,6 @@ export abstract class MemoryManagerSyncOps {
       cacheEnabled: this.cache.enabled,
       ftsEnabled: this.fts.enabled,
       ftsTokenizer: this.settings.store.fts.tokenizer,
-      legacySidecarDatabasePath: this.resolveLegacySidecarDatabasePath(),
     });
     this.fts.available = result.ftsAvailable;
     if (result.ftsError) {

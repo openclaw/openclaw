@@ -90,7 +90,7 @@ describe("memory index schema", () => {
     }
   });
 
-  it("imports a legacy sidecar memory database into a new agent database", () => {
+  it("does not import a legacy sidecar memory database during schema startup", () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-memory-sidecar-"));
     const legacyPath = path.join(rootDir, "memory", "main.sqlite");
     const agentPath = path.join(rootDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -149,22 +149,14 @@ describe("memory index schema", () => {
         db,
         cacheEnabled: true,
         ftsEnabled: true,
-        legacySidecarDatabasePath: legacyPath,
       });
 
       expect(result.ftsAvailable).toBe(true);
-      expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([
-        { path: "MEMORY.md", source: "memory", hash: "file-hash", mtime: 10, size: 20 },
-      ]);
-      expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([
-        { id: "chunk-1", text: "remember this" },
-      ]);
-      expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([
-        { id: "chunk-1", text: "remember this" },
-      ]);
-      expect(db.prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([
-        { provider: "openai", hash: "chunk-hash" },
-      ]);
+      expect(db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks").all()).toEqual([]);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts").all()).toEqual([]);
+      expect(db.prepare("SELECT provider, hash FROM memory_embedding_cache").all()).toEqual([]);
+      expect(fs.existsSync(legacyPath)).toBe(true);
     } finally {
       db.close();
       fs.rmSync(rootDir, { recursive: true, force: true });

@@ -14,6 +14,7 @@ export {
   DEFAULT_MEMORY_READ_MAX_CHARS,
   ensureDir,
   ensureMemoryIndexSchema,
+  importLegacyMemorySidecarIndex,
   hashText,
   isFileMissingError,
   isTransientMemoryReadError,

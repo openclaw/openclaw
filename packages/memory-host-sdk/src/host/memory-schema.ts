@@ -25,6 +25,14 @@ const LEGACY_MEMORY_INDEX_TRIGGERS = [
 const LEGACY_MEMORY_SIDECAR_SCHEMA = "legacy_memory_sidecar";
 const MEMORY_INDEX_SOURCE_COLUMNS = ["path", "source", "hash", "mtime", "size"] as const;
 
+export type LegacyMemorySidecarImportResult = {
+  imported: boolean;
+  reason?: "missing-sidecar" | "canonical-not-empty" | "legacy-schema-missing";
+  sources: number;
+  chunks: number;
+  cacheEntries: number;
+};
+
 function tableHasExactColumns(
   db: DatabaseSync,
   tableName: string,
@@ -258,6 +266,26 @@ function canonicalMemoryIndexHasRows(db: DatabaseSync): boolean {
   return Number(row?.count ?? 0) > 0;
 }
 
+function tableRowCount(db: DatabaseSync, schema: string, tableName: string): number {
+  const row = db.prepare(`SELECT COUNT(*) AS count FROM ${schema}.${tableName}`).get() as
+    | { count?: unknown }
+    | undefined;
+  return Number(row?.count ?? 0);
+}
+
+function readLegacySidecarCounts(
+  db: DatabaseSync,
+  schema: string,
+): Pick<LegacyMemorySidecarImportResult, "sources" | "chunks" | "cacheEntries"> {
+  return {
+    sources: tableRowCount(db, schema, "files"),
+    chunks: tableRowCount(db, schema, "chunks"),
+    cacheEntries: hasLegacyEmbeddingCacheTable(db, schema)
+      ? tableRowCount(db, schema, "embedding_cache")
+      : 0,
+  };
+}
+
 function migrateLegacyMemoryIndexTables(
   db: DatabaseSync,
   preservedEmbeddingCacheTable?: string,
@@ -289,34 +317,54 @@ function migrateLegacyMemoryIndexTables(
   }
 }
 
-function importLegacySidecarMemoryIndex(
-  db: DatabaseSync,
-  legacySidecarDatabasePath: string | undefined,
-  preservedEmbeddingCacheTable?: string,
-): void {
-  if (!legacySidecarDatabasePath || !fs.existsSync(legacySidecarDatabasePath)) {
-    return;
+export function importLegacyMemorySidecarIndex(params: {
+  db: DatabaseSync;
+  legacySidecarDatabasePath: string | undefined;
+  preservedEmbeddingCacheTable?: string;
+}): LegacyMemorySidecarImportResult {
+  if (!params.legacySidecarDatabasePath || !fs.existsSync(params.legacySidecarDatabasePath)) {
+    return { imported: false, reason: "missing-sidecar", sources: 0, chunks: 0, cacheEntries: 0 };
   }
-  if (canonicalMemoryIndexHasRows(db)) {
-    return;
+  if (canonicalMemoryIndexHasRows(params.db)) {
+    return {
+      imported: false,
+      reason: "canonical-not-empty",
+      sources: 0,
+      chunks: 0,
+      cacheEntries: 0,
+    };
   }
 
-  db.prepare(`ATTACH DATABASE ? AS ${LEGACY_MEMORY_SIDECAR_SCHEMA}`).run(legacySidecarDatabasePath);
+  params.db
+    .prepare(`ATTACH DATABASE ? AS ${LEGACY_MEMORY_SIDECAR_SCHEMA}`)
+    .run(params.legacySidecarDatabasePath);
   try {
-    if (!hasLegacyMemoryIndexTables(db, LEGACY_MEMORY_SIDECAR_SCHEMA)) {
-      return;
+    if (!hasLegacyMemoryIndexTables(params.db, LEGACY_MEMORY_SIDECAR_SCHEMA)) {
+      return {
+        imported: false,
+        reason: "legacy-schema-missing",
+        sources: 0,
+        chunks: 0,
+        cacheEntries: 0,
+      };
     }
-    db.exec("SAVEPOINT import_legacy_sidecar_memory_index");
+    const counts = readLegacySidecarCounts(params.db, LEGACY_MEMORY_SIDECAR_SCHEMA);
+    params.db.exec("SAVEPOINT import_legacy_sidecar_memory_index");
     try {
-      copyLegacyMemoryIndexRows(db, LEGACY_MEMORY_SIDECAR_SCHEMA, preservedEmbeddingCacheTable);
-      db.exec("RELEASE import_legacy_sidecar_memory_index");
+      copyLegacyMemoryIndexRows(
+        params.db,
+        LEGACY_MEMORY_SIDECAR_SCHEMA,
+        params.preservedEmbeddingCacheTable,
+      );
+      params.db.exec("RELEASE import_legacy_sidecar_memory_index");
+      return { imported: true, ...counts };
     } catch (err) {
-      db.exec("ROLLBACK TO import_legacy_sidecar_memory_index");
-      db.exec("RELEASE import_legacy_sidecar_memory_index");
+      params.db.exec("ROLLBACK TO import_legacy_sidecar_memory_index");
+      params.db.exec("RELEASE import_legacy_sidecar_memory_index");
       throw err;
     }
   } finally {
-    db.exec(`DETACH DATABASE ${LEGACY_MEMORY_SIDECAR_SCHEMA}`);
+    params.db.exec(`DETACH DATABASE ${LEGACY_MEMORY_SIDECAR_SCHEMA}`);
   }
 }
 
@@ -330,7 +378,6 @@ export function ensureMemoryIndexSchema(params: {
   ftsTable?: string;
   ftsEnabled: boolean;
   ftsTokenizer?: "unicode61" | "trigram";
-  legacySidecarDatabasePath?: string;
 }): { ftsAvailable: boolean; ftsError?: string } {
   const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
   const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
@@ -410,11 +457,6 @@ export function ensureMemoryIndexSchema(params: {
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);
   migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable);
-  importLegacySidecarMemoryIndex(
-    params.db,
-    params.legacySidecarDatabasePath,
-    params.embeddingCacheTable,
-  );
   if (params.cacheEnabled) {
     const updatedAtIndex =
       embeddingCacheTable === MEMORY_EMBEDDING_CACHE_TABLE

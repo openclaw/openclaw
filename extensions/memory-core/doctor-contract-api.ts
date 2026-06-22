@@ -1,8 +1,18 @@
 // Memory Core doctor contract migrates shipped workspace dreaming state.
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  ensureMemoryIndexSchema,
+  importLegacyMemorySidecarIndex,
+  requireNodeSqlite,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  ensureOpenClawAgentDatabaseSchema,
+  resolveOpenClawAgentSqlitePath,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   DAILY_INGESTION_STATE_RELATIVE_PATH,
   SESSION_INGESTION_STATE_RELATIVE_PATH,
@@ -34,6 +44,160 @@ type LegacySource = {
   label: string;
   filePath: string;
 };
+
+type LegacyMemorySidecarSource = {
+  agentId: string;
+  legacyPath: string;
+  agentDatabasePath: string;
+};
+
+const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
+
+function resolveConfiguredAgentIds(config: unknown): string[] {
+  const cfg = config as { agents?: { list?: unknown } };
+  const ids = new Set<string>();
+  if (Array.isArray(cfg.agents?.list)) {
+    for (const entry of cfg.agents.list) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const id = (entry as { id?: unknown }).id;
+      ids.add(normalizeAgentId(typeof id === "string" ? id : undefined));
+    }
+  }
+  if (ids.size === 0) {
+    ids.add(normalizeAgentId(undefined));
+  }
+  return [...ids];
+}
+
+async function collectLegacyMemorySidecarSources(params: {
+  config: unknown;
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+}): Promise<LegacyMemorySidecarSource[]> {
+  const agentIds = new Set(resolveConfiguredAgentIds(params.config));
+  const legacyDir = path.join(params.stateDir, "memory");
+  try {
+    const entries = await fs.readdir(legacyDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".sqlite")) {
+        agentIds.add(normalizeAgentId(entry.name.slice(0, -".sqlite".length)));
+      }
+    }
+  } catch {}
+
+  const migrationEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const sources: LegacyMemorySidecarSource[] = [];
+  for (const agentId of agentIds) {
+    const legacyPath = path.join(legacyDir, `${agentId}.sqlite`);
+    if (!(await fileExists(legacyPath))) {
+      continue;
+    }
+    sources.push({
+      agentId,
+      legacyPath,
+      agentDatabasePath: resolveOpenClawAgentSqlitePath({ agentId, env: migrationEnv }),
+    });
+  }
+  return sources;
+}
+
+async function archiveLegacyMemorySidecar(params: {
+  source: LegacyMemorySidecarSource;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const existingSources = (
+    await Promise.all(
+      LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
+        const filePath = `${params.source.legacyPath}${suffix}`;
+        return (await fileExists(filePath)) ? filePath : null;
+      }),
+    )
+  ).filter((filePath): filePath is string => filePath !== null);
+  if (existingSources.length === 0) {
+    return;
+  }
+  const existingArchives = (
+    await Promise.all(
+      existingSources.map(async (sourcePath) => {
+        const archivedPath = `${sourcePath}.migrated`;
+        return (await fileExists(archivedPath)) ? archivedPath : null;
+      }),
+    )
+  ).filter((filePath): filePath is string => filePath !== null);
+  if (existingArchives.length > 0) {
+    params.warnings.push(
+      `Left migrated Memory Core legacy memory index sidecar in place because ${existingArchives[0]} already exists`,
+    );
+    return;
+  }
+  for (const sourcePath of existingSources) {
+    try {
+      await fs.rename(sourcePath, `${sourcePath}.migrated`);
+    } catch (err) {
+      params.warnings.push(
+        `Failed archiving Memory Core legacy memory index sidecar ${sourcePath}: ${String(err)}`,
+      );
+      return;
+    }
+  }
+  params.changes.push(
+    `Archived Memory Core legacy memory index sidecar -> ${params.source.legacyPath}.migrated`,
+  );
+}
+
+async function migrateLegacyMemorySidecarSource(params: {
+  source: LegacyMemorySidecarSource;
+  env: NodeJS.ProcessEnv;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  await fs.mkdir(path.dirname(params.source.agentDatabasePath), { recursive: true });
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(params.source.agentDatabasePath);
+  try {
+    const migrationEnv = {
+      ...params.env,
+      OPENCLAW_STATE_DIR: path.dirname(path.dirname(params.source.legacyPath)),
+    };
+    ensureOpenClawAgentDatabaseSchema(db, {
+      agentId: params.source.agentId,
+      env: migrationEnv,
+      path: params.source.agentDatabasePath,
+      register: true,
+    });
+    ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+    const result = importLegacyMemorySidecarIndex({
+      db,
+      legacySidecarDatabasePath: params.source.legacyPath,
+    });
+    if (result.reason === "legacy-schema-missing") {
+      params.warnings.push(
+        `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because the sidecar schema is not a legacy memory index`,
+      );
+      return;
+    }
+    if (result.reason === "canonical-not-empty") {
+      params.warnings.push(
+        `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because per-agent SQLite already has memory index rows`,
+      );
+      await archiveLegacyMemorySidecar(params);
+      return;
+    }
+    if (!result.imported) {
+      return;
+    }
+    ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+    params.changes.push(
+      `Migrated Memory Core legacy memory index for agent ${params.source.agentId} -> per-agent SQLite (${result.sources} source(s), ${result.chunks} chunk(s), ${result.cacheEntries} cache row(s))`,
+    );
+    await archiveLegacyMemorySidecar(params);
+  } finally {
+    db.close();
+  }
+}
 
 function resolveConfiguredWorkspaces(config: unknown, env: NodeJS.ProcessEnv): string[] {
   return resolveMemoryDreamingWorkspaces(
@@ -263,6 +427,49 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           changes,
           warnings,
         });
+      }
+      return { changes, warnings };
+    },
+  },
+  {
+    id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
+    label: "Memory Core legacy memory index sidecar",
+    async detectLegacyState(params) {
+      const sources = await collectLegacyMemorySidecarSources({
+        config: params.config,
+        env: params.env,
+        stateDir: params.stateDir,
+      });
+      if (sources.length === 0) {
+        return null;
+      }
+      return {
+        preview: sources.map(
+          (source) =>
+            `- Memory Core legacy memory index: ${source.legacyPath} -> ${source.agentDatabasePath}`,
+        ),
+      };
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      for (const source of await collectLegacyMemorySidecarSources({
+        config: params.config,
+        env: params.env,
+        stateDir: params.stateDir,
+      })) {
+        try {
+          await migrateLegacyMemorySidecarSource({
+            source,
+            env: params.env,
+            changes,
+            warnings,
+          });
+        } catch (err) {
+          warnings.push(
+            `Skipped Memory Core legacy memory index import for agent ${source.agentId} because the sidecar could not be imported: ${String(err)}`,
+          );
+        }
       }
       return { changes, warnings };
     },

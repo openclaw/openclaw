@@ -2,7 +2,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -29,6 +31,114 @@ function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigration
       });
     },
   };
+}
+
+function legacyMemoryIndexMigration() {
+  const migration = stateMigrations.find(
+    (entry) => entry.id === "memory-core-legacy-sidecar-index-to-agent-sqlite",
+  );
+  if (!migration) {
+    throw new Error("expected memory-core legacy sidecar migration");
+  }
+  return migration;
+}
+
+async function writeLegacyMemorySidecar(legacyPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+  const db = new DatabaseSync(legacyPath);
+  try {
+    db.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE files (
+        path TEXT PRIMARY KEY,
+        source TEXT NOT NULL DEFAULT 'memory',
+        hash TEXT NOT NULL,
+        mtime INTEGER NOT NULL,
+        size INTEGER NOT NULL
+      );
+      CREATE TABLE chunks (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'memory',
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        model TEXT NOT NULL,
+        text TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      CREATE TABLE embedding_cache (
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        provider_key TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        dims INTEGER,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (provider, model, provider_key, hash)
+      );
+      INSERT INTO meta VALUES ('memory_index_meta_v1', '{"vectorDims":3}');
+      INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10, 20);
+      INSERT INTO chunks VALUES (
+        'chunk-1', 'MEMORY.md', 'memory', 1, 2, 'chunk-hash', 'embed-model',
+        'remember this', '[1,0,0]', 30
+      );
+      INSERT INTO embedding_cache VALUES (
+        'openai', 'embed-model', 'key', 'chunk-hash', '[1,0,0]', 3, 40
+      );
+    `);
+  } finally {
+    db.close();
+  }
+}
+
+async function createCanonicalMemoryIndex(agentPath: string, text: string): Promise<void> {
+  await fs.mkdir(path.dirname(agentPath), { recursive: true });
+  const db = new DatabaseSync(agentPath);
+  try {
+    ensureMemoryIndexSchema({
+      db,
+      cacheEnabled: true,
+      ftsEnabled: true,
+    });
+    db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
+      "memory_index_meta_v1",
+      '{"vectorDims":3}',
+    );
+    db.prepare(
+      "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+    ).run("MEMORY.md", "memory", "canonical-file-hash", 11, 21);
+    db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "canonical-chunk",
+      "MEMORY.md",
+      "memory",
+      1,
+      1,
+      "canonical-hash",
+      "embed-model",
+      text,
+      "[0,1,0]",
+      31,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+function readMemoryRows(agentPath: string) {
+  const db = new DatabaseSync(agentPath);
+  try {
+    return {
+      sources: db.prepare("SELECT path, source, hash FROM memory_index_sources").all(),
+      chunks: db.prepare("SELECT id, text FROM memory_index_chunks").all(),
+      cache: db.prepare("SELECT provider, hash FROM memory_embedding_cache").all(),
+    };
+  } finally {
+    db.close();
+  }
 }
 
 describe("memory-core doctor dreaming migration", () => {
@@ -258,5 +368,55 @@ describe("memory-core doctor dreaming migration", () => {
     configureMemoryCoreDreamingState(context().openPluginStateKeyedStore);
     const recall = await shortTermTesting.readRecallStore(workspaceDir, "2026-04-05T12:00:00.000Z");
     expect(recall.entries["memory:memory/2026-04-05.md:1:1"]?.conceptTags).toContain("glacier");
+  });
+
+  it("migrates the legacy memory sidecar index to the per-agent SQLite database", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+
+    const migration = legacyMemoryIndexMigration();
+    const preview = await migration.detectLegacyState(migrationParams());
+    expect(preview?.preview).toEqual([
+      `- Memory Core legacy memory index: ${legacyPath} -> ${agentPath}`,
+    ]);
+
+    const result = await migration.migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
+    expect(readMemoryRows(agentPath)).toEqual({
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      chunks: [{ id: "chunk-1", text: "remember this" }],
+      cache: [{ provider: "openai", hash: "chunk-hash" }],
+    });
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("archives the legacy memory sidecar without overwriting an already-migrated canonical index", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([
+      "Skipped Memory Core legacy memory index import for agent main because per-agent SQLite already has memory index rows",
+    ]);
+    expect(result.changes).toEqual([
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
+    expect(readMemoryRows(agentPath)).toEqual({
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "canonical-file-hash" }],
+      chunks: [{ id: "canonical-chunk", text: "canonical memory remains authoritative" }],
+      cache: [],
+    });
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 });
