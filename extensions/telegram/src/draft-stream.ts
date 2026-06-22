@@ -88,12 +88,16 @@ function isTelegramHtmlParseError(err: unknown): boolean {
   return TELEGRAM_PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
+function telegramRichHtmlToParseModeHtml(html: string): string {
+  return html.replace(/<br\s*\/?>/giu, "\n");
+}
+
 function normalizeTelegramDraftTransportPreview(
   preview: TelegramDraftPreview,
 ): TelegramDraftTransportPreview {
   if (preview.richMessage?.html) {
     return {
-      text: preview.richMessage.html,
+      text: telegramRichHtmlToParseModeHtml(preview.richMessage.html),
       parseMode: "HTML",
       plainText: preview.text,
     };
@@ -351,8 +355,7 @@ export function createTelegramDraftStream(params: {
     const renderedPayloadLength = richMessages
       ? telegramDraftRichPayloadLength(rendered)
       : renderedText.length;
-    const renderedPreview = { ...rendered, text: renderedText };
-    const renderedPreviewKey = telegramDraftPreviewKey(renderedPreview);
+    const renderedPreviewKey = telegramDraftPreviewKey({ ...rendered, text: renderedText });
     if (!renderedText) {
       return false;
     }
@@ -413,7 +416,7 @@ export function createTelegramDraftStream(params: {
     lastSentPreviewKey = renderedPreviewKey;
     try {
       const sent = await sendMessageTransportPreview({
-        preview: renderedPreview,
+        preview: rendered,
         sendGeneration,
       });
       if (sent) {

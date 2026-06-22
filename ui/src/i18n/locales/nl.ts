@@ -203,6 +203,7 @@ export const nl: TranslationMap = {
     inherit: "overnemen",
     defaultOption: "Standaard ({value})",
     offExplicit: "uit (expliciet)",
+    auto: "auto",
     on: "aan",
     off: "uit",
     full: "volledig",
@@ -1626,6 +1627,7 @@ export const nl: TranslationMap = {
       nextHeartbeat: "Volgende heartbeat",
       wakeModeHelp: "Nu triggert onmiddellijk. Volgende heartbeat wacht op de volgende cyclus.",
       payloadKind: "Wat moet er worden uitgevoerd?",
+      command: "Command",
       systemEvent: "Bericht plaatsen op main-tijdlijn",
       agentTurn: "Assistenttaak uitvoeren (geïsoleerd)",
       systemEventHelp:

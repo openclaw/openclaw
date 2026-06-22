@@ -1,3 +1,4 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Shared queue type contracts for admission, drain, and fallback handling.
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
@@ -106,6 +107,7 @@ export type FollowupRun = {
     senderE164?: string;
     senderIsOwner?: boolean;
     traceAuthorized?: boolean;
+    approvalReviewerDeviceId?: string;
     sessionFile: string;
     workspaceDir: string;
     /** Task working directory for runtime execution. Defaults to workspaceDir. */
@@ -121,6 +123,10 @@ export type FollowupRun = {
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;
+    fastMode?: FastMode;
+    fastModeAutoOnSeconds?: number;
+    fastModeOverride?: boolean;
+    fastModeAutoOnSecondsOverride?: boolean;
     verboseLevel?: VerboseLevel;
     reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;

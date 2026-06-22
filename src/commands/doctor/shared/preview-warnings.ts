@@ -983,13 +983,3 @@ export async function collectDoctorPreviewNotes(params: {
 
   return { infoNotes, warningNotes: warnings };
 }
-
-/** Collect warning notes only for callers that do not display info notes. */
-export async function collectDoctorPreviewWarnings(params: {
-  cfg: OpenClawConfig;
-  doctorFixCommand: string;
-  env?: NodeJS.ProcessEnv;
-  allowExec?: boolean;
-}): Promise<string[]> {
-  return (await collectDoctorPreviewNotes(params)).warningNotes;
-}

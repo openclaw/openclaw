@@ -201,6 +201,7 @@ export const pt_BR: TranslationMap = {
     inherit: "herdar",
     defaultOption: "Padrão ({value})",
     offExplicit: "desativado (explícito)",
+    auto: "auto",
     on: "ativado",
     off: "desligado",
     full: "completo",
@@ -1625,6 +1626,7 @@ export const pt_BR: TranslationMap = {
       nextHeartbeat: "Próximo heartbeat",
       wakeModeHelp: "Agora dispara imediatamente. Próximo heartbeat aguarda o próximo ciclo.",
       payloadKind: "O que deve ser executado?",
+      command: "Command",
       systemEvent: "Publicar mensagem na linha do tempo principal",
       agentTurn: "Executar tarefa do assistente (isolada)",
       systemEventHelp:

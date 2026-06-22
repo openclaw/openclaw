@@ -4,7 +4,12 @@ import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
-import { resolveWindowsCommandShim } from "../../windows-command.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+  resolveWindowsCommandShim,
+} from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -16,6 +21,27 @@ function resolveCommand(command: string): string {
     command,
     cmdCommands: ["npm", "pnpm", "yarn", "npx"],
   });
+}
+
+function resolveChildInvocation(params: { argv: string[]; windowsVerbatimArguments?: boolean }): {
+  args: string[];
+  command: string;
+  windowsVerbatimArguments?: boolean;
+} {
+  const resolvedCommand = resolveCommand(params.argv[0] ?? "");
+  const args = params.argv.slice(1);
+  if (!isWindowsBatchCommand(resolvedCommand)) {
+    return {
+      command: resolvedCommand,
+      args,
+      windowsVerbatimArguments: params.windowsVerbatimArguments,
+    };
+  }
+  return {
+    command: resolveTrustedWindowsCmdExe(),
+    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(resolvedCommand, args)],
+    windowsVerbatimArguments: true,
+  };
 }
 
 export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
@@ -32,10 +58,12 @@ export async function createChildAdapter(params: {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
 }): Promise<ChildAdapter> {
-  const resolvedArgv = [...params.argv];
-  resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
+  const invocation = resolveChildInvocation({
+    argv: params.argv,
+    windowsVerbatimArguments: params.windowsVerbatimArguments,
+  });
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
-  const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedArgv[0] ?? "", resolvedArgv.slice(1), {
+  const preparedSpawn = prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, {
     env: baseEnv,
   });
 
@@ -52,7 +80,7 @@ export async function createChildAdapter(params: {
     stdio: ["pipe", "pipe", "pipe"],
     detached: useDetached,
     windowsHide: true,
-    windowsVerbatimArguments: params.windowsVerbatimArguments,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   };
   if (stdinMode === "inherit") {
     options.stdio = ["inherit", "pipe", "pipe"];

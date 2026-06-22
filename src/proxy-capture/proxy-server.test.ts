@@ -5,14 +5,22 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { DebugProxySettings } from "./env.js";
 import { parseConnectTarget, startDebugProxyServer } from "./proxy-server.js";
 import { closeDebugProxyCaptureStore, getDebugProxyCaptureStore } from "./store.sqlite.js";
 
 let testRoot: string | undefined;
+const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
 async function cleanupTestRoot(): Promise<void> {
   closeDebugProxyCaptureStore();
+  closeOpenClawStateDatabaseForTest();
+  if (originalStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+  }
   if (!testRoot) {
     return;
   }
@@ -27,10 +35,11 @@ async function makeSettings(): Promise<DebugProxySettings> {
   await mkdir(certDir, { recursive: true });
   await writeFile(join(certDir, "root-ca.pem"), "test root cert\n", "utf8");
   await writeFile(join(certDir, "root-ca-key.pem"), "test root key\n", "utf8");
+  process.env.OPENCLAW_STATE_DIR = testRoot;
   return {
     enabled: true,
     required: false,
-    dbPath: ":memory:",
+    dbPath: join(testRoot, "capture.sqlite"),
     blobDir: join(testRoot, "blobs"),
     certDir,
     sessionId: "debug-proxy-server-test",
@@ -160,10 +169,7 @@ describe("startDebugProxyServer", () => {
 
       expect(origin.receivedRequestBody()).toBe(requestBody);
       expect(responseBody).toBe(origin.responseBody);
-      const events = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir).getSessionEvents(
-        settings.sessionId,
-        10,
-      );
+      const events = getDebugProxyCaptureStore().getSessionEvents(settings.sessionId, 10);
       const capturedRequest = events.find((event) => event.kind === "request");
       const capturedResponse = events.find((event) => event.kind === "response");
       expect(capturedRequest?.dataText).toBe("q".repeat(8192));

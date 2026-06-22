@@ -3,7 +3,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -12,7 +12,10 @@ import {
   collectInstalledPluginSdkZodArtifactErrors,
   collectInstalledRootDependencyManifestErrors,
   collectInstalledPackageErrors,
+  fetchRegistryJson,
   normalizeInstalledBinaryVersion,
+  openClawNpmPostpublishVerifyUsage,
+  parseOpenClawNpmPostpublishVerifyArgs,
   resolveInstalledBinaryCommandInvocation,
   resolveInstalledBinaryPath,
   retryNpmRegistryProvenanceRead,
@@ -21,6 +24,31 @@ import {
 } from "../scripts/openclaw-npm-postpublish-verify.ts";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
+
+describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
+  it("supports help and package-manager separators", () => {
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["--help"])).toEqual({
+      help: true,
+      version: "",
+    });
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["--", "2026.3.23"])).toEqual({
+      help: false,
+      version: "2026.3.23",
+    });
+  });
+
+  it("rejects missing, option-like, and extra arguments before verification", () => {
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs([])).toThrow(
+      openClawNpmPostpublishVerifyUsage(),
+    );
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["--tag"])).toThrow(
+      "Unknown openclaw npm postpublish verifier option: --tag",
+    );
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", "extra"])).toThrow(
+      "Unexpected openclaw npm postpublish verifier argument: extra",
+    );
+  });
+});
 
 function writeDistJavaScriptFiles(packageRoot: string, count: number): void {
   const distDir = join(packageRoot, "dist");
@@ -87,6 +115,59 @@ describe("npm registry provenance verification", () => {
       },
     },
   };
+
+  it("fetches npm registry JSON with bounded response handling", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init).toMatchObject({
+        headers: {
+          Accept: "application/json",
+        },
+        redirect: "error",
+        signal: expect.any(AbortSignal),
+      });
+      return new Response(JSON.stringify({ ok: true }));
+    });
+
+    await expect(
+      fetchRegistryJson("https://registry.example/openclaw", {
+        fetchImpl,
+        timeoutMs: 1234,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("bounds oversized npm registry response bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response("x".repeat(65), {
+        headers: { "content-length": "65" },
+      });
+    });
+
+    await expect(
+      fetchRegistryJson("https://registry.example/openclaw", {
+        fetchImpl,
+        maxBodyBytes: 64,
+        timeoutMs: 1234,
+      }),
+    ).rejects.toThrow(
+      "npm registry https://registry.example/openclaw response body exceeded 64 bytes",
+    );
+  });
+
+  it("keeps npm registry timeouts active while reading response bodies", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }));
+    });
+
+    await expect(
+      fetchRegistryJson("https://registry.example/openclaw", {
+        fetchImpl,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow(
+      "npm registry request timed out after 5ms: https://registry.example/openclaw",
+    );
+  });
 
   it("verifies an npm registry signature against the matching public key", () => {
     const keys = generateKeyPairSync("ec", { namedCurve: "prime256v1" });

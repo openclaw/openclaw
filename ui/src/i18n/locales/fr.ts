@@ -203,6 +203,7 @@ export const fr: TranslationMap = {
     inherit: "hériter",
     defaultOption: "Par défaut ({value})",
     offExplicit: "désactivé (explicite)",
+    auto: "auto",
     on: "activé",
     off: "désactivé",
     full: "complet",
@@ -1638,6 +1639,7 @@ export const fr: TranslationMap = {
       wakeModeHelp:
         "Maintenant déclenche immédiatement. Prochain heartbeat attend le cycle suivant.",
       payloadKind: "Que faut-il exécuter ?",
+      command: "Command",
       systemEvent: "Publier un message dans la chronologie principale",
       agentTurn: "Exécuter une tâche d’assistant (isolée)",
       systemEventHelp:

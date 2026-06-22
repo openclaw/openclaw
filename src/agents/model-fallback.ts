@@ -168,6 +168,7 @@ export function isFallbackSummaryError(err: unknown): err is FallbackSummaryErro
 
 export type ModelFallbackRunOptions = {
   allowTransientCooldownProbe?: boolean;
+  isFinalFallbackAttempt?: boolean;
 };
 
 type ModelFallbackRuntimeContext = {
@@ -520,7 +521,7 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
     params.model,
   );
   if (isCliProvider(params.provider, params.cfg)) {
-    return { skipsProviderAuthCooldown: false };
+    return { skipsProviderAuthCooldown: true };
   }
   const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
@@ -539,7 +540,9 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
       ? "model"
       : harnessPolicy.runtimeSource;
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
-    return { skipsProviderAuthCooldown: false };
+    // CLI runtimes own their transport/auth, so stale OpenClaw provider
+    // profile state must not block the candidate before the CLI starts.
+    return { skipsProviderAuthCooldown: true };
   }
   if (agentRuntime === "openclaw") {
     return { skipsProviderAuthCooldown: false };
@@ -1655,7 +1658,10 @@ async function runWithModelFallbackInternal<T>(
       run: params.run,
       ...candidate,
       attempts,
-      options: runOptions,
+      options: {
+        ...runOptions,
+        isFinalFallbackAttempt: i + 1 === candidates.length,
+      },
       // Only the outer fallback loop knows another candidate remains. Carry
       // that fact through this attempt so the embedded runner does not freeze
       // the shared lane before the next candidate can run.

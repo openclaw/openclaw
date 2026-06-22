@@ -35,8 +35,6 @@ import type {
 } from "../../../plugins/hook-types.js";
 import type { StreamFn } from "../../runtime/index.js";
 
-export { diagnosticErrorCategory };
-
 type ModelCallDiagnosticContext = {
   runId: string;
   sessionKey?: string;

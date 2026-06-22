@@ -202,6 +202,7 @@ export const uk: TranslationMap = {
     inherit: "успадковувати",
     defaultOption: "За замовчуванням ({value})",
     offExplicit: "вимкнено (явно)",
+    auto: "auto",
     on: "увімкнено",
     off: "вимкнено",
     full: "повний",
@@ -1624,6 +1625,7 @@ export const uk: TranslationMap = {
       nextHeartbeat: "Наступний heartbeat",
       wakeModeHelp: "Зараз спрацьовує негайно. Наступний heartbeat чекає наступного циклу.",
       payloadKind: "Що слід запустити?",
+      command: "Command",
       systemEvent: "Опублікувати повідомлення в основній часовій шкалі",
       agentTurn: "Запустити завдання асистента (ізольовано)",
       systemEventHelp:

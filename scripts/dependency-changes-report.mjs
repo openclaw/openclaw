@@ -234,7 +234,7 @@ function gitDiffDependencyFiles(baseRef, cwd) {
 
 function readRequiredValue(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
@@ -345,7 +345,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(import.met
       process.exitCode = exitCode;
     },
     /** @param {unknown} error */ (error) => {
-      process.stderr.write(`${error.stack ?? error.message ?? String(error)}\n`);
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
     },
   );

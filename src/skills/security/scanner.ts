@@ -771,28 +771,6 @@ async function scanFileWithCache(params: {
   return { scanned: true, findings };
 }
 
-export async function scanDirectory(
-  dirPath: string,
-  opts?: SkillScanOptions,
-): Promise<SkillScanFinding[]> {
-  const scanOptions = normalizeScanOptions(opts);
-  const { files } = await collectScannableFiles(dirPath, scanOptions);
-  const allFindings: SkillScanFinding[] = [];
-
-  for (const file of files) {
-    const scanResult = await scanFileWithCache({
-      filePath: file,
-      maxFileBytes: scanOptions.maxFileBytes,
-    });
-    if (!scanResult.scanned) {
-      continue;
-    }
-    allFindings.push(...scanResult.findings);
-  }
-
-  return allFindings;
-}
-
 export async function scanDirectoryWithSummary(
   dirPath: string,
   opts?: SkillScanOptions,

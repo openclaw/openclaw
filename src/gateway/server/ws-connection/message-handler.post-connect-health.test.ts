@@ -78,6 +78,9 @@ const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
   role: "operator",
 } as const satisfies Record<string, unknown>;
+const NODE_PAIR_REMOVE_PARAMS = {
+  nodeId: "device-1",
+} as const satisfies Record<string, unknown>;
 
 function createLogger() {
   return {
@@ -349,6 +352,48 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
     expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
       reason: "device-token-revoked",
+      method: "status.summary",
+    });
+  });
+
+  it("waits for device-backed node removal before dispatching later queued requests", async () => {
+    let releaseMutation: (() => void) | undefined;
+    const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const client = createConnectedTestClient({ connId: "conn-node-invalidating" });
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      expect(opts.req.method).toBe("node.pair.remove");
+      await new Promise<void>((resolve) => {
+        releaseMutation = resolve;
+      });
+      client.invalidated = true;
+      client.invalidatedReason = "device-pair-removed";
+    });
+
+    const harness = attachGatewayHarness({
+      connId: "conn-node-invalidating",
+      connectNonce: "nonce-node-invalidating",
+      client,
+      close,
+      setCloseCause,
+    });
+
+    harness.sendRequest("remove-node-1", "node.pair.remove", NODE_PAIR_REMOVE_PARAMS);
+    harness.sendRequest("queued-1", "status.summary");
+
+    await vi.waitFor(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+      expect(releaseMutation).toBeTypeOf("function");
+    });
+
+    releaseMutation?.();
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-pair-removed");
+    });
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      reason: "device-pair-removed",
       method: "status.summary",
     });
   });

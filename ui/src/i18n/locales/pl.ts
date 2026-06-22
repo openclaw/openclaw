@@ -202,6 +202,7 @@ export const pl: TranslationMap = {
     inherit: "dziedzicz",
     defaultOption: "Domyślnie ({value})",
     offExplicit: "wył. (jawnie)",
+    auto: "auto",
     on: "wł.",
     off: "wył.",
     full: "pełne",
@@ -1628,6 +1629,7 @@ export const pl: TranslationMap = {
       nextHeartbeat: "Następny heartbeat",
       wakeModeHelp: "Teraz uruchamia od razu. Następny heartbeat czeka na kolejny cykl.",
       payloadKind: "Co ma zostać uruchomione?",
+      command: "Command",
       systemEvent: "Opublikuj wiadomość na głównej osi czasu",
       agentTurn: "Uruchom zadanie asystenta (izolowane)",
       systemEventHelp:

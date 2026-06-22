@@ -72,6 +72,7 @@ const mocks = vi.hoisted(() => {
     return skillStatusReportFixture;
   });
   return {
+    callGatewayMock: vi.fn(),
     loadConfigMock: vi.fn(() => ({})),
     resolveDefaultAgentIdMock: vi.fn((_configForTest: unknown) => "main"),
     resolveAgentIdByWorkspacePathMock: vi.fn(
@@ -102,6 +103,7 @@ const mocks = vi.hoisted(() => {
 });
 
 const {
+  callGatewayMock,
   loadConfigMock,
   resolveDefaultAgentIdMock,
   resolveAgentIdByWorkspacePathMock,
@@ -167,6 +169,10 @@ function expectStatusWorkspaceCall(workspaceDir: string): void {
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime: mocks.defaultRuntime,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (...args: unknown[]) => mocks.callGatewayMock(...args),
 }));
 
 vi.mock("../utils.js", async (importOriginal) => ({
@@ -250,6 +256,7 @@ describe("skills cli commands", () => {
     runtimeLogs.length = 0;
     runtimeStdout.length = 0;
     runtimeErrors.length = 0;
+    callGatewayMock.mockReset();
     loadConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentIdByWorkspacePathMock.mockReset();
@@ -268,6 +275,7 @@ describe("skills cli commands", () => {
     fetchClawHubSkillCardMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
 
+    callGatewayMock.mockRejectedValue(new Error("gateway unavailable"));
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
@@ -672,11 +680,30 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/workspace",
       slug: undefined,
     });
+    expect(updateAllArgs.config).toEqual({});
     expectLogger(updateAllArgs.logger);
     expect(
       runtimeLogs.some((line) => line.includes("Updated calendar: 1.2.2 -> 1.2.3")),
       "update result log",
     ).toBe(true);
+    expect(runtimeErrors).toStrictEqual([]);
+  });
+
+  it("does not bootstrap configured skills during update all", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      agents: {
+        defaults: {
+          skills: ["apple-notes"],
+        },
+      },
+    });
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
+
+    await runCommand(["skills", "update", "--all"]);
+
+    expect(readTrackedClawHubSkillSlugsMock).toHaveBeenCalledWith("/tmp/workspace");
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
+    expect(runtimeLogs).toContain("No tracked ClawHub skills to update.");
     expect(runtimeErrors).toStrictEqual([]);
   });
 
@@ -783,6 +810,7 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/openclaw-config",
       slug: undefined,
       logger: expect.any(Object),
+      config: {},
     });
   });
 
@@ -809,6 +837,7 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/openclaw-config",
       slug: "calendar",
       logger: expect.any(Object),
+      config: {},
     });
   });
 
@@ -1193,6 +1222,60 @@ describe("skills cli commands", () => {
     });
 
     expectStatusWorkspaceCall("/tmp/workspace-writer");
+  });
+
+  it("uses gateway skills.status for read-only status commands when reachable", async () => {
+    routeWorkspaceByAgent();
+    const gatewayReport = {
+      ...skillStatusReportFixture,
+      agentId: "writer",
+      workspaceDir: "/gateway/workspace-writer",
+      skills: [
+        {
+          ...skillStatusReportFixture.skills[0],
+          name: "apple-notes",
+          description: "Notes helpers",
+          eligible: true,
+          modelVisible: true,
+          commandVisible: true,
+          requirements: {
+            bins: ["memo"],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: ["darwin"],
+          },
+          missing: {
+            bins: [],
+            anyBins: [],
+            env: [],
+            config: [],
+            os: [],
+          },
+        },
+      ],
+    };
+    callGatewayMock.mockResolvedValue(gatewayReport);
+
+    await runCommand(["skills", "check", "--agent", "writer", "--json"]);
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      config: {},
+      method: "skills.status",
+      params: { agentId: "writer" },
+      timeoutMs: 1_500,
+      clientName: "cli",
+      mode: "cli",
+    });
+    expect(buildWorkspaceSkillStatusMock).not.toHaveBeenCalled();
+    const output = JSON.parse(runtimeStdout.at(-1) ?? "{}") as {
+      workspaceDir?: string;
+      eligible?: string[];
+      missingRequirements?: Array<{ name: string }>;
+    };
+    expect(output.workspaceDir).toBe("/gateway/workspace-writer");
+    expect(output.eligible).toEqual(["apple-notes"]);
+    expect(output.missingRequirements).toEqual([]);
   });
 
   it.each([

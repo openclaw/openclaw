@@ -482,7 +482,3 @@ export function createPairingNotifierService(api: OpenClawPluginApi): OpenClawPl
     },
   };
 }
-
-export function registerPairingNotifierService(api: OpenClawPluginApi): void {
-  api.registerService(createPairingNotifierService(api));
-}
