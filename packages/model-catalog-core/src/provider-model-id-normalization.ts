@@ -98,7 +98,8 @@ export function normalizeProviderModelIdWithPolicies(params: {
   for (const prefix of policy.stripPrefixes ?? []) {
     const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
     if (normalizedPrefix && normalizeLowercaseStringOrEmpty(modelId).startsWith(normalizedPrefix)) {
-      modelId = modelId.slice(prefix.length);
+      // Use normalized length to match what was actually matched (handles whitespace in manifest prefix)
+      modelId = modelId.slice(normalizedPrefix.length);
       break;
     }
   }
