@@ -180,6 +180,35 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(tabsCommand.parent?.opts().json).toBe(true);
   });
 
+  it("accepts --browser-profile placed after the lazy subcommand (#55563 regression 1)", async () => {
+    // The root program enables positional options in production (run-main), which is
+    // what makes a parent option placed after a lazy subcommand reach the reparse and
+    // get rejected by the real subcommand. Mirror that here so the regression reproduces.
+    const program = new Command();
+    program.name("openclaw");
+    program.enablePositionalOptions();
+
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "tabs",
+      "--browser-profile",
+      "remote",
+    ]);
+
+    await program.parseAsync(["browser", "tabs", "--browser-profile", "remote"], {
+      from: "user",
+    });
+
+    expect(manageMocks.tabsAction).toHaveBeenCalledTimes(1);
+    const tabsCommand = requireTrailingCommand(
+      requireFirstCall(manageMocks.tabsAction, "tabs action call"),
+      "tabs action",
+    );
+    expect(tabsCommand.parent?.opts().browserProfile).toBe("remote");
+  });
+
   it("skips browser option values when selecting the lazy command group", async () => {
     const program = new Command();
     program.name("openclaw");

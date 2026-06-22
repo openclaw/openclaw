@@ -11,10 +11,14 @@ vi.mock("../argv.js", () => ({
   buildParseArgv: buildParseArgvMock,
 }));
 
-vi.mock("./helpers.js", () => ({
-  resolveActionArgs: resolveActionArgsMock,
-  resolveCommandOptionArgs: resolveCommandOptionArgsMock,
-}));
+vi.mock("./helpers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./helpers.js")>();
+  return {
+    ...actual,
+    resolveActionArgs: resolveActionArgsMock,
+    resolveCommandOptionArgs: resolveCommandOptionArgsMock,
+  };
+});
 
 function setRawArgs(command: Command, rawArgs: string[]): void {
   (command as Command & { rawArgs: string[] }).rawArgs = rawArgs;
@@ -123,5 +127,39 @@ describe("reparseProgramFromActionArgs", () => {
       fallbackArgv: [],
     });
     expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "status"]);
+  });
+
+  it("hoists parent options placed after a lazy subcommand before re-parsing", async () => {
+    const root = new Command().name("openclaw");
+    const browser = root
+      .command("browser")
+      .option("--browser-profile <name>", "Browser profile name")
+      .option("--json", "JSON output", false);
+    browser.command("tabs").description("List tabs");
+    setRawArgs(root, ["node", "openclaw", "browser", "tabs", "--browser-profile", "remote"]);
+    buildParseArgvMock.mockReturnValue([
+      "node",
+      "openclaw",
+      "browser",
+      "tabs",
+      "--browser-profile",
+      "remote",
+    ]);
+    const parseAsync = vi.spyOn(root, "parseAsync").mockResolvedValue(root);
+    const actionCommand = {
+      name: () => "tabs",
+      parent: browser,
+    } as unknown as Command;
+
+    await reparseProgramFromActionArgs(browser, [actionCommand]);
+
+    expect(parseAsync).toHaveBeenCalledWith([
+      "node",
+      "openclaw",
+      "browser",
+      "--browser-profile",
+      "remote",
+      "tabs",
+    ]);
   });
 });

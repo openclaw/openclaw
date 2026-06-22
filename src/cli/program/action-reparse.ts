@@ -1,7 +1,11 @@
 // Reparse support for lazy commands after their placeholder has been replaced.
 import type { Command } from "commander";
 import { buildParseArgv } from "../argv.js";
-import { resolveActionArgs, resolveCommandOptionArgs } from "./helpers.js";
+import {
+  hoistParentOptionsBeforeSubcommand,
+  resolveActionArgs,
+  resolveCommandOptionArgs,
+} from "./helpers.js";
 
 function buildFallbackArgv(program: Command, actionCommand: Command | undefined): string[] {
   const actionArgsList = resolveActionArgs(actionCommand);
@@ -38,5 +42,21 @@ export async function reparseProgramFromActionArgs(
     rawArgs,
     fallbackArgv,
   });
-  await rootProgram.parseAsync(parseArgv);
+  // A parent option placed after a lazy subcommand (`browser tabs --browser-profile
+  // remote`) is rejected by the real subcommand on reparse, because Commander binds
+  // options to the command they follow. The lazy placeholder accepted it as an
+  // unknown option, so hoist such parent/ancestor options back before the subcommand
+  // before re-parsing. This is a no-op when parent options already precede the
+  // subcommand.
+  const normalizedArgv = actionCommand
+    ? hoistParentOptionsBeforeSubcommand({
+        argv: parseArgv,
+        parentCommand: program,
+        subcommandName: actionCommand.name(),
+        subcommandCommand: program.commands.find(
+          (command) => command.name() === actionCommand.name(),
+        ),
+      })
+    : parseArgv;
+  await rootProgram.parseAsync(normalizedArgv);
 }
