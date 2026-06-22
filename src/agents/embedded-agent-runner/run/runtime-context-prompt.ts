@@ -176,8 +176,11 @@ export function resolveRuntimeContextPromptParts(params: {
   // When hooks added pre-prompt context, modelPromptText still contains the
   // system-event prefix that was separated into runtimeContext. Strip it so
   // events aren't delivered to the model twice (Message A and Message B).
+  const hasHiddenPromptContext = Boolean(
+    hiddenPromptParts?.before.trim() || hiddenPromptParts?.after.trim(),
+  );
   const returnModelPromptText =
-    hiddenPromptParts && modelPrompt
+    hasHiddenPromptContext && hiddenPromptParts && modelPrompt
       ? (removePromptContextAroundOccurrence({
           text: modelPromptText,
           prompt: transcriptPrompt ?? extracted.text,
