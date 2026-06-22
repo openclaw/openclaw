@@ -15,7 +15,10 @@ import {
 
 // Drain microtasks + the immediate queue so the fire-and-forget persistent write
 // in recordMattermostThreadParticipation has settled before we assert on it.
-const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+const flush = (): Promise<void> =>
+  new Promise((resolve) => {
+    setImmediate(resolve);
+  });
 
 function setRuntime(openKeyedStore: (options: OpenKeyedStoreOptions) => unknown): void {
   setMattermostRuntime({
