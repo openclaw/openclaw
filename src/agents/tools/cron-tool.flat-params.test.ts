@@ -219,4 +219,113 @@ describe("cron tool flat-params", () => {
     expect(params).not.toHaveProperty("payload ");
     expect(params).not.toHaveProperty("enabled ");
   });
+
+  it("trims trailing whitespace from patch object keys via update action (#95407)", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-patch-trailing-space", {
+      action: "update",
+      jobId: "job-123",
+      patch: {
+        "schedule ": { kind: "cron", expr: "0 9 * * 1-5", tz: "America/New_York" },
+        "enabled ": false,
+      },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      id?: string;
+      patch?: { schedule?: unknown; enabled?: boolean };
+    }>();
+    expect(method).toBe("cron.update");
+    expect(params.id).toBe("job-123");
+    expect(params.patch?.schedule).toBeDefined();
+    expect((params.patch?.schedule as Record<string, unknown>)?.kind).toBe("cron");
+    expect(params.patch?.enabled).toBe(false);
+    expect(params.patch).not.toHaveProperty("schedule ");
+    expect(params.patch).not.toHaveProperty("enabled ");
+  });
+
+  it("trims leading whitespace from job object keys", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-leading-space", {
+      action: "add",
+      job: {
+        "  name": "Leading space test",
+        "  schedule": { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
+        "  payload": { kind: "agentTurn", message: "test" },
+        "  enabled": true,
+      },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      name?: string;
+      schedule?: unknown;
+      payload?: unknown;
+      enabled?: boolean;
+    }>();
+    expect(method).toBe("cron.add");
+    expect(params.name).toBe("Leading space test");
+    expect(params.schedule).toBeDefined();
+    expect(params.payload).toBeDefined();
+    expect(params.enabled).toBe(true);
+    // Leading-space keys should be trimmed
+    expect(params).not.toHaveProperty("  name");
+    expect(params).not.toHaveProperty("  schedule");
+  });
+
+  it("trims trailing whitespace from flat-recovered job keys", async () => {
+    // When params.job is missing/empty, the flat-params recovery path runs.
+    // The recovery checks params keys against CRON_RECOVERABLE_OBJECT_KEYS.
+    // Trailing-space keys do not match (separate issue), so the test verifies
+    // that clean keys are correctly recovered even alongside mangled ones.
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-flat-trailing", {
+      action: "add",
+      job: {},
+      // Clean keys are recovered by flat-params path
+      schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
+      payload: { kind: "agentTurn", message: "hello" },
+      enabled: true,
+      // Trailing-space keys are not matched by CRON_RECOVERABLE_OBJECT_KEYS
+      // and are silently ignored — they do not pollute the output
+      "schedule ": { kind: "every", everyMs: 5000 },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<{
+      schedule?: unknown;
+      payload?: unknown;
+      enabled?: boolean;
+    }>();
+    expect(method).toBe("cron.add");
+    // Only clean keys were recovered
+    expect(params.schedule).toEqual({ kind: "cron", expr: "0 12 * * *", tz: "UTC" });
+    expect(params.payload).toBeDefined();
+    expect(params.enabled).toBe(true);
+    expect(params).not.toHaveProperty("schedule ");
+  });
+
+  it("preserves keys without whitespace when trimming", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: callGatewayToolMock });
+
+    await tool.execute("call-clean-keys", {
+      action: "add",
+      job: {
+        name: "Clean keys",
+        schedule: { kind: "cron", expr: "0 12 * * *", tz: "UTC" },
+        payload: { kind: "agentTurn", message: "test" },
+        enabled: true,
+        description: "All keys should be preserved as-is",
+      },
+    });
+
+    const [method, _gatewayOpts, params] = firstGatewayToolCall<Record<string, unknown>>();
+    expect(method).toBe("cron.add");
+    expect(params.name).toBe("Clean keys");
+    expect(params.schedule).toBeDefined();
+    expect(params.payload).toBeDefined();
+    expect(params.enabled).toBe(true);
+    expect(params.description).toBe("All keys should be preserved as-is");
+  });
 });
