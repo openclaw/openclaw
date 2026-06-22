@@ -293,14 +293,17 @@ jobs:
             }
           }
 
+          const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
           const nodeTestShards = runNodeFull
             ? createNodeTestShardBundles({
                 includeReleaseOnlyPluginShards: false,
+                compact: compactPullRequest,
               }).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
                 shard_name: shard.shardName,
+                groups: shard.groups,
                 configs: shard.configs,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
@@ -848,7 +851,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - name: Checkout
@@ -938,7 +941,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -1019,7 +1022,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -1172,7 +1175,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 6
+      max-parallel: 12
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout
@@ -1231,6 +1234,7 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
@@ -1245,28 +1249,47 @@ jobs:
           import { writeFileSync } from "node:fs";
           import { join } from "node:path";
 
-          const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
-          if (!Array.isArray(configs) || configs.length === 0) {
-            console.error("Missing node test shard configs");
-            process.exit(1);
-          }
-          const includePatterns = JSON.parse(process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null");
-          const childEnv = { ...process.env };
-          if (Array.isArray(includePatterns) && includePatterns.length > 0) {
-            const includeFile = join(
-              process.env.RUNNER_TEMP ?? ".",
-              `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
+          const groups = JSON.parse(process.env.OPENCLAW_NODE_TEST_GROUPS_JSON ?? "null");
+          const plans = Array.isArray(groups) && groups.length > 0
+            ? groups
+            : [{
+                configs: JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]"),
+                includePatterns: JSON.parse(
+                  process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
+                ),
+                shard_name: process.env.OPENCLAW_VITEST_SHARD_NAME,
+              }];
+          for (const plan of plans) {
+            const configs = plan.configs;
+            if (!Array.isArray(configs) || configs.length === 0) {
+              console.error("Missing node test shard configs");
+              process.exit(1);
+            }
+            const childEnv = {
+              ...process.env,
+              ...(plan.shard_name ? { OPENCLAW_VITEST_SHARD_NAME: plan.shard_name } : {}),
+            };
+            if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
+              const includeFile = join(
+                process.env.RUNNER_TEMP ?? ".",
+                `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
+              );
+              writeFileSync(includeFile, JSON.stringify(plan.includePatterns), "utf8");
+              childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+            } else {
+              delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+            }
+            const result = spawnSync(
+              "pnpm",
+              ["exec", "node", "scripts/test-projects.mjs", ...configs],
+              {
+                env: childEnv,
+                stdio: "inherit",
+              },
             );
-            writeFileSync(includeFile, JSON.stringify(includePatterns), "utf8");
-            childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
-          }
-
-          const result = spawnSync("pnpm", ["exec", "node", "scripts/test-projects.mjs", ...configs], {
-            env: childEnv,
-            stdio: "inherit",
-          });
-          if ((result.status ?? 1) !== 0) {
-            process.exit(result.status ?? 1);
+            if ((result.status ?? 1) !== 0) {
+              process.exit(result.status ?? 1);
+            }
           }
           EOF
 
@@ -1281,7 +1304,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         include:
           - check_name: check-guards
@@ -1423,7 +1446,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         include:
           - check_name: check-additional-boundaries-a
