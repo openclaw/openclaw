@@ -422,9 +422,6 @@ function inferChatTypeFromTarget(params: {
   if (/^user:/i.test(to)) {
     return "direct";
   }
-  if (/^(channel:|thread:)/i.test(to)) {
-    return "channel";
-  }
   if (/^group:/i.test(to)) {
     return "group";
   }
@@ -433,7 +430,20 @@ function inferChatTypeFromTarget(params: {
     resolveOutboundChannelPlugin({
       channel: params.channel,
     });
-  return plugin?.messaging?.inferTargetChatType?.({ to }) ?? undefined;
+  // Consult the plugin hook BEFORE the channel:/thread: default so
+  // plugins can override the chat type for private channels that use
+  // the same prefix as public channels (e.g. Mattermost private
+  // channels addressed as channel:<id> but authoritatively typed as
+  // group). Without this ordering the prefix match short-circuits
+  // and the plugin hook is never reached for channel: targets.
+  const pluginChatType = plugin?.messaging?.inferTargetChatType?.({ to });
+  if (pluginChatType) {
+    return pluginChatType;
+  }
+  if (/^(channel:|thread:)/i.test(to)) {
+    return "channel";
+  }
+  return undefined;
 }
 
 function resolveHeartbeatDeliveryChatType(params: {

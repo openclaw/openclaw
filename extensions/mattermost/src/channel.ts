@@ -34,12 +34,17 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mattermostApprovalAuth } from "./approval-auth.js";
+import type { ChatType } from "openclaw/plugin-sdk/chat-type";
 import {
   chunkTextForOutbound,
   createAccountStatusSink,
   DEFAULT_ACCOUNT_ID,
   type ChannelPlugin,
 } from "./channel-api.js";
+import {
+  mapMattermostChannelTypeToChatType,
+  mattermostChannelKindCache,
+} from "./mattermost/monitor-gating.js";
 import {
   describeMattermostAccount,
   isMattermostConfigured,
@@ -798,6 +803,20 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       targetPrefixes: ["mattermost"],
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
+      inferTargetChatType: ({ to }) => {
+        const trimmed = to.trim();
+        if (/^user:/i.test(trimmed)) return "direct";
+        if (/^group:/i.test(trimmed)) return "group";
+        // For channel: targets, consult the monitor-populated cache.
+        // Private channels (type P) are authoritatively typed as group,
+        // but addressed as channel:<id> — the cache resolves the real type.
+        const channelMatch = /^channel:(.+?)$/i.exec(trimmed);
+        if (channelMatch) {
+          const cachedKind = mattermostChannelKindCache.get(channelMatch[1]);
+          if (cachedKind) return cachedKind;
+        }
+        return undefined;
+      },
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
         const child = conversationId.trim();

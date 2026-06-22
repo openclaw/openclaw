@@ -1,6 +1,20 @@
 // Mattermost plugin module implements monitor gating behavior.
 import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 
+// Module-level cache mapping Mattermost channel IDs to their resolved ChatType.
+// Populated by the monitor when channel info is fetched, consumed synchronously
+// by inferTargetChatType so channel: targets can be resolved to the correct
+// chat type (group for private channels, channel for public).
+export const mattermostChannelKindCache = new Map<string, ChatType>();
+
+/** Populate the channel kind cache (called by the Mattermost monitor). */
+export function setMattermostChannelKindCache(
+  channelId: string,
+  channelType: string | null | undefined,
+): void {
+  mattermostChannelKindCache.set(channelId, mapMattermostChannelTypeToChatType(channelType));
+}
+
 export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   const normalized = channelType?.trim().toUpperCase();
   if (!normalized) {

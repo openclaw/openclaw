@@ -14,6 +14,7 @@ import {
   type MattermostUser,
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
+import { setMattermostChannelKindCache } from "./monitor-gating.js";
 
 export type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
@@ -126,11 +127,17 @@ export function createMattermostMonitorResources(params: {
     const rawNow = Date.now();
     const cached = getCachedValue(channelCache, channelId, asDateTimestampMs(rawNow));
     if (cached !== undefined) {
+      if (cached?.type) {
+        setMattermostChannelKindCache(channelId, cached.type);
+      }
       return cached;
     }
     try {
       const info = await fetchMattermostChannel(client, channelId);
       setCachedValue(channelCache, channelId, info, CHANNEL_CACHE_TTL_MS, rawNow);
+      if (info?.type) {
+        setMattermostChannelKindCache(channelId, info.type);
+      }
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: channel lookup failed: ${String(err)}`);

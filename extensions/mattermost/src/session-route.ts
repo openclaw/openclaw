@@ -20,6 +20,7 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
     (resolvedKind !== "channel" &&
       resolvedKind !== "group" &&
       (lower.startsWith("user:") || trimmed.startsWith("@")));
+  const isGroup = resolvedKind === "group";
   if (trimmed.startsWith("@")) {
     trimmed = trimmed.slice(1).trim();
   }
@@ -36,7 +37,7 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
       kind: isUser ? "direct" : "channel",
       id: rawId,
     },
-    chatType: isUser ? "direct" : "channel",
+    chatType: isUser ? "direct" : isGroup ? "group" : "channel",
     from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
     to: isUser ? `user:${rawId}` : `channel:${rawId}`,
   });
