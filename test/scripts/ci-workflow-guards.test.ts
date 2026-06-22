@@ -104,6 +104,7 @@ describe("ci workflow guards", () => {
   it("bounds matrix fan-out for runner-registration pressure", () => {
     const workflow = readCiWorkflow();
 
+    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(4);
     expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(6);
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(4);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(4);
