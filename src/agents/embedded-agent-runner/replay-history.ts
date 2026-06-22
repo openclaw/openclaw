@@ -38,7 +38,10 @@ import {
   stripToolResultDetails,
 } from "../session-transcript-repair.js";
 import type { SessionManager } from "../sessions/index.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../stream-message-shared.js";
+import {
+  MODEL_INIT_ERROR_FALLBACK_TEXT,
+  STREAM_ERROR_FALLBACK_TEXT,
+} from "../stream-message-shared.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import {
@@ -408,7 +411,14 @@ function isStreamErrorSentinelContent(content: readonly unknown[]): boolean {
     return false;
   }
   const blockRecord = block as { type?: unknown; text?: unknown };
-  return blockRecord.type === "text" && blockRecord.text === STREAM_ERROR_FALLBACK_TEXT;
+  if (blockRecord.type !== "text" || typeof blockRecord.text !== "string") {
+    return false;
+  }
+  // Check for both stream error and model initialization error sentinels
+  return (
+    blockRecord.text === STREAM_ERROR_FALLBACK_TEXT ||
+    blockRecord.text === MODEL_INIT_ERROR_FALLBACK_TEXT
+  );
 }
 
 function normalizeAssistantUsageSnapshot(usage: unknown) {
