@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { minimatch } from "minimatch";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
@@ -100,6 +101,27 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
   return uniqueStrings(resolved);
 }
 
+function isExcludedPath(absPath: string, workspaceDir: string, excludePaths?: string[]): boolean {
+  if (!excludePaths?.length) {
+    return false;
+  }
+  const relPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
+  for (const pattern of excludePaths) {
+    // minimatch glob match (supports **, *, etc.)
+    if (minimatch(relPath, pattern)) {
+      return true;
+    }
+    // Also treat plain directory paths as prefix matches (e.g. "memory/dreaming/light"
+    // should exclude all files underneath it, not just the directory entry itself).
+    // Only apply when the pattern contains no glob-special characters.
+    const hasGlobChars = /[*?[]/.test(pattern);
+    if (!hasGlobChars && relPath.startsWith(pattern + "/")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function isMemoryPath(relPath: string): boolean {
   const normalized = normalizeRelPath(relPath);
   if (!normalized) {
@@ -151,6 +173,7 @@ export async function listMemoryFiles(
   workspaceDir: string,
   extraPaths?: string[],
   multimodal?: MemoryMultimodalSettings,
+  excludePaths?: string[],
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryDir = path.join(workspaceDir, "memory");
@@ -208,6 +231,34 @@ export async function listMemoryFiles(
       } catch {}
     }
   }
+
+  // Apply excludePaths filtering (runs after shouldSkipRootMemoryAuxiliaryPath)
+  if (excludePaths?.length && result.length > 0) {
+    const filtered: string[] = [];
+    for (const absPath of result) {
+      if (!isExcludedPath(absPath, workspaceDir, excludePaths)) {
+        filtered.push(absPath);
+      }
+    }
+    if (filtered.length <= 1) {
+      return filtered;
+    }
+    const seen = new Set<string>();
+    const deduped: string[] = [];
+    for (const entry of filtered) {
+      let key = entry;
+      try {
+        key = await fs.realpath(entry);
+      } catch {}
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      deduped.push(entry);
+    }
+    return deduped;
+  }
+
   if (result.length <= 1) {
     return result;
   }

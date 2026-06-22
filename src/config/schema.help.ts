@@ -1176,6 +1176,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Chooses which sources are indexed: "memory" reads MEMORY.md + memory files, and "sessions" includes transcript history. Keep ["memory"] unless you need recall from prior chat transcripts.',
   "agents.defaults.memorySearch.extraPaths":
     "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
+  "agents.defaults.memorySearch.excludePaths":
+    "Optional glob patterns or exact paths to exclude from memory search indexing. Supports minimatch wildcards (e.g. memory/dreaming/light). Applied against workspace-relative paths inside memory/ and extraPaths, after built-in auxiliary-path filtering.",
   "agents.defaults.memorySearch.qmd":
     "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
   "agents.defaults.memorySearch.qmd.extraCollections":

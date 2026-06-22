@@ -451,6 +451,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",
   "agents.defaults.memorySearch.extraPaths": "Extra Memory Paths",
+  "agents.defaults.memorySearch.excludePaths": "Exclude Memory Paths",
   "agents.defaults.memorySearch.qmd": "Memory Search QMD Collections",
   "agents.defaults.memorySearch.qmd.extraCollections": "QMD Extra Collections",
   "agents.defaults.memorySearch.qmd.extraCollections.path": "QMD Extra Collection Path",

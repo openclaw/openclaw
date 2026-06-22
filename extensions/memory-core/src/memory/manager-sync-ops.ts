@@ -1790,6 +1790,7 @@ export abstract class MemoryManagerSyncOps {
       this.workspaceDir,
       this.settings.extraPaths,
       this.settings.multimodal,
+      this.settings.excludePaths,
     );
     const fileEntries = (
       await runWithConcurrency(
