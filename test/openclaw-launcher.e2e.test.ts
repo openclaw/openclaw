@@ -505,6 +505,28 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it("uses precomputed subcommand help with leading root options", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ subcommandHelpText: { models: "PRECOMPUTED models help\n" } }),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "--profile", "work", "--no-color", "models", "-h"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("PRECOMPUTED models help\n");
+  });
+
   it("defers precomputed subcommand help to the runtime entry when container env is set", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(

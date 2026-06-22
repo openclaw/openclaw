@@ -371,34 +371,101 @@ const buildMissingEntryErrorMessage = async () => {
 const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
-const resolvePrecomputedCommandHelp = (argv) => {
-  if (argv.length !== 4 || (argv[3] !== "--help" && argv[3] !== "-h")) {
-    return null;
+const LAUNCHER_HELP_FLAGS = new Set(["-h", "--help"]);
+const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
+const LAUNCHER_PRECOMPUTED_COMMAND_HELP = {
+  browser: { command: "browser", metadataKey: "browserHelpText" },
+  secrets: { command: "secrets", metadataKey: "secretsHelpText" },
+  nodes: { command: "nodes", metadataKey: "nodesHelpText" },
+};
+const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
+  "doctor",
+  "gateway",
+  "models",
+  "plugins",
+  "sessions",
+  "tasks",
+]);
+
+const isLauncherRootOptionValueToken = (arg) => {
+  if (!arg || arg === "--") {
+    return false;
   }
-  if (argv[2] === "browser") {
-    return { command: "browser", metadataKey: "browserHelpText" };
+  if (!arg.startsWith("-")) {
+    return true;
   }
-  if (argv[2] === "secrets") {
-    return { command: "secrets", metadataKey: "secretsHelpText" };
+  return /^-\d+(?:\.\d+)?$/.test(arg);
+};
+
+const consumeLauncherRootOptionToken = (args, index) => {
+  const arg = args[index];
+  if (!arg) {
+    return 0;
   }
-  if (argv[2] === "nodes") {
-    return { command: "nodes", metadataKey: "nodesHelpText" };
+  if (LAUNCHER_ROOT_BOOLEAN_FLAGS.has(arg)) {
+    return 1;
   }
   if (
-    argv[2] === "doctor" ||
-    argv[2] === "gateway" ||
-    argv[2] === "models" ||
-    argv[2] === "plugins" ||
-    argv[2] === "sessions" ||
-    argv[2] === "tasks"
+    arg.startsWith("--profile=") ||
+    arg.startsWith("--log-level=") ||
+    arg.startsWith("--container=")
   ) {
+    return 1;
+  }
+  if (LAUNCHER_ROOT_VALUE_FLAGS.has(arg)) {
+    return isLauncherRootOptionValueToken(args[index + 1]) ? 2 : 1;
+  }
+  return 0;
+};
+
+const resolvePrecomputedCommandHelpByName = (commandName) => {
+  if (Object.hasOwn(LAUNCHER_PRECOMPUTED_COMMAND_HELP, commandName)) {
+    return LAUNCHER_PRECOMPUTED_COMMAND_HELP[commandName];
+  }
+  if (LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP.has(commandName)) {
     return {
-      command: argv[2],
+      command: commandName,
       metadataKey: "subcommandHelpText",
-      subcommandKey: argv[2],
+      subcommandKey: commandName,
     };
   }
   return null;
+};
+
+const resolvePrecomputedCommandHelp = (argv) => {
+  const args = argv.slice(2);
+  let commandHelp = null;
+  let sawHelp = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return null;
+    }
+    if (!commandHelp) {
+      const consumed = consumeLauncherRootOptionToken(args, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        return null;
+      }
+      commandHelp = resolvePrecomputedCommandHelpByName(arg);
+      if (!commandHelp) {
+        return null;
+      }
+      continue;
+    }
+    if (LAUNCHER_HELP_FLAGS.has(arg)) {
+      sawHelp = true;
+      continue;
+    }
+    return null;
+  }
+
+  return commandHelp && sawHelp ? commandHelp : null;
 };
 
 const isHelpFastPathDisabled = () =>
