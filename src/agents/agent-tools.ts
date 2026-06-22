@@ -543,6 +543,8 @@ export function createOpenClawCodingTools(options?: {
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
+  /** Expose soul_update tool; only true inside the soul-reflection sub-turn. */
+  enableSoulUpdateTool?: boolean;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -1071,6 +1073,7 @@ export function createOpenClawCodingTools(options?: {
           onYield: options?.onYield,
           allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
           recordToolPrepStage: options?.recordToolPrepStage,
+          enableSoulUpdateTool: options?.enableSoulUpdateTool,
         })
       : pluginToolsOnly),
     ...toolSearchTools,

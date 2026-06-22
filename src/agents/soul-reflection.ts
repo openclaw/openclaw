@@ -51,6 +51,8 @@ export const REFLECTION_PROMPT = [
   'If YES: call the `soul_update` tool with a concise `rule` (≤ 280 chars, imperative voice, no first-person — e.g. "never use em-dashes") and a short `evidence` quote from the user.',
   "If NO:  call `soul_update` with `noop: true`.",
   "",
+  "Output rule: after the tool result, respond with the literal token `NO_REPLY` and nothing else. Do not greet, summarize, or acknowledge — the runtime handles user notification, and any other text leaks into the user's chat as a duplicate notice.",
+  "",
   "Guidelines:",
   "- Only persist durable rules about communication style, format, tone, or boundaries — not one-off task details.",
   "- Skip rules already implied by your existing SOUL.md.",

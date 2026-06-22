@@ -185,6 +185,12 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
+    /**
+     * Expose the soul_update tool. Defaults to false; only set true by the
+     * soul-reflection sub-turn. Without this, autoUpdate=true alone leaks the
+     * tool into main turns where the model would call it redundantly.
+     */
+    enableSoulUpdateTool?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config ?? openClawToolsDeps.config;
@@ -437,7 +443,8 @@ export function createOpenClawTools(
         ]),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     ...collectPresentOpenClawTools([heartbeatTool]),
-    ...(resolvedConfig?.agents?.defaults?.soul?.autoUpdate === true
+    ...(resolvedConfig?.agents?.defaults?.soul?.autoUpdate === true &&
+    options?.enableSoulUpdateTool === true
       ? [createSoulUpdateTool({ workspaceDir })]
       : []),
     createTtsTool({

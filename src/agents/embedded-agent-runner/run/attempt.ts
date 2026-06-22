@@ -1344,6 +1344,7 @@ export async function runEmbeddedAttempt(
             onToolOutcome: params.onToolOutcome,
             allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
+            enableSoulUpdateTool: params.inputProvenance?.sourceTool === "soul_reflection",
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;

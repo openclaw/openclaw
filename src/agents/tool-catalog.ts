@@ -309,6 +309,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "soul_update",
+    label: "soul_update",
+    description: "Persist a durable rule to SOUL.md (reflection sub-turn only)",
+    sectionId: "agents",
+    profiles: ["minimal", "coding", "messaging", "full"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "image",
     label: "image",
     description: "Image understanding",
