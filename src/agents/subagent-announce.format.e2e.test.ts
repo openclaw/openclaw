@@ -26,6 +26,8 @@ import * as embeddedRuns from "./embedded-agent-runner/runs.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import * as agentStep from "./tools/agent-step.js";
 
 type AgentCallRequest = {
   method?: string;
@@ -171,7 +173,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
     getLatestSubagentRunByChildSessionKey: vi.fn(
-      (_childSessionKey: string): MockSubagentRun | undefined => undefined,
+      (_childSessionKey: string): SubagentRunRecord | null => null,
     ),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
@@ -179,6 +181,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     replaceSubagentRunAfterSteer: vi.fn(
       (_params: { previousRunId: string; nextRunId: string }) => true,
     ),
+    markDescendantCompletionConsumedByRequester: vi.fn(),
     resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
   },
 }));
@@ -404,6 +407,8 @@ describe("subagent announce formatting", () => {
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
       getRuntimeConfig: () => configOverride,
+      loadSubagentRegistryRuntime: async () =>
+        subagentRegistryMock as unknown as typeof import("./subagent-announce.registry.runtime.js"),
     });
     subagentAnnounceOutputTesting.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(
@@ -466,11 +471,10 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionKey: string, _runId: string) =>
         subagentRegistryMock.countPendingDescendantRuns(sessionKey),
       );
-    subagentRegistryMock.getLatestSubagentRunByChildSessionKey
-      .mockClear()
-      .mockReturnValue(undefined);
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockClear().mockReturnValue(null);
     subagentRegistryMock.listSubagentRunsForRequester.mockClear().mockReturnValue([]);
     subagentRegistryMock.replaceSubagentRunAfterSteer.mockClear().mockReturnValue(true);
+    subagentRegistryMock.markDescendantCompletionConsumedByRequester.mockClear();
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
     hasSubagentDeliveryTargetHook = false;
     hookHasHooksMock.mockClear();
@@ -2605,6 +2609,19 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("result from child b");
     expect(msg).not.toContain("stale result from child a");
     expect(msg.match(/1\. child-a/g)?.length ?? 0).toBe(1);
+    expect(subagentRegistryMock.markDescendantCompletionConsumedByRequester).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(subagentRegistryMock.markDescendantCompletionConsumedByRequester).toHaveBeenCalledWith({
+      requesterSessionKey: "agent:main:subagent:parent",
+      runStartedAt: defaultOutcomeAnnounce.startedAt,
+      runIds: ["run-child-current", "run-child-b"],
+      kind: "subagent_descendant_result",
+      consumerRunId: "run-parent-dedupe",
+    });
+    const consumedRunIds =
+      subagentRegistryMock.markDescendantCompletionConsumedByRequester.mock.calls[0]?.[0]?.runIds;
+    expect(consumedRunIds).not.toContain("run-child-stale");
   });
 
   it("does not announce a direct child that moved to a newer parent", async () => {
@@ -2638,7 +2655,7 @@ describe("subagent announce formatting", () => {
     subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation(
       (childSessionKey: string) => {
         if (childSessionKey !== "agent:main:subagent:shared-child") {
-          return undefined;
+          return null;
         }
         return {
           runId: "run-child-new-parent",

@@ -414,28 +414,8 @@ export function buildChildCompletionFindings(
   return ["Child completion results:", "", ...sections].join("\n\n");
 }
 
-export function dedupeLatestChildCompletionRows(
-  children: Array<{
-    childSessionKey: string;
-    task: string;
-    label?: string;
-    createdAt: number;
-    endedAt?: number;
-    frozenResultText?: string | null;
-    completion?: {
-      resultText?: string | null;
-      fallbackResultText?: string | null;
-    };
-    delivery?: {
-      payload?: {
-        frozenResultText?: string | null;
-        fallbackFrozenResultText?: string | null;
-      };
-    };
-    outcome?: SubagentRunOutcome;
-  }>,
-) {
-  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
+export function dedupeLatestChildCompletionRows<T extends ChildCompletionRow>(children: T[]): T[] {
+  const latestByChildSessionKey = new Map<string, T>();
   for (const child of children) {
     const existing = latestByChildSessionKey.get(child.childSessionKey);
     if (!existing || child.createdAt > existing.createdAt) {

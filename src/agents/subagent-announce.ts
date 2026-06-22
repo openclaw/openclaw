@@ -349,10 +349,9 @@ export async function runSubagentAnnounceFlow(params: {
             getLatestSubagentRunByChildSessionKey:
               subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
           });
-          consumedChildRunIds = currentDirectChildren.map((child) => child.runId);
-          childCompletionFindings = buildChildCompletionFindings(
-            dedupeLatestChildCompletionRows(currentDirectChildren),
-          );
+          const consumedDirectChildren = dedupeLatestChildCompletionRows(currentDirectChildren);
+          consumedChildRunIds = consumedDirectChildren.map((child) => child.runId);
+          childCompletionFindings = buildChildCompletionFindings(consumedDirectChildren);
         }
       }
     } catch {
