@@ -23,6 +23,7 @@ import {
   getApiKeyForModel,
   hasAvailableAuthForProvider,
   hasRuntimeAvailableProviderAuth,
+  isConfigBackedInlineProviderApiKey,
   resolveApiKeyForProvider,
   resolveEnvApiKey,
   resolveModelAuthMode,
@@ -1248,6 +1249,39 @@ describe("getApiKeyForModel", () => {
         hasAvailableAuthForProvider({ provider: "inline-cloud", store, cfg }),
       ).resolves.toBe(false);
     });
+  });
+
+  it("recognizes managed non-env SecretRef apiKeys as config-backed inline provider keys", () => {
+    // Regression for the marker/gate asymmetry: file/exec SecretRef provider
+    // keys resolve to a source label that is not one of the inline source
+    // markers, so the failure marker used to skip them and their 402 billing
+    // cooldown was never recorded even though the gate would honor it.
+    const emptyStore = { version: 1 as const, profiles: {} };
+    for (const secretRef of [
+      { source: "file", provider: "default", id: "/run/secrets/inline-cloud" },
+      { source: "exec", provider: "default", id: "print-inline-cloud-key" },
+    ] as const) {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            "inline-cloud": {
+              baseUrl: "https://inline-cloud.example",
+              api: "openai-completions",
+              apiKey: secretRef,
+              models: [],
+            },
+          },
+        },
+      };
+      expect(
+        isConfigBackedInlineProviderApiKey({
+          cfg,
+          provider: "inline-cloud",
+          source: `${secretRef.source}:${secretRef.provider}:${secretRef.id}`,
+          store: emptyStore,
+        }),
+      ).toBe(true);
+    }
   });
 
   it("keeps healthy stored profiles available when configured env auth is cooling down", async () => {
