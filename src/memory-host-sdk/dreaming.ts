@@ -72,6 +72,7 @@ export type MemoryDreamingExecutionConfig = {
   thinking: MemoryDreamingThinking;
   budget: MemoryDreamingBudget;
   model?: string;
+  language?: string;
   maxOutputTokens?: number;
   temperature?: number;
   timeoutMs?: number;
@@ -311,12 +312,14 @@ function resolveExecutionConfig(
       ? Math.min(2, temperatureRaw)
       : undefined;
   const model = normalizeTrimmedString(record?.model) ?? fallback.model;
+  const language = normalizeTrimmedString(record?.language) ?? fallback.language;
 
   return {
     speed: normalizeSpeed(record?.speed) ?? fallback.speed,
     thinking: normalizeThinking(record?.thinking) ?? fallback.thinking,
     budget: normalizeBudget(record?.budget) ?? fallback.budget,
     ...(model ? { model } : {}),
+    ...(language ? { language } : {}),
     ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
