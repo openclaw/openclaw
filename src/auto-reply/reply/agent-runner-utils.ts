@@ -199,6 +199,21 @@ export const formatBunFetchSocketError = (message: string) => {
   ].join("\n");
 };
 
+/** Resolves whether final-answer tags should be enforced for a queued run. */
+export const resolveEnforceFinalTag = (
+  run: FollowupRun["run"],
+  provider: string,
+  model = run.model,
+) =>
+  (run.skipProviderRuntimeHints ? false : undefined) ??
+  (run.enforceFinalTag ||
+    isReasoningTagProvider(provider, {
+      config: run.config,
+      workspaceDir: run.workspaceDir,
+      modelId: model,
+    }) ||
+    false);
+
 /** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
 export function resolveRunFastModeForFallbackCandidate(params: {
   run: FollowupRun["run"];
