@@ -1,0 +1,146 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Signal tests cover alias target resolution behavior.
+import { describe, expect, it } from "vitest";
+import {
+  listSignalAliasDirectoryEntries,
+  resolveSignalAliasTarget,
+  resolveSignalTarget,
+} from "./aliases.js";
+
+describe("resolveSignalAliasTarget", () => {
+  it("resolves top-level DM aliases to canonical targets", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            home: "+15551234567",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSignalAliasTarget({ cfg, input: "signal:home" })).toEqual({
+      kind: "user",
+      to: "+15551234567",
+      alias: "home",
+    });
+  });
+
+  it("resolves account aliases after merging top-level aliases", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            home: "+15551234567",
+          },
+          accounts: {
+            work: {
+              aliases: {
+                ops: "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSignalAliasTarget({ cfg, accountId: "work", input: "ops" })).toEqual({
+      kind: "group",
+      to: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+      alias: "ops",
+    });
+    expect(resolveSignalAliasTarget({ cfg, accountId: "work", input: "home" })?.to).toBe(
+      "+15551234567",
+    );
+  });
+
+  it("rejects recursive aliases before delivery", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            home: "signal:me",
+            me: "home",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(() => resolveSignalAliasTarget({ cfg, input: "home" })).toThrow(
+      'Signal alias "home" resolves recursively through "home".',
+    );
+  });
+
+  it("rejects aliases whose final value is not a Signal target", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            jane: "not a target",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(() => resolveSignalAliasTarget({ cfg, input: "jane" })).toThrow(
+      'Signal alias "jane" must point to an E.164 number, uuid:<id>, username:<name>, or group:<id>.',
+    );
+  });
+});
+
+describe("resolveSignalTarget", () => {
+  it("resolves aliases and raw targets through the same canonical parser", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            me: "uuid:123E4567-E89B-12D3-A456-426614174000",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSignalTarget({ cfg, input: "signal:me" })).toEqual({
+      kind: "user",
+      to: "123e4567-e89b-12d3-a456-426614174000",
+      source: "alias",
+      alias: "me",
+    });
+    expect(
+      resolveSignalTarget({ cfg, input: "uuid:123E4567-E89B-12D3-A456-426614174000" }),
+    ).toEqual({
+      kind: "user",
+      to: "123e4567-e89b-12d3-a456-426614174000",
+      source: "raw",
+    });
+  });
+});
+
+describe("listSignalAliasDirectoryEntries", () => {
+  it("lists alias-backed peers and groups with alias display names", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            me: "+15551234567",
+            ops: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSignalAliasDirectoryEntries({ cfg, kind: "user" })).toEqual([
+      { kind: "user", id: "+15551234567", name: "me" },
+    ]);
+    expect(listSignalAliasDirectoryEntries({ cfg, kind: "user", query: "1555" })).toEqual([
+      { kind: "user", id: "+15551234567", name: "me" },
+    ]);
+    expect(listSignalAliasDirectoryEntries({ cfg, kind: "group" })).toEqual([
+      {
+        kind: "group",
+        id: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+        name: "ops",
+      },
+    ]);
+  });
+});

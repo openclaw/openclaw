@@ -225,6 +225,123 @@ describe("probeSignal", () => {
 });
 
 describe("signal outbound", () => {
+  it("resolves aliases through the message target resolver", async () => {
+    const resolved = await signalPlugin.messaging?.targetResolver?.resolveTarget?.({
+      cfg: {
+        channels: {
+          signal: {
+            aliases: {
+              ops: "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      input: "signal:ops",
+      normalized: "ops",
+      preferredKind: "group",
+    });
+
+    expect(resolved).toEqual({
+      to: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+      kind: "group",
+      display: "ops",
+      source: "directory",
+    });
+  });
+
+  it("resolves aliases through sync outbound target resolution", () => {
+    const resolved = signalPlugin.outbound?.resolveTarget?.({
+      cfg: {
+        channels: {
+          signal: {
+            aliases: {
+              me: "+15551234567",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      to: "signal:me",
+      accountId: "default",
+    });
+
+    expect(resolved).toEqual({ ok: true, to: "+15551234567" });
+  });
+
+  it("returns clear outbound errors for recursive aliases", () => {
+    const resolved = signalPlugin.outbound?.resolveTarget?.({
+      cfg: {
+        channels: {
+          signal: {
+            aliases: {
+              home: "signal:me",
+              me: "home",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      to: "signal:home",
+    });
+
+    expect(resolved?.ok).toBe(false);
+    if (resolved?.ok === false) {
+      expect(resolved.error.message).toBe(
+        'Signal alias "home" resolves recursively through "home".',
+      );
+    }
+  });
+
+  it("builds canonical session routes for aliases", async () => {
+    const route = await signalPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {
+        channels: {
+          signal: {
+            aliases: {
+              ops: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      target: "signal:ops",
+      resolvedTarget: {
+        to: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+        kind: "group",
+        source: "directory",
+      },
+    });
+
+    expect(route?.to).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
+    expect(route?.baseSessionKey).toContain(
+      "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+    );
+  });
+
+  it("lists configured aliases through the Signal directory", async () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            me: "+15551234567",
+            ops: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      signalPlugin.directory?.listPeers?.({ cfg, query: "me", runtime: {} as never }),
+    ).resolves.toEqual([{ kind: "user", id: "+15551234567", name: "me" }]);
+    await expect(
+      signalPlugin.directory?.listGroups?.({ cfg, query: "ops", runtime: {} as never }),
+    ).resolves.toEqual([
+      {
+        kind: "group",
+        id: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+        name: "ops",
+      },
+    ]);
+  });
+
   it("chunks outbound text without requiring Signal runtime initialization", () => {
     clearSignalRuntime();
     const chunker = signalPlugin.outbound?.chunker;

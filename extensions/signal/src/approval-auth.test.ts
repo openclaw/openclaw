@@ -30,4 +30,27 @@ describe("signalApprovalAuth", () => {
       }),
     ).toEqual({ authorized: true });
   });
+
+  it("authorizes defaultTo aliases with the canonical Signal target", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          allowFrom: [],
+          defaultTo: "signal:me",
+          aliases: {
+            me: "+15551230000",
+          },
+        },
+      },
+    };
+
+    expect(
+      signalApprovalAuth.authorizeActorAction({
+        cfg,
+        senderId: "+15551230000",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toEqual({ authorized: true });
+  });
 });
