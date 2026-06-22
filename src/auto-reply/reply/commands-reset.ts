@@ -5,7 +5,9 @@ import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/bind
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
+import { writeSessionLabel } from "./commands-name.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
@@ -26,6 +28,29 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   mutableCtx.BodyStripped = resetTail;
   // Mark the context so ACP dispatch continues with the post-reset tail, not the reset command.
   mutableCtx.AcpDispatchTailAfterReset = true;
+}
+
+function parseNamedNewSessionTail(resetTail: string): string | undefined {
+  const tail = resetTail.trim();
+  if (!tail) {
+    return undefined;
+  }
+  const flagMatch = tail.match(/^--name(?:=|\s+)(.+)$/i);
+  if (flagMatch?.[1]) {
+    return flagMatch[1].trim();
+  }
+  const prefixMatch = tail.match(/^name:(.+)$/i);
+  if (prefixMatch?.[1]) {
+    return prefixMatch[1].trim();
+  }
+  const quotedMatch = tail.match(/^"([^"]+)"$|^'([^']+)'$/);
+  if (quotedMatch?.[1] || quotedMatch?.[2]) {
+    return (quotedMatch[1] ?? quotedMatch[2] ?? "").trim();
+  }
+  if (!tail.startsWith("-") && !/\s/.test(tail)) {
+    return tail;
+  }
+  return undefined;
 }
 
 function isResetAuthorized(params: HandleCommandsParams): boolean {
@@ -184,6 +209,23 @@ export async function maybeHandleResetCommand(
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,
   });
+  const newSessionTitle = commandAction === "new" ? parseNamedNewSessionTail(resetTail) : undefined;
+  if (newSessionTitle) {
+    const writeResult = await writeSessionLabel(params, newSessionTitle);
+    if (!writeResult.ok) {
+      return {
+        shouldContinue: false,
+        reply: { text: `✅ New session started, but couldn't name it: ${writeResult.error}` },
+      };
+    }
+    markCommandSessionMetadataChanged(params);
+    return {
+      shouldContinue: false,
+      ...(hookResult.routedReply
+        ? {}
+        : { reply: { text: `✅ New session started as “${writeResult.label}”.` } }),
+    };
+  }
   if (!resetTail) {
     return {
       shouldContinue: false,

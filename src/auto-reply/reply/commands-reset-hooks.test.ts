@@ -1,7 +1,15 @@
 // Tests reset hook emission and cleanup around reset commands.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  clearSessionStoreCacheForTest,
+  getSessionEntry,
+  upsertSessionEntry,
+} from "../../config/sessions.js";
 import type { MsgContext } from "../templating.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -15,6 +23,14 @@ const resetMocks = vi.hoisted(() => ({
   resetConfiguredBindingTargetInPlace: vi.fn().mockResolvedValue({ ok: true as const }),
   resolveBoundAcpThreadSessionKey: vi.fn(() => undefined as string | undefined),
 }));
+
+let tempRoots: string[] = [];
+
+async function createStorePath(): Promise<string> {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-command-"));
+  tempRoots.push(root);
+  return path.join(root, "sessions.json");
+}
 
 vi.mock("../../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: (
@@ -148,8 +164,11 @@ describe("handleCommands reset hooks", () => {
     triggerInternalHookMock.mockResolvedValue(undefined);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearBootstrapSnapshotSpy.mockRestore();
+    clearSessionStoreCacheForTest();
+    await Promise.all(tempRoots.map((root) => fs.rm(root, { recursive: true, force: true })));
+    tempRoots = [];
   });
 
   it("triggers hooks for /new commands", async () => {
@@ -500,6 +519,39 @@ describe("handleCommands reset hooks", () => {
       reply: { text: "✅ New session started." },
     });
     expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
+  });
+
+  it("names a fresh session for single-token /new tails", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:main:main",
+      entry: { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    });
+    const params = buildResetParams("/new Beispielsessionname", {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Beispielsessionname”." },
+    });
+    expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Beispielsessionname",
+    );
   });
 
   it("keeps reset tails falling through so the model receives the user input", async () => {
