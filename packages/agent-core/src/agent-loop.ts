@@ -269,6 +269,13 @@ async function runLoop(
   let firstTurn = true;
   // Check for steering messages at start (user may have typed while waiting)
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
+  const stopIfAborted = async (): Promise<boolean> => {
+    if (!signal?.aborted) {
+      return false;
+    }
+    await emit({ type: "agent_end", messages: newMessages });
+    return true;
+  };
 
   // Outer loop: continues when queued follow-up messages arrive after agent would stop
   while (true) {
@@ -276,6 +283,10 @@ async function runLoop(
 
     // Inner loop: process tool calls and steering messages
     while (hasMoreToolCalls || pendingMessages.length > 0) {
+      if (await stopIfAborted()) {
+        return;
+      }
+
       if (!firstTurn) {
         await emit({ type: "turn_start" });
       } else {
@@ -290,6 +301,10 @@ async function runLoop(
           currentContext.messages.push(message);
           newMessages.push(message);
         }
+      }
+
+      if (await stopIfAborted()) {
+        return;
       }
 
       // Stream assistant response
@@ -332,8 +347,7 @@ async function runLoop(
       }
 
       await emit({ type: "turn_end", message, toolResults });
-      if (signal?.aborted) {
-        await emit({ type: "agent_end", messages: newMessages });
+      if (await stopIfAborted()) {
         return;
       }
 
@@ -361,6 +375,9 @@ async function runLoop(
           reasoning: nextReasoning,
         });
       }
+      if (await stopIfAborted()) {
+        return;
+      }
 
       if (
         await config.shouldStopAfterTurn?.({
@@ -375,6 +392,9 @@ async function runLoop(
       }
 
       pendingMessages = (await config.getSteeringMessages?.()) || [];
+      if (await stopIfAborted()) {
+        return;
+      }
     }
 
     const followUpMessages = (await config.getFollowUpMessages?.()) || [];

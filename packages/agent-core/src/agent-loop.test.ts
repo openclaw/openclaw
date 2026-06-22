@@ -820,6 +820,53 @@ describe("agentLoop tool termination", () => {
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult"]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
+
+  it("does not request another model turn when an async turn hook aborts the run", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-hook-abort", name: "hook_abort", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const events: AgentEvent[] = [];
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "abort from hook", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [makeTool("hook_abort", [])],
+      },
+      {
+        ...config,
+        prepareNextTurn: async () => {
+          await Promise.resolve();
+          controller.abort(new Error("user aborted"));
+          return undefined;
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult"]);
+    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+  });
 });
 
 describe("agentLoop thinking state", () => {
