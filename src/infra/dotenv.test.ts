@@ -466,7 +466,7 @@ describe("loadDotEnv", () => {
         delete process.env.OPENCLAW_OAUTH_DIR;
         delete process.env.PI_CODING_AGENT_DIR;
 
-        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true }); // nosemgrep: openclaw-workspace-trust-root-env-read — this test asserts the loader BLOCKS these trust-root vars (they stay undefined), the opposite of the unsafe read the rule guards against
 
         expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBeUndefined();
