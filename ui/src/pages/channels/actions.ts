@@ -1,15 +1,15 @@
-import { loadConfig, saveConfig, type ConfigState } from "../pages/config/data.ts";
-// Control UI module implements app channels behavior.
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
+// Channels page owns its mutations and profile effects.
+import { resolveControlUiAuthHeader } from "../../ui/control-ui-auth.ts";
+import type { NostrProfile } from "../../ui/types.ts";
+import { loadConfig, saveConfig, type ConfigState } from "../config/data.ts";
 import {
   loadChannels,
   logoutWhatsApp,
   startWhatsAppLogin,
   waitWhatsAppLogin,
   type ChannelsState,
-} from "./controllers/channels.ts";
-import type { NostrProfile } from "./types.ts";
-import { createNostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+} from "./data.ts";
+import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
 

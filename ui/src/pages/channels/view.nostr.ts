@@ -1,15 +1,15 @@
-// Control UI view renders channels.nostr screen content.
+// Channels page renders Nostr status.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../format.ts";
-import type { ChannelAccountSnapshot, NostrStatus } from "../types.ts";
-import { renderChannelConfigSection } from "./channels.config.ts";
+import { formatRelativeTimestamp } from "../../ui/format.ts";
+import type { ChannelAccountSnapshot, NostrStatus } from "../../ui/types.ts";
+import { renderChannelConfigSection } from "./view.config.ts";
 import {
   renderNostrProfileForm,
   type NostrProfileFormState,
   type NostrProfileFormCallbacks,
-} from "./channels.nostr-profile-form.ts";
-import type { ChannelsProps } from "./channels.types.ts";
+} from "./view.nostr-profile-form.ts";
+import type { ChannelsProps } from "./view.types.ts";
 
 /**
  * Truncate a pubkey for display (shows first and last 8 chars)

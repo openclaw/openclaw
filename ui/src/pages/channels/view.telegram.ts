@@ -1,15 +1,15 @@
-// Control UI view renders channels.telegram screen content.
+// Channels page renders Telegram status.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../format.ts";
-import type { ChannelAccountSnapshot, TelegramStatus } from "../types.ts";
-import { renderChannelConfigSection } from "./channels.config.ts";
+import { formatRelativeTimestamp } from "../../ui/format.ts";
+import type { ChannelAccountSnapshot, TelegramStatus } from "../../ui/types.ts";
+import { renderChannelConfigSection } from "./view.config.ts";
 import {
   formatNullableBoolean,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
-} from "./channels.shared.ts";
-import type { ChannelsProps } from "./channels.types.ts";
+} from "./view.shared.ts";
+import type { ChannelsProps } from "./view.types.ts";
 
 export function renderTelegramCard(params: {
   props: ChannelsProps;

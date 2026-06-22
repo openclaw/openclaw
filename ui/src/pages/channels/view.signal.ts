@@ -1,15 +1,15 @@
-// Control UI view renders channels.signal screen content.
+// Channels page renders Signal status.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../format.ts";
-import type { SignalStatus } from "../types.ts";
-import { renderChannelConfigSection } from "./channels.config.ts";
+import { formatRelativeTimestamp } from "../../ui/format.ts";
+import type { SignalStatus } from "../../ui/types.ts";
+import { renderChannelConfigSection } from "./view.config.ts";
 import {
   formatNullableBoolean,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
-} from "./channels.shared.ts";
-import type { ChannelsProps } from "./channels.types.ts";
+} from "./view.shared.ts";
+import type { ChannelsProps } from "./view.types.ts";
 
 export function renderSignalCard(params: {
   props: ChannelsProps;

@@ -1,10 +1,12 @@
-// Control UI controller manages channels gateway state.
-import type { ChannelsStatusSnapshot } from "../types.ts";
-import type { ChannelsState } from "./channels.types.ts";
+// Channels page data owns the shared channel status request and effects.
+import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
-} from "./scope-errors.ts";
+} from "../../ui/controllers/scope-errors.ts";
+import type { ChannelsStatusSnapshot } from "../../ui/types.ts";
+import { loadConfig, loadConfigSchema } from "../config/data.ts";
+import type { ChannelsState } from "./data.types.ts";
 
 export type { ChannelsState };
 
@@ -144,4 +146,16 @@ export async function logoutWhatsApp(state: ChannelsState) {
   } finally {
     state.whatsappBusy = false;
   }
+}
+
+export async function loadChannelsPage(host: SettingsHost) {
+  const app = host as unknown as SettingsAppHost;
+  const primaryRefresh = Promise.all([loadChannels(app, false), loadConfig(app)]);
+  void primaryRefresh.then(
+    () => {
+      void loadConfigSchema(app).finally(() => host.requestUpdate?.());
+    },
+    () => undefined,
+  );
+  await primaryRefresh;
 }

@@ -21,7 +21,7 @@ import type {
   CronStatus,
 } from "../../ui/types.ts";
 import { formatBytes, type AgentContext } from "../../ui/views/agents-utils.ts";
-import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../ui/views/channel-config-extras.ts";
+import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../channels/config-extras.ts";
 import type { AgentsPanel } from "./types.ts";
 
 function countWords(text: string) {

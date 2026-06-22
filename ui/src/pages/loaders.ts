@@ -1,6 +1,5 @@
 import type { SettingsAppHost, SettingsHost } from "../app/app-host.ts";
 import { scheduleChatScroll } from "../ui/app-scroll.ts";
-import { loadChannels } from "../ui/controllers/channels.ts";
 import {
   loadDreamDiary,
   loadDreamingStatus,
@@ -61,10 +60,6 @@ export async function loadChatPage(host: SettingsHost, app: SettingsAppHost) {
   }
 }
 
-export async function loadChannelsPage(host: SettingsHost) {
-  await loadChannelsRoute(host);
-}
-
 function loadConfigSchemaAfterPrimary(
   host: SettingsHost,
   app: SettingsAppHost,
@@ -76,13 +71,6 @@ function loadConfigSchemaAfterPrimary(
     },
     () => undefined,
   );
-}
-
-async function loadChannelsRoute(host: SettingsHost) {
-  const app = host as unknown as SettingsAppHost;
-  const primaryRefresh = Promise.all([loadChannels(app, false), loadConfig(app)]);
-  loadConfigSchemaAfterPrimary(host, app, primaryRefresh);
-  await primaryRefresh;
 }
 
 function resolveDreamingAgentIdForSession(host: SettingsHost): string {

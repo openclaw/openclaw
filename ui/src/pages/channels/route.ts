@@ -3,9 +3,8 @@ import type { SettingsHost } from "../../app/app-host.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { loadChannels } from "../../ui/controllers/channels.ts";
 import { updateConfigFormValue } from "../config/data.ts";
-import { loadChannelsPage } from "../loaders.ts";
+import { loadChannels, loadChannelsPage } from "./data.ts";
 
 type ChannelsLoadContext = { host: SettingsHost };
 type ChannelsRenderContext = RouteRenderContext;
@@ -15,7 +14,7 @@ export const page = definePage({
   path: "/channels",
   loader: ({ host }: ChannelsLoadContext) => loadChannelsPage(host),
   component: () =>
-    import("../../ui/views/channels.ts").then((module) => ({
+    import("./view.ts").then((module) => ({
       render: ({ state, navigate }: ChannelsRenderContext) =>
         renderSettingsWorkspace(
           state,

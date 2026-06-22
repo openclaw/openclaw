@@ -1,4 +1,4 @@
-// Control UI type declarations define channels contracts.
+// Channels page view contracts.
 import type {
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
@@ -12,8 +12,8 @@ import type {
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
-} from "../types.ts";
-import type { NostrProfileFormState } from "./channels.nostr-profile-form.ts";
+} from "../../ui/types.ts";
+import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
 
 export type ChannelKey = string;
 

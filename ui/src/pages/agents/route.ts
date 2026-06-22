@@ -3,7 +3,6 @@ import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { loadChannels } from "../../ui/controllers/channels.ts";
 import { parseAgentSessionKey } from "../../ui/session-key.ts";
 import { normalizeStringEntries } from "../../ui/string-coerce.ts";
 import {
@@ -11,6 +10,7 @@ import {
   resolveEffectiveModelFallbacks,
   resolveModelPrimary,
 } from "../../ui/views/agents-utils.ts";
+import { loadChannels } from "../channels/data.ts";
 import {
   loadConfig,
   removeConfigFormValue,

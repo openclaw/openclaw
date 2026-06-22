@@ -1,4 +1,4 @@
-// Control UI view renders channel config extras screen content.
+// Channels page config helpers.
 import { t } from "../../i18n/index.ts";
 
 export function resolveChannelConfigValue(

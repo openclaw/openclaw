@@ -1,7 +1,7 @@
-// Control UI tests cover channels behavior.
+// Channels page data tests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelsStatusSnapshot } from "../types.ts";
-import { loadChannels, waitWhatsAppLogin, type ChannelsState } from "./channels.ts";
+import type { ChannelsStatusSnapshot } from "../../ui/types.ts";
+import { loadChannels, waitWhatsAppLogin, type ChannelsState } from "./data.ts";
 
 function createDeferred<T>() {
   let resolve: ((value: T) => void) | undefined;

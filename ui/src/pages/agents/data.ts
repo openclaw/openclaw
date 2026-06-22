@@ -4,7 +4,6 @@ import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "../../ui/chat-model-ref.ts";
-import { loadChannels } from "../../ui/controllers/channels.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -19,6 +18,7 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../ui/types.ts";
+import { loadChannels } from "../channels/data.ts";
 import { loadConfig, saveConfig, stageDefaultAgentConfigEntry } from "../config/data.ts";
 import type { ConfigState } from "../config/data.ts";
 import { loadAgentFiles } from "./files.ts";

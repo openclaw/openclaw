@@ -1,7 +1,7 @@
-// Control UI view renders channels screen content.
+// Channels page renders its screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../format.ts";
+import { formatRelativeTimestamp } from "../../ui/format.ts";
 import type {
   ChannelAccountSnapshot,
   ChannelUiMetaEntry,
@@ -15,23 +15,23 @@ import type {
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
-} from "../types.ts";
-import { renderChannelConfigSection } from "./channels.config.ts";
-import { renderDiscordCard } from "./channels.discord.ts";
-import { renderGoogleChatCard } from "./channels.googlechat.ts";
-import { renderIMessageCard } from "./channels.imessage.ts";
-import { renderNostrCard } from "./channels.nostr.ts";
+} from "../../ui/types.ts";
+import { renderChannelConfigSection } from "./view.config.ts";
+import { renderDiscordCard } from "./view.discord.ts";
+import { renderGoogleChatCard } from "./view.googlechat.ts";
+import { renderIMessageCard } from "./view.imessage.ts";
+import { renderNostrCard } from "./view.nostr.ts";
 import {
   channelEnabled,
   formatNullableBoolean,
   renderChannelAccountCount,
   resolveChannelDisplayState,
-} from "./channels.shared.ts";
-import { renderSignalCard } from "./channels.signal.ts";
-import { renderSlackCard } from "./channels.slack.ts";
-import { renderTelegramCard } from "./channels.telegram.ts";
-import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types.ts";
-import { renderWhatsAppCard } from "./channels.whatsapp.ts";
+} from "./view.shared.ts";
+import { renderSignalCard } from "./view.signal.ts";
+import { renderSlackCard } from "./view.slack.ts";
+import { renderTelegramCard } from "./view.telegram.ts";
+import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
+import { renderWhatsAppCard } from "./view.whatsapp.ts";
 
 export function renderChannels(props: ChannelsProps) {
   const channels = props.snapshot?.channels as Record<string, unknown> | null;

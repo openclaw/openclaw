@@ -1,15 +1,15 @@
-// Control UI view renders channels.whatsapp screen content.
+// Channels page renders WhatsApp status.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
-import type { WhatsAppStatus } from "../types.ts";
-import { renderChannelConfigSection } from "./channels.config.ts";
+import { formatRelativeTimestamp, formatDurationHuman } from "../../ui/format.ts";
+import type { WhatsAppStatus } from "../../ui/types.ts";
+import { renderChannelConfigSection } from "./view.config.ts";
 import {
   formatNullableBoolean,
   renderSingleAccountChannelCard,
   resolveChannelConfigured,
-} from "./channels.shared.ts";
-import type { ChannelsProps } from "./channels.types.ts";
+} from "./view.shared.ts";
+import type { ChannelsProps } from "./view.types.ts";
 
 export function renderWhatsAppCard(params: {
   props: ChannelsProps;

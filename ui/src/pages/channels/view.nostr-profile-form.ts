@@ -6,7 +6,7 @@
 
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { NostrProfile as NostrProfileType } from "../types.ts";
+import type { NostrProfile as NostrProfileType } from "../../ui/types.ts";
 
 // ============================================================================
 // Types

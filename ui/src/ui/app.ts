@@ -11,6 +11,20 @@ import {
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "../pages/agents/data.ts";
 import {
+  handleChannelConfigReload as handleChannelConfigReloadInternal,
+  handleChannelConfigSave as handleChannelConfigSaveInternal,
+  handleNostrProfileCancel as handleNostrProfileCancelInternal,
+  handleNostrProfileEdit as handleNostrProfileEditInternal,
+  handleNostrProfileFieldChange as handleNostrProfileFieldChangeInternal,
+  handleNostrProfileImport as handleNostrProfileImportInternal,
+  handleNostrProfileSave as handleNostrProfileSaveInternal,
+  handleNostrProfileToggleAdvanced as handleNostrProfileToggleAdvancedInternal,
+  handleWhatsAppLogout as handleWhatsAppLogoutInternal,
+  handleWhatsAppStart as handleWhatsAppStartInternal,
+  handleWhatsAppWait as handleWhatsAppWaitInternal,
+} from "../pages/channels/actions.ts";
+import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
+import {
   handleAbortChat as handleAbortChatInternal,
   handleChatDraftChange as handleChatDraftChangeInternal,
   handleChatInputHistoryKey as handleChatInputHistoryKeyInternal,
@@ -35,19 +49,6 @@ import type {
   ClawHubSkillDetail,
   SkillMessage,
 } from "../pages/skills/data.ts";
-import {
-  handleChannelConfigReload as handleChannelConfigReloadInternal,
-  handleChannelConfigSave as handleChannelConfigSaveInternal,
-  handleNostrProfileCancel as handleNostrProfileCancelInternal,
-  handleNostrProfileEdit as handleNostrProfileEditInternal,
-  handleNostrProfileFieldChange as handleNostrProfileFieldChangeInternal,
-  handleNostrProfileImport as handleNostrProfileImportInternal,
-  handleNostrProfileSave as handleNostrProfileSaveInternal,
-  handleNostrProfileToggleAdvanced as handleNostrProfileToggleAdvancedInternal,
-  handleWhatsAppLogout as handleWhatsAppLogoutInternal,
-  handleWhatsAppStart as handleWhatsAppStartInternal,
-  handleWhatsAppWait as handleWhatsAppWaitInternal,
-} from "./app-channels.ts";
 import { DEFAULT_SESSIONS_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
@@ -160,7 +161,6 @@ import type {
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
-import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 
 declare global {
   interface Window {

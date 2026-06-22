@@ -1,14 +1,14 @@
-// Control UI tests cover channels behavior.
+// Channels page view tests.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { WhatsAppStatus } from "../types.ts";
+import type { WhatsAppStatus } from "../../ui/types.ts";
 import {
   channelEnabled,
   resolveChannelConfigured,
   resolveChannelDisplayState,
-} from "./channels.shared.ts";
-import type { ChannelsProps } from "./channels.types.ts";
-import { renderWhatsAppCard } from "./channels.whatsapp.ts";
+} from "./view.shared.ts";
+import type { ChannelsProps } from "./view.types.ts";
+import { renderWhatsAppCard } from "./view.whatsapp.ts";
 
 function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
   return {

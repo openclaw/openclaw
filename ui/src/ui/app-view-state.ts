@@ -1,5 +1,6 @@
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
+import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "../pages/chat/data.ts";
 import type { CronModelSuggestionsState, CronState } from "../pages/cron/data.ts";
 import type { LogEntry, LogLevel } from "../pages/logs/data.ts";
@@ -53,7 +54,6 @@ import type {
   ToolsCatalogResult,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
-import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
 import type { SessionLogEntry } from "./views/usage.ts";
 
 export type AppViewState = {

@@ -7,9 +7,9 @@ import {
   type JsonSchema,
 } from "../../components/config-form.ts";
 import { t } from "../../i18n/index.ts";
-import type { ConfigUiHints } from "../types.ts";
-import { formatChannelExtraValue, resolveChannelConfigValue } from "./channel-config-extras.ts";
-import type { ChannelsProps } from "./channels.types.ts";
+import type { ConfigUiHints } from "../../ui/types.ts";
+import { formatChannelExtraValue, resolveChannelConfigValue } from "./config-extras.ts";
+import type { ChannelsProps } from "./view.types.ts";
 
 type ChannelConfigFormProps = {
   channelId: string;

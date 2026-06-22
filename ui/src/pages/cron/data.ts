@@ -8,7 +8,6 @@ import {
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
 } from "../../ui/control-ui-performance.ts";
-import { loadChannels } from "../../ui/controllers/channels.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -33,6 +32,7 @@ import type {
 } from "../../ui/types.ts";
 import { CRON_CHANNEL_LAST } from "../../ui/ui-types.ts";
 import type { CronFormState } from "../../ui/ui-types.ts";
+import { loadChannels } from "../channels/data.ts";
 import { getCronJobPayload, hasCronJobPayload } from "./payload.ts";
 
 export const DEFAULT_CRON_FORM: CronFormState = {
