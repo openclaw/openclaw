@@ -47,6 +47,13 @@ type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unkno
 
 const MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
+// Operators on slow or remote embedders need to lift the default cap; a single
+// cold cloud-embedding RTT can otherwise trip the whole tool even though the
+// local FTS/vec store is instant. Clamp to a sane band so a typo can't disable
+// the deadline (0) or wedge a turn for minutes. See esqandil/openclaw#4.
+const MEMORY_SEARCH_TOOL_TIMEOUT_MIN_MS = 1_000;
+const MEMORY_SEARCH_TOOL_TIMEOUT_MAX_MS = 120_000;
+const MEMORY_SEARCH_TOOL_TIMEOUT_ENV = "OPENCLAW_MEMORY_SEARCH_TIMEOUT_MS";
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
 
@@ -76,10 +83,55 @@ function recordMemorySearchToolCooldown(key: string, error: string): void {
   });
 }
 
+/**
+ * Parse a candidate `memory_search` tool-timeout (ms) from config or env.
+ *
+ * Returns `undefined` for anything unparseable or outside the supported band
+ * so the caller falls back to the built-in default instead of honoring a value
+ * that would either disable the deadline or hang a turn for minutes.
+ */
+function parseMemorySearchToolTimeoutMs(value: unknown): number | undefined {
+  const numeric =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && value.trim() !== ""
+        ? Number(value)
+        : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    return undefined;
+  }
+  const rounded = Math.round(numeric);
+  if (rounded < MEMORY_SEARCH_TOOL_TIMEOUT_MIN_MS || rounded > MEMORY_SEARCH_TOOL_TIMEOUT_MAX_MS) {
+    return undefined;
+  }
+  return rounded;
+}
+
+/**
+ * Resolve the effective `memory_search` tool timeout.
+ *
+ * Precedence: env override (`OPENCLAW_MEMORY_SEARCH_TIMEOUT_MS`) >
+ * `plugins.entries.memory-core.config.search.timeoutMs` > built-in 15s default.
+ * Out-of-range or unparseable values are ignored at each layer.
+ */
+function resolveMemorySearchToolTimeoutMs(cfg: OpenClawConfig): number {
+  const fromEnv = parseMemorySearchToolTimeoutMs(process.env[MEMORY_SEARCH_TOOL_TIMEOUT_ENV]);
+  if (fromEnv !== undefined) {
+    return fromEnv;
+  }
+  const search = asRecord(resolveMemoryCorePluginConfig(cfg)?.search);
+  const fromConfig = parseMemorySearchToolTimeoutMs(search?.timeoutMs);
+  if (fromConfig !== undefined) {
+    return fromConfig;
+  }
+  return MEMORY_SEARCH_TOOL_TIMEOUT_MS;
+}
+
 export const testing = {
   resetMemorySearchToolCooldowns() {
     memorySearchToolCooldowns.clear();
   },
+  resolveMemorySearchToolTimeoutMs,
 } as const;
 
 function isActiveMemoryManagerContext(
@@ -483,7 +535,7 @@ export function createMemorySearchTool(options: {
         };
 
         const outcome = await runMemorySearchToolWithDeadline({
-          timeoutMs: MEMORY_SEARCH_TOOL_TIMEOUT_MS,
+          timeoutMs: resolveMemorySearchToolTimeoutMs(cfg),
           run: async ({
             signal: deadlineSignal,
             timeoutMs: toolTimeoutMs,

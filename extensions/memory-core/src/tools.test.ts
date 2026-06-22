@@ -1,5 +1,5 @@
 // Memory Core tests cover tools plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
@@ -675,5 +675,68 @@ describe("memory_search corpus labels", () => {
         source: "sessions",
       },
     ]);
+  });
+});
+
+describe("resolveMemorySearchToolTimeoutMs", () => {
+  const ENV_KEY = "OPENCLAW_MEMORY_SEARCH_TIMEOUT_MS";
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env[ENV_KEY];
+    delete process.env[ENV_KEY];
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env[ENV_KEY];
+    } else {
+      process.env[ENV_KEY] = savedEnv;
+    }
+  });
+
+  const withSearchTimeout = (timeoutMs: unknown) =>
+    asOpenClawConfig({
+      plugins: { entries: { "memory-core": { config: { search: { timeoutMs } } } } },
+    });
+
+  it("defaults to 15s when nothing is configured", () => {
+    expect(memoryToolsTesting.resolveMemorySearchToolTimeoutMs(asOpenClawConfig({}))).toBe(15_000);
+  });
+
+  it("honors a valid plugin config override", () => {
+    expect(memoryToolsTesting.resolveMemorySearchToolTimeoutMs(withSearchTimeout(45_000))).toBe(
+      45_000,
+    );
+  });
+
+  it("accepts a numeric string from config", () => {
+    expect(memoryToolsTesting.resolveMemorySearchToolTimeoutMs(withSearchTimeout("30000"))).toBe(
+      30_000,
+    );
+  });
+
+  it("ignores out-of-range or unparseable config values", () => {
+    expect(memoryToolsTesting.resolveMemorySearchToolTimeoutMs(withSearchTimeout(0))).toBe(15_000);
+    expect(memoryToolsTesting.resolveMemorySearchToolTimeoutMs(withSearchTimeout(10_000_000))).toBe(
+      15_000,
+    );
+    expect(memoryToolsTesting.resolveMemorySearchToolTimeoutMs(withSearchTimeout("soon"))).toBe(
+      15_000,
+    );
+  });
+
+  it("lets the env override take precedence over config", () => {
+    process.env[ENV_KEY] = "20000";
+    expect(memoryToolsTesting.resolveMemorySearchToolTimeoutMs(withSearchTimeout(45_000))).toBe(
+      20_000,
+    );
+  });
+
+  it("ignores an out-of-range env override and falls back to config", () => {
+    process.env[ENV_KEY] = "0";
+    expect(memoryToolsTesting.resolveMemorySearchToolTimeoutMs(withSearchTimeout(45_000))).toBe(
+      45_000,
+    );
   });
 });
