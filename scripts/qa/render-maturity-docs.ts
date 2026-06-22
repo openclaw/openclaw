@@ -3,20 +3,27 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
+import {
+  validateQaEvidenceSummaryJson,
+  type QaEvidenceScorecardJson,
+  type QaEvidenceStatus,
+  type QaEvidenceSummaryJson,
+} from "../../extensions/qa-lab/src/evidence-summary.js";
+import {
+  QA_MATURITY_SCORE_KEYS,
+  parseQaMaturityScores,
+  type QaMaturityScoreCategory,
+  type QaMaturityScoreKey,
+  type QaMaturityScoreLastRun,
+  type QaMaturityScoreObject,
+  type QaMaturityScoreSurface,
+  type QaMaturityScoreSurfaceLts,
+  type QaMaturityScores,
+} from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
 const DEFAULT_SCORES_PATH = "docs/maturity-scores.yaml";
 const DEFAULT_OUTPUT_DIR = "docs";
-const SCORE_KEYS = ["coverage", "quality", "completeness"] as const;
-const LABEL_BANDS = [
-  ["Lovable", 95, 100],
-  ["Stable", 80, 95],
-  ["Beta", 70, 80],
-  ["Alpha", 50, 70],
-  ["Experimental", 0, 50],
-] as const;
-
-type ScoreKey = (typeof SCORE_KEYS)[number];
 
 type Args = {
   taxonomy: string;
@@ -26,58 +33,6 @@ type Args = {
   evidenceDir?: string;
   check: boolean;
   strictInputs: boolean;
-};
-
-type ScoreObject = {
-  score: number;
-  label: string;
-};
-
-type ScoreBundle = Record<ScoreKey, ScoreObject>;
-
-type LastScoreRun = {
-  status?: string;
-  completed_at?: string;
-};
-
-type SurfaceLts = {
-  supported_categories: number;
-  total_categories: number;
-  status: string;
-};
-
-type CategoryLts = {
-  supported: boolean;
-  human_override: boolean;
-};
-
-type ScoreCategory = ScoreBundle & {
-  name: string;
-  lts: CategoryLts;
-};
-
-type ScoreSurface = {
-  id: string;
-  name: string;
-  level?: string | { code?: string; label?: string };
-  scores: ScoreBundle;
-  categories: ScoreCategory[];
-  lts: SurfaceLts;
-  last_score_run?: LastScoreRun;
-};
-
-type Scores = {
-  version: number;
-  process_version: number;
-  counts: {
-    active_surfaces: number;
-    category_scores: number;
-  };
-  rollups: {
-    surface_average: ScoreBundle;
-    category_average: ScoreBundle;
-  };
-  surfaces: ScoreSurface[];
 };
 
 type TaxonomyLevel = {
@@ -111,7 +66,7 @@ type TaxonomySurface = {
   categories: TaxonomyCategory[];
   rationale?: string;
   completeness_instructions?: string;
-  last_score_run?: LastScoreRun;
+  last_score_run?: QaMaturityScoreLastRun;
 };
 
 type TaxonomyProfile = {
@@ -130,55 +85,31 @@ type Taxonomy = {
   profiles?: TaxonomyProfile[];
 };
 
-type CountSummary = {
-  fulfilled?: number;
-  total?: number;
-  fulfillmentPercent?: number;
-};
-
-type EvidenceCategoryReport = {
-  id: string;
-  surfaceId: string;
-  name: string;
-  status: string;
-  features: CountSummary & { secondaryOnly?: number };
-  missingCoverageIds: string[];
-};
-
-type EvidenceScorecard = {
-  run: Record<string, unknown>;
-  categories: CountSummary;
-  features: CountSummary;
-  categoryReports: EvidenceCategoryReport[];
-};
-
-type EvidenceEntry = {
-  result?: {
-    status?: string;
-  };
-};
+type CountSummary = QaEvidenceScorecardJson["categories"];
+type EvidenceScorecard = QaEvidenceScorecardJson;
 
 type EvidenceSummary = {
   sourcePath: string;
   path: string;
   generatedAt: string;
   profile: string;
-  evidenceMode: string;
   entryCount: number;
   statuses: StatusCounts;
   scorecard?: EvidenceScorecard;
 };
 
-type StatusCounts = {
-  pass: number;
-  fail: number;
-  blocked: number;
-  skipped: number;
+type StatusCounts = Record<QaEvidenceStatus, number>;
+
+const EMPTY_STATUS_COUNTS: StatusCounts = {
+  pass: 0,
+  fail: 0,
+  blocked: 0,
+  skipped: 0,
 };
 
 type RenderInputs = {
   taxonomy: Taxonomy;
-  scores: Scores;
+  scores: QaMaturityScores;
   taxonomyPath: string;
   scoresPath: string;
 };
@@ -188,11 +119,6 @@ type RenderMaturityScorecardInputs = RenderInputs & {
   scoreWarnings: string[];
   evidenceWarnings: string[];
   staticAssetsPath?: string;
-};
-
-type GeneratedNoticeInputs = {
-  taxonomyPath: string;
-  scoresPath: string;
 };
 
 function parseArgs(argv: string[]): Args {
@@ -281,37 +207,6 @@ function assertString(value: unknown, label: string): string {
     throw new Error(`${label} must be a non-empty string`);
   }
   return value;
-}
-
-function assertIntegerRange(value: unknown, label: string, min: number, max: number): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
-    throw new Error(`${label} must be an integer ${min}-${max}`);
-  }
-  return value;
-}
-
-function isStatusKey(value: string): value is keyof StatusCounts {
-  return value === "pass" || value === "fail" || value === "blocked" || value === "skipped";
-}
-
-function maturityLabel(score: number): string {
-  for (const [label, low, high] of LABEL_BANDS) {
-    if (score >= low && score <= high) {
-      return label;
-    }
-  }
-  throw new Error(`score outside 0-100: ${score}`);
-}
-
-function assertScoreObject(value: unknown, label: string): ScoreObject {
-  const scoreObject = assertObject(value, label);
-  const score = assertIntegerRange(scoreObject.score, `${label}.score`, 0, 100);
-  const declaredLabel = assertString(scoreObject.label, `${label}.label`);
-  const expectedLabel = maturityLabel(score);
-  if (declaredLabel !== expectedLabel) {
-    throw new Error(`${label}.label must be ${expectedLabel} for score ${score}`);
-  }
-  return { score, label: declaredLabel };
 }
 
 function validateTaxonomy(taxonomy: Taxonomy, taxonomyPath: string): void {
@@ -418,16 +313,16 @@ function taxonomyCategoryIndex(taxonomy: Taxonomy): {
   return { active, surfaces };
 }
 
-function averageScore(rows: ScoreSurface[], key: ScoreKey): number {
+function averageScore(rows: QaMaturityScoreSurface[], key: QaMaturityScoreKey): number {
   return Math.round(rows.reduce((sum, row) => sum + row.scores[key].score, 0) / rows.length);
 }
 
-function averageCategoryScore(rows: ScoreCategory[], key: ScoreKey): number {
+function averageCategoryScore(rows: QaMaturityScoreCategory[], key: QaMaturityScoreKey): number {
   return Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
 }
 
 function expectedLtsSupported(
-  scoreCategory: ScoreCategory,
+  scoreCategory: QaMaturityScoreCategory,
   taxonomyCategory: TaxonomyCategory,
 ): boolean {
   return (
@@ -443,16 +338,22 @@ function expectedSurfaceLtsStatus(supportedCategories: number, totalCategories: 
   return supportedCategories === totalCategories ? "full" : "partial";
 }
 
-function validateScores(scores: Scores, scoresPath: string, taxonomy: Taxonomy): string[] {
+function validateScores(
+  scores: QaMaturityScores,
+  scoresPath: string,
+  taxonomy: Taxonomy,
+): string[] {
   const warnings: string[] = [];
   assertObject(scores, scoresPath);
   if (scores.version !== 1) {
     throw new Error(`${scoresPath} must declare version: 1`);
   }
-  assertIntegerRange(scores.process_version, `${scoresPath}.process_version`, 1, 999);
   assertObject(scores.counts, `${scoresPath}.counts`);
   assertObject(scores.rollups, `${scoresPath}.rollups`);
-  const scoreSurfaces = assertArray<ScoreSurface>(scores.surfaces, `${scoresPath}.surfaces`);
+  const scoreSurfaces = assertArray<QaMaturityScoreSurface>(
+    scores.surfaces,
+    `${scoresPath}.surfaces`,
+  );
   const taxonomyIndex = taxonomyCategoryIndex(taxonomy);
   if (scores.counts.active_surfaces !== scoreSurfaces.length) {
     throw new Error(
@@ -476,7 +377,7 @@ function validateScores(scores: Scores, scoresPath: string, taxonomy: Taxonomy):
   }
 
   const seenSurfaceIds = new Set<string>();
-  const allScoreCategories: ScoreCategory[] = [];
+  const allScoreCategories: QaMaturityScoreCategory[] = [];
   for (const [surfaceIndex, scoreSurface] of scoreSurfaces.entries()) {
     assertObject(scoreSurface, `${scoresPath}.surfaces[${surfaceIndex}]`);
     const surfaceId = assertString(scoreSurface.id, `${scoresPath}.surfaces[${surfaceIndex}].id`);
@@ -490,14 +391,8 @@ function validateScores(scores: Scores, scoresPath: string, taxonomy: Taxonomy):
       warnings.push(`${scoresPath}: surface ${surfaceId} is not an active taxonomy surface`);
     }
     assertString(scoreSurface.name, `${scoresPath}.${surfaceId}.name`);
-    assertScoreObject(scoreSurface.scores?.coverage, `${scoresPath}.${surfaceId}.scores.coverage`);
-    assertScoreObject(scoreSurface.scores?.quality, `${scoresPath}.${surfaceId}.scores.quality`);
-    assertScoreObject(
-      scoreSurface.scores?.completeness,
-      `${scoresPath}.${surfaceId}.scores.completeness`,
-    );
 
-    const categories = assertArray<ScoreCategory>(
+    const categories = assertArray<QaMaturityScoreCategory>(
       scoreSurface.categories,
       `${scoresPath}.${surfaceId}.categories`,
     );
@@ -519,18 +414,6 @@ function validateScores(scores: Scores, scoresPath: string, taxonomy: Taxonomy):
         throw new Error(`${scoresPath}.${surfaceId}: duplicate category name ${categoryName}`);
       }
       seenCategoryNames.add(categoryName);
-      assertScoreObject(
-        scoreCategory.coverage,
-        `${scoresPath}.${surfaceId}.${categoryName}.coverage`,
-      );
-      assertScoreObject(
-        scoreCategory.quality,
-        `${scoresPath}.${surfaceId}.${categoryName}.quality`,
-      );
-      assertScoreObject(
-        scoreCategory.completeness,
-        `${scoresPath}.${surfaceId}.${categoryName}.completeness`,
-      );
       const lts = scoreCategory.lts;
       assertObject(lts, `${scoresPath}.${surfaceId}.${categoryName}.lts`);
       if (typeof lts.supported !== "boolean") {
@@ -597,32 +480,7 @@ function validateScores(scores: Scores, scoresPath: string, taxonomy: Taxonomy):
   }
 
   const rollups = scores.rollups;
-  assertScoreObject(
-    rollups.surface_average?.coverage,
-    `${scoresPath}.rollups.surface_average.coverage`,
-  );
-  assertScoreObject(
-    rollups.surface_average?.quality,
-    `${scoresPath}.rollups.surface_average.quality`,
-  );
-  assertScoreObject(
-    rollups.surface_average?.completeness,
-    `${scoresPath}.rollups.surface_average.completeness`,
-  );
-  assertScoreObject(
-    rollups.category_average?.coverage,
-    `${scoresPath}.rollups.category_average.coverage`,
-  );
-  assertScoreObject(
-    rollups.category_average?.quality,
-    `${scoresPath}.rollups.category_average.quality`,
-  );
-  assertScoreObject(
-    rollups.category_average?.completeness,
-    `${scoresPath}.rollups.category_average.completeness`,
-  );
-
-  for (const key of SCORE_KEYS) {
+  for (const key of QA_MATURITY_SCORE_KEYS) {
     const expectedSurfaceAverage = averageScore(scoreSurfaces, key);
     if (rollups.surface_average[key].score !== expectedSurfaceAverage) {
       throw new Error(
@@ -671,7 +529,7 @@ function htmlAttributeEscape(value: RenderScalar): string {
     .replaceAll(">", "&gt;");
 }
 
-function scoreText(value?: ScoreObject): string {
+function scoreText(value?: QaMaturityScoreObject): string {
   if (!value || typeof value !== "object") {
     return "`Unscored`";
   }
@@ -679,7 +537,7 @@ function scoreText(value?: ScoreObject): string {
 }
 
 function levelText(
-  surface: ScoreSurface | TaxonomySurface,
+  surface: QaMaturityScoreSurface | TaxonomySurface,
   taxonomyLevels: Map<string, TaxonomyLevel>,
 ): string {
   const scoreLevel = surface.level;
@@ -691,7 +549,7 @@ function levelText(
   return [level?.code, level?.label ?? levelId].filter(Boolean).join(" ");
 }
 
-function lastRunText(surface: { last_score_run?: LastScoreRun }): string {
+function lastRunText(surface: { last_score_run?: QaMaturityScoreLastRun }): string {
   const lastRun = surface.last_score_run;
   if (!lastRun || typeof lastRun !== "object") {
     return "";
@@ -701,7 +559,7 @@ function lastRunText(surface: { last_score_run?: LastScoreRun }): string {
     .join(" ");
 }
 
-function ltsText(lts?: SurfaceLts): string {
+function ltsText(lts?: QaMaturityScoreSurfaceLts): string {
   if (!lts || typeof lts !== "object") {
     return "unscored";
   }
@@ -712,19 +570,9 @@ function frontmatter(title: string, summary: string): string[] {
   return ["---", `title: "${title}"`, `summary: "${summary}"`, "---", ""];
 }
 
-function generatedNotice(inputs: GeneratedNoticeInputs): string[] {
-  const parts = [
-    "This file is generated from",
-    yamlCode(inputs.taxonomyPath),
-    "and",
-    `${yamlCode(inputs.scoresPath)}.`,
-    "Run",
-    yamlCode("pnpm maturity:render"),
-    "after editing scorecard sources.",
-  ];
+function generatedNotice(): string[] {
   return [
-    "> " + parts.join(" "),
-    "> Committed docs intentionally exclude the old maintainer inventory tree; per-run QA evidence stays in GitHub Actions artifacts.",
+    "> This page is generated during OpenClaw release validation so the scores stay consistent across releases.",
     "",
   ];
 }
@@ -751,7 +599,7 @@ function activeSurfaces(taxonomy: Taxonomy): TaxonomySurface[] {
   return taxonomy.surfaces.filter((surface) => !surface.archived);
 }
 
-function surfaceScoreMap(scores: Scores): Map<string, ScoreSurface> {
+function surfaceScoreMap(scores: QaMaturityScores): Map<string, QaMaturityScoreSurface> {
   return new Map(scores.surfaces.map((surface) => [surface.id, surface]));
 }
 
@@ -759,7 +607,9 @@ function taxonomyLevelMap(taxonomy: Taxonomy): Map<string, TaxonomyLevel> {
   return new Map(taxonomy.levels.map((level) => [level.id, level]));
 }
 
-function categoryScoreMap(scoreSurface?: ScoreSurface): Map<string, ScoreCategory> {
+function categoryScoreMap(
+  scoreSurface?: QaMaturityScoreSurface,
+): Map<string, QaMaturityScoreCategory> {
   return new Map((scoreSurface?.categories ?? []).map((category) => [category.name, category]));
 }
 
@@ -809,13 +659,10 @@ function collectQaEvidenceFiles(root?: string): string[] {
   return files.toSorted((left, right) => left.localeCompare(right));
 }
 
-function countStatuses(entries: EvidenceEntry[]): StatusCounts {
-  const counts: StatusCounts = { pass: 0, fail: 0, blocked: 0, skipped: 0 };
-  for (const entry of entries ?? []) {
-    const status = entry?.result?.status;
-    if (typeof status === "string" && isStatusKey(status)) {
-      counts[status] += 1;
-    }
+function countStatuses(entries: QaEvidenceSummaryJson["entries"]): StatusCounts {
+  const counts: StatusCounts = { ...EMPTY_STATUS_COUNTS };
+  for (const entry of entries) {
+    counts[entry.result.status] += 1;
   }
   return counts;
 }
@@ -828,114 +675,57 @@ function countText(counts?: CountSummary): string {
   if (!counts || typeof counts !== "object") {
     return "";
   }
-  return `${counts.fulfilled ?? 0}/${counts.total ?? 0} (${numberText(counts.fulfillmentPercent)}%)`;
+  return `${counts.fulfilled ?? 0} of ${counts.total ?? 0} (${numberText(counts.fulfillmentPercent)}%)`;
 }
 
-function readCountSummary(value: unknown, label: string): CountSummary {
-  const object = assertObject(value, label);
-  return {
-    fulfilled: typeof object.fulfilled === "number" ? object.fulfilled : undefined,
-    total: typeof object.total === "number" ? object.total : undefined,
-    fulfillmentPercent:
-      typeof object.fulfillmentPercent === "number" ? object.fulfillmentPercent : undefined,
-  };
+function checkSetTitle(profile: string): string {
+  const normalized = profile.trim();
+  if (!normalized || normalized === "release") {
+    return "Release validation";
+  }
+  return familyTitle(normalized);
 }
 
-function readScorecard(
-  payload: Record<string, unknown>,
-  filePath: string,
-): EvidenceScorecard | undefined {
-  const scorecard = payload?.scorecard;
-  if (scorecard === undefined) {
-    return undefined;
+function resultCountsText(statuses: StatusCounts): string {
+  return [
+    `${statuses.pass} passed`,
+    `${statuses.fail} failed`,
+    `${statuses.blocked} blocked`,
+    `${statuses.skipped} skipped`,
+  ].join(", ");
+}
+
+function readinessStatusText(status: string): string {
+  if (status === "fulfilled") {
+    return "Ready";
   }
-  const scorecardObject = assertObject(scorecard, `${filePath}.scorecard`);
-  const run = assertObject(scorecardObject.run, `${filePath}.scorecard.run`);
-  const categories = readCountSummary(
-    scorecardObject.categories,
-    `${filePath}.scorecard.categories`,
-  );
-  const features = readCountSummary(scorecardObject.features, `${filePath}.scorecard.features`);
-  const categoryReports = assertArray<Record<string, unknown>>(
-    scorecardObject.categoryReports,
-    `${filePath}.scorecard.categoryReports`,
-  );
-  const parsedCategoryReports: EvidenceCategoryReport[] = [];
-  for (const [index, category] of categoryReports.entries()) {
-    const categoryObject = assertObject(
-      category,
-      `${filePath}.scorecard.categoryReports[${index}]`,
-    );
-    assertString(categoryObject.id, `${filePath}.scorecard.categoryReports[${index}].id`);
-    assertString(
-      categoryObject.surfaceId,
-      `${filePath}.scorecard.categoryReports[${index}].surfaceId`,
-    );
-    assertString(categoryObject.name, `${filePath}.scorecard.categoryReports[${index}].name`);
-    assertString(categoryObject.status, `${filePath}.scorecard.categoryReports[${index}].status`);
-    const categoryFeatures = readCountSummary(
-      categoryObject.features,
-      `${filePath}.scorecard.categoryReports[${index}].features`,
-    );
-    const categoryFeatureObject = assertObject(
-      categoryObject.features,
-      `${filePath}.scorecard.categoryReports[${index}].features`,
-    );
-    const missingCoverageIds = assertArray<string>(
-      categoryObject.missingCoverageIds,
-      `${filePath}.scorecard.categoryReports[${index}].missingCoverageIds`,
-    );
-    for (const [coverageIndex, coverageId] of missingCoverageIds.entries()) {
-      assertString(
-        coverageId,
-        `${filePath}.scorecard.categoryReports[${index}].missingCoverageIds[${coverageIndex}]`,
-      );
-    }
-    parsedCategoryReports.push({
-      id: assertString(categoryObject.id, `${filePath}.scorecard.categoryReports[${index}].id`),
-      surfaceId: assertString(
-        categoryObject.surfaceId,
-        `${filePath}.scorecard.categoryReports[${index}].surfaceId`,
-      ),
-      name: assertString(
-        categoryObject.name,
-        `${filePath}.scorecard.categoryReports[${index}].name`,
-      ),
-      status: assertString(
-        categoryObject.status,
-        `${filePath}.scorecard.categoryReports[${index}].status`,
-      ),
-      features: {
-        ...categoryFeatures,
-        secondaryOnly:
-          typeof categoryFeatureObject.secondaryOnly === "number"
-            ? categoryFeatureObject.secondaryOnly
-            : undefined,
-      },
-      missingCoverageIds,
-    });
+  if (status === "partial") {
+    return "Partially reviewed";
   }
-  return {
-    run,
-    categories,
-    features,
-    categoryReports: parsedCategoryReports,
-  };
+  if (status === "missing") {
+    return "Needs review";
+  }
+  return status;
+}
+
+function followUpText(missingCoverageIds: readonly string[]): string {
+  if (missingCoverageIds.length === 0) {
+    return "None";
+  }
+  return `${missingCoverageIds.length} capability ${missingCoverageIds.length === 1 ? "gap" : "gaps"}`;
 }
 
 function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
   return collectQaEvidenceFiles(evidenceDir).map((filePath) => {
-    const payload = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
-    const entries = Array.isArray(payload.entries) ? (payload.entries as EvidenceEntry[]) : [];
+    const payload = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(filePath, "utf8")));
     return {
       sourcePath: filePath,
       path: path.relative(process.cwd(), filePath),
-      generatedAt: typeof payload.generatedAt === "string" ? payload.generatedAt : "",
-      profile: typeof payload.profile === "string" ? payload.profile : "",
-      evidenceMode: typeof payload.evidenceMode === "string" ? payload.evidenceMode : "",
-      entryCount: entries.length,
-      statuses: countStatuses(entries),
-      scorecard: readScorecard(payload, filePath),
+      generatedAt: payload.generatedAt,
+      profile: payload.profile ?? "",
+      entryCount: payload.entries.length,
+      statuses: countStatuses(payload.entries),
+      scorecard: payload.scorecard,
     };
   });
 }
@@ -1006,29 +796,24 @@ function copyStaticSourceAssets({
 }
 
 function renderEvidenceSection(evidenceSummaries: EvidenceSummary[]): string[] {
-  const lines = ["## QA evidence artifacts", ""];
   if (evidenceSummaries.length === 0) {
-    lines.push(
-      "No `qa-evidence.json` artifact directory was provided for this render.",
-      "Use the `Maturity scorecard` workflow with a source run id, or run `pnpm maturity:render -- --evidence-dir <downloaded-artifacts> --output-dir <output-dir>` locally to produce an evidence-enriched docs artifact.",
-      "",
-    );
-    return lines;
+    return [];
   }
+  const lines = [
+    "## Release check summary",
+    "",
+    "The checks below show which scorecard areas were exercised during release validation.",
+    "",
+  ];
 
   lines.push(
-    "These rows come from the deterministic `scorecard` field in each `qa-evidence.json` artifact. Subjective maturity scores still come from `docs/maturity-scores.yaml`.",
-    "",
-    "| Evidence file | Profile | Mode | Generated | Entries | Result counts | Category fulfillment | Feature fulfillment |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Check set | Completed | Checks run | Results | Areas reviewed | Capabilities reviewed |",
+    "| --- | --- | --- | --- | --- | --- |",
   );
   for (const item of evidenceSummaries) {
     const scorecard = item.scorecard;
-    const categoryFulfillment = countText(scorecard?.categories);
-    const featureFulfillment = countText(scorecard?.features);
-    const statusText = `pass ${item.statuses.pass}, fail ${item.statuses.fail}, blocked ${item.statuses.blocked}, skipped ${item.statuses.skipped}`;
     lines.push(
-      `| ${yamlCode(item.path)} | ${markdownEscape(item.profile)} | ${markdownEscape(item.evidenceMode)} | ${markdownEscape(item.generatedAt)} | ${item.entryCount} | ${markdownEscape(statusText)} | ${markdownEscape(categoryFulfillment)} | ${markdownEscape(featureFulfillment)} |`,
+      `| ${markdownEscape(checkSetTitle(item.profile))} | ${markdownEscape(item.generatedAt)} | ${item.entryCount} | ${markdownEscape(resultCountsText(item.statuses))} | ${markdownEscape(countText(scorecard?.categories))} | ${markdownEscape(countText(scorecard?.features))} |`,
     );
   }
   lines.push("");
@@ -1038,15 +823,15 @@ function renderEvidenceSection(evidenceSummaries: EvidenceSummary[]): string[] {
   );
   if (categoryRows.length > 0) {
     lines.push(
-      "### Deterministic QA scorecard",
+      "### Readiness by area",
       "",
-      "| Profile | Surface | Category | QA status | Features | Secondary-only | Missing coverage IDs |",
-      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| Check set | Surface | Area | Status | Capabilities reviewed | Follow-up |",
+      "| --- | --- | --- | --- | --- | --- |",
     );
     for (const { item, category } of categoryRows) {
       const features = countText(category.features);
       lines.push(
-        `| ${markdownEscape(item.profile)} | ${yamlCode(category.surfaceId)} | ${yamlCode(category.id)} ${markdownEscape(category.name)} | ${markdownEscape(category.status)} | ${markdownEscape(features)} | ${category.features.secondaryOnly ?? 0} | ${markdownEscape((category.missingCoverageIds ?? []).join(", "))} |`,
+        `| ${markdownEscape(checkSetTitle(item.profile))} | ${markdownEscape(category.surfaceId)} | ${markdownEscape(category.name)} | ${markdownEscape(readinessStatusText(category.status))} | ${markdownEscape(features)} | ${markdownEscape(followUpText(category.missingCoverageIds))} |`,
       );
     }
     lines.push("");
@@ -1070,7 +855,7 @@ function renderMaturityScorecard({
   const lines = [
     ...frontmatter(
       "Maturity scorecard",
-      "Generated OpenClaw maturity scorecard for product, platform, provider, channel, and QA surfaces.",
+      "OpenClaw release readiness scores for product areas, integrations, and supported workflows.",
     ),
     ...renderMetadataComment({
       taxonomy,
@@ -1084,7 +869,7 @@ function renderMaturityScorecard({
     }),
     "# Maturity scorecard",
     "",
-    ...generatedNotice({ taxonomyPath, scoresPath }),
+    ...generatedNotice(),
     "## Overview",
     "",
     `- Active surfaces: ${scores.counts.active_surfaces}`,
@@ -1099,24 +884,6 @@ function renderMaturityScorecard({
     `| Category average | ${scoreText(scores.rollups.category_average.coverage)} | ${scoreText(scores.rollups.category_average.quality)} | ${scoreText(scores.rollups.category_average.completeness)} |`,
     "",
   ];
-
-  if ((taxonomy.profiles ?? []).length > 0) {
-    lines.push(
-      "## QA profiles",
-      "",
-      "| Profile | Evidence mode | Scope | Description |",
-      "| --- | --- | --- | --- |",
-    );
-    for (const profile of taxonomy.profiles ?? []) {
-      const scope = profile.includeAllCategories
-        ? "All categories"
-        : `${(profile.categoryIds ?? []).length} categories`;
-      lines.push(
-        `| ${yamlCode(profile.id)} | ${markdownEscape(profile.evidenceMode ?? "full")} | ${markdownEscape(scope)} | ${markdownEscape(profile.description)} |`,
-      );
-    }
-    lines.push("");
-  }
 
   lines.push(
     "## Surface scorecard",
@@ -1134,7 +901,7 @@ function renderMaturityScorecard({
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function renderTaxonomy({ taxonomy, scores, taxonomyPath, scoresPath }: RenderInputs): string {
+function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "scores">): string {
   const levels = taxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
   const profilesByCategory = categoryProfiles(taxonomy);
@@ -1142,11 +909,11 @@ function renderTaxonomy({ taxonomy, scores, taxonomyPath, scoresPath }: RenderIn
   const lines = [
     ...frontmatter(
       "Maturity taxonomy",
-      "Generated taxonomy reference for OpenClaw maturity scorecard surfaces, categories, features, docs, and QA coverage IDs.",
+      "Detailed reference for the product areas and checks behind the OpenClaw maturity scorecard.",
     ),
     "# Maturity taxonomy",
     "",
-    ...generatedNotice({ taxonomyPath, scoresPath }),
+    ...generatedNotice(),
     "## Maturity levels",
     "",
     "| Level | Label | Meaning | Promotion bar |",
@@ -1211,20 +978,16 @@ function renderTaxonomy({ taxonomy, scores, taxonomyPath, scoresPath }: RenderIn
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
-function renderTaxonomyOutline({
-  taxonomy,
-  taxonomyPath,
-  scoresPath,
-}: Omit<RenderInputs, "scores">): string {
+function renderTaxonomyOutline({ taxonomy }: Pick<RenderInputs, "taxonomy">): string {
   const surfaces = activeSurfaces(taxonomy);
   const lines = [
     ...frontmatter(
       "Maturity taxonomy outline",
-      "Generated outline of OpenClaw maturity scorecard surfaces, categories, and feature coverage IDs.",
+      "Generated outline of the product areas and capabilities behind the OpenClaw maturity scorecard.",
     ),
     "# Maturity taxonomy outline",
     "",
-    ...generatedNotice({ taxonomyPath, scoresPath }),
+    ...generatedNotice(),
   ];
   for (const family of familyOrder(surfaces)) {
     lines.push(`## ${familyTitle(family)}`, "");
@@ -1273,7 +1036,7 @@ function main(): void {
   const scoresPath = path.normalize(args.scores);
   const outputDir = path.normalize(args.outputDir);
   const taxonomy = readYaml(taxonomyPath) as Taxonomy;
-  const scores = readYaml(scoresPath) as Scores;
+  const scores = parseQaMaturityScores(readYaml(scoresPath), scoresPath);
   validateTaxonomy(taxonomy, taxonomyPath);
   const scoreWarnings = validateScores(scores, scoresPath, taxonomy);
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
@@ -1307,8 +1070,8 @@ function main(): void {
         staticAssetsPath,
       }),
     ],
-    ["taxonomy.md", renderTaxonomy({ taxonomy, scores, taxonomyPath, scoresPath })],
-    ["taxonomy-outline.md", renderTaxonomyOutline({ taxonomy, taxonomyPath, scoresPath })],
+    ["taxonomy.md", renderTaxonomy({ taxonomy, scores })],
+    ["taxonomy-outline.md", renderTaxonomyOutline({ taxonomy })],
   ]);
   if (args.check && !anyOutputExists(outputDir, outputs)) {
     process.stdout.write(

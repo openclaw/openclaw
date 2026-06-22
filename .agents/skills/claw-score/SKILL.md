@@ -40,9 +40,12 @@ out of this repo. If a score needs private evidence, use the redacted
 - `docs/maturity-scores.yaml` is the aggregate score source committed in this
   repo. It is the only committed score data; do not add generated inventory
   directories.
-- There is no committed maturity-doc renderer or `pnpm maturity:*` script in
-  this repo. Do not invent generated scorecard files; update the source YAML
-  and current docs directly.
+- `extensions/qa-lab/src/scorecard-taxonomy.ts` exports
+  `qaMaturityScoresSchema` and `parseQaMaturityScores`; use that schema to
+  validate score output instead of duplicating score labels, bands, or object
+  shapes in prompts.
+- Generated scorecard previews come from `pnpm maturity:render`; do not hand-edit
+  generated Markdown to change score results.
 - `qa-evidence.json` artifacts provide per-run QA scorecard evidence. They can
   enrich generated artifact docs, but they are not committed as inventory.
 
@@ -50,15 +53,19 @@ out of this repo. If a score needs private evidence, use the redacted
 
 Run from the openclaw repo root.
 
-Validate YAML structure after source edits:
+Validate taxonomy YAML structure and the maturity score schema after source
+edits:
 
 ```bash
-node <<'NODE'
-const fs = require("node:fs");
-const YAML = require("yaml");
-for (const file of ["taxonomy.yaml", "docs/maturity-scores.yaml", "qa/scenarios/index.yaml"]) {
+node --import tsx --input-type=module <<'NODE'
+import fs from "node:fs";
+import YAML from "yaml";
+import { parseQaMaturityScores } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
+
+for (const file of ["taxonomy.yaml", "qa/scenarios/index.yaml"]) {
   YAML.parse(fs.readFileSync(file, "utf8"));
 }
+parseQaMaturityScores(YAML.parse(fs.readFileSync("docs/maturity-scores.yaml", "utf8")));
 NODE
 ```
 
@@ -87,7 +94,7 @@ When asked to score or refresh a surface:
    discrawl or unredacted private archives.
 5. Update `docs/maturity-scores.yaml` only when the score change is backed by
    public or redacted artifact evidence.
-6. Run the YAML validation command from this skill.
+6. Run the schema validation command from this skill.
 7. Run `pnpm check:docs` if docs prose changed, and focused QA coverage checks
    if coverage IDs or profile membership changed.
 
