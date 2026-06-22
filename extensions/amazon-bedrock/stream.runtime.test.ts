@@ -501,3 +501,194 @@ describe("Bedrock canonical Claude aliases", () => {
     },
   );
 });
+
+describe("Bedrock stream retry (#87876)", () => {
+  function context() {
+    return {
+      messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }],
+    } as never;
+  }
+
+  it("retries once on InternalServerException from client.send", async () => {
+    const send = vi
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Internal server error"), {
+          name: "InternalServerException",
+          $metadata: {},
+        }),
+      )
+      .mockResolvedValueOnce({
+        $metadata: { httpStatusCode: 200 },
+        stream: streamEvents([
+          { messageStart: { role: ConversationRole.ASSISTANT } },
+          { messageStop: { stopReason: "end_turn" } },
+        ]),
+      } as never);
+
+    const stream = streamSimpleBedrock(bedrockModel({}), context());
+    await stream.result();
+
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries once on ServiceUnavailableException", async () => {
+    const send = vi
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Service unavailable"), {
+          name: "ServiceUnavailableException",
+          $metadata: {},
+        }),
+      )
+      .mockResolvedValueOnce({
+        $metadata: { httpStatusCode: 200 },
+        stream: streamEvents([
+          { messageStart: { role: ConversationRole.ASSISTANT } },
+          { messageStop: { stopReason: "end_turn" } },
+        ]),
+      } as never);
+
+    const stream = streamSimpleBedrock(bedrockModel({}), context());
+    await stream.result();
+
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry on ValidationException (permanent)", async () => {
+    const send = vi
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockRejectedValue(
+        Object.assign(new Error("Validation error"), {
+          name: "ValidationException",
+          $metadata: {},
+        }),
+      );
+
+    const stream = streamSimpleBedrock(bedrockModel({}), context());
+    const result = await stream.result();
+
+    expect(result.errorMessage).toContain("Validation error");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry on ThrottlingException (permanent)", async () => {
+    const send = vi
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockRejectedValue(
+        Object.assign(new Error("Throttling error"), {
+          name: "ThrottlingException",
+          $metadata: {},
+        }),
+      );
+
+    const stream = streamSimpleBedrock(bedrockModel({}), context());
+    const result = await stream.result();
+
+    expect(result.errorMessage).toContain("Throttling error");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry when the caller explicitly aborted (user-initiated)", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send");
+
+    const stream = streamSimpleBedrock(bedrockModel({}), context(), {
+      signal: controller.signal,
+    });
+    const result = await stream.result();
+
+    expect(result.errorMessage).toBeDefined();
+    expect(send).toHaveBeenCalledTimes(0); // AbortSignal already fired
+  });
+
+  it("retries once on stream ModelStreamErrorException", async () => {
+    const send = vi
+      .spyOn(BedrockRuntimeClient.prototype, "send")
+      .mockResolvedValueOnce({
+        $metadata: { httpStatusCode: 200 },
+        stream: streamEvents([
+          { messageStart: { role: ConversationRole.ASSISTANT } },
+          { modelStreamErrorException: Object.assign(new Error("stream error"), { name: "ModelStreamErrorException" }) },
+        ]),
+      } as never)
+      .mockResolvedValueOnce({
+        $metadata: { httpStatusCode: 200 },
+        stream: streamEvents([
+          { messageStart: { role: ConversationRole.ASSISTANT } },
+          { messageStop: { stopReason: "end_turn" } },
+        ]),
+      } as never);
+
+    const stream = streamSimpleBedrock(bedrockModel({}), context());
+    await stream.result();
+
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("isTransientBedrockStreamError", () => {
+  it("returns true for InternalServerException", () => {
+    const err = Object.assign(new Error("boom"), {
+      name: "InternalServerException",
+      $metadata: {},
+    });
+    expect(testing.isTransientBedrockStreamError(err)).toBe(true);
+  });
+
+  it("returns true for ServiceUnavailableException", () => {
+    const err = Object.assign(new Error("down"), {
+      name: "ServiceUnavailableException",
+      $metadata: {},
+    });
+    expect(testing.isTransientBedrockStreamError(err)).toBe(true);
+  });
+
+  it("returns true for ModelStreamErrorException", () => {
+    const err = Object.assign(new Error("stream broke"), {
+      name: "ModelStreamErrorException",
+      $metadata: {},
+    });
+    expect(testing.isTransientBedrockStreamError(err)).toBe(true);
+  });
+
+  it("returns false for ValidationException", () => {
+    const err = Object.assign(new Error("bad input"), {
+      name: "ValidationException",
+      $metadata: {},
+    });
+    expect(testing.isTransientBedrockStreamError(err)).toBe(false);
+  });
+
+  it("returns false for ThrottlingException", () => {
+    const err = Object.assign(new Error("rate limited"), {
+      name: "ThrottlingException",
+      $metadata: {},
+    });
+    expect(testing.isTransientBedrockStreamError(err)).toBe(false);
+  });
+
+  it("returns false for auth errors", () => {
+    const err = new Error("Unauthorized: Access denied");
+    expect(testing.isTransientBedrockStreamError(err)).toBe(false);
+  });
+
+  it("returns true for AbortError", () => {
+    const err = Object.assign(new Error("The operation was aborted"), {
+      name: "AbortError",
+    });
+    expect(testing.isTransientBedrockStreamError(err)).toBe(true);
+  });
+
+  it("returns true for socket hang-up errors", () => {
+    const err = new Error("socket hang up");
+    expect(testing.isTransientBedrockStreamError(err)).toBe(true);
+  });
+
+  it("returns true for ECONNRESET", () => {
+    const err = new Error("read ECONNRESET");
+    expect(testing.isTransientBedrockStreamError(err)).toBe(true);
+  });
+});

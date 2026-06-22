@@ -229,73 +229,115 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       }
       const command = new ConverseStreamCommand(commandInput);
 
-      const response = await client.send(command, { abortSignal: options.signal });
-      if (response.$metadata.httpStatusCode !== undefined) {
-        const responseHeaders: Record<string, string> = {};
-        if (response.$metadata.requestId) {
-          responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
-        }
-        await options?.onResponse?.(
-          { status: response.$metadata.httpStatusCode, headers: responseHeaders },
-          model,
-        );
-      }
+      // Bedrock Converse Streaming can silently drop long-running connections
+      // (~6 min). Retry once on transient stream failures to avoid losing the
+      // entire session transcript (#87876).
+      const BEDROCK_STREAM_RETRY_MAX = 1;
 
-      let sawMessageStop = false;
-      for await (const item of response.stream!) {
-        if (item.messageStart) {
-          if (item.messageStart.role !== ConversationRole.ASSISTANT) {
-            throw new Error(
-              "Unexpected assistant message start but got user message start instead",
+      for (let streamAttempt = 0; streamAttempt <= BEDROCK_STREAM_RETRY_MAX; streamAttempt++) {
+        if (streamAttempt > 0) {
+          // Reset output for retry.
+          output.content.length = 0;
+          output.stopReason = "stop";
+          output.errorMessage = undefined;
+          output.usage = {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          };
+          refusalBuffer?.discard();
+        }
+
+        try {
+          const attemptClient =
+            streamAttempt > 0 ? new BedrockRuntimeClient(config) : client;
+          const response = await attemptClient.send(command, {
+            abortSignal: options.signal,
+          });
+
+          if (response.$metadata.httpStatusCode !== undefined) {
+            const responseHeaders: Record<string, string> = {};
+            if (response.$metadata.requestId) {
+              responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
+            }
+            await options?.onResponse?.(
+              { status: response.$metadata.httpStatusCode, headers: responseHeaders },
+              model,
             );
           }
-          eventSink.push({ type: "start", partial: output });
-        } else if (item.contentBlockStart) {
-          handleContentBlockStart(item.contentBlockStart, blocks, output, eventSink);
-        } else if (item.contentBlockDelta) {
-          handleContentBlockDelta(item.contentBlockDelta, blocks, output, eventSink);
-        } else if (item.contentBlockStop) {
-          handleContentBlockStop(item.contentBlockStop, blocks, output, eventSink);
-        } else if (item.messageStop) {
-          sawMessageStop = true;
-          if ((item.messageStop.stopReason as string | undefined) === "refusal") {
-            applyAnthropicRefusal(
-              output,
-              readBedrockStopDetails(item.messageStop.additionalModelResponseFields),
-              model.provider,
-            );
-          } else {
-            output.stopReason = mapStopReason(item.messageStop.stopReason);
+
+          let sawMessageStop = false;
+          for await (const item of response.stream!) {
+            if (item.messageStart) {
+              if (item.messageStart.role !== ConversationRole.ASSISTANT) {
+                throw new Error(
+                  "Unexpected assistant message start but got user message start instead",
+                );
+              }
+              eventSink.push({ type: "start", partial: output });
+            } else if (item.contentBlockStart) {
+              handleContentBlockStart(item.contentBlockStart, blocks, output, eventSink);
+            } else if (item.contentBlockDelta) {
+              handleContentBlockDelta(item.contentBlockDelta, blocks, output, eventSink);
+            } else if (item.contentBlockStop) {
+              handleContentBlockStop(item.contentBlockStop, blocks, output, eventSink);
+            } else if (item.messageStop) {
+              sawMessageStop = true;
+              if ((item.messageStop.stopReason as string | undefined) === "refusal") {
+                applyAnthropicRefusal(
+                  output,
+                  readBedrockStopDetails(item.messageStop.additionalModelResponseFields),
+                  model.provider,
+                );
+              } else {
+                output.stopReason = mapStopReason(item.messageStop.stopReason);
+              }
+            } else if (item.metadata) {
+              handleMetadata(item.metadata, model, output);
+            } else if (item.internalServerException) {
+              throw item.internalServerException;
+            } else if (item.modelStreamErrorException) {
+              throw item.modelStreamErrorException;
+            } else if (item.validationException) {
+              throw item.validationException;
+            } else if (item.throttlingException) {
+              throw item.throttlingException;
+            } else if (item.serviceUnavailableException) {
+              throw item.serviceUnavailableException;
+            }
           }
-        } else if (item.metadata) {
-          handleMetadata(item.metadata, model, output);
-        } else if (item.internalServerException) {
-          throw item.internalServerException;
-        } else if (item.modelStreamErrorException) {
-          throw item.modelStreamErrorException;
-        } else if (item.validationException) {
-          throw item.validationException;
-        } else if (item.throttlingException) {
-          throw item.throttlingException;
-        } else if (item.serviceUnavailableException) {
-          throw item.serviceUnavailableException;
+
+          if (refusalBuffer && !sawMessageStop) {
+            throw new Error("Bedrock stream ended before messageStop");
+          }
+          if (options.signal?.aborted) {
+            throw new Error("Request was aborted");
+          }
+
+          if (output.stopReason === "error" || output.stopReason === "aborted") {
+            throw new Error(output.errorMessage ?? "An unknown error occurred");
+          }
+
+          refusalBuffer?.flush();
+          stream.push({ type: "done", reason: output.stopReason, message: output });
+          stream.end();
+          return;
+        } catch (error) {
+          // Retry on transient stream errors only — never on user abort,
+          // auth failures, validation errors, or throttling.
+          if (
+            streamAttempt < BEDROCK_STREAM_RETRY_MAX &&
+            !options.signal?.aborted &&
+            isTransientBedrockStreamError(error)
+          ) {
+            continue;
+          }
+          throw error;
         }
       }
-
-      if (refusalBuffer && !sawMessageStop) {
-        throw new Error("Bedrock stream ended before messageStop");
-      }
-      if (options.signal?.aborted) {
-        throw new Error("Request was aborted");
-      }
-
-      if (output.stopReason === "error" || output.stopReason === "aborted") {
-        throw new Error(output.errorMessage ?? "An unknown error occurred");
-      }
-
-      refusalBuffer?.flush();
-      stream.push({ type: "done", reason: output.stopReason, message: output });
-      stream.end();
     } catch (error) {
       for (const block of output.content) {
         delete (block as Block).index;
@@ -315,6 +357,42 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 
   return stream;
 };
+
+/**
+ * Classify whether a Bedrock stream error is transient and worth retrying.
+ * Internal server errors, service-unavailable responses, model-stream errors,
+ * and network-level aborts are transient.  Validation, throttling, and auth
+ * failures are permanent.
+ */
+function isTransientBedrockStreamError(error: unknown): boolean {
+  if (error instanceof BedrockRuntimeServiceException) {
+    switch (error.name) {
+      case "InternalServerException":
+      case "ServiceUnavailableException":
+      case "ModelStreamErrorException":
+        return true;
+      case "ValidationException":
+      case "ThrottlingException":
+        return false;
+      default:
+        break;
+    }
+  }
+  // Network-level errors are transient. Auth errors are permanent.
+  if (error instanceof Error) {
+    const msg = error.message.toLowerCase();
+    if (/unauthorized|forbidden|access denied|invalid.*key/.test(msg)) {
+      return false;
+    }
+    if (error.name === "AbortError" || error.name === "TimeoutError") {
+      return true;
+    }
+    if (/socket.*hang|econnreset|etimedout|network.*error/i.test(msg)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /**
  * Human-readable prefixes for Bedrock SDK exception names.
@@ -1106,6 +1184,7 @@ export const testing = {
   convertMessages,
   getConfiguredBedrockRegion,
   hasConfiguredBedrockProfile,
+  isTransientBedrockStreamError,
   mapThinkingLevelToEffort,
   resolveSimpleBedrockOptions,
   shouldUseExplicitBedrockEndpoint,
