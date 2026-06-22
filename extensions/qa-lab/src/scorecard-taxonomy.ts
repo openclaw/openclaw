@@ -6,7 +6,7 @@ import { z } from "zod";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
-export const QA_MATURITY_SCORES_PATH = "docs/maturity-scores.yaml";
+export const QA_MATURITY_SCORES_PATH = "qa/maturity-scores.yaml";
 export const QA_MATURITY_SCORE_KEYS = ["coverage", "quality", "completeness"] as const;
 export const QA_MATURITY_SCORE_LABELS = [
   "Lovable",

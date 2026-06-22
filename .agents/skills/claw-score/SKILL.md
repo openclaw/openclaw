@@ -15,7 +15,7 @@ committed `inventory/` report tree.
 This skill owns the operational workflow for:
 
 - `taxonomy.yaml`
-- `docs/maturity-scores.yaml`
+- `qa/maturity-scores.yaml`
 - `docs/concepts/qa-e2e-automation.md`
 - `qa/scenarios/index.yaml`
 
@@ -37,7 +37,7 @@ out of this repo. If a score needs private evidence, use the redacted
   coverage IDs. Do not promote generic IDs into standalone feature names.
 - Avoid duplicate coverage-ID bundles under different feature names in one
   category.
-- `docs/maturity-scores.yaml` is the aggregate score source committed in this
+- `qa/maturity-scores.yaml` is the aggregate score source committed in this
   repo. It is the only committed score data; do not add generated inventory
   directories.
 - `extensions/qa-lab/src/scorecard-taxonomy.ts` exports
@@ -65,7 +65,7 @@ import { parseQaMaturityScores } from "./extensions/qa-lab/src/scorecard-taxonom
 for (const file of ["taxonomy.yaml", "qa/scenarios/index.yaml"]) {
   YAML.parse(fs.readFileSync(file, "utf8"));
 }
-parseQaMaturityScores(YAML.parse(fs.readFileSync("docs/maturity-scores.yaml", "utf8")));
+parseQaMaturityScores(YAML.parse(fs.readFileSync("qa/maturity-scores.yaml", "utf8")));
 NODE
 ```
 
@@ -92,7 +92,7 @@ When asked to score or refresh a surface:
    metadata.
 4. Prefer existing `qa-evidence.json` artifacts for executed proof. Do not use
    discrawl or unredacted private archives.
-5. Update `docs/maturity-scores.yaml` only when the score change is backed by
+5. Update `qa/maturity-scores.yaml` only when the score change is backed by
    public or redacted artifact evidence.
 6. Run the schema validation command from this skill.
 7. Run `pnpm check:docs` if docs prose changed, and focused QA coverage checks
@@ -100,7 +100,7 @@ When asked to score or refresh a surface:
 
 For subjective score changes, make the smallest defensible edit and leave the
 evidence path in the PR or task summary. Keep manual prose in current docs and
-keep score data in `docs/maturity-scores.yaml`.
+keep score data in `qa/maturity-scores.yaml`.
 
 ## Default Completeness Process
 

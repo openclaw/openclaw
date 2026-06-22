@@ -28,7 +28,7 @@ import {
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
-const DEFAULT_SCORES_PATH = "docs/maturity-scores.yaml";
+const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
 const DEFAULT_OUTPUT_DIR = "docs";
 
 type Args = {
@@ -120,7 +120,7 @@ function parseArgs(argv: string[]): Args {
 
 Options:
   --taxonomy <path>     Taxonomy YAML path (default: taxonomy.yaml)
-  --scores <path>       Aggregate score YAML path (default: docs/maturity-scores.yaml)
+  --scores <path>       Aggregate score YAML path (default: qa/maturity-scores.yaml)
   --output-dir <path>   Directory for maturity-scorecard.md, taxonomy.md, and taxonomy-outline.md
   --static-assets-dir <path>
                         Copy source YAML and QA evidence JSON for docs components

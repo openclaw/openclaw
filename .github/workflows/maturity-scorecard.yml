@@ -21,20 +21,22 @@ on:
     branches: [main]
     paths:
       - "taxonomy.yaml"
-      - "docs/maturity-scores.yaml"
+      - "qa/maturity-scores.yaml"
       - "docs/maturity-scorecard.md"
       - "docs/taxonomy.md"
       - "docs/taxonomy-outline.md"
+      - "extensions/qa-lab/src/scorecard-taxonomy.ts"
       - "scripts/qa/render-maturity-docs.ts"
       - "package.json"
       - ".github/workflows/maturity-scorecard.yml"
   pull_request:
     paths:
       - "taxonomy.yaml"
-      - "docs/maturity-scores.yaml"
+      - "qa/maturity-scores.yaml"
       - "docs/maturity-scorecard.md"
       - "docs/taxonomy.md"
       - "docs/taxonomy-outline.md"
+      - "extensions/qa-lab/src/scorecard-taxonomy.ts"
       - "scripts/qa/render-maturity-docs.ts"
       - "package.json"
       - ".github/workflows/maturity-scorecard.yml"
