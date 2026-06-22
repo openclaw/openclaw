@@ -135,6 +135,15 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(bundled.find((shard) => shard.shardName === "bundle-infra-small-1")?.runner).toBe(
       "blacksmith-4vcpu-ubuntu-2404",
     );
+    expect(
+      new Set(
+        bundled
+          .filter((shard) => shard.shardName.startsWith("bundle-"))
+          .flatMap((shard) => shard.configs),
+      ),
+    ).toEqual(new Set(["test/vitest/vitest.infra.config.ts"]));
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-commands-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-cron-"))).toBe(false);
     expect(bundled.some((shard) => shard.shardName.startsWith("bundle-agents-core-"))).toBe(false);
     expect(bundled.some((shard) => shard.shardName.startsWith("bundle-gateway-server-"))).toBe(
       false,

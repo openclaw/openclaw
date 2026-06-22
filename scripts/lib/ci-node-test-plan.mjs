@@ -14,11 +14,9 @@ const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
-const BUNDLEABLE_NODE_TEST_CONFIGS = new Set([
-  "test/vitest/vitest.commands.config.ts",
-  "test/vitest/vitest.cron.config.ts",
-  "test/vitest/vitest.infra.config.ts",
-]);
+// Commands and cron run non-isolated, so keep their split shards as separate
+// processes. Combining their include lists can retain test state across groups.
+const BUNDLEABLE_NODE_TEST_CONFIGS = new Set(["test/vitest/vitest.infra.config.ts"]);
 const KEEP_LARGE_NODE_TEST_RUNNER = new Set([
   "agentic-agents-core-auth",
   "agentic-agents-core-models",
