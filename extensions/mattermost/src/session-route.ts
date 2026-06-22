@@ -7,6 +7,7 @@ import {
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { mattermostChannelKindCache } from "./mattermost/monitor-gating.js";
 
 export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   let trimmed = stripChannelTargetPrefix(params.target, "mattermost");
@@ -27,6 +28,18 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   if (!rawId) {
     return null;
   }
+  // Only trust the monitor-populated cache for authoritative channel type.
+  // A cold cache (undefined) preserves the existing "channel" default,
+  // preventing uncached public channel: targets from being misclassified
+  // as group. When the monitor has resolved the channel type, the cache
+  // entry carries the authoritative Mattermost channel kind (D→direct,
+  // G/P→group, O→channel).
+  const cachedKind = mattermostChannelKindCache.get(rawId);
+  const chatType = isUser
+    ? "direct"
+    : cachedKind === "group"
+      ? "group"
+      : "channel";
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -36,7 +49,7 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
       kind: isUser ? "direct" : "channel",
       id: rawId,
     },
-    chatType: isUser ? "direct" : "channel",
+    chatType,
     from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
     to: isUser ? `user:${rawId}` : `channel:${rawId}`,
   });
