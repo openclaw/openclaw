@@ -901,14 +901,24 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
     case "RATE_LIMIT":
     case "RATE_LIMITED":
     case "RATE_LIMIT_EXCEEDED":
+    case "RATE_LIMIT_ERROR":
     case "TOO_MANY_REQUESTS":
     case "THROTTLED":
     case "THROTTLING":
     case "THROTTLINGEXCEPTION":
     case "THROTTLING_EXCEPTION":
       return "rate_limit";
+    case "INSUFFICIENT_QUOTA":
+      return "billing";
     case "DEACTIVATED_WORKSPACE":
       return "auth_permanent";
+    case "INTERNAL":
+    case "SERVER_ERROR":
+      return "server_error";
+    case "API_ERROR":
+    case "DEADLINE_EXCEEDED":
+      return "timeout";
+    case "UNAVAILABLE":
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";

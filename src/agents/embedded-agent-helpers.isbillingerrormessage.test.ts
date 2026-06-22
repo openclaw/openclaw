@@ -1,5 +1,6 @@
 // Covers provider error classifiers and failover reason mapping.
 import { describe, expect, it } from "vitest";
+import type { AssistantMessage } from "../llm/types.js";
 import {
   classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
@@ -52,6 +53,31 @@ const MIXED_INTERNAL_SERVER_ERROR_STATUS_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR
 const INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE = `${PLAIN_INTERNAL_SERVER_ERROR_STATUS_SAMPLE}; code:500`;
 const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
+
+function makeCodeOnlyAssistantError(params: {
+  provider: string;
+  code: string;
+}): AssistantMessage {
+  return {
+    role: "assistant",
+    api: params.provider,
+    provider: params.provider,
+    model: "test-model",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error",
+    errorCode: params.code,
+    errorMessage: "",
+    content: [],
+    timestamp: 0,
+  };
+}
 
 function expectMessageMatches(
   matcher: (message: string) => boolean,
@@ -1493,6 +1519,23 @@ describe("classifyFailoverReason provider messages", () => {
 });
 
 describe("classifyProviderRuntimeFailureKind", () => {
+  it.each([
+    { provider: "openai", code: "SERVER_ERROR", expected: "server_error" },
+    { provider: "google", code: "UNAVAILABLE", expected: "overloaded" },
+    { provider: "google", code: "DEADLINE_EXCEEDED", expected: "timeout" },
+    { provider: "google", code: "INTERNAL", expected: "server_error" },
+    { provider: "openai", code: "INSUFFICIENT_QUOTA", expected: "billing" },
+    { provider: "anthropic", code: "RATE_LIMIT_ERROR", expected: "rate_limit" },
+    { provider: "anthropic", code: "API_ERROR", expected: "timeout" },
+  ] as const)(
+    "classifies assistant $provider code-only $code as $expected",
+    ({ provider, code, expected }) => {
+      expect(classifyAssistantFailoverReason(makeCodeOnlyAssistantError({ provider, code }))).toBe(
+        expected,
+      );
+    },
+  );
+
   it("classifies missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
