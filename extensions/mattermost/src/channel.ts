@@ -58,6 +58,7 @@ import {
   resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
+import { inferMattermostTargetChatType } from "./mattermost/chat-type-cache.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
@@ -798,6 +799,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       targetPrefixes: ["mattermost"],
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
+      inferTargetChatType: ({ to }) => inferMattermostTargetChatType(to),
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
         const child = conversationId.trim();

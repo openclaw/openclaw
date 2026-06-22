@@ -43,6 +43,29 @@ describe("mattermost session route", () => {
     expect(channelRoute.sessionKey).toContain("thread456");
   });
 
+  it("preserves resolved private-channel routes as group sessions", () => {
+    const route = resolveMattermostOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "acct-1",
+      target: "mattermost:channel:private123",
+      resolvedTarget: {
+        kind: "group",
+        to: "channel:private123",
+        source: "directory",
+      },
+      threadId: "thread456",
+    });
+
+    const groupRoute = expectRoute(route);
+    expect(groupRoute.peer.kind).toBe("group");
+    expect(groupRoute.peer.id).toBe("private123");
+    expect(groupRoute.chatType).toBe("group");
+    expect(groupRoute.from).toBe("mattermost:group:private123");
+    expect(groupRoute.to).toBe("channel:private123");
+    expect(groupRoute.sessionKey).toBe("agent:main:mattermost:group:private123:thread:thread456");
+  });
+
   it("recovers channel thread routes from currentSessionKey", () => {
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},

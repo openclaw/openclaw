@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 const resolveMattermostAccount = vi.fn();
 const createMattermostClient = vi.fn();
 const fetchMattermostUser = vi.fn();
+const fetchMattermostChannel = vi.fn();
 const normalizeMattermostBaseUrl = vi.fn((value: string | undefined) => value?.trim());
 
 vi.mock("./accounts.js", () => ({
@@ -12,6 +13,7 @@ vi.mock("./accounts.js", () => ({
 
 vi.mock("./client.js", () => ({
   createMattermostClient,
+  fetchMattermostChannel,
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
 }));
@@ -36,6 +38,7 @@ describe("mattermost target resolution", () => {
   beforeEach(() => {
     resolveMattermostAccount.mockReset();
     createMattermostClient.mockReset();
+    fetchMattermostChannel.mockReset();
     fetchMattermostUser.mockReset();
     normalizeMattermostBaseUrl.mockClear();
   });
@@ -91,6 +94,7 @@ describe("mattermost target resolution", () => {
   it("falls back to channel targets on 404 lookups", async () => {
     createMattermostClient.mockReturnValue({ client: true });
     fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
     const input = "bcde1234abcd1234abcd1234ab";
 
     await expect(
@@ -103,6 +107,49 @@ describe("mattermost target resolution", () => {
       kind: "channel",
       id: input,
       to: `channel:${input}`,
+    });
+  });
+
+  it("uses channel type to classify private channel ids as group targets", async () => {
+    createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockResolvedValue({
+      id: "bcde1234abcd1234abcd1234ab",
+      type: "P",
+    });
+    const input = "channel:bcde1234abcd1234abcd1234ab";
+
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input,
+        token: "token",
+        baseUrl: "https://mm.example.com",
+      }),
+    ).resolves.toEqual({
+      kind: "group",
+      id: "bcde1234abcd1234abcd1234ab",
+      to: "channel:bcde1234abcd1234abcd1234ab",
+    });
+  });
+
+  it("uses channel type to keep public channel ids as channel targets", async () => {
+    createMattermostClient.mockReturnValue({ client: true });
+    fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockResolvedValue({
+      id: "bcde1234abcd1234abcd1234ab",
+      type: "O",
+    });
+
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input: "bcde1234abcd1234abcd1234ab",
+        token: "token",
+        baseUrl: "https://mm.example.com",
+      }),
+    ).resolves.toEqual({
+      kind: "channel",
+      id: "bcde1234abcd1234abcd1234ab",
+      to: "channel:bcde1234abcd1234abcd1234ab",
     });
   });
 

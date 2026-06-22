@@ -422,9 +422,6 @@ function inferChatTypeFromTarget(params: {
   if (/^user:/i.test(to)) {
     return "direct";
   }
-  if (/^(channel:|thread:)/i.test(to)) {
-    return "channel";
-  }
   if (/^group:/i.test(to)) {
     return "group";
   }
@@ -433,7 +430,14 @@ function inferChatTypeFromTarget(params: {
     resolveOutboundChannelPlugin({
       channel: params.channel,
     });
-  return plugin?.messaging?.inferTargetChatType?.({ to }) ?? undefined;
+  const hookChatType = plugin?.messaging?.inferTargetChatType?.({ to });
+  // A `channel:<id>` target can be a private channel a plugin classifies as group
+  // (Mattermost private/`P` channels). Consult the plugin hook before the generic
+  // `channel` default so the session namespace matches the inbound classification.
+  if (/^(channel:|thread:)/i.test(to)) {
+    return hookChatType ?? "channel";
+  }
+  return hookChatType ?? undefined;
 }
 
 function resolveHeartbeatDeliveryChatType(params: {

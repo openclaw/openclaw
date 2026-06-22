@@ -4,6 +4,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { recordMattermostChannelChatType } from "./chat-type-cache.js";
 import {
   fetchMattermostChannel,
   fetchMattermostUser,
@@ -131,6 +132,9 @@ export function createMattermostMonitorResources(params: {
     try {
       const info = await fetchMattermostChannel(client, channelId);
       setCachedValue(channelCache, channelId, info, CHANNEL_CACHE_TTL_MS, rawNow);
+      // Warm the id-keyed chat-type cache so the sync `inferTargetChatType` hook can
+      // classify private (`P`/`G`) channels as group on later outbound deliveries.
+      recordMattermostChannelChatType(channelId, info?.type);
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: channel lookup failed: ${String(err)}`);

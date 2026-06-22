@@ -1687,3 +1687,42 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.to).toBe("room-one");
   });
 });
+
+describe("inferChatTypeFromTarget plugin hook ordering for channel: targets", () => {
+  const PRIVATE = "aaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const registerHookPlugin = (hook?: (to: string) => "group" | "channel" | undefined) => {
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        createTestChannelPlugin({
+          id: "mm",
+          messaging: {
+            targetPrefixes: ["mm"],
+            ...(hook ? { inferTargetChatType: ({ to }: { to: string }) => hook(to) } : {}),
+          },
+        }),
+      ]),
+    );
+  };
+
+  it("consults the plugin hook before the generic channel default", () => {
+    // A private channel addressed as channel:<id> must reach the plugin hook (which
+    // classifies it as group) instead of short-circuiting to the channel default.
+    registerHookPlugin((to) => (to === `channel:${PRIVATE}` ? "group" : undefined));
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: { sessionId: "s", updatedAt: 1, lastChannel: "mm", lastTo: `channel:${PRIVATE}` },
+      heartbeat: { target: "last" },
+    });
+    expect(resolved.chatType).toBe("group");
+  });
+
+  it("falls back to the channel default when the hook returns undefined", () => {
+    registerHookPlugin(() => undefined);
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg: {},
+      entry: { sessionId: "s", updatedAt: 1, lastChannel: "mm", lastTo: `channel:${PRIVATE}` },
+      heartbeat: { target: "last" },
+    });
+    expect(resolved.chatType).toBe("channel");
+  });
+});

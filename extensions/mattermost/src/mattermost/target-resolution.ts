@@ -3,27 +3,33 @@ import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMattermostAccount } from "./accounts.js";
 import {
+  isMattermostId,
+  recordMattermostChannelChatType,
+  resetMattermostChatTypeCacheForTests,
+} from "./chat-type-cache.js";
+import {
   createMattermostClient,
+  fetchMattermostChannel,
   fetchMattermostUser,
   normalizeMattermostBaseUrl,
 } from "./client.js";
+import { mapMattermostChannelTypeToChatType } from "./monitor-gating.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
+export { isMattermostId };
+
 export type MattermostOpaqueTargetResolution = {
-  kind: "user" | "channel";
+  kind: "user" | "channel" | "group";
   id: string;
   to: string;
 };
 
-const mattermostOpaqueTargetCache = new Map<string, boolean>();
+type MattermostOpaqueTargetKind = MattermostOpaqueTargetResolution["kind"];
+
+const mattermostOpaqueTargetCache = new Map<string, MattermostOpaqueTargetKind>();
 
 function cacheKey(baseUrl: string, token: string, id: string): string {
   return `${baseUrl}::${token}::${id}`;
-}
-
-/** Mattermost IDs are 26-character lowercase alphanumeric strings. */
-export function isMattermostId(value: string): boolean {
-  return /^[a-z0-9]{26}$/.test(value);
 }
 
 export function isExplicitMattermostTarget(raw: string): boolean {
@@ -51,6 +57,44 @@ export function parseMattermostApiStatus(err: unknown): number | undefined {
   return Number.isFinite(code) ? code : undefined;
 }
 
+function parseExplicitMattermostTarget(raw: string):
+  | {
+      kind: MattermostOpaqueTargetKind;
+      id: string;
+    }
+  | undefined {
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("user:")) {
+    return { kind: "user", id: trimmed.slice("user:".length).trim() };
+  }
+  if (lower.startsWith("mattermost:")) {
+    return { kind: "user", id: trimmed.slice("mattermost:".length).trim() };
+  }
+  if (lower.startsWith("group:")) {
+    return { kind: "group", id: trimmed.slice("group:".length).trim() };
+  }
+  if (lower.startsWith("channel:")) {
+    return { kind: "channel", id: trimmed.slice("channel:".length).trim() };
+  }
+  return undefined;
+}
+
+function buildMattermostOpaqueTarget(
+  kind: MattermostOpaqueTargetKind,
+  id: string,
+): MattermostOpaqueTargetResolution {
+  return {
+    kind,
+    id,
+    to: kind === "user" ? `user:${id}` : `channel:${id}`,
+  };
+}
+
+function mapMattermostChannelTargetKind(channelType?: string | null): "channel" | "group" {
+  return mapMattermostChannelTypeToChatType(channelType) === "group" ? "group" : "channel";
+}
+
 export async function resolveMattermostOpaqueTarget(params: {
   input: string;
   cfg?: OpenClawConfig;
@@ -59,7 +103,12 @@ export async function resolveMattermostOpaqueTarget(params: {
   baseUrl?: string;
 }): Promise<MattermostOpaqueTargetResolution | null> {
   const input = params.input.trim();
-  if (!input || isExplicitMattermostTarget(input) || !isMattermostId(input)) {
+  if (!input) {
+    return null;
+  }
+  const explicit = parseExplicitMattermostTarget(input);
+  const lookupId = explicit?.id ?? input;
+  if (!lookupId || !isMattermostId(lookupId)) {
     return null;
   }
 
@@ -73,13 +122,14 @@ export async function resolveMattermostOpaqueTarget(params: {
     return null;
   }
 
-  const key = cacheKey(baseUrl, token, input);
-  const cached = mattermostOpaqueTargetCache.get(key);
-  if (cached === true) {
-    return { kind: "user", id: input, to: `user:${input}` };
+  if (explicit?.kind === "user" || explicit?.kind === "group") {
+    return buildMattermostOpaqueTarget(explicit.kind, lookupId);
   }
-  if (cached === false) {
-    return { kind: "channel", id: input, to: `channel:${input}` };
+
+  const key = cacheKey(baseUrl, token, lookupId);
+  const cached = mattermostOpaqueTargetCache.get(key);
+  if (cached) {
+    return buildMattermostOpaqueTarget(cached, lookupId);
   }
 
   const client = createMattermostClient({
@@ -87,18 +137,33 @@ export async function resolveMattermostOpaqueTarget(params: {
     botToken: token,
     allowPrivateNetwork: isPrivateNetworkOptInEnabled(account?.config),
   });
+  if (!explicit) {
+    try {
+      await fetchMattermostUser(client, lookupId);
+      mattermostOpaqueTargetCache.set(key, "user");
+      return buildMattermostOpaqueTarget("user", lookupId);
+    } catch (err) {
+      if (parseMattermostApiStatus(err) !== 404) {
+        return buildMattermostOpaqueTarget("channel", lookupId);
+      }
+    }
+  }
+
   try {
-    await fetchMattermostUser(client, input);
-    mattermostOpaqueTargetCache.set(key, true);
-    return { kind: "user", id: input, to: `user:${input}` };
+    const channel = await fetchMattermostChannel(client, lookupId);
+    const kind = mapMattermostChannelTargetKind(channel.type);
+    mattermostOpaqueTargetCache.set(key, kind);
+    recordMattermostChannelChatType(lookupId, channel.type);
+    return buildMattermostOpaqueTarget(kind, lookupId);
   } catch (err) {
     if (parseMattermostApiStatus(err) === 404) {
-      mattermostOpaqueTargetCache.set(key, false);
+      mattermostOpaqueTargetCache.set(key, "channel");
     }
-    return { kind: "channel", id: input, to: `channel:${input}` };
+    return buildMattermostOpaqueTarget("channel", lookupId);
   }
 }
 
 export function resetMattermostOpaqueTargetCacheForTests(): void {
   mattermostOpaqueTargetCache.clear();
+  resetMattermostChatTypeCacheForTests();
 }

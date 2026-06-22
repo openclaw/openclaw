@@ -866,18 +866,22 @@ function inferDeliveryTargetChatType(target: {
   ) {
     return "direct";
   }
-  if (normalizedTo.startsWith("channel:") || normalizedTo.startsWith("thread:")) {
-    return "channel";
-  }
   if (normalizedTo.startsWith("group:")) {
     return "group";
   }
   const channel = normalizeMessageChannel(target.channel);
-  return channel
+  const hookChatType = channel
     ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging?.inferTargetChatType?.({
         to: target.to ?? "",
       })
     : undefined;
+  // A `channel:<id>` target can be a private channel a plugin classifies as group
+  // (Mattermost private/`P` channels). Consult the plugin hook before the generic
+  // `channel` default so threaded/scheduled deliveries keep the inbound namespace.
+  if (normalizedTo.startsWith("channel:") || normalizedTo.startsWith("thread:")) {
+    return hookChatType ?? "channel";
+  }
+  return hookChatType;
 }
 
 function isDirectMessageDeliveryTarget(
