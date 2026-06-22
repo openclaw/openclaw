@@ -143,6 +143,115 @@ describe("monitorSignalProvider tool results", () => {
     expect(sendMock.mock.calls[0]?.[1]).toBe("PFX final reply");
   });
 
+  it("passes inbound Signal quote metadata to final replies", async () => {
+    replyMock.mockResolvedValue({ text: "final reply" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      replyToId: "1700000000001",
+      replyToAuthor: "+15550001111",
+      replyToBody: "quote me",
+    });
+  });
+
+  it("passes inbound Signal quote metadata to media replies", async () => {
+    replyMock.mockResolvedValue({ text: "caption", mediaUrl: "file:///tmp/reply.png" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).toMatchObject({
+      mediaUrl: "file:///tmp/reply.png",
+      replyToId: "1700000000001",
+      replyToAuthor: "+15550001111",
+      replyToBody: "quote me",
+    });
+  });
+
+  it("does not attach native quote metadata for a different explicit reply target", async () => {
+    replyMock.mockResolvedValue({ text: "final reply", replyToId: "1700000000999" });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToAuthor");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
+  });
+
+  it("does not attach native quote metadata when the reply opts out of the current message", async () => {
+    replyMock.mockResolvedValue({ text: "status reply", replyToCurrent: false });
+
+    await receiveSignalPayloads({
+      payloads: [
+        {
+          envelope: {
+            sourceNumber: "+15550001111",
+            sourceName: "Ada",
+            timestamp: 1700000000001,
+            dataMessage: {
+              message: "quote me",
+            },
+          },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(sendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToId");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToAuthor");
+    expect(sendMock.mock.calls[0]?.[2]).not.toHaveProperty("replyToBody");
+  });
+
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
     setSignalToolResultTestConfig(
       createSignalToolResultConfig({ autoStart: false, dmPolicy: "pairing", allowFrom: [] }),

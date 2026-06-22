@@ -476,6 +476,9 @@ export async function containerSendMessage(params: {
   message: string;
   textStyles?: Array<{ start: number; length: number; style: string }>;
   attachments?: string[];
+  quoteTimestamp?: number;
+  quoteAuthor?: string;
+  quoteMessage?: string;
   timeoutMs?: number;
 }): Promise<{ timestamp?: number }> {
   const payload: Record<string, unknown> = {
@@ -492,6 +495,11 @@ export async function containerSendMessage(params: {
   if (params.attachments && params.attachments.length > 0) {
     // Container API only accepts base64-encoded attachments, not file paths.
     payload.base64_attachments = await filesToBase64DataUris(params.attachments);
+  }
+  if (params.quoteTimestamp !== undefined && params.quoteAuthor) {
+    payload.quote_timestamp = params.quoteTimestamp;
+    payload.quote_author = params.quoteAuthor;
+    payload.quote_message = params.quoteMessage ?? "";
   }
 
   const result = await containerRestRequest<{ timestamp?: unknown }>(
@@ -675,6 +683,10 @@ export async function containerRpcRequest<T = unknown>(
         message: (p.message as string) ?? "",
         textStyles,
         attachments: p.attachments as string[] | undefined,
+        quoteTimestamp: p["quote-timestamp"] as number | undefined,
+        quoteAuthor:
+          typeof p["quote-author"] === "string" ? stripUuidPrefix(p["quote-author"]) : undefined,
+        quoteMessage: p["quote-message"] as string | undefined,
         timeoutMs: opts.timeoutMs,
       });
       return result as T;

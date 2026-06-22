@@ -128,21 +128,34 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
       ctx: unknown;
       cfg: unknown;
       dispatcher: {
-        sendFinalReply: (payload: { text: string }) => boolean;
+        sendFinalReply: (payload: {
+          text?: string;
+          mediaUrl?: string;
+          mediaUrls?: string[];
+        }) => boolean;
         markComplete?: () => void;
         waitForIdle?: () => Promise<void>;
       };
     }) => {
       const resolved = (await replyMock(params.ctx, {}, params.cfg)) as
-        | { text?: string }
+        | {
+            text?: string;
+            mediaUrl?: string;
+            mediaUrls?: string[];
+            replyToId?: string;
+            replyToCurrent?: boolean;
+          }
         | undefined;
       const text = typeof resolved?.text === "string" ? resolved.text.trim() : "";
-      if (text) {
-        params.dispatcher.sendFinalReply({ text });
+      const hasMedia =
+        typeof resolved?.mediaUrl === "string" ||
+        (Array.isArray(resolved?.mediaUrls) && resolved.mediaUrls.length > 0);
+      if (resolved && (text || hasMedia)) {
+        params.dispatcher.sendFinalReply(resolved);
       }
       params.dispatcher.markComplete?.();
       await params.dispatcher.waitForIdle?.();
-      return { queuedFinal: Boolean(text) };
+      return { queuedFinal: Boolean(text || hasMedia) };
     },
   };
 });

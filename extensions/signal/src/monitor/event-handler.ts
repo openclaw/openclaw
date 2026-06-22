@@ -205,6 +205,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     groupName?: string;
     isGroup: boolean;
     bodyText: string;
+    nativeReplyBody?: string;
     commandBody: string;
     timestamp?: number;
     messageId?: string;
@@ -330,6 +331,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       reply: {
         to: signalTo,
+        replyToId: entry.messageId,
       },
       message: {
         body: combinedBody,
@@ -496,6 +498,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
+          replyContext: {
+            replyToId: ctxPayload.ReplyToId,
+            author: entry.senderRecipient,
+            body: entry.nativeReplyBody ?? entry.bodyText,
+          },
         });
       },
       onError: (err, info) => {
@@ -674,6 +681,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ...last,
         bodyText: combinedText,
         commandBody: combinedCommandBody,
+        nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
         mediaPath: undefined,
         mediaType: undefined,
         mediaPaths: undefined,
