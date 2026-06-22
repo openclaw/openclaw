@@ -279,6 +279,20 @@ describe("runtime context prompt submission", () => {
     );
   });
 
+  it("preserves repeated hook text when there is no hidden runtime context", () => {
+    const modelPrompt = "Hello\n\nHook summary: Hello";
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: "Hello",
+        transcriptPrompt: "Hello",
+        modelPrompt,
+      }),
+    ).toEqual({
+      prompt: "Hello",
+      modelPrompt,
+    });
+  });
+
   it("fails closed for unterminated hidden runtime context blocks", () => {
     // Unterminated internal context is ambiguous; keep only the known transcript
     // prompt rather than leaking partial hidden content.
