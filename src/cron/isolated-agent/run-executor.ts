@@ -332,6 +332,9 @@ export function createCronPromptExecutor(params: {
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
             lane: resolveCronAgentLane(params.lane),
+            // Intentionally-silent cron jobs (watchers that say nothing unless
+            // there is something to report) should not throw empty_response.
+            allowEmptyAssistantReplyAsSilent: true,
             cliSessionId,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel,
@@ -435,6 +438,9 @@ export function createCronPromptExecutor(params: {
             : undefined,
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
+          // Intentionally-silent cron jobs (watchers that say nothing unless
+          // there is something to report) should not throw empty_response.
+          allowEmptyAssistantReplyAsSilent: true,
           requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
           disableMessageTool: !params.sourceDelivery.messageTool.enabled,
           forceMessageTool: params.sourceDelivery.messageTool.force,
