@@ -323,4 +323,4 @@ export function parseToolSummary(content: string) {
     cleanContent: nonToolLines.join("\n").trim(),
   };
 }
-import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";

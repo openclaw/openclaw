@@ -1,6 +1,6 @@
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 // Control UI chat module implements stream reconciliation behavior.
 import { resetToolStream } from "../app-tool-stream.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { extractText } from "./message-extract.ts";
 import {
   streamSegmentHasItemId,

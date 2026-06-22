@@ -1,4 +1,9 @@
 import { normalizeBasePath } from "../../app-routes.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../lib/string-coerce.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 // Control UI module implements app chat behavior.
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { setLastActiveSessionKey } from "../../ui/app-last-active-session.ts";
@@ -63,10 +68,6 @@ import {
   resolveUiSelectedGlobalAgentId,
 } from "../../ui/session-key.ts";
 import { isSessionRunActive } from "../../ui/session-run-state.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../ui/string-coerce.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
@@ -80,7 +81,6 @@ import type {
   ChatQueueSkillWorkshopRevision,
   ChatSessionRefreshTarget,
 } from "../../ui/ui-types.ts";
-import { generateUUID } from "../../ui/uuid.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import {
   applyChatHistorySessionInfo,

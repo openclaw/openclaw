@@ -2,7 +2,7 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setUiTimeFormatPreference } from "../format.ts";
+import { setUiTimeFormatPreference } from "../../lib/format.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import {
   formatChatTimestampForDisplay,

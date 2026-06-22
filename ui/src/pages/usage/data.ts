@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 // Control UI controller manages usage gateway state.
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import {
@@ -5,7 +6,6 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../ui/controllers/scope-errors.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
 import type {
   SessionsUsageResult,
   CostUsageSummary,

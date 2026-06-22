@@ -1,9 +1,9 @@
 // Control UI view renders activity screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatTimeMs } from "../../ui/format.ts";
+import { formatTimeMs } from "../../lib/format.ts";
+import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
 import { icons } from "../../ui/icons.ts";
-import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../ui/string-coerce.ts";
 import type { ActivityEntry, ActivityStatus } from "./data.ts";
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];

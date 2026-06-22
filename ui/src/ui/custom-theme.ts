@@ -1,6 +1,6 @@
 // Control UI module implements custom theme behavior.
 import { z } from "zod";
-import { normalizeOptionalString } from "./string-coerce.ts";
+import { normalizeOptionalString } from "../lib/string-coerce.ts";
 
 const TWEAKCN_HOSTS = new Set(["tweakcn.com", "www.tweakcn.com"]);
 const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;

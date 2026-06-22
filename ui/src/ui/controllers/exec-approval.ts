@@ -1,5 +1,5 @@
 // Control UI controller manages exec approval gateway state.
-import { normalizeOptionalString } from "../string-coerce.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 export type ExecApprovalRequestPayload = {
   command: string;

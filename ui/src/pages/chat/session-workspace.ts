@@ -1,7 +1,7 @@
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../ui/session-key.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
-import { normalizeOptionalString } from "../../ui/string-coerce.ts";
 import type {
   ArtifactDownloadResult,
   SessionWorkspaceGetResult,

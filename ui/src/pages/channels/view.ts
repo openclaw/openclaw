@@ -1,7 +1,7 @@
 // Channels page renders its screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../../ui/format.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type {
   ChannelAccountSnapshot,
   ChannelUiMetaEntry,

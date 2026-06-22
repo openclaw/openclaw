@@ -8,16 +8,17 @@ import {
   formatFastModeCurrentStatus,
 } from "../../../../src/shared/fast-mode.js";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "../../lib/string-coerce.ts";
+import { generateUUID } from "../../lib/uuid.ts";
+import {
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../session-key.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../string-coerce.ts";
 import {
   formatThinkingLevels,
   normalizeThinkLevel,
@@ -33,7 +34,6 @@ import type {
   SessionsListResult,
   SessionsPatchResult,
 } from "../types.ts";
-import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
 import { formatCompactTokenCount } from "./token-format.ts";
 

@@ -24,8 +24,8 @@ import {
   blockArtCodeBlockCopyPayloadEncoding,
   encodeBlockArtCodeBlockCopyPayload,
 } from "./chat/code-block-copy-payload.ts";
-import { truncateText } from "./format.ts";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import { truncateText } from "../lib/format.ts";
+import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 
 const allowedTags = [
   "a",

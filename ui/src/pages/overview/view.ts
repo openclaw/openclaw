@@ -2,19 +2,19 @@
 import { html, nothing } from "lit";
 import type { RouteId } from "../../app-routes.ts";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+import { formatRelativeTimestamp, formatDurationHuman } from "../../lib/format.ts";
 import {
   resolveAuthHintKind,
   type PairingHint,
   resolvePairingHint,
   shouldShowInsecureContextHint,
 } from "../../lib/overview-hints.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { EventLogEntry } from "../../ui/app-events.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../ui/external-link.ts";
-import { formatRelativeTimestamp, formatDurationHuman } from "../../ui/format.ts";
 import type { GatewayHelloOk } from "../../ui/gateway.ts";
 import { icons } from "../../ui/icons.ts";
 import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../ui/storage.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
 import type {
   AttentionItem,
   CronJob,

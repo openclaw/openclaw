@@ -1,7 +1,7 @@
 // Channels page renders Signal status.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../../ui/format.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { SignalStatus } from "../../ui/types.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
 import {

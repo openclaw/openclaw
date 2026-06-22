@@ -6,12 +6,12 @@ import {
   type ControlUiEmbedSandboxMode,
 } from "../../../../src/gateway/control-ui-contract.js";
 import { normalizeBasePath } from "../../app-routes.ts";
+import { setUiTimeFormatPreference } from "../../lib/format.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "../control-ui-auth.ts";
-import { setUiTimeFormatPreference } from "../format.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import { loadLocalAssistantIdentity } from "../storage.ts";
-import { normalizeOptionalString } from "../string-coerce.ts";
 
 const SEAM_COLOR_CSS_VARIABLES = [
   "--ring",

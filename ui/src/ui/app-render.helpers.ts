@@ -8,6 +8,7 @@ import {
 import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
 import { t } from "../i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import {
   createChatSessionsLoadOverrides,
   refreshChat,
@@ -45,7 +46,6 @@ import {
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
 

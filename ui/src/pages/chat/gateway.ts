@@ -1,6 +1,8 @@
 // Control UI controller manages chat gateway state.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { getChatAttachmentDataUrl } from "../../ui/chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -49,7 +51,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../ui/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
@@ -57,7 +58,6 @@ import type {
   ModelCatalogEntry,
 } from "../../ui/types.ts";
 import type { ChatAttachment } from "../../ui/ui-types.ts";
-import { generateUUID } from "../../ui/uuid.ts";
 
 export { isGatewayMethodAdvertised } from "../../ui/gateway-methods.ts";
 

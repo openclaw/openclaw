@@ -28,9 +28,9 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
 
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-routes.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
+import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
-import { normalizeOptionalString } from "./string-coerce.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import {
   hasLocalUserIdentity,

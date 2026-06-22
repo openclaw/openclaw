@@ -1,5 +1,5 @@
 // Control UI chat module implements heartbeat display behavior.
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;

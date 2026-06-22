@@ -1,7 +1,7 @@
 // Control UI view renders nodes exec approvals screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { clampText, formatRelativeTimestamp } from "../../ui/format.ts";
+import { clampText, formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ExecApprovalsAllowlistEntry, ExecApprovalsFile } from "./exec-approvals.ts";
 import {
   resolveConfigAgents as resolveSharedConfigAgents,

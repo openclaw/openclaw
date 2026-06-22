@@ -64,7 +64,7 @@ describe("slash command browser import", () => {
       'import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";',
       'import type { GatewayBrowserClient } from "../gateway.ts";',
       'import type { IconName } from "../icons.ts";',
-      'import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";',
+      'import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";',
     ]);
     expect(importDeclarations(sharedRegistry)).toEqual([
       'import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";',

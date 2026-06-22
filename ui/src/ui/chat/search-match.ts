@@ -1,5 +1,5 @@
 // Control UI chat module implements search match behavior.
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { extractTextCached } from "./message-extract.ts";
 
 export function messageMatchesSearchQuery(message: unknown, query: string): boolean {

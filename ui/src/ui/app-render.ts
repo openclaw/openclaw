@@ -16,6 +16,9 @@ import {
   type RouterOutletSelection,
 } from "../app/router-outlet.ts";
 import { t } from "../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { formatRelativeTimestamp } from "../lib/format.ts";
+import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatCommands } from "../pages/chat/data.ts";
 import { runUpdate } from "../pages/config/data.ts";
@@ -29,18 +32,15 @@ import {
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { renderChatSessionSelect } from "./chat/session-controls.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
-import { formatRelativeTimestamp } from "./format.ts";
 import { icons } from "./icons.ts";
-import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import "../components/dashboard-header.ts";
+import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
   isSessionKeyTiedToAgent,
   normalizeAgentId,
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "./session-key.ts";
-import { normalizeOptionalString } from "./string-coerce.ts";
 import type { GatewaySessionRow } from "./types.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
 import { renderCommandPalette } from "./views/command-palette.ts";

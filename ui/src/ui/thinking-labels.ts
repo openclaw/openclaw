@@ -1,5 +1,5 @@
 // Control UI module implements thinking labels behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { normalizeThinkLevel } from "./thinking.ts";
 
 export function normalizeThinkingOptionValue(raw: string): string {

@@ -5,10 +5,13 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../lib/string-coerce.ts";
 import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
 import { buildQualifiedChatModelValue } from "../chat-model-ref.ts";
 import { controlUiPublicAssetPath } from "../public-assets.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,

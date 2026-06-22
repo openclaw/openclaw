@@ -1,8 +1,8 @@
 // Control UI view renders debug screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { formatTimeMs } from "../../lib/format.ts";
 import type { EventLogEntry } from "../../ui/app-events.ts";
-import { formatTimeMs } from "../../ui/format.ts";
 import { formatEventPayload } from "../../ui/presenter.ts";
 
 export type DebugProps = {

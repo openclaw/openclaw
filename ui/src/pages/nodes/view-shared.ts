@@ -1,5 +1,5 @@
 // Nodes page owns these pure view helpers.
-import { normalizeOptionalString } from "../../ui/string-coerce.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 export type NodeTargetOption = {
   id: string;

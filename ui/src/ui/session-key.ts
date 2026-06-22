@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "./string-coerce.ts";
+} from "../lib/string-coerce.ts";
 
 export type ParsedAgentSessionKey = {
   agentId: string;

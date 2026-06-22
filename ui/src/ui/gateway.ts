@@ -21,9 +21,9 @@ import {
   PROTOCOL_VERSION,
 } from "../../../packages/gateway-protocol/src/version.js";
 import { buildDeviceAuthPayload } from "../../../src/gateway/device-auth.js";
+import { generateUUID } from "../lib/uuid.ts";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
-import { generateUUID } from "./uuid.ts";
 
 export type GatewayEventFrame = {
   type: "event";

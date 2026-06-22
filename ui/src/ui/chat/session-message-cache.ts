@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 // Control UI chat module implements bounded visible-message caching.
 import {
   DEFAULT_MAIN_KEY,
@@ -9,7 +10,6 @@ import {
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 const MAX_CACHED_CHAT_MESSAGES = 100;

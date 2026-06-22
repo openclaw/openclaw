@@ -1,6 +1,7 @@
 import { html } from "lit";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { t } from "../../i18n/index.ts";
+import { formatTimeMs } from "../../lib/format.ts";
 import { definePage } from "../../router/index.ts";
 import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
@@ -9,7 +10,6 @@ import {
   resolveChatAgentFilterOptions,
   resolvePreferredSessionForAgent,
 } from "../../ui/chat/session-controls.ts";
-import { formatTimeMs } from "../../ui/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../ui/plugin-activation.ts";
 import { loadConfig, openConfigFile } from "../config/data.ts";
 import { loadDreamsPage } from "../loaders.ts";

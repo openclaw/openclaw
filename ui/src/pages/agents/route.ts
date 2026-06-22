@@ -1,10 +1,10 @@
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { parseAgentSessionKey } from "../../ui/session-key.ts";
-import { normalizeStringEntries } from "../../ui/string-coerce.ts";
 import {
   resolveAgentConfig,
   resolveEffectiveModelFallbacks,

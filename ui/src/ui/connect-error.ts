@@ -6,8 +6,8 @@ import {
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
 } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { resolveGatewayErrorDetailCode } from "./gateway.ts";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 type ErrorWithMessageAndDetails = {
   message?: unknown;

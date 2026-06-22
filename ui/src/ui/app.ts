@@ -5,6 +5,7 @@ import { CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE } from "../../../src/gateway/cont
 import { appRouter, createApplicationContext, type ApplicationContext } from "../app-routes.ts";
 import { createRouterOutletSnapshot } from "../app/router-outlet.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
+import { generateUUID } from "../lib/uuid.ts";
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import {
   loadToolsEffective as loadToolsEffectiveInternal,
@@ -156,7 +157,6 @@ import type {
   ToolsEffectiveResult,
 } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
-import { generateUUID } from "./uuid.ts";
 
 declare global {
   interface Window {

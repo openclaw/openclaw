@@ -1,10 +1,11 @@
 // Control UI module implements app tool stream behavior.
 import { stripInlineDirectiveTagsForDelivery } from "../../../src/utils/directive-tags.js";
+import { formatUnknownText, truncateText } from "../lib/format.ts";
+import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { updateActivityFromToolEvent, type ActivityEntry } from "../pages/activity/data.ts";
 import { createChatModelOverride } from "./chat-model-ref.ts";
 import type { ChatModelOverride } from "./chat-model-ref.types.ts";
 import type { ChatStreamSegment } from "./chat/stream-text.ts";
-import { formatUnknownText, truncateText } from "./format.ts";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -12,7 +13,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "./session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;

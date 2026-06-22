@@ -4,7 +4,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
-import { normalizeOptionalString } from "../string-coerce.ts";
+import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 
 const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;

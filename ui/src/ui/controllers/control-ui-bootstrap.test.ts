@@ -5,7 +5,7 @@ import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE,
 } from "../../../../src/gateway/control-ui-contract.js";
-import { resolveUiHourCycleOptions, setUiTimeFormatPreference } from "../format.ts";
+import { resolveUiHourCycleOptions, setUiTimeFormatPreference } from "../../lib/format.ts";
 import { loadControlUiBootstrapConfig } from "./control-ui-bootstrap.ts";
 
 function requireFetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {

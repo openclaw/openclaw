@@ -2,8 +2,8 @@
 import { html, svg, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
-import { formatDateTimeMs, formatMs, formatTimeMs } from "../../ui/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../ui/string-coerce.ts";
+import { formatDateTimeMs, formatMs, formatTimeMs } from "../../lib/format.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { parseToolSummary } from "./helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./metrics.ts";
 import type {

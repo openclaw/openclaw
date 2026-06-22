@@ -5,7 +5,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
-import { formatCost, formatTokens, formatRelativeTimestamp } from "../../ui/format.ts";
+import { formatCost, formatTokens, formatRelativeTimestamp } from "../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../ui/model-auth-helpers.ts";
 import { formatNextRun } from "../../ui/presenter.ts";
 import {

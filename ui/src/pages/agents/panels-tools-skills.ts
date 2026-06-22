@@ -9,7 +9,10 @@ import {
   computeSkillReasons,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../../ui/string-coerce.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+} from "../../lib/string-coerce.ts";
 import type {
   SkillStatusEntry,
   SkillStatusReport,

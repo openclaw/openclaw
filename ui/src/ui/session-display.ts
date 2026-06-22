@@ -1,5 +1,5 @@
 // Control UI module implements session display behavior.
-import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import type { SessionsListResult } from "./types.ts";
 
 const CHANNEL_LABELS: Record<string, string> = {
