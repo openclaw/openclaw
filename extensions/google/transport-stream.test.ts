@@ -2021,6 +2021,204 @@ describe("google transport stream", () => {
     expect(params.toolConfig).toBeUndefined();
   });
 
+  it("skips unreadable Google tools while preserving healthy declarations", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+    const cyclicSchema: Record<string, unknown> = { type: "object" };
+    cyclicSchema.properties = { self: cyclicSchema };
+    const sharedProperty = { type: "string" };
+
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      tools: [
+        {
+          get name(): string {
+            throw new Error("tool name unavailable");
+          },
+          description: "Broken",
+          parameters: {},
+        },
+        {
+          name: "revoked",
+          description: "Broken",
+          parameters: proxy,
+        },
+        {
+          name: "cyclic",
+          description: "Broken",
+          parameters: cyclicSchema,
+        },
+        {
+          name: "lookup",
+          description: "Lookup",
+          parameters: {
+            type: "object",
+            properties: {
+              first: sharedProperty,
+              second: sharedProperty,
+            },
+            required: ["first", "second"],
+          },
+        },
+      ],
+    } as never);
+
+    expect(params.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parametersJsonSchema: {
+              type: "object",
+              properties: {
+                first: { type: "string" },
+                second: { type: "string" },
+              },
+              required: ["first", "second"],
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("preserves reserved Google tool schema property names", () => {
+    const parameters = JSON.parse(
+      '{"type":"object","properties":{"__proto__":{"type":"string"}},"required":["__proto__"]}',
+    ) as Record<string, unknown>;
+
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      tools: [
+        {
+          name: "lookup",
+          description: "Lookup",
+          parameters,
+        },
+      ],
+    } as never);
+
+    const schema = params.tools?.[0]?.functionDeclarations?.[0]?.parametersJsonSchema as
+      | { properties?: Record<string, unknown>; required?: unknown }
+      | undefined;
+    const properties = schema?.properties;
+    expect(properties).toBeDefined();
+    expect(Object.hasOwn(properties as Record<string, unknown>, "__proto__")).toBe(true);
+    expect(Reflect.get(properties as Record<string, unknown>, "__proto__")).toEqual({
+      type: "string",
+    });
+    expect(schema?.required).toEqual(["__proto__"]);
+  });
+
+  it("treats null Google tool choice as no explicit choice", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+            },
+          },
+        ],
+      } as never,
+      { toolChoice: null } as never,
+    );
+
+    expect(params.tools).toBeDefined();
+    expect(params.toolConfig).toBeUndefined();
+  });
+
+  it("omits optional tools when every Google tool declaration is skipped", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "revoked",
+            description: "Broken",
+            parameters: proxy,
+          },
+        ],
+      } as never,
+      { toolChoice: "auto" },
+    );
+
+    expect(params.tools).toBeUndefined();
+    expect(params.toolConfig).toBeUndefined();
+  });
+
+  it("throws when forced Google tool choice has no valid declarations", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+
+    expect(() =>
+      buildGoogleGenerativeAiParams(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "revoked",
+              description: "Broken",
+              parameters: proxy,
+            },
+          ],
+        } as never,
+        { toolChoice: "any" },
+      ),
+    ).toThrow("Google tool choice requires at least one valid tool declaration");
+  });
+
+  it("throws when pinned function tool choice is skipped", () => {
+    const { proxy, revoke } = Proxy.revocable({}, {});
+    revoke();
+
+    expect(() =>
+      buildGoogleGenerativeAiParams(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "revoked",
+              description: "Broken",
+              parameters: proxy,
+            },
+            {
+              name: "lookup",
+              description: "Lookup",
+              parameters: {
+                type: "object",
+                properties: {
+                  query: { type: "string" },
+                },
+                required: ["query"],
+              },
+            },
+          ],
+        } as never,
+        {
+          toolChoice: {
+            type: "function",
+            function: { name: "revoked" },
+          },
+        },
+      ),
+    ).toThrow("Google tool choice references an unavailable tool: revoked");
+  });
+
   it("uses a non-empty text placeholder for empty user text", () => {
     const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
       messages: [

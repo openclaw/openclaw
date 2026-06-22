@@ -39,6 +39,7 @@ import {
   type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
 } from "./thinking-api.js";
+import { materializeGoogleToolSchema } from "./tool-schema.js";
 import {
   isGoogleVertexCredentialsMarker,
   resolveGoogleVertexAuthorizedUserHeaders,
@@ -292,7 +293,8 @@ function mapToolChoice(
     return undefined;
   }
   if (typeof choice === "object" && choice.type === "function") {
-    return { mode: "ANY", allowedFunctionNames: [choice.function.name] };
+    const name = choice.function.name;
+    return { mode: "ANY", allowedFunctionNames: [name] };
   }
   switch (choice) {
     case "none":
@@ -303,6 +305,41 @@ function mapToolChoice(
     default:
       return { mode: "AUTO" };
   }
+}
+
+function getPinnedFunctionToolName(
+  choice: GoogleTransportOptions["toolChoice"],
+): string | undefined {
+  return choice !== null && typeof choice === "object" && choice.type === "function"
+    ? choice.function.name
+    : undefined;
+}
+
+function requiresGoogleToolChoice(choice: GoogleTransportOptions["toolChoice"]): boolean {
+  return (
+    choice === "any" || choice === "required" || getPinnedFunctionToolName(choice) !== undefined
+  );
+}
+
+function collectFunctionDeclarationNames(
+  tools: GoogleGenerateContentRequest["tools"],
+): Set<string> {
+  const names = new Set<string>();
+  for (const tool of tools ?? []) {
+    const declarations = tool.functionDeclarations;
+    if (!Array.isArray(declarations)) {
+      continue;
+    }
+    for (const declaration of declarations) {
+      if (declaration && typeof declaration === "object" && "name" in declaration) {
+        const name = (declaration as { name?: unknown }).name;
+        if (typeof name === "string") {
+          names.add(name);
+        }
+      }
+    }
+  }
+  return names;
 }
 
 function mapStopReasonString(reason: string): "stop" | "length" | "error" {
@@ -707,15 +744,32 @@ function convertGoogleTools(tools: NonNullable<Context["tools"]>) {
   if (tools.length === 0) {
     return undefined;
   }
+  const functionDeclarations = tools.flatMap((tool) => {
+    const declaration = buildGoogleFunctionDeclaration(tool);
+    return declaration ? [declaration] : [];
+  });
+  if (functionDeclarations.length === 0) {
+    return undefined;
+  }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parametersJsonSchema: tool.parameters,
-      })),
+      functionDeclarations,
     },
   ];
+}
+
+function buildGoogleFunctionDeclaration(
+  tool: NonNullable<Context["tools"]>[number],
+): Record<string, unknown> | undefined {
+  try {
+    return {
+      name: tool.name,
+      description: tool.description,
+      parametersJsonSchema: materializeGoogleToolSchema(tool.parameters),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export function buildGoogleGenerativeAiParams(
@@ -759,12 +813,23 @@ export function buildGoogleGenerativeAiParams(
     };
   }
   if (!cachedContent && context.tools?.length) {
-    params.tools = convertGoogleTools(context.tools);
-    const toolChoice = mapToolChoice(options?.toolChoice);
-    if (toolChoice) {
-      params.toolConfig = {
-        functionCallingConfig: toolChoice,
-      };
+    const tools = convertGoogleTools(context.tools);
+    if (!tools && requiresGoogleToolChoice(options?.toolChoice)) {
+      throw new Error("Google tool choice requires at least one valid tool declaration");
+    }
+    if (tools) {
+      const declarationNames = collectFunctionDeclarationNames(tools);
+      const pinnedFunctionName = getPinnedFunctionToolName(options?.toolChoice);
+      if (pinnedFunctionName && !declarationNames.has(pinnedFunctionName)) {
+        throw new Error(`Google tool choice references an unavailable tool: ${pinnedFunctionName}`);
+      }
+      params.tools = tools;
+      const toolChoice = mapToolChoice(options?.toolChoice);
+      if (toolChoice) {
+        params.toolConfig = {
+          functionCallingConfig: toolChoice,
+        };
+      }
     }
   }
   return params;

@@ -350,23 +350,88 @@ const JSON_SCHEMA_META_DECLARATIONS = new Set([
   "$defs",
   "definitions", // pre-draft-2019-09 equivalent of $defs
 ]);
+const MAX_GOOGLE_TOOL_SCHEMA_DEPTH = 64;
+const MAX_GOOGLE_TOOL_SCHEMA_NODES = 10_000;
 
 /**
  * Strip meta-declarations from a schema obj
  */
 function sanitizeForOpenApi(schema: unknown): unknown {
-  if (typeof schema !== "object" || schema === null || Array.isArray(schema)) {
+  return materializeGoogleToolSchema(schema, { stripMetaDeclarations: true });
+}
+
+function materializeGoogleToolSchema(
+  schema: unknown,
+  options: { stripMetaDeclarations: boolean },
+): unknown {
+  const state = { nodes: 0 };
+  return materializeGoogleToolSchemaValue(schema, options, state, 0, new Set<object>());
+}
+
+function materializeGoogleToolSchemaValue(
+  schema: unknown,
+  options: { stripMetaDeclarations: boolean },
+  state: { nodes: number },
+  depth: number,
+  stack: Set<object>,
+): unknown {
+  if (depth > MAX_GOOGLE_TOOL_SCHEMA_DEPTH) {
+    throw new Error("Google tool schema exceeds maximum supported depth");
+  }
+  if (++state.nodes > MAX_GOOGLE_TOOL_SCHEMA_NODES) {
+    throw new Error("Google tool schema exceeds maximum supported size");
+  }
+  if (typeof schema !== "object" || schema === null) {
     return schema;
   }
-
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (JSON_SCHEMA_META_DECLARATIONS.has(key)) {
-      continue;
-    }
-    result[key] = sanitizeForOpenApi(value);
+  if (stack.has(schema)) {
+    throw new Error("Google tool schema contains a cycle");
   }
-  return result;
+
+  stack.add(schema);
+  try {
+    if (Array.isArray(schema)) {
+      return schema.map((item) =>
+        materializeGoogleToolSchemaValue(item, options, state, depth + 1, stack),
+      );
+    }
+
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(schema)) {
+      if (options.stripMetaDeclarations && JSON_SCHEMA_META_DECLARATIONS.has(key)) {
+        continue;
+      }
+      Object.defineProperty(result, key, {
+        value: materializeGoogleToolSchemaValue(value, options, state, depth + 1, stack),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+    return result;
+  } finally {
+    stack.delete(schema);
+  }
+}
+
+function buildGoogleFunctionDeclaration(
+  tool: Tool,
+  useParameters: boolean,
+): Record<string, unknown> | undefined {
+  try {
+    const name = tool.name;
+    const description = tool.description;
+    const parameters = useParameters
+      ? sanitizeForOpenApi(tool.parameters)
+      : materializeGoogleToolSchema(tool.parameters, { stripMetaDeclarations: false });
+    return {
+      name,
+      description,
+      ...(useParameters ? { parameters } : { parametersJsonSchema: parameters }),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -384,15 +449,16 @@ export function convertTools(
   if (tools.length === 0) {
     return undefined;
   }
+  const functionDeclarations = tools.flatMap((tool) => {
+    const declaration = buildGoogleFunctionDeclaration(tool, useParameters);
+    return declaration ? [declaration] : [];
+  });
+  if (functionDeclarations.length === 0) {
+    return undefined;
+  }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        ...(useParameters
-          ? { parameters: sanitizeForOpenApi(tool.parameters as unknown) }
-          : { parametersJsonSchema: tool.parameters }),
-      })),
+      functionDeclarations,
     },
   ];
 }
@@ -411,6 +477,10 @@ export function mapToolChoice(choice: string): FunctionCallingConfigMode {
     default:
       return FunctionCallingConfigMode.AUTO;
   }
+}
+
+function requiresGoogleToolChoice(choice: GoogleProviderOptions["toolChoice"]): boolean {
+  return choice === "any";
 }
 
 export function createGoogleAssistantOutput<T extends GoogleApiType>(
@@ -498,13 +568,17 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
     generationConfig.stopSequences = options.stop;
   }
 
+  const tools = context.tools && context.tools.length > 0 ? convertTools(context.tools) : undefined;
+  if (!tools && context.tools?.length && requiresGoogleToolChoice(options.toolChoice)) {
+    throw new Error("Google tool choice requires at least one valid tool declaration");
+  }
   const config: GenerateContentConfig = {
     ...(Object.keys(generationConfig).length > 0 && generationConfig),
     ...(context.systemPrompt && { systemInstruction: sanitizeSurrogates(context.systemPrompt) }),
-    ...(context.tools && context.tools.length > 0 && { tools: convertTools(context.tools) }),
+    ...(tools && { tools }),
   };
 
-  if (context.tools && context.tools.length > 0 && options.toolChoice) {
+  if (tools && options.toolChoice) {
     config.toolConfig = {
       functionCallingConfig: {
         mode: mapToolChoice(options.toolChoice),
