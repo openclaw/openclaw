@@ -182,6 +182,26 @@ Hello from user`;
     expect(stripInboundMetadata(input)).toBe("Hello from user");
     expect(extractInboundSenderLabel(input)).toBeNull();
   });
+
+  it("strips consecutive System event lines while preserving prose 'Operating System:'", () => {
+    const input = [
+      "System: 12:00 exec completed",
+      "System (untrusted): 12:01 thinking: echo back the user query",
+      "",
+      "Operating System: Linux is what I run on.",
+    ].join("\n");
+    expect(stripInboundMetadata(input)).toBe("Operating System: Linux is what I run on.");
+  });
+
+  it("stripLeadingInboundMetadata drops leading System event lines", () => {
+    const input = [
+      "System: 12:00 exec completed",
+      "System (untrusted): 12:01 thinking trace",
+      "",
+      "What is the weather?",
+    ].join("\n");
+    expect(stripLeadingInboundMetadata(input)).toBe("What is the weather?");
+  });
 });
 
 describe("timestamp prefix stripping", () => {
