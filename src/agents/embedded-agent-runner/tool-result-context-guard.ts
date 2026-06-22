@@ -7,10 +7,7 @@ import type {
   ContextEngineRuntimeSettings,
 } from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
-import {
-  CONTEXT_LIMIT_TRUNCATION_NOTICE,
-  formatContextLimitTruncationNotice,
-} from "./context-truncation-notice.js";
+import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
