@@ -374,7 +374,6 @@ function buildGoogleMeetChromeStartParams(
 ): Record<string, unknown> {
   return {
     ...params,
-    browserProfile: config.chrome.browserProfile,
     audioInputCommand: copyCommand(config.chrome.audioInputCommand),
     audioOutputCommand: copyCommand(config.chrome.audioOutputCommand),
     audioBridgeCommand: copyCommand(config.chrome.audioBridgeCommand),
