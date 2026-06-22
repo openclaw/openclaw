@@ -189,7 +189,12 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     });
     const memoryToolRoutedBootstrapFiles: CodexBootstrapFile[] = [];
     const memoryReferenceFiles: EmbeddedContextFile[] = [];
-    const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, {
+    const codexBootstrapFiles = prioritizeCodexRootMemoryBootstrapFile({
+      bootstrapFiles,
+      memoryToolsAvailable,
+      workspaceDir: params.resolvedWorkspace,
+    });
+    const contextFiles = buildBootstrapContextForFiles(codexBootstrapFiles, {
       config: params.params.config,
       agentId: params.params.agentId ?? params.sessionAgentId,
       warn: (message) => embeddedAgentLog.warn(message),
@@ -200,15 +205,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         targetWorkspaceDir: params.effectiveWorkspace,
       }),
     );
-    const codexContextFiles = ensureCodexRootMemoryContextFile({
-      bootstrapFiles,
-      contextFiles,
-      memoryToolsAvailable,
-      config: params.params.config,
-      agentId: params.params.agentId ?? params.sessionAgentId,
-      resolvedWorkspace: params.resolvedWorkspace,
-      effectiveWorkspace: params.effectiveWorkspace,
-    });
+    const codexContextFiles = contextFiles;
     const promptContextFiles = selectCodexWorkspacePromptContextFiles(codexContextFiles, {
       excludeMemory: false,
       memoryWorkspaceDir: params.effectiveWorkspace,
@@ -256,64 +253,31 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   }
 }
 
-function ensureCodexRootMemoryContextFile(params: {
+function prioritizeCodexRootMemoryBootstrapFile(params: {
   bootstrapFiles: CodexBootstrapFile[];
-  contextFiles: EmbeddedContextFile[];
   memoryToolsAvailable: boolean;
-  config: EmbeddedRunAttemptParams["config"] | undefined;
-  agentId: string;
-  resolvedWorkspace: string;
-  effectiveWorkspace: string;
-}): EmbeddedContextFile[] {
+  workspaceDir: string;
+}): CodexBootstrapFile[] {
   if (!params.memoryToolsAvailable) {
-    return params.contextFiles;
+    return params.bootstrapFiles;
   }
-  const rootMemoryBootstrapFile = params.bootstrapFiles.find(
+  const rootMemoryIndex = params.bootstrapFiles.findIndex(
     (file) =>
       !file.missing &&
       readNonEmptyString(file.path) &&
       isCodexWorkspaceRootMemoryPath({
         filePath: file.path,
-        workspaceDir: params.resolvedWorkspace,
+        workspaceDir: params.workspaceDir,
       }),
   );
-  if (!rootMemoryBootstrapFile) {
-    return params.contextFiles;
+  if (rootMemoryIndex <= 0) {
+    return params.bootstrapFiles;
   }
-  const hasInjectedRootMemory = params.contextFiles.some(
-    (file) =>
-      file.content.trim().length > 0 &&
-      isCodexWorkspaceRootMemoryContextFile({
-        file,
-        workspaceDir: params.effectiveWorkspace,
-      }),
-  );
-  if (hasInjectedRootMemory) {
-    return params.contextFiles;
-  }
-  const [rootMemoryContextFile] = buildBootstrapContextForFiles([rootMemoryBootstrapFile], {
-    config: params.config,
-    agentId: params.agentId,
-    warn: (message) => embeddedAgentLog.warn(message),
-  }).map((file) =>
-    remapCodexContextFilePath({
-      file,
-      sourceWorkspaceDir: params.resolvedWorkspace,
-      targetWorkspaceDir: params.effectiveWorkspace,
-    }),
-  );
-  if (!rootMemoryContextFile || rootMemoryContextFile.content.trim().length === 0) {
-    return params.contextFiles;
-  }
+  const rootMemoryBootstrapFile = params.bootstrapFiles[rootMemoryIndex]!;
   return [
-    ...params.contextFiles.filter(
-      (file) =>
-        !isCodexWorkspaceRootMemoryContextFile({
-          file,
-          workspaceDir: params.effectiveWorkspace,
-        }),
-    ),
-    rootMemoryContextFile,
+    rootMemoryBootstrapFile,
+    ...params.bootstrapFiles.slice(0, rootMemoryIndex),
+    ...params.bootstrapFiles.slice(rootMemoryIndex + 1),
   ];
 }
 

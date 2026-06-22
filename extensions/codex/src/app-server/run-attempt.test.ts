@@ -2920,7 +2920,7 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
-  it("keeps root MEMORY.md injected with memory tools when earlier workspace instructions exhaust the shared cap", async () => {
+  it("prioritizes root MEMORY.md with memory tools inside the shared bootstrap cap", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const memorySummary = "Memory summary survives the Codex bootstrap cap.";
@@ -2962,6 +2962,11 @@ describe("runCodexAppServerAttempt", () => {
       injectedChars: memorySummary.length,
       truncated: false,
     });
+    const injectedChars = systemPromptReport.injectedWorkspaceFiles.reduce(
+      (sum, file) => sum + file.injectedChars,
+      0,
+    );
+    expect(injectedChars).toBeLessThanOrEqual(2000);
   });
 
   it("keeps MEMORY.md bounded inside the Codex workspace context budget", async () => {
