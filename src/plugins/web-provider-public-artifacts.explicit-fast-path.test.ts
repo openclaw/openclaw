@@ -30,15 +30,6 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => {
             }),
           };
         }
-        if (dirName === "google" && artifactBasename === "web-search-provider.js") {
-          return {
-            createGeminiWebSearchProvider: () => ({
-              ...providerBase,
-              id: "gemini",
-              createTool: () => ({ description: "fixture", parameters: {} }),
-            }),
-          };
-        }
         if (dirName === "mockplugin" && artifactBasename === "web-search-contract-api.js") {
           return {
             createFuzzpluginWebSearchProvider: () => {
@@ -91,7 +82,6 @@ vi.mock("./public-surface-loader.js", async (importOriginal) => {
   };
 });
 
-import { resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts as resolveExplicitRuntimeWebSearchProviders } from "./web-provider-public-artifacts.explicit.js";
 import {
   resolveBundledWebFetchProvidersFromPublicArtifacts,
   resolveBundledWebSearchProvidersFromPublicArtifacts,
@@ -155,25 +145,6 @@ describe("web provider public artifacts explicit fast path", () => {
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "fuzzplugin",
       artifactBasename: "web-search-contract-api.js",
-    });
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
-  });
-
-  it("resolves bundled runtime web search providers by explicit plugin id", () => {
-    const provider = expectSingleProvider(
-      resolveExplicitRuntimeWebSearchProviders({
-        onlyPluginIds: ["google"],
-      }),
-    );
-
-    expect(provider.pluginId).toBe("google");
-    expect(provider.createTool({ config: {} as never })).toEqual({
-      description: "fixture",
-      parameters: {},
-    });
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
-      dirName: "google",
-      artifactBasename: "web-search-provider.js",
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });

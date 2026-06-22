@@ -42,6 +42,21 @@ describe("official external plugin catalog", () => {
       ["parallel", "@openclaw/parallel-plugin"],
       ["perplexity", "@openclaw/perplexity-plugin"],
     ] as const;
+    const newlyExternalized = [
+      ["clickclack", "@openclaw/clickclack"],
+      ["fireworks", "@openclaw/fireworks-provider"],
+      ["irc", "@openclaw/irc"],
+      ["mattermost", "@openclaw/mattermost"],
+      ["moonshot", "@openclaw/moonshot-provider"],
+      ["searxng", "@openclaw/searxng-plugin"],
+      ["signal", "@openclaw/signal"],
+      ["sms", "@openclaw/sms"],
+      ["tavily", "@openclaw/tavily-plugin"],
+      ["tencent", "@openclaw/tencent-provider"],
+      ["venice", "@openclaw/venice-provider"],
+      ["vercel-ai-gateway", "@openclaw/vercel-ai-gateway-provider"],
+      ["zai", "@openclaw/zai-provider"],
+    ] as const;
 
     for (const [id, npmSpec] of [...providers, ...plugins]) {
       expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toEqual({
@@ -51,13 +66,22 @@ describe("official external plugin catalog", () => {
         minHostVersion: ">=2026.6.8",
       });
     }
+    for (const [id, npmSpec] of newlyExternalized) {
+      expect(resolveOfficialExternalPluginInstall(expectCatalogEntry(id))).toMatchObject({
+        clawhubSpec: `clawhub:${npmSpec}`,
+        npmSpec,
+        defaultChoice: "npm",
+        minHostVersion: ">=2026.6.9",
+      });
+    }
   });
 
-  it("keeps StepFun npm-only because its ClawHub package name is unavailable", () => {
+  it("advertises StepFun with its ClawHub package and plugin API floor", () => {
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("stepfun"))).toEqual({
+      clawhubSpec: "clawhub:@openclaw/stepfun-provider",
       npmSpec: "@openclaw/stepfun-provider",
       defaultChoice: "npm",
-      minHostVersion: ">=2026.6.8",
+      minHostVersion: ">=2026.6.9",
     });
   });
 
@@ -149,9 +173,9 @@ describe("official external plugin catalog", () => {
     expect(
       resolveOfficialExternalProviderContractPluginIds({
         contract: "mediaUnderstandingProviders",
-        providerIds: new Set(["groq"]),
+        providerIds: new Set(["groq", "moonshot", "zai"]),
       }),
-    ).toEqual(["groq"]);
+    ).toEqual(["groq", "moonshot", "zai"]);
   });
 
   it("maps env-only web-fetch credentials to external plugin owners", () => {
@@ -189,9 +213,16 @@ describe("official external plugin catalog", () => {
         GROQ_API_KEY: "groq-key",
         KILOCODE_API_KEY: "kilocode-key",
         KIMICODE_API_KEY: "kimi-key",
+        KIMI_API_KEY: "moonshot-kimi-key",
+        MOONSHOT_API_KEY: "moonshot-key",
         QIANFAN_API_KEY: "qianfan-key",
         MODELSTUDIO_API_KEY: "qwen-key",
         STEPFUN_API_KEY: "stepfun-key",
+        FIREWORKS_API_KEY: "fireworks-key",
+        TOKENHUB_API_KEY: "tokenhub-key",
+        VENICE_API_KEY: "venice-key",
+        AI_GATEWAY_API_KEY: "gateway-key",
+        ZAI_API_KEY: "zai-key",
       }),
     ).toEqual([
       "arcee",
@@ -200,12 +231,18 @@ describe("official external plugin catalog", () => {
       "cloudflare-ai-gateway",
       "deepinfra",
       "deepseek",
+      "fireworks",
       "groq",
       "kilocode",
       "kimi",
+      "moonshot",
       "qianfan",
       "qwen",
       "stepfun",
+      "tencent",
+      "venice",
+      "vercel-ai-gateway",
+      "zai",
     ]);
     expect(resolveOfficialExternalProviderPluginIdsForEnv({ GROQ_API_KEY: " " })).toEqual([]);
   });
@@ -236,6 +273,14 @@ describe("official external plugin catalog", () => {
       npmSpec: "@openclaw/discord",
       allowInvalidConfigRecovery: true,
     });
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("mattermost"))).toMatchObject({
+      npmSpec: "@openclaw/mattermost",
+      allowInvalidConfigRecovery: true,
+    });
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("tavily"))).toMatchObject({
+      npmSpec: "@openclaw/tavily-plugin",
+      allowInvalidConfigRecovery: true,
+    });
   });
 
   it("lists Matrix as an official external ClawHub channel after cutover", () => {
@@ -248,7 +293,7 @@ describe("official external plugin catalog", () => {
     }
 
     expect(ids.has("matrix")).toBe(true);
-    expect(ids.has("mattermost")).toBe(false);
+    expect(ids.has("mattermost")).toBe(true);
     expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("matrix"))).toEqual({
       clawhubSpec: "clawhub:@openclaw/matrix",
       npmSpec: "@openclaw/matrix",

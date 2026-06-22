@@ -7,16 +7,13 @@ import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sd
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   testing as beforeToolCallTesting,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import {
-  cleanToolSchemaForGemini,
-  normalizeToolParameterSchema,
-  normalizeToolParameters,
-} from "./agent-tools.schema.js";
+import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
 const TEST_USAGE = {
@@ -136,15 +133,18 @@ describe("normalizeToolParameterSchema", () => {
   });
 
   it("inlines local $ref before removing unsupported keywords", () => {
-    const cleaned = cleanToolSchemaForGemini({
-      type: "object",
-      properties: {
-        foo: { $ref: "#/$defs/Foo" },
+    const cleaned = normalizeToolParameterSchema(
+      {
+        type: "object",
+        properties: {
+          foo: { $ref: "#/$defs/Foo" },
+        },
+        $defs: {
+          Foo: { type: "string", enum: ["a", "b"] },
+        },
       },
-      $defs: {
-        Foo: { type: "string", enum: ["a", "b"] },
-      },
-    }) as {
+      { modelProvider: "gemini" },
+    ) as {
       $defs?: unknown;
       properties?: Record<string, unknown>;
     };
@@ -600,18 +600,21 @@ describe("normalizeToolParameterSchema", () => {
   });
 
   it("cleans tuple items schemas", () => {
-    const cleaned = cleanToolSchemaForGemini({
-      type: "object",
-      properties: {
-        tuples: {
-          type: "array",
-          items: [
-            { type: "string", format: "uuid" },
-            { type: "number", minimum: 1 },
-          ],
+    const cleaned = normalizeToolParameterSchema(
+      {
+        type: "object",
+        properties: {
+          tuples: {
+            type: "array",
+            items: [
+              { type: "string", format: "uuid" },
+              { type: "number", minimum: 1 },
+            ],
+          },
         },
       },
-    }) as {
+      { modelProvider: "gemini" },
+    ) as {
       properties?: Record<string, unknown>;
     };
 
@@ -625,13 +628,16 @@ describe("normalizeToolParameterSchema", () => {
   });
 
   it("drops null-only union variants without flattening other unions", () => {
-    const cleaned = cleanToolSchemaForGemini({
-      type: "object",
-      properties: {
-        parentId: { anyOf: [{ type: "string" }, { type: "null" }] },
-        count: { oneOf: [{ type: "string" }, { type: "number" }] },
+    const cleaned = normalizeToolParameterSchema(
+      {
+        type: "object",
+        properties: {
+          parentId: { anyOf: [{ type: "string" }, { type: "null" }] },
+          count: { oneOf: [{ type: "string" }, { type: "number" }] },
+        },
       },
-    }) as {
+      { modelProvider: "gemini" },
+    ) as {
       properties?: Record<string, unknown>;
     };
 

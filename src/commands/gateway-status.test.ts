@@ -297,7 +297,14 @@ function mockLocalTokenEnvRefConfig(envTokenId = "MISSING_GATEWAY_TOKEN") {
 
 async function runGatewayStatus(
   runtime: ReturnType<typeof createRuntimeCapture>["runtime"],
-  opts: { timeout: string; json?: boolean; ssh?: string; sshAuto?: boolean; sshIdentity?: string },
+  opts: {
+    timeout: string;
+    json?: boolean;
+    port?: unknown;
+    ssh?: string;
+    sshAuto?: boolean;
+    sshIdentity?: string;
+  },
 ) {
   await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
 }
@@ -912,6 +919,77 @@ describe("gateway-status command", () => {
     await runGatewayStatus(runtime, { timeout: "15000", json: true });
 
     expect(requireProbeCall("ws://127.0.0.1:18789").timeoutMs).toBe(15_000);
+  });
+
+  it("uses --port for the local loopback probe target", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    probeGateway.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        port: 18789,
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true, port: "19080" });
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBe(15_000);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      network?: { localLoopbackUrl?: string | null };
+    };
+    expect(parsed.network?.localLoopbackUrl).toBe("ws://127.0.0.1:19080");
+  });
+
+  it("lets --port select the local probe despite gateway env and configured remote targets", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+    probeGateway.mockClear();
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "remote",
+        port: 18789,
+        remote: { url: "wss://remote.example:18789", token: "rtok" },
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PORT: "19001",
+        OPENCLAW_GATEWAY_URL: "wss://env-gateway.example/ws",
+      },
+      async () => {
+        await runGatewayStatus(runtime, { timeout: "15000", json: true, port: "19080" });
+      },
+    );
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(readProbeCalls().map((call) => call.url)).toEqual(["ws://127.0.0.1:19080"]);
+    expect(requireProbeCall("ws://127.0.0.1:19080").timeoutMs).toBe(15_000);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      network?: { localLoopbackUrl?: string | null };
+      primaryTargetId?: string | null;
+      targets?: Array<{ id?: string; kind?: string; url?: string }>;
+    };
+    expect(parsed.network?.localLoopbackUrl).toBe("ws://127.0.0.1:19080");
+    expect(parsed.primaryTargetId).toBe("localLoopback");
+    expect(parsed.targets).toEqual([
+      expect.objectContaining({
+        id: "localLoopback",
+        kind: "localLoopback",
+        url: "ws://127.0.0.1:19080",
+      }),
+    ]);
+  });
+
+  it("passes the full caller timeout through to active configured remote probes", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(requireProbeCall("wss://remote.example:18789").timeoutMs).toBe(15_000);
   });
 
   it("uses configured handshake timeout as the default local probe budget", async () => {

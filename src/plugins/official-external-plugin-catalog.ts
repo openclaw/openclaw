@@ -66,6 +66,7 @@ export type OfficialExternalPluginCatalogManifest = {
   channel?: {
     id?: string;
     label?: string;
+    envVars?: readonly string[];
   };
   providers?: readonly OfficialExternalProviderCatalogProvider[];
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
@@ -318,6 +319,22 @@ export function listOfficialExternalChannelCatalogEntries(): OfficialExternalPlu
   return listOfficialExternalPluginCatalogEntries().filter((entry) =>
     Boolean(getOfficialExternalPluginCatalogManifest(entry)?.channel),
   );
+}
+
+export function listOfficialExternalChannelEnvVars(): Array<{
+  channelId: string;
+  envVars: readonly string[];
+}> {
+  return listOfficialExternalChannelCatalogEntries().flatMap((entry) => {
+    const channel = getOfficialExternalPluginCatalogManifest(entry)?.channel;
+    const channelId = normalizeOptionalString(channel?.id)?.toLowerCase();
+    const envVars = uniqueStrings(
+      (channel?.envVars ?? [])
+        .map((envVar) => normalizeOptionalString(envVar))
+        .filter((envVar): envVar is string => Boolean(envVar)),
+    );
+    return channelId && envVars.length > 0 ? [{ channelId, envVars }] : [];
+  });
 }
 
 export function listOfficialExternalProviderCatalogEntries(): OfficialExternalPluginCatalogEntry[] {

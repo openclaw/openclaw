@@ -51,6 +51,11 @@ type ArtifactCollectionOptions = {
   downloadArtifactId?: string;
 };
 
+type ArtifactBase64Payload = {
+  data?: string;
+  sizeBytes: number;
+};
+
 type ResolvedArtifactSession = {
   sessionKey: string;
   agentId?: string;
@@ -155,40 +160,85 @@ function base64FromDataUrl(value: string): string | undefined {
   if (!metadata.includes(";base64")) {
     return undefined;
   }
-  return trimmed.slice(commaIndex + 1).replace(/\s+/g, "");
+  return trimmed.slice(commaIndex + 1);
 }
 
 function isBase64Whitespace(value: string): boolean {
   return value === " " || value === "\n" || value === "\r" || value === "\t";
 }
 
-function estimateBase64Size(value: string | undefined): number | undefined {
+function isArtifactBase64DataChar(value: string): boolean {
+  const code = value.charCodeAt(0);
+  return (
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) ||
+    value === "+" ||
+    value === "/" ||
+    value === "-" ||
+    value === "_"
+  );
+}
+
+function normalizeArtifactBase64Char(value: string): string {
+  if (value === "-") {
+    return "+";
+  }
+  if (value === "_") {
+    return "/";
+  }
+  return value;
+}
+
+function readArtifactBase64Payload(
+  value: string | undefined,
+  opts: { includeData: boolean },
+): ArtifactBase64Payload | undefined {
   if (!value) {
     return undefined;
   }
   let encodedLength = 0;
   let padding = 0;
+  let sawPadding = false;
+  let data = opts.includeData ? "" : undefined;
   for (const char of value) {
-    if (!char || isBase64Whitespace(char)) {
-      continue;
-    }
-    encodedLength += 1;
-  }
-  for (let index = value.length - 1; index >= 0 && padding < 2; index -= 1) {
-    const char = value[index];
-    if (!char || isBase64Whitespace(char)) {
+    if (isBase64Whitespace(char)) {
       continue;
     }
     if (char === "=") {
       padding += 1;
+      if (padding > 2) {
+        return undefined;
+      }
+      sawPadding = true;
+      encodedLength += 1;
+      if (data !== undefined) {
+        data += char;
+      }
       continue;
     }
-    break;
+    if (sawPadding || !isArtifactBase64DataChar(char)) {
+      return undefined;
+    }
+    encodedLength += 1;
+    if (data !== undefined) {
+      data += normalizeArtifactBase64Char(char);
+    }
   }
   if (encodedLength === 0) {
     return undefined;
   }
-  return Math.max(0, Math.floor((encodedLength * 3) / 4) - padding);
+  const remainder = encodedLength % 4;
+  if ((padding > 0 && remainder !== 0) || remainder === 1) {
+    return undefined;
+  }
+  if (data !== undefined && padding === 0 && remainder > 0) {
+    data += "=".repeat(4 - remainder);
+  }
+  return {
+    ...(data !== undefined ? { data } : {}),
+    sizeBytes: Math.max(0, Math.floor((encodedLength * 3) / 4) - padding),
+  };
 }
 
 function mediaUrlValue(value: unknown): string | undefined {
@@ -274,10 +324,14 @@ function resolveBlockDownload(
   const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
     (value) => typeof value === "string" && /^data:/i.test(value),
   );
-  const base64FromDetectedDataUrl = dataUrl ? base64FromDataUrl(dataUrl) : undefined;
-  const directBase64 = [data, sourceData, content].find(
-    (value) => typeof value === "string" && !/^data:/i.test(value),
+  const base64FromDetectedDataUrl = readArtifactBase64Payload(
+    dataUrl ? base64FromDataUrl(dataUrl) : undefined,
+    opts,
   );
+  const directBase64 = [data, sourceData, content]
+    .filter((value): value is string => typeof value === "string" && !/^data:/i.test(value))
+    .map((value) => readArtifactBase64Payload(value, opts))
+    .find((value): value is ArtifactBase64Payload => value !== undefined);
   const base64 = base64FromDetectedDataUrl ?? directBase64;
   const remoteUrl = [url, sourceUrl, imageUrl, audioUrl].find(
     (value) => typeof value === "string" && isSafeDownloadUrl(value),
@@ -292,9 +346,14 @@ function resolveBlockDownload(
   const sizeBytes =
     typeof explicitSize === "number" && Number.isFinite(explicitSize) && explicitSize >= 0
       ? Math.floor(explicitSize)
-      : estimateBase64Size(base64);
+      : base64?.sizeBytes;
   if (base64) {
-    return { mode: "bytes", ...(opts.includeData ? { data: base64 } : {}), mimeType, sizeBytes };
+    return {
+      mode: "bytes",
+      ...(base64.data ? { data: base64.data } : {}),
+      mimeType,
+      sizeBytes,
+    };
   }
   if (remoteUrl) {
     return { mode: "url", url: remoteUrl, mimeType, sizeBytes };

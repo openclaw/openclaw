@@ -12,7 +12,7 @@ import {
   type QaReportScenario,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { QaSuiteArtifactError } from "./errors.js";
+import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
@@ -882,21 +882,6 @@ async function writeQaSuiteArtifacts(params: {
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
   }
   return { evidencePath, report, reportPath, summaryPath };
-}
-
-async function assertQaSuiteArtifactWritten(
-  kind: "evidence" | "report" | "summary",
-  filePath: string,
-) {
-  try {
-    await fs.access(filePath);
-  } catch (error) {
-    throw new QaSuiteArtifactError(
-      `${kind}_missing`,
-      `QA suite did not produce ${kind} artifact at ${filePath}: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
-  }
 }
 
 function buildQaSuiteRuntimeMetrics(params: {

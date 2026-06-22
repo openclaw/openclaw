@@ -169,12 +169,8 @@ import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynam
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
-import {
-  buildInlineProviderModels,
-  resolveModel,
-  resolveModelAsync,
-  resolveModelWithRegistry,
-} from "./model.js";
+import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { resolveModel, resolveModelAsync, resolveModelWithRegistry } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,

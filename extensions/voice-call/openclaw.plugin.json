@@ -2,6 +2,7 @@
   "id": "voice-call",
   "name": "Voice Call",
   "description": "OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.",
+  "skills": ["./skills"],
   "commandAliases": [{ "name": "voicecall" }],
   "activation": {
     "onStartup": true,
