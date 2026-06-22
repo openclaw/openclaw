@@ -171,7 +171,7 @@ plugins.
   <Accordion title="Sessions and runs">
     | Command | Description |
     | --- | --- |
-    | `/new [title]` | Archive the current session and start a fresh one. A single-token tail (for example `/new Planning`) names the new session; use `/new "Planning notes"` or `/new --name Planning notes` for multi-word names |
+    | `/new [model\|title]` | Archive the current session and start a fresh one. Model-looking tails keep the existing model/prompt behavior; use `/new Planning`, `/new "Planning notes"`, or `/new --name Planning notes` to name the new session |
     | `/reset [soft [message]]` | Reset the current session in place. `soft` keeps the transcript, drops reused CLI backend session ids, and reruns startup |
     | `/name <title>` | Name or rename the current session. Omit the title to see the current name and a suggestion |
     | `/close` | Close and archive the current session. Alias: `/delete` |

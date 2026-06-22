@@ -30,9 +30,72 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   mutableCtx.AcpDispatchTailAfterReset = true;
 }
 
-function parseNamedNewSessionTail(resetTail: string): string | undefined {
+function getNativeCommandTitle(params: HandleCommandsParams): string | undefined {
+  if ((params.ctx.CommandSource ?? "text") === "text") {
+    return undefined;
+  }
+  const title = params.ctx.CommandArgs?.values?.title;
+  return typeof title === "string" && title.trim() ? title.trim() : undefined;
+}
+
+function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
+  const refs = new Set<string>();
+  const providers = (
+    params.cfg as {
+      models?: {
+        providers?: Record<string, { models?: Array<Record<string, unknown>> }>;
+      };
+    }
+  ).models?.providers;
+  if (!providers) {
+    return refs;
+  }
+  for (const [providerId, provider] of Object.entries(providers)) {
+    refs.add(providerId.toLowerCase());
+    for (const model of provider.models ?? []) {
+      const modelId = typeof model.id === "string" ? model.id.trim() : "";
+      const modelName = typeof model.name === "string" ? model.name.trim() : "";
+      for (const value of [modelId, modelName]) {
+        if (!value) {
+          continue;
+        }
+        refs.add(value.toLowerCase());
+        refs.add(`${providerId}/${value}`.toLowerCase());
+      }
+    }
+  }
+  return refs;
+}
+
+function looksLikeModelRef(params: HandleCommandsParams, tail: string): boolean {
+  const normalized = tail.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (collectConfiguredModelRefs(params).has(normalized)) {
+    return true;
+  }
+  if (normalized.includes("/")) {
+    return true;
+  }
+  return /^(?:gpt|o[134]|claude|gemini|llama|mistral|mixtral|codestral|qwen|deepseek|grok|kimi|command-r|sonar|phi)(?:[-_:./]|\d|$)/i.test(
+    normalized,
+  );
+}
+
+function parseNamedNewSessionTail(
+  params: HandleCommandsParams,
+  resetTail: string,
+): string | undefined {
+  const nativeTitle = getNativeCommandTitle(params);
+  if (nativeTitle) {
+    return nativeTitle;
+  }
   const tail = resetTail.trim();
   if (!tail) {
+    return undefined;
+  }
+  if (/^(?:--model(?:=|\s+)|model:)/i.test(tail)) {
     return undefined;
   }
   const flagMatch = tail.match(/^--name(?:=|\s+)(.+)$/i);
@@ -47,7 +110,7 @@ function parseNamedNewSessionTail(resetTail: string): string | undefined {
   if (quotedMatch?.[1] || quotedMatch?.[2]) {
     return (quotedMatch[1] ?? quotedMatch[2] ?? "").trim();
   }
-  if (!tail.startsWith("-") && !/\s/.test(tail)) {
+  if (!tail.startsWith("-") && !/\s/.test(tail) && !looksLikeModelRef(params, tail)) {
     return tail;
   }
   return undefined;
@@ -209,7 +272,8 @@ export async function maybeHandleResetCommand(
     previousSessionEntry: params.previousSessionEntry,
     workspaceDir: params.workspaceDir,
   });
-  const newSessionTitle = commandAction === "new" ? parseNamedNewSessionTail(resetTail) : undefined;
+  const newSessionTitle =
+    commandAction === "new" ? parseNamedNewSessionTail(params, resetTail) : undefined;
   if (newSessionTitle) {
     const writeResult = await writeSessionLabel(params, newSessionTitle);
     if (!writeResult.ok) {

@@ -1,8 +1,5 @@
-import {
-  deleteSessionEntryLifecycle,
-  resolveMainSessionKey,
-  resolveSessionStoreEntry,
-} from "../../config/sessions.js";
+import { resolveMainSessionKey, resolveSessionStoreEntry } from "../../config/sessions.js";
+import { callGateway } from "../../gateway/call.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
@@ -50,16 +47,14 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
 
   const store = params.sessionStore ?? {};
   const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
-  const storeKeys = [resolved.normalizedKey, ...resolved.legacyKeys];
-  const deletion = await deleteSessionEntryLifecycle({
-    archiveTranscript: true,
-    storePath: params.storePath,
-    target: {
-      canonicalKey: resolved.normalizedKey,
-      storeKeys,
+  const deletion = await callGateway<{ deleted?: boolean }>({
+    method: "sessions.delete",
+    params: {
+      key: resolved.normalizedKey,
+      deleteTranscript: true,
     },
   });
-  if (!deletion.deleted) {
+  if (!deletion?.deleted) {
     return deleteSessionReply("No active session was found to delete.");
   }
 

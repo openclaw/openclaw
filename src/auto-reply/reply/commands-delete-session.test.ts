@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearSessionStoreCacheForTest,
   getSessionEntry,
@@ -16,8 +16,19 @@ import {
 } from "./commands-delete-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+const callGatewayMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (params: unknown) => callGatewayMock(params),
+}));
+
 const sessionKey = "agent:main:web:delete-me";
 let tempRoots: string[] = [];
+
+beforeEach(() => {
+  callGatewayMock.mockReset();
+  callGatewayMock.mockResolvedValue({ deleted: true });
+});
 
 afterEach(async () => {
   clearSessionStoreCacheForTest();
@@ -93,16 +104,13 @@ describe("delete session command", () => {
     });
   });
 
-  it("deletes the current session and archives its transcript", async () => {
+  it("routes deletion through the gateway session lifecycle", async () => {
     const storePath = await createStorePath();
-    const transcriptPath = path.join(path.dirname(storePath), "delete-me.jsonl");
-    await fs.writeFile(transcriptPath, '{"type":"session","id":"delete-me"}\n', "utf-8");
     await upsertSessionEntry({
       storePath,
       sessionKey,
       entry: {
         sessionId: "delete-me",
-        sessionFile: transcriptPath,
         updatedAt: 1,
         totalTokens: 0,
         totalTokensFresh: true,
@@ -116,8 +124,10 @@ describe("delete session command", () => {
       shouldContinue: false,
       reply: { text: "✅ Session closed and archived." },
     });
-    expect(getSessionEntry({ storePath, sessionKey })).toBeUndefined();
-    await expect(fs.stat(transcriptPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: { key: sessionKey, deleteTranscript: true },
+    });
     expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
       { sessionKey, reason: "command-metadata" },
     ]);
@@ -135,6 +145,7 @@ describe("delete session command", () => {
     const result = await handleDeleteSessionCommand(params, true);
 
     expect(result?.reply?.text).toContain("main session cannot be deleted");
+    expect(callGatewayMock).not.toHaveBeenCalled();
     expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.sessionId).toBe(
       "main-session",
     );
@@ -152,6 +163,7 @@ describe("delete session command", () => {
     const result = await handleDeleteSessionCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
+    expect(callGatewayMock).not.toHaveBeenCalled();
     expect(getSessionEntry({ storePath, sessionKey })?.sessionId).toBe("delete-me");
   });
 });
