@@ -202,6 +202,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
     var status: NotificationAuthorizationStatus = .notDetermined
     var requestAuthorizationResult = false
     var requestAuthorizationCalls = 0
+    var addCalls = 0
 
     func authorizationStatus() async -> NotificationAuthorizationStatus {
         self.status
@@ -217,7 +218,9 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         return self.requestAuthorizationResult
     }
 
-    func add(_: UNNotificationRequest) async throws {}
+    func add(_: UNNotificationRequest) async throws {
+        self.addCalls += 1
+    }
 
     func removePendingNotificationRequests(withIdentifiers _: [String]) async {}
 
@@ -1230,13 +1233,76 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 hasStoredOperatorToken: false))
     }
 
-    @Test @MainActor func successfulBootstrapOnboardingRequestsNotificationAuthorization() async {
+    @Test @MainActor func successfulBootstrapOnboardingDoesNotRequestNotificationAuthorization() async {
         let center = MockBootstrapNotificationCenter()
         let appModel = NodeAppModel(notificationCenter: center)
 
         await appModel._test_handleSuccessfulBootstrapGatewayOnboarding()
 
-        #expect(center.requestAuthorizationCalls == 1)
+        #expect(center.requestAuthorizationCalls == 0)
+    }
+
+    @Test @MainActor func operatorGatewayRequestedEventShowsNotificationGuidanceWhenNotificationsOff() async throws {
+        let center = MockBootstrapNotificationCenter()
+        center.status = .notDetermined
+        let appModel = NodeAppModel(notificationCenter: center)
+        appModel._test_resetExecApprovalNotificationGuidanceSuppression()
+        defer { appModel._test_resetExecApprovalNotificationGuidanceSuppression() }
+
+        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+            type: "event",
+            event: ExecApprovalNotificationBridge.requestedKind,
+            payload: AnyCodable(["id": "approval-notifications-off"]),
+            seq: nil,
+            stateversion: nil))
+
+        let prompt = try #require(appModel._test_pendingNotificationPermissionGuidancePrompt())
+        #expect(prompt.approvalId == "approval-notifications-off")
+        #expect(center.requestAuthorizationCalls == 0)
+    }
+
+    @Test @MainActor func suppressedOperatorGatewayRequestedEventDoesNotShowNotificationGuidance() async {
+        let center = MockBootstrapNotificationCenter()
+        center.status = .denied
+        let appModel = NodeAppModel(notificationCenter: center)
+        appModel._test_resetExecApprovalNotificationGuidanceSuppression()
+        defer { appModel._test_resetExecApprovalNotificationGuidanceSuppression() }
+        appModel.dismissNotificationPermissionGuidancePrompt(suppressFuture: true)
+
+        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+            type: "event",
+            event: ExecApprovalNotificationBridge.requestedKind,
+            payload: AnyCodable(["id": "approval-suppressed"]),
+            seq: nil,
+            stateversion: nil))
+
+        #expect(appModel._test_pendingNotificationPermissionGuidancePrompt() == nil)
+        #expect(center.requestAuthorizationCalls == 0)
+    }
+
+    @Test @MainActor func operatorGatewayResolvedEventClearsNotificationGuidancePrompt() async throws {
+        let center = MockBootstrapNotificationCenter()
+        center.status = .denied
+        let appModel = NodeAppModel(notificationCenter: center)
+        appModel._test_resetExecApprovalNotificationGuidanceSuppression()
+        defer { appModel._test_resetExecApprovalNotificationGuidanceSuppression() }
+
+        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+            type: "event",
+            event: ExecApprovalNotificationBridge.requestedKind,
+            payload: AnyCodable(["id": "approval-guidance-resolved"]),
+            seq: nil,
+            stateversion: nil))
+        _ = try #require(appModel._test_pendingNotificationPermissionGuidancePrompt())
+
+        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+            type: "event",
+            event: ExecApprovalNotificationBridge.resolvedKind,
+            payload: AnyCodable(["id": "approval-guidance-resolved"]),
+            seq: nil,
+            stateversion: nil))
+
+        #expect(appModel._test_pendingNotificationPermissionGuidancePrompt() == nil)
     }
 
     @Test func clearingBootstrapTokenStripsReconnectConfigEvenWithoutPersistence() throws {
@@ -1296,6 +1362,82 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
         #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
+    }
+
+    @Test @MainActor func systemNotifyDoesNotRequestNotificationAuthorizationWhenOff() async throws {
+        let center = MockBootstrapNotificationCenter()
+        center.status = .notDetermined
+        let appModel = NodeAppModel(notificationCenter: center)
+        let params = OpenClawSystemNotifyParams(title: "Approval", body: "Review request")
+        let paramsData = try JSONEncoder().encode(params)
+        let req = BridgeInvokeRequest(
+            id: "notify-off",
+            command: OpenClawSystemCommand.notify.rawValue,
+            paramsJSON: String(decoding: paramsData, as: UTF8.self))
+
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok == false)
+        #expect(res.error?.code == .unavailable)
+        #expect(res.error?.message == "NOT_AUTHORIZED: notifications")
+        #expect(center.requestAuthorizationCalls == 0)
+        #expect(center.addCalls == 0)
+    }
+
+    @Test @MainActor func systemNotifySchedulesWhenNotificationsAreAlreadyAllowed() async throws {
+        let center = MockBootstrapNotificationCenter()
+        center.status = .authorized
+        let appModel = NodeAppModel(notificationCenter: center)
+        let params = OpenClawSystemNotifyParams(title: "Approval", body: "Review request")
+        let paramsData = try JSONEncoder().encode(params)
+        let req = BridgeInvokeRequest(
+            id: "notify-on",
+            command: OpenClawSystemCommand.notify.rawValue,
+            paramsJSON: String(decoding: paramsData, as: UTF8.self))
+
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok)
+        #expect(center.requestAuthorizationCalls == 0)
+        #expect(center.addCalls == 1)
+    }
+
+    @Test @MainActor func chatPushWithoutSpeechDoesNotRequestNotificationAuthorizationWhenOff() async throws {
+        let center = MockBootstrapNotificationCenter()
+        center.status = .notDetermined
+        let appModel = NodeAppModel(notificationCenter: center)
+        let params = OpenClawChatPushParams(text: "Build finished", speak: false)
+        let paramsData = try JSONEncoder().encode(params)
+        let req = BridgeInvokeRequest(
+            id: "chat-push-off",
+            command: OpenClawChatCommand.push.rawValue,
+            paramsJSON: String(decoding: paramsData, as: UTF8.self))
+
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok == false)
+        #expect(res.error?.code == .unavailable)
+        #expect(res.error?.message == "NOT_AUTHORIZED: notifications")
+        #expect(center.requestAuthorizationCalls == 0)
+        #expect(center.addCalls == 0)
+    }
+
+    @Test @MainActor func chatPushSchedulesWhenNotificationsAreAlreadyAllowed() async throws {
+        let center = MockBootstrapNotificationCenter()
+        center.status = .authorized
+        let appModel = NodeAppModel(notificationCenter: center)
+        let params = OpenClawChatPushParams(text: "Build finished", speak: false)
+        let paramsData = try JSONEncoder().encode(params)
+        let req = BridgeInvokeRequest(
+            id: "chat-push-on",
+            command: OpenClawChatCommand.push.rawValue,
+            paramsJSON: String(decoding: paramsData, as: UTF8.self))
+
+        let res = await appModel._test_handleInvoke(req)
+
+        #expect(res.ok)
+        #expect(center.requestAuthorizationCalls == 0)
+        #expect(center.addCalls == 1)
     }
 
     @Test @MainActor func handleInvokeRejectsInvalidScreenFormat() async {
