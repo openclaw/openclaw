@@ -101,10 +101,10 @@ export function formatTaskStateChangeMessage(
   const title = resolveTaskDisplayTitle(task);
   const runLabel = resolveTaskRunLabel(task);
   if (event.kind === "queued") {
-    return `Background task accepted: ${title}${runLabel}.`;
+    return `Queued in background: ${title}. I'll update you when it starts, if it runs long, fails, or finishes.`;
   }
   if (event.kind === "running") {
-    return `Background task started: ${title}${runLabel}.`;
+    return `Working in background: ${title}. I'll update you if it runs long, fails, or finishes.`;
   }
   if (event.kind === "progress") {
     const summary = sanitizeTaskStatusText(event.summary);

@@ -1579,7 +1579,8 @@ describe("task-registry", () => {
         channel: "telegram",
         to: "telegram:-1001234567890:topic:42",
         threadId: 42,
-        content: "Background task started: ACP background task (run run-topi).",
+        content:
+          "Working in background: ACP background task. I'll update you if it runs long, fails, or finishes.",
       });
       expect(peekSystemEvents(ownerKey)).toStrictEqual([]);
 
@@ -3633,7 +3634,8 @@ describe("task-registry", () => {
 
       await waitForAssertion(() =>
         expectRecordFields(sentMessageCall(), {
-          content: "Background task started: ACP background task (run run-stat).",
+          content:
+            "Working in background: ACP background task. I'll update you if it runs long, fails, or finishes.",
         }),
       );
       hoisted.sendMessageMock.mockClear();
