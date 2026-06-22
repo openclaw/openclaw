@@ -1,8 +1,3 @@
-/**
- * Channel plugin adapter type contracts.
- *
- * Defines approval, setup, config, outbound, directory, and messaging adapter surfaces.
- */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { AgentBinding } from "../../config/types.agents.js";
@@ -18,6 +13,12 @@ import type {
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
+/**
+ * Channel plugin adapter type contracts.
+ *
+ * Defines approval, setup, config, outbound, directory, and messaging adapter surfaces.
+ */
+import type { ChatType } from "../chat-type.js";
 import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
@@ -89,6 +90,14 @@ export type ChannelSetupAdapter = {
     agentId: string;
     accountId?: string;
   }) => string | undefined;
+  /** Given an explicit --bind value, determine if it is a peer/conversation ID
+   * rather than a channel account ID. Return undefined when the value should
+   * be treated as a plain accountId. */
+  resolveBindingPeerFromAccountId?: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    accountId: string;
+  }) => { kind: ChatType; id: string } | undefined;
   applyAccountName?: (params: {
     cfg: OpenClawConfig;
     accountId: string;

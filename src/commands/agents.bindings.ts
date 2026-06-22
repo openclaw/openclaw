@@ -1,6 +1,7 @@
 // Pure helpers for parsing, adding, removing, and generating agent route bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { ChatType } from "../channels/chat-type.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
@@ -288,12 +289,25 @@ export function buildChannelBindings(params: {
   const agentId = normalizeAgentId(params.agentId);
   for (const channel of params.selection) {
     const match: AgentRouteBinding["match"] = { channel };
+    const explicitAccountId = params.accountIds?.[channel]?.trim();
+    let peerBinding: { kind: ChatType; id: string } | undefined;
+    if (explicitAccountId) {
+      const plugin = getBindingChannelPlugin(channel);
+      peerBinding = plugin?.setup?.resolveBindingPeerFromAccountId?.({
+        cfg: params.config,
+        agentId,
+        accountId: explicitAccountId,
+      });
+    }
     const accountId = resolveBindingAccountId({
       channel,
       config: params.config,
       agentId,
-      explicitAccountId: params.accountIds?.[channel],
+      explicitAccountId: peerBinding ? undefined : explicitAccountId,
     });
+    if (peerBinding) {
+      match.peer = peerBinding;
+    }
     if (accountId) {
       match.accountId = accountId;
     }
@@ -330,6 +344,7 @@ export function parseBindingSpecs(params: {
       errors.push(formatUnknownChannelMessage({ channel: channelRaw }));
       continue;
     }
+    let peerBinding: { kind: ChatType; id: string } | undefined;
     let accountId: string | undefined = accountRaw?.trim();
     if (accountRaw !== undefined && !accountId) {
       errors.push(
@@ -337,13 +352,36 @@ export function parseBindingSpecs(params: {
       );
       continue;
     }
-    accountId = resolveBindingAccountId({
-      channel,
-      config: params.config,
-      agentId,
-      explicitAccountId: accountId,
-    });
+    // When an explicit :value is provided, ask the channel plugin whether it
+    // is a peer/conversation ID rather than an account ID (e.g. Feishu chat_id).
+    if (accountId) {
+      const plugin = getBindingChannelPlugin(channel);
+      peerBinding = plugin?.setup?.resolveBindingPeerFromAccountId?.({
+        cfg: params.config,
+        agentId,
+        accountId,
+      });
+    }
+    if (peerBinding) {
+      // The explicit value is a peer ID — resolve the natural accountId
+      // without passing the explicit (non-account) value.
+      accountId = resolveBindingAccountId({
+        channel,
+        config: params.config,
+        agentId,
+      });
+    } else {
+      accountId = resolveBindingAccountId({
+        channel,
+        config: params.config,
+        agentId,
+        explicitAccountId: accountId,
+      });
+    }
     const match: AgentRouteBinding["match"] = { channel };
+    if (peerBinding) {
+      match.peer = peerBinding;
+    }
     if (accountId) {
       match.accountId = accountId;
     }

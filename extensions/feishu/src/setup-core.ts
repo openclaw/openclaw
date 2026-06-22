@@ -5,6 +5,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultFeishuAccountId } from "./accounts.js";
+import { detectIdType } from "./targets.js";
 import type { FeishuConfig } from "./types.js";
 
 export function setFeishuNamedAccountEnabled(
@@ -33,6 +34,16 @@ export function setFeishuNamedAccountEnabled(
 
 export const feishuSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ cfg, accountId }) => accountId?.trim() || resolveDefaultFeishuAccountId(cfg),
+  resolveBindingPeerFromAccountId: ({ accountId }) => {
+    const idType = detectIdType(accountId);
+    if (idType === "chat_id") {
+      return { kind: "group", id: accountId };
+    }
+    if (idType === "open_id") {
+      return { kind: "direct", id: accountId };
+    }
+    return undefined;
+  },
   applyAccountConfig: ({ cfg, accountId }) => {
     const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
     if (isDefault) {
