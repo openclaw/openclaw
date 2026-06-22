@@ -114,7 +114,7 @@ describe("vercel ai gateway provider catalog", () => {
   it("preserves provider thinking metadata for known live-only upstream models", () => {
     expect(resolveVercelAiGatewayModel("openai/gpt-5.5")).toMatchObject({
       reasoning: true,
-      input: ["text"],
+      input: ["text", "image"],
     });
   });
 

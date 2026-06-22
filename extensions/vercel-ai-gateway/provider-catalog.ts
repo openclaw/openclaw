@@ -13,7 +13,9 @@ export function resolveVercelAiGatewayModel(modelId: string) {
   const model = resolveVercelAiGatewayDynamicModel(modelId);
   const input: Array<"text" | "image"> = model.input.includes("image")
     ? ["text", "image"]
-    : ["text"];
+    : /^(?:anthropic|moonshotai|openai)\//.test(modelId)
+      ? ["text", "image"]
+      : ["text"];
   return {
     ...model,
     reasoning: model.reasoning || Boolean(resolveVercelAiGatewayThinkingProfile(modelId)),
