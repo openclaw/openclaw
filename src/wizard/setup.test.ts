@@ -107,6 +107,12 @@ const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 const hasRunnableLocalAgent = vi.hoisted(() => vi.fn(async () => false));
 const finishAgentAssistedSetup = vi.hoisted(() => vi.fn(async () => {}));
 const defaultGatewayBindMode = vi.hoisted(() => vi.fn<DefaultGatewayBindMode>(() => "loopback"));
+const resolveControlUiLinks = vi.hoisted(() =>
+  vi.fn(() => ({
+    httpUrl: "http://127.0.0.1:18789",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+);
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
@@ -307,6 +313,8 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../gateway/net.js", () => ({
   defaultGatewayBindMode,
+  isLoopbackAddress: (value: string | undefined) =>
+    value === "::1" || value === "localhost" || value?.startsWith("127.") === true,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -328,10 +336,7 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   probeGatewayReachable,
   waitForGatewayReachable: vi.fn(async () => {}),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
-  resolveControlUiLinks: vi.fn(() => ({
-    httpUrl: "http://127.0.0.1:18789",
-    wsUrl: "ws://127.0.0.1:18789",
-  })),
+  resolveControlUiLinks,
 }));
 
 vi.mock("../commands/systemd-linger.js", () => ({
@@ -748,6 +753,58 @@ describe("runSetupWizard", () => {
     expect(configureGatewayForSetup).toHaveBeenCalledWith(
       expect.objectContaining({
         quickstartGateway: expect.objectContaining({
+          authMode: "token",
+        }),
+      }),
+    );
+    expect(finishAgentAssistedSetup).not.toHaveBeenCalled();
+    vi.clearAllMocks();
+  });
+
+  it("keeps authenticated non-loopback Gateway policies out of assisted setup", async () => {
+    resolveControlUiLinks.mockReturnValueOnce({
+      httpUrl: "http://192.168.1.10:18789",
+      wsUrl: "ws://192.168.1.10:18789",
+    });
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: {
+            mode: "token",
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    configureGatewayForSetup.mockClear();
+    finishAgentAssistedSetup.mockClear();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      createRuntime(),
+      buildWizardPrompter({}),
+    );
+
+    expect(configureGatewayForSetup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        quickstartGateway: expect.objectContaining({
+          bind: "lan",
           authMode: "token",
         }),
       }),

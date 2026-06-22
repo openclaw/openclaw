@@ -26,7 +26,7 @@ import { createConfigIO, replaceConfigFile, resolveGatewayPort } from "../config
 import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
-import { defaultGatewayBindMode } from "../gateway/net.js";
+import { defaultGatewayBindMode, isLoopbackAddress } from "../gateway/net.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   buildPluginCompatibilitySnapshotNotices,
@@ -75,12 +75,22 @@ function resolveQuickstartGatewayAuthMode(config: OpenClawConfig): GatewayAuthMo
 
 function canUseAgentAssistedGatewayPolicy(
   config: OpenClawConfig,
+  resolveGatewayProbeUrl: () => string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const auth = config.gateway?.auth;
   const authMode = resolveQuickstartGatewayAuthMode(config);
-  if (authMode !== "none" && auth?.rateLimit?.exemptLoopback === false) {
-    return false;
+  if (authMode !== "none") {
+    if (auth?.rateLimit?.exemptLoopback === false) {
+      return false;
+    }
+    try {
+      if (!isLoopbackAddress(new URL(resolveGatewayProbeUrl()).hostname)) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
   }
   if (authMode !== "trusted-proxy") {
     return true;
@@ -405,7 +415,17 @@ export async function runSetupWizard(
     flow === "quickstart" &&
     baseConfig.gateway?.mode !== "remote" &&
     !hasExplicitFullWizardIntent(opts) &&
-    canUseAgentAssistedGatewayPolicy(baseConfig);
+    canUseAgentAssistedGatewayPolicy(
+      baseConfig,
+      () =>
+        onboardHelpers.resolveControlUiLinks({
+          port: resolveGatewayPort(baseConfig),
+          bind: baseConfig.gateway?.bind,
+          customBindHost: baseConfig.gateway?.customBindHost,
+          basePath: baseConfig.gateway?.controlUi?.basePath,
+          tlsEnabled: baseConfig.gateway?.tls?.enabled === true,
+        }).wsUrl,
+    );
 
   if (snapshot.exists && !useAgentAssistedSetup) {
     await prompter.note(
