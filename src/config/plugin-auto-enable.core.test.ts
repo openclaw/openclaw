@@ -1196,33 +1196,39 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("does not reuse same-turn auto-enable results after discovery mutates in place", () => {
-    const config: OpenClawConfig = {};
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          browser: {
+            config: {},
+          },
+        },
+      },
+    };
     const mutableDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
-    const manifestRegistry = makeRegistry([{ id: "irc-plugin", channels: ["irc"] }]);
-    const configuredEnv = makeIsolatedEnv({
-      IRC_HOST: "irc.libera.chat",
-      IRC_NICK: "openclaw-bot",
-    });
+    const manifestRegistry = makeRegistry([{ id: "browser", channels: [] }]);
+    setupRegistryMock.resolvePluginSetupAutoEnableReasons.mockClear();
 
     const first = applyPluginAutoEnable({
       config,
       discovery: mutableDiscovery,
-      env: configuredEnv,
+      env,
       manifestRegistry,
     });
     mutableDiscovery.candidates.push(
-      makeBundledChannelCandidate({ pluginId: "irc-plugin", channelId: "irc" }),
+      makeBundledChannelCandidate({ pluginId: "unrelated-channel", channelId: "unrelated" }),
     );
     const second = applyPluginAutoEnable({
       config,
       discovery: mutableDiscovery,
-      env: configuredEnv,
+      env,
       manifestRegistry,
     });
 
-    expect(first.config.plugins?.entries?.["irc-plugin"]).toBeUndefined();
-    expect(second.config.plugins?.entries?.["irc-plugin"]?.enabled).toBe(true);
+    expect(first.config.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(second).toEqual(first);
     expect(second).not.toBe(first);
+    expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(2);
   });
 
   it("does not reuse same-turn auto-enable results after env mutates in place", () => {
