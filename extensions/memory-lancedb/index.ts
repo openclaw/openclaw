@@ -1577,7 +1577,10 @@ export default definePluginEntry({
           const text = results
             .map(({ result, text: memoryText }, i) => {
               const escapedText = escapeMemoryForPrompt(memoryText);
-              return `${i + 1}. [${result.entry.category}] ${escapedText} (${(result.score * 100).toFixed(0)}%)`;
+              // Include the memory ID so the model can round-trip it into
+              // memory_forget(memoryId=<uuid>); details.memories is stripped
+              // before provider replay (docs/concepts/messages.md).
+              return `${i + 1}. [${result.entry.category}] ${escapedText} (${(result.score * 100).toFixed(0)}%) (id: ${result.entry.id})`;
             })
             .join("\n");
 
