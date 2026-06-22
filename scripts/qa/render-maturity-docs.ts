@@ -604,7 +604,7 @@ function renderMaturityScorecard({
     surfaceRows.push([
       `[${markdownEscape(surfaceName)}](/maturity/taxonomy#${markdownSlug(surfaceName)})`,
       markdownEscape(familyTitle(surface.family)),
-      markdownEscape(levelText(scoreSurface ?? surface, levels)),
+      markdownEscape(levelText(surface, levels)),
       scoreText(scoreSurface?.scores?.coverage),
       scoreText(scoreSurface?.scores?.quality),
       scoreText(scoreSurface?.scores?.completeness),
@@ -675,10 +675,17 @@ function renderTaxonomy({
       const scoreSurface = scoreSurfaces.get(surface.id);
       const categoryScores = categoryScoreMap(scoreSurface);
       const categoryRows: RenderScalar[][] = [
-        ["Area", "Features", "Docs", "Coverage", "Quality", "Completeness", "Long-term support"],
+        [
+          "Area",
+          "Capabilities",
+          "Docs",
+          "Coverage",
+          "Quality",
+          "Completeness",
+          "Long-term support",
+        ],
       ];
       for (const category of surface.categories) {
-        const featureNames = category.features.map((feature) => feature.name).join(", ");
         const docs = (category.docs ?? [])
           .map((doc) => docsLink(doc, docsRouteIndex))
           .filter((doc): doc is string => Boolean(doc))
@@ -686,7 +693,7 @@ function renderTaxonomy({
         const scoreCategory = categoryScores.get(category.name);
         categoryRows.push([
           markdownEscape(category.name),
-          markdownEscape(featureNames),
+          category.features.length,
           docs,
           scoreText(scoreCategory?.coverage),
           scoreText(scoreCategory?.quality),
@@ -697,7 +704,7 @@ function renderTaxonomy({
       lines.push(
         `#### ${surfaceName}`,
         "",
-        `- Level: ${markdownEscape(levelText(scoreSurface ?? surface, levels))}`,
+        `- Level: ${markdownEscape(levelText(surface, levels))}`,
         `- Rationale: ${surface.rationale ?? ""}`,
         "",
         ...markdownTable(categoryRows),
