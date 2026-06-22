@@ -3630,7 +3630,12 @@ export default definePluginEntry({
               });
               return undefined;
             }
-            if (!isEligibleInteractiveSession(ctx)) {
+            if (
+              !isEligibleInteractiveSession({
+                ...ctx,
+                sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+              })
+            ) {
               await persistPluginStatusLines({
                 api,
                 agentId: effectiveAgentId,

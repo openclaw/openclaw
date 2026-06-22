@@ -859,6 +859,26 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
+  it("does not run when a session id resolves to a dreaming-narrative cron session key", async () => {
+    hoisted.sessionStore["agent:main:dreaming-narrative-light-abc123"] = {
+      sessionId: "dreaming-session",
+      updatedAt: 1,
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionId: "dreaming-session",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("allows non-canonical session keys that merely contain the dreaming-narrative substring", async () => {
     const result = await hooks.before_prompt_build(
       { prompt: "what wings should i order?", messages: [] },
