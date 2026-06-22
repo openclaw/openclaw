@@ -1,6 +1,12 @@
+# Railway config-as-code. The container's entrypoint (scripts/railway-entrypoint.sh)
+# owns startup: it chowns the root-owned Railway volume, drops to the node user,
+# and starts the gateway bound to 0.0.0.0 on $PORT. So there is no startCommand here.
 [build]
+builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
+healthcheckPath = "/healthz"
+healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
