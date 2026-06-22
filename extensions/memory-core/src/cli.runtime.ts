@@ -235,9 +235,10 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
   const remSummary = rem.enabled
     ? `rem=${formatCron(rem.cron)} · limit=${rem.limit} · lookbackDays=${rem.lookbackDays} · minPatternStrength=${rem.minPatternStrength}`
     : null;
-  const deepSummary = deep.enabled
-    ? `${formatCron(deep.cron)} · limit=${deep.limit} · minScore=${deep.minScore} · minRecallCount=${deep.minRecallCount} · minUniqueQueries=${deep.minUniqueQueries} · recencyHalfLifeDays=${deep.recencyHalfLifeDays} · maxAgeDays=${deep.maxAgeDays ?? "none"} · maxPromotedSnippetTokens=${deep.maxPromotedSnippetTokens}`
-    : null;
+  const hasLighterPhase = light.enabled || rem.enabled;
+  const deepLabel = hasLighterPhase ? "deep=" : "";
+  const deepDetails = `${formatCron(deep.cron)} · limit=${deep.limit} · minScore=${deep.minScore} · minRecallCount=${deep.minRecallCount} · minUniqueQueries=${deep.minUniqueQueries} · recencyHalfLifeDays=${deep.recencyHalfLifeDays} · maxAgeDays=${deep.maxAgeDays ?? "none"} · maxPromotedSnippetTokens=${deep.maxPromotedSnippetTokens}`;
+  const deepSummary = deep.enabled ? `${deepLabel}${deepDetails}` : null;
   const phases = [lightSummary, remSummary, deepSummary].filter(Boolean);
   return phases.length > 0 ? phases.join(" · ") : "off";
 }

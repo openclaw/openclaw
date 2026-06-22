@@ -836,6 +836,63 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("labels deep dreaming when multiple phases are active during status", async () => {
+    getRuntimeConfig.mockReturnValue({
+      plugins: {
+        entries: {
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+                frequency: "15 2 * * *",
+                timezone: "UTC",
+                phases: {
+                  light: {
+                    enabled: true,
+                    limit: 5,
+                    lookbackDays: 1,
+                  },
+                  deep: {
+                    enabled: true,
+                    limit: 7,
+                    minScore: 0.72,
+                    minRecallCount: 4,
+                    minUniqueQueries: 2,
+                    recencyHalfLifeDays: 10,
+                    maxAgeDays: 45,
+                    maxPromotedSnippetTokens: 512,
+                  },
+                  rem: {
+                    enabled: true,
+                    limit: 2,
+                    lookbackDays: 14,
+                    minPatternStrength: 0.67,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expectLogged(log, "Dreaming: light=15 2 * * * (UTC) · limit=5 · lookbackDays=1");
+    expectLogged(log, "rem=15 2 * * * (UTC) · limit=2 · lookbackDays=14 · minPatternStrength=0.67");
+    expectLogged(log, "deep=15 2 * * * (UTC) · limit=7 · minScore=0.72");
+    expectLogged(log, "minRecallCount=4");
+    expectLogged(log, "maxPromotedSnippetTokens=512");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("preserves deep dreaming diagnostics during status", async () => {
     getRuntimeConfig.mockReturnValue({
       plugins: {
