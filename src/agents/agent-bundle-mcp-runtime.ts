@@ -696,10 +696,12 @@ export function createSessionMcpRuntime(params: {
               launchSummary: resolved.description,
               message,
             });
-            if (!reusedSession) {
-              await disposeSession(session);
-              sessions.delete(serverName);
-            }
+            // Always clean up on failure — whether reused or new.
+            // A reused session that fails (e.g. server-side Streamable HTTP
+            // session expiry with "Session not found" -32600) must be disposed
+            // and recreated, not left to persist indefinitely.
+            await disposeSession(session);
+            sessions.delete(serverName);
             failIfDisposed();
           }
         }
