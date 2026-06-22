@@ -172,12 +172,7 @@ describe("outbound policy helpers", () => {
       expected: /target provider "forum" while bound to "workspace"/,
     },
     {
-      cfg: {
-        ...workspaceConfig,
-        tools: {
-          message: { crossContext: { allowWithinProvider: false } },
-        },
-      } as OpenClawConfig,
+      cfg: workspaceConfig,
       channel: "workspace",
       action: "send" as const,
       to: "C999",
@@ -189,9 +184,18 @@ describe("outbound policy helpers", () => {
       cfg: {
         ...workspaceConfig,
         tools: {
-          message: { crossContext: { allowWithinProvider: false } },
+          message: { crossContext: { allowWithinProvider: true } },
         },
       } as OpenClawConfig,
+      channel: "workspace",
+      action: "send" as const,
+      to: "C999",
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      expected: "allow" as const,
+    },
+    {
+      cfg: workspaceConfig,
       channel: "workspace",
       action: "upload-file" as const,
       to: "C999",

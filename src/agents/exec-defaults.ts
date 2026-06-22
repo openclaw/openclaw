@@ -44,6 +44,8 @@ type LayeredExecPolicy = {
   ask: ExecAsk;
 };
 
+const clearModeOnLegacyPolicy = { clearModeOnLegacyPolicy: true } as const;
+
 function applySessionLegacyExecPolicyLayer(
   base: LayeredExecPolicy,
   sessionEntry?: SessionEntry,
@@ -190,10 +192,15 @@ export function resolveExecDefaults(params: {
   };
   const layeredPolicy = applyExecPolicyLayer(
     applySessionLegacyExecPolicyLayer(
-      applyExecPolicyLayer(applyExecPolicyLayer(basePolicy, globalExec), agentExec),
+      applyExecPolicyLayer(
+        applyExecPolicyLayer(basePolicy, globalExec, clearModeOnLegacyPolicy),
+        agentExec,
+        clearModeOnLegacyPolicy,
+      ),
       params.sessionEntry,
     ),
     params.execOverrides,
+    clearModeOnLegacyPolicy,
   );
   const modePolicy = resolveExecModePolicy(layeredPolicy);
   // Approval files are safety bounds: they can only reduce security/ask from

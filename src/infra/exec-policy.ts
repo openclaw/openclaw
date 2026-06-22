@@ -7,9 +7,19 @@ export type ExecPolicyLayer = {
   ask?: ExecAsk;
 };
 
+export type ApplyExecPolicyLayerOptions = {
+  /**
+   * Legacy security/ask config overrides predate mode. When such an override is
+   * used as a config layer, clear any inherited mode so the effective mode is
+   * re-derived from the legacy policy fields instead of the broader mode layer.
+   */
+  clearModeOnLegacyPolicy?: boolean;
+};
+
 export function applyExecPolicyLayer<TBase extends ExecPolicyLayer>(
   base: TBase,
   layer?: ExecPolicyLayer,
+  options?: ApplyExecPolicyLayerOptions,
 ): TBase & ExecPolicyLayer {
   if (!layer) {
     return base;
@@ -19,15 +29,18 @@ export function applyExecPolicyLayer<TBase extends ExecPolicyLayer>(
       ...base,
       mode: layer.mode,
       ...resolveExecPolicyForMode(layer.mode),
-    } as unknown as TBase & ExecPolicyLayer;
+    } as TBase & ExecPolicyLayer;
   }
   if (layer.security !== undefined || layer.ask !== undefined) {
-    const { mode: _mode, ...baseWithoutMode } = base;
+    const nextBase = { ...base } as TBase & ExecPolicyLayer;
+    if (options?.clearModeOnLegacyPolicy === true) {
+      delete nextBase.mode;
+    }
     return {
-      ...baseWithoutMode,
+      ...nextBase,
       security: layer.security ?? base.security,
       ask: layer.ask ?? base.ask,
-    } as unknown as TBase & ExecPolicyLayer;
+    } as TBase & ExecPolicyLayer;
   }
   return base;
 }

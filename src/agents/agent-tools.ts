@@ -340,7 +340,12 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const globalExec = cfg?.tools?.exec;
   const agentExec =
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
-  const layeredPolicy = applyExecPolicyLayer(applyExecPolicyLayer({}, globalExec), agentExec);
+  const clearModeOnLegacyPolicy = { clearModeOnLegacyPolicy: true } as const;
+  const layeredPolicy = applyExecPolicyLayer(
+    applyExecPolicyLayer({}, globalExec, clearModeOnLegacyPolicy),
+    agentExec,
+    clearModeOnLegacyPolicy,
+  );
   return {
     host: agentExec?.host ?? globalExec?.host,
     mode: layeredPolicy.mode,
@@ -803,7 +808,9 @@ export function createOpenClawCodingTools(options?: {
   }
   options?.recordToolPrepStage?.("base-coding-tools");
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
-  const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec);
+  const effectiveExecPolicy = applyExecPolicyLayer(execConfig, options?.exec, {
+    clearModeOnLegacyPolicy: true,
+  });
   const execTool = includeShellTools
     ? createLazyExecTool({
         ...execDefaults,

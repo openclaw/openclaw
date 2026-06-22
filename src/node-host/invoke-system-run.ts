@@ -202,6 +202,7 @@ export function resolveEffectiveSystemRunExecPolicy(params: {
 }): EffectiveSystemRunExecPolicy {
   const agentExec = resolveAgentExecConfig(params.cfg, params.agentId);
   const globalExec = params.cfg.tools?.exec;
+  const clearModeOnLegacyPolicy = { clearModeOnLegacyPolicy: true } as const;
   const layeredPolicy = applyExecPolicyLayer(
     applyExecPolicyLayer(
       {
@@ -209,8 +210,10 @@ export function resolveEffectiveSystemRunExecPolicy(params: {
         ask: params.defaultAsk,
       },
       globalExec,
+      clearModeOnLegacyPolicy,
     ),
     agentExec,
+    clearModeOnLegacyPolicy,
   );
   const modePolicy = resolveExecModePolicy({
     mode: layeredPolicy.mode,
