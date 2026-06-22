@@ -23,6 +23,7 @@ import {
 } from "../infra/event-session-routing.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { appendRegularFile } from "../infra/regular-file.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -350,7 +351,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     try {
-      pendingLogLines += `${JSON.stringify(entry)}\n`;
+      pendingLogLines += `${redactSensitiveText(JSON.stringify(entry))}\n`;
       if (pendingLogLines.length >= 16_384) {
         flushLogBuffer();
         return;

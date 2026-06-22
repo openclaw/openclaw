@@ -611,7 +611,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
         ...structuredFields,
         ...traceFields,
       };
-      const line = redactSensitiveText(JSON.stringify(redactLogRecordForTransport(record)));
+      const line = redactSensitiveText(JSON.stringify(record));
       const payload = `${line}\n`;
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const nextBytes = currentFileBytes + payloadBytes;
