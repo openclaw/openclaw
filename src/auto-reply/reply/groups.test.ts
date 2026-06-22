@@ -91,6 +91,15 @@ describe("group runtime loading", () => {
     vi.doUnmock("./groups.runtime.js");
   });
 
+  it("describes channel conversations as channels instead of group chats", () => {
+    const context = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+    });
+
+    expect(context).toContain("You are in a Mattermost channel.");
+    expect(context).not.toContain("You are in a Mattermost group chat.");
+  });
+
   it("builds direct chat context without silent-token guidance", () => {
     expect(
       groups.buildDirectChatContext({
