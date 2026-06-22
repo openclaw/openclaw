@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -78,18 +79,23 @@ describe("handleControlUiHttpRequest", () => {
     method: "GET" | "HEAD" | "POST";
     rootPath: string;
     basePath?: string;
+    headers?: IncomingMessage["headers"];
     rootKind?: "resolved" | "bundled";
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiHttpRequest(
-      { url: params.url, method: params.method } as IncomingMessage,
+      {
+        url: params.url,
+        method: params.method,
+        headers: params.headers ?? {},
+      } as IncomingMessage,
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
         root: { kind: params.rootKind ?? "resolved", path: params.rootPath },
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   async function runBootstrapConfigRequest(params: {
@@ -1307,6 +1313,116 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
         expect(firstEndCallLength(end)).toBe(0);
+      },
+    });
+  });
+
+  it("compresses text control-ui assets when the client accepts gzip", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const script = "const answer = 42;\n".repeat(200);
+        await writeAssetFile(tmp, "app.js", script);
+
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/assets/app.js",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "gzip" },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
+        const body = end.mock.calls[0]?.[0];
+        expect(Buffer.isBuffer(body)).toBe(true);
+        expect(gunzipSync(body as Buffer).toString("utf8")).toBe(script);
+      },
+    });
+  });
+
+  it("advertises negotiated compression on HEAD requests for text assets", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "actual.css", "body { color: red; }\n");
+
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/assets/actual.css",
+          method: "HEAD",
+          rootPath: tmp,
+          headers: { "accept-encoding": "gzip" },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(firstEndCallLength(end)).toBe(0);
+      },
+    });
+  });
+
+  it("prefers the highest-q accepted control-ui asset encoding", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const script = "const answer = 42;\n".repeat(200);
+        await writeAssetFile(tmp, "app.js", script);
+
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/assets/app.js",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "br;q=0.1, gzip;q=1" },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        const body = end.mock.calls[0]?.[0];
+        expect(Buffer.isBuffer(body)).toBe(true);
+        expect(gunzipSync(body as Buffer).toString("utf8")).toBe(script);
+      },
+    });
+  });
+
+  it("does not revive explicitly rejected gzip through wildcard encoding", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const script = "const answer = 42;\n".repeat(200);
+        await writeAssetFile(tmp, "app.js", script);
+
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/assets/app.js",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "gzip;q=0, *;q=1" },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "br");
+        const body = end.mock.calls[0]?.[0];
+        expect(Buffer.isBuffer(body)).toBe(true);
+        expect(brotliDecompressSync(body as Buffer).toString("utf8")).toBe(script);
+      },
+    });
+  });
+
+  it("does not compress already-compressed image assets", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "photo.png", "png-bytes");
+
+        const { res, end, setHeader, handled } = await runControlUiRequest({
+          url: "/assets/photo.png",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "gzip" },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(setHeader).not.toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(responseBody(end)).toBe("png-bytes");
       },
     });
   });
