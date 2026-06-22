@@ -38,28 +38,6 @@ internal fun ClawPanel(
 }
 
 /**
- * Bottom-sheet container with the app surface treatment and top-only rounding.
- */
-@Composable
-internal fun ClawSheetSurface(
-  modifier: Modifier = Modifier,
-  contentPadding: PaddingValues = PaddingValues(18.dp),
-  content: @Composable () -> Unit,
-) {
-  Surface(
-    modifier = modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
-    color = ClawTheme.colors.surface,
-    contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
-  ) {
-    Column(modifier = Modifier.padding(contentPadding)) {
-      content()
-    }
-  }
-}
-
-/**
  * Shared empty state used when a screen has no records but can still offer an action.
  */
 @Composable

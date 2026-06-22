@@ -25,6 +25,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { resolveProviderToolPolicy } from "./provider-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
+import { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import {
   resolveSubagentCapabilityStore,
   resolveStoredSubagentInheritedToolAllowlist,
@@ -142,6 +143,44 @@ export function filterToolsByPolicy(tools: AnyAgentTool[], policy?: SandboxToolP
     return tools;
   }
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
+}
+
+/** Resolve the shared profile, scope, extra, and sandbox policy layers. */
+export function resolveConfiguredToolPolicies(params: {
+  cfg: OpenClawConfig;
+  agentTools?: AgentToolsConfig;
+  sandboxMode?: "off" | "non-main" | "all";
+  agentId?: string | null;
+  extraPolicies?: readonly (SandboxToolPolicy | undefined)[];
+}): SandboxToolPolicy[] {
+  const policies: SandboxToolPolicy[] = [];
+  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
+  const profilePolicy = resolveToolProfilePolicy(profile);
+  if (profilePolicy) {
+    policies.push(profilePolicy);
+  }
+
+  const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
+  if (globalPolicy) {
+    policies.push(globalPolicy);
+  }
+
+  const agentPolicy = pickSandboxToolPolicy(params.agentTools);
+  if (agentPolicy) {
+    policies.push(agentPolicy);
+  }
+
+  for (const policy of params.extraPolicies ?? []) {
+    if (policy) {
+      policies.push(policy);
+    }
+  }
+
+  if (params.sandboxMode === "all") {
+    policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
+  }
+
+  return policies;
 }
 
 function collectUniqueStrings(values: Array<string | null | undefined>): string[] {

@@ -2765,11 +2765,6 @@ internal fun resolveOperatorSessionConnectAuth(
   )
 }
 
-internal fun shouldConnectOperatorSession(
-  auth: NodeRuntime.GatewayConnectAuth,
-  storedOperatorToken: String?,
-): Boolean = resolveOperatorSessionConnectAuth(auth, storedOperatorToken) != null
-
 private enum class HomeCanvasGatewayState {
   Connected,
   Connecting,

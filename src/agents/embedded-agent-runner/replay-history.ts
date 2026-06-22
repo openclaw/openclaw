@@ -825,9 +825,19 @@ export async function sanitizeSessionHistory(params: {
     providerSanitized = providerResult ?? undefined;
   }
   const sanitizedWithProvider = providerSanitized ?? sanitizedCompactionUsage;
+  const responsesProviderRepaired =
+    isOpenAIResponsesApi && policy.repairToolUseResultPairing
+      ? sanitizeToolUseResultPairing(sanitizedWithProvider, {
+          erroredAssistantResultPolicy: "drop",
+          // Provider replay hooks run after the core repair pipeline and may
+          // rewrite history. Keep the final Responses invariant guarded by the
+          // same Codex-compatible repair instead of failing on hook output.
+          missingToolResultText: "aborted",
+        })
+      : sanitizedWithProvider;
   const responsesInvariantChecked = isOpenAIResponsesApi
-    ? assertOpenAIResponsesToolUseResultInvariant(sanitizedWithProvider)
-    : sanitizedWithProvider;
+    ? assertOpenAIResponsesToolUseResultInvariant(responsesProviderRepaired)
+    : responsesProviderRepaired;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

@@ -1879,7 +1879,7 @@ describe("sendChatMessage", () => {
     expect(state.chatMessages).toHaveLength(1);
   });
 
-  it("passes the backing session id from history when sending after reconnect", async () => {
+  it("passes the backing session id from history without resume for ordinary sends", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1904,7 +1904,36 @@ describe("sendChatMessage", () => {
     const sendParams = requireRecord(sendRequest?.[1]);
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
+    expect(sendParams.resumeSession).toBeUndefined();
+    expect(sendParams).not.toHaveProperty("__controlUiReconnectResume");
     expect(sendParams.message).toBe("continue");
+  });
+
+  it("sends reconnect resume once when the current session matches the reconnect marker", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      currentSessionId: "session-before-reconnect",
+      reconnectResumeSessionId: "session-before-reconnect",
+    });
+
+    await requestChatSend(state, {
+      message: "continue",
+      runId: "run-1",
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        sessionId: "session-before-reconnect",
+        __controlUiReconnectResume: true,
+        message: "continue",
+        idempotencyKey: "run-1",
+      }),
+    );
+    expect(state.reconnectResumeSessionId).toBeNull();
   });
 
   it("does not reuse another global agent's visible session id for queued sends", async () => {

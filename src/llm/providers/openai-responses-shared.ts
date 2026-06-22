@@ -13,6 +13,7 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
   OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE,
@@ -254,7 +255,12 @@ export function convertResponsesMessages<TApi extends Api>(
     messages.push({
       type: "message",
       role,
-      content: [{ type: "input_text", text: sanitizeSurrogates(context.systemPrompt) }],
+      content: [
+        {
+          type: "input_text",
+          text: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
+        },
+      ],
     });
   }
 

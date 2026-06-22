@@ -632,6 +632,7 @@ struct OpenClawApp: App {
     var body: some Scene {
         WindowGroup {
             RootTabs()
+                .tint(OpenClawBrand.accent)
                 .preferredColorScheme(self.appearancePreference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
@@ -686,6 +687,7 @@ struct OpenClawApp: App {
             .flatMap(\.windows)
             .forEach { window in
                 window.overrideUserInterfaceStyle = style
+                window.tintColor = OpenClawBrand.uiAccent
             }
     }
 }

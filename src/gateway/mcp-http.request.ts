@@ -156,7 +156,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  if (params.req.method === "GET") {
+  if (params.req.method === "GET" || params.req.method === "DELETE") {
     // Origin validation first (matches the POST path): a browser loopback request is
     // rejected before bearer auth, so the local-loopback Origin boundary holds even for
     // unauthenticated browser requests.
@@ -171,39 +171,27 @@ export function validateMcpLoopbackRequest(params: {
       params.res.end(JSON.stringify({ error: "unauthorized" }));
       return null;
     }
-    logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
-    params.res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-    });
-    params.res.flushHeaders();
-    params.res.write(":\n\n");
-    params.onSseResponse?.(params.res);
-    params.req.on("close", () => {
-      if (!params.res.writableEnded) {
-        params.res.end();
-      }
-    });
-    return null;
-  }
+    if (params.req.method === "GET") {
+      logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
+      params.res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+      });
+      params.res.flushHeaders();
+      params.res.write(":\n\n");
+      params.onSseResponse?.(params.res);
+      params.req.on("close", () => {
+        if (!params.res.writableEnded) {
+          params.res.end();
+        }
+      });
+      return null;
+    }
 
-  if (params.req.method === "DELETE") {
     // Streamable HTTP session teardown. The loopback server is stateless — it owns no
     // session lifecycle — so this is an auth-gated no-op acknowledgement: clients that
     // send DELETE when closing the transport get a clean 200 rather than a 405.
-    // Origin validation first (matches the POST/GET paths), before bearer auth.
-    if (rejectsBrowserLoopbackRequest(params.req)) {
-      params.res.writeHead(403, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "forbidden" }));
-      return null;
-    }
-    const sender = resolveMcpSender(params);
-    if (!sender) {
-      params.res.writeHead(401, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "unauthorized" }));
-      return null;
-    }
     logMcpLoopbackHttp("session-delete", { method: "DELETE", path: url.pathname });
     params.res.writeHead(200, { "Content-Type": "application/json" });
     params.res.end(JSON.stringify({ ok: true }));

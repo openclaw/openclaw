@@ -183,10 +183,6 @@ export function resolveLlmIdleTimeoutMs(params?: {
     return clampImplicitTimeoutMs(agentTimeoutMs);
   }
 
-  if (params?.trigger === "cron") {
-    return 0;
-  }
-
   // The default watchdog is a network-silence-as-hang guard for cloud providers.
   // Local providers can legitimately stream nothing for many minutes during
   // prompt evaluation or thinking, so falling back to the default would abort

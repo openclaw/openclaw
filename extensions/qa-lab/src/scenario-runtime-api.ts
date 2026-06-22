@@ -86,6 +86,8 @@ export type QaScenarioRuntimeDeps = {
   extractQaToolPayload: QaScenarioRuntimeFunction;
   formatMemoryDreamingDay: QaScenarioRuntimeFunction;
   resolveSessionTranscriptsDirForAgent: QaScenarioRuntimeFunction;
+  activeMemoryToggleKey: QaScenarioRuntimeFunction;
+  setActiveMemorySessionDisabled: QaScenarioRuntimeFunction;
   buildAgentSessionKey: QaScenarioRuntimeFunction;
   normalizeLowercaseStringOrEmpty: QaScenarioRuntimeFunction;
   formatErrorMessage: QaScenarioRuntimeFunction;
@@ -177,6 +179,8 @@ type QaScenarioRuntimeApi<
   extractQaToolPayload: TDeps["extractQaToolPayload"];
   formatMemoryDreamingDay: TDeps["formatMemoryDreamingDay"];
   resolveSessionTranscriptsDirForAgent: TDeps["resolveSessionTranscriptsDirForAgent"];
+  activeMemoryToggleKey: TDeps["activeMemoryToggleKey"];
+  setActiveMemorySessionDisabled: TDeps["setActiveMemorySessionDisabled"];
   buildAgentSessionKey: TDeps["buildAgentSessionKey"];
   normalizeLowercaseStringOrEmpty: TDeps["normalizeLowercaseStringOrEmpty"];
   formatErrorMessage: TDeps["formatErrorMessage"];
@@ -283,6 +287,8 @@ export function createQaScenarioRuntimeApi<
     extractQaToolPayload: params.deps.extractQaToolPayload,
     formatMemoryDreamingDay: params.deps.formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent: params.deps.resolveSessionTranscriptsDirForAgent,
+    activeMemoryToggleKey: params.deps.activeMemoryToggleKey,
+    setActiveMemorySessionDisabled: params.deps.setActiveMemorySessionDisabled,
     buildAgentSessionKey: params.deps.buildAgentSessionKey,
     normalizeLowercaseStringOrEmpty: params.deps.normalizeLowercaseStringOrEmpty,
     formatErrorMessage: params.deps.formatErrorMessage,

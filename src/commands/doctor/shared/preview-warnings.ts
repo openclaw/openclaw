@@ -345,8 +345,11 @@ function readPreviewStringList(value: unknown): string[] | undefined {
 
 function collectUncoveredConfiguredToolSectionGrantEntries(
   configuredEntries: ConfiguredToolSectionGrantEntry[],
-  profilePolicy: ToolPolicyConfig,
+  profilePolicy: ToolPolicyConfig | undefined,
 ): ConfiguredToolSectionGrantEntry[] {
+  if (!profilePolicy) {
+    return [];
+  }
   return configuredEntries
     .map((entry) => ({
       ...entry,
@@ -403,6 +406,9 @@ function collectProfileConfiguredToolSectionScopeWarnings(params: {
     ? tools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
     : params.inheritedAlsoAllow;
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+  if (!profilePolicy) {
+    return [];
+  }
   const uncoveredEntries = collectUncoveredConfiguredToolSectionGrantEntries(
     configuredEntries,
     profilePolicy,
@@ -454,6 +460,9 @@ function collectByProviderConfiguredToolSectionWarnings(params: {
     const alsoAllow =
       readPreviewStringList(policy.alsoAllow) ?? readPreviewStringList(inheritedPolicy?.alsoAllow);
     const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+    if (!profilePolicy) {
+      return [];
+    }
     const uncoveredEntries = collectUncoveredConfiguredToolSectionGrantEntries(
       params.configuredEntries,
       profilePolicy,
@@ -560,6 +569,9 @@ function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
       readPreviewStringList(overridingPolicy?.alsoAllow) ??
       readPreviewStringList(inheritedPolicy.alsoAllow);
     const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+    if (!profilePolicy) {
+      return [];
+    }
     const uncoveredEntries = collectUncoveredConfiguredToolSectionGrantEntries(
       params.configuredEntries,
       profilePolicy,

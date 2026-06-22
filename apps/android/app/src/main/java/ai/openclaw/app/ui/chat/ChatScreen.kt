@@ -973,24 +973,6 @@ private fun userFacingChatError(error: String): String {
   }
 }
 
-/** Normalizes persisted thinking values into compact UI labels. */
-private fun thinkingDisplay(value: String): String =
-  when (value.lowercase(Locale.US)) {
-    "low" -> "Low"
-    "medium" -> "Medium"
-    "high" -> "High"
-    else -> "Off"
-  }
-
-/** Converts displayed thinking labels back to gateway request values. */
-private fun thinkingValue(display: String): String =
-  when (display.lowercase(Locale.US)) {
-    "low" -> "low"
-    "medium" -> "medium"
-    "high" -> "high"
-    else -> "off"
-  }
-
 /** Cycles through context budget presets from the compact composer control. */
 private fun nextThinkingValue(value: String): String =
   when (value.lowercase(Locale.US)) {

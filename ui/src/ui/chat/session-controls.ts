@@ -95,7 +95,10 @@ export function renderChatSessionSelect(
   const agentSelect = compact ? "" : renderChatAgentSelect(state, onSwitchSession, agentOptions);
   const sessionSwitcherOnly = options.sessionSwitcherOnly ?? false;
   const modelSelect = sessionSwitcherOnly ? "" : renderChatModelSelect(state);
-  const quotaPill = sessionSwitcherOnly ? "" : renderChatQuotaPill(state);
+  // Quota is informational, not a control: show it whenever there is room
+  // (hidden only in the collapsed/compact sidebar), independent of
+  // sessionSwitcherOnly which suppresses the model *control* (#93041).
+  const quotaPill = compact ? "" : renderChatQuotaPill(state);
   const surface = options.surface ?? "desktop";
   const selectedSessionLabel = resolveSelectedChatSessionLabel(state, sessionGroups);
   const pickerOpen = state.chatSessionPickerOpen && state.chatSessionPickerSurface === surface;

@@ -2952,6 +2952,41 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toBe("QA_CANARY_TEST");
   });
 
+  it("prefers Matrix exact marker prompts over quoted silent-reply guidance", async () => {
+    const server = await startMockServer();
+
+    const response = await postResponses(server, {
+      stream: false,
+      instructions: [
+        "You are in a Matrix group chat.",
+        'If no response is needed, reply with exactly "NO_REPLY" and nothing else.',
+      ].join(" "),
+      input: [
+        makeUserInput(
+          "@qa-sut-f28c143f:matrix-qa.test reply with only this exact marker: MATRIX_QA_CANARY_14C3958A",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe("MATRIX_QA_CANARY_14C3958A");
+  });
+
+  it("lets current exact replies beat stale exact marker history", async () => {
+    const server = await startMockServer();
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput("Earlier turn: reply with only this exact marker: STALE_MARKER"),
+        makeUserInput("Reply exactly: CURRENT_REPLY"),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe("CURRENT_REPLY");
+  });
+
   it("uses WhatsApp location markers only for the matching coordinate body", async () => {
     const server = await startMockServer();
     const setupInput = makeUserInput(
