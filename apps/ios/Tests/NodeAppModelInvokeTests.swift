@@ -200,22 +200,10 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
 
 private final class MockBootstrapNotificationCenter: NotificationCentering, @unchecked Sendable {
     var status: NotificationAuthorizationStatus = .notDetermined
-    var requestAuthorizationResult = false
-    var requestAuthorizationCalls = 0
     var addCalls = 0
 
     func authorizationStatus() async -> NotificationAuthorizationStatus {
         self.status
-    }
-
-    func requestAuthorization(options _: UNAuthorizationOptions) async throws -> Bool {
-        self.requestAuthorizationCalls += 1
-        if self.requestAuthorizationResult {
-            self.status = .authorized
-        } else {
-            self.status = .denied
-        }
-        return self.requestAuthorizationResult
     }
 
     func add(_: UNNotificationRequest) async throws {
@@ -1233,15 +1221,6 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
                 hasStoredOperatorToken: false))
     }
 
-    @Test @MainActor func successfulBootstrapOnboardingDoesNotRequestNotificationAuthorization() async {
-        let center = MockBootstrapNotificationCenter()
-        let appModel = NodeAppModel(notificationCenter: center)
-
-        await appModel._test_handleSuccessfulBootstrapGatewayOnboarding()
-
-        #expect(center.requestAuthorizationCalls == 0)
-    }
-
     @Test @MainActor func operatorGatewayRequestedEventShowsNotificationGuidanceWhenNotificationsOff() async throws {
         let center = MockBootstrapNotificationCenter()
         center.status = .notDetermined
@@ -1258,7 +1237,6 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
 
         let prompt = try #require(appModel._test_pendingNotificationPermissionGuidancePrompt())
         #expect(prompt.approvalId == "approval-notifications-off")
-        #expect(center.requestAuthorizationCalls == 0)
     }
 
     @Test @MainActor func suppressedOperatorGatewayRequestedEventDoesNotShowNotificationGuidance() async {
@@ -1277,7 +1255,6 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
             stateversion: nil))
 
         #expect(appModel._test_pendingNotificationPermissionGuidancePrompt() == nil)
-        #expect(center.requestAuthorizationCalls == 0)
     }
 
     @Test @MainActor func operatorGatewayResolvedEventClearsNotificationGuidancePrompt() async throws {
@@ -1364,7 +1341,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
     }
 
-    @Test @MainActor func systemNotifyDoesNotRequestNotificationAuthorizationWhenOff() async throws {
+    @Test @MainActor func systemNotifyReturnsUnavailableWhenNotificationsOff() async throws {
         let center = MockBootstrapNotificationCenter()
         center.status = .notDetermined
         let appModel = NodeAppModel(notificationCenter: center)
@@ -1380,7 +1357,6 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
         #expect(res.error?.message == "NOT_AUTHORIZED: notifications")
-        #expect(center.requestAuthorizationCalls == 0)
         #expect(center.addCalls == 0)
     }
 
@@ -1398,11 +1374,10 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         let res = await appModel._test_handleInvoke(req)
 
         #expect(res.ok)
-        #expect(center.requestAuthorizationCalls == 0)
         #expect(center.addCalls == 1)
     }
 
-    @Test @MainActor func chatPushWithoutSpeechDoesNotRequestNotificationAuthorizationWhenOff() async throws {
+    @Test @MainActor func chatPushWithoutSpeechReturnsUnavailableWhenNotificationsOff() async throws {
         let center = MockBootstrapNotificationCenter()
         center.status = .notDetermined
         let appModel = NodeAppModel(notificationCenter: center)
@@ -1418,7 +1393,6 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
         #expect(res.error?.message == "NOT_AUTHORIZED: notifications")
-        #expect(center.requestAuthorizationCalls == 0)
         #expect(center.addCalls == 0)
     }
 
@@ -1436,7 +1410,6 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         let res = await appModel._test_handleInvoke(req)
 
         #expect(res.ok)
-        #expect(center.requestAuthorizationCalls == 0)
         #expect(center.addCalls == 1)
     }
 

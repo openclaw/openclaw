@@ -14,10 +14,6 @@ private final class MockNotificationCenter: NotificationCentering, @unchecked Se
         self.authorization
     }
 
-    func requestAuthorization(options _: UNAuthorizationOptions) async throws -> Bool {
-        true
-    }
-
     func add(_ request: UNNotificationRequest) async throws {
         self.addedRequests.append(request)
     }
