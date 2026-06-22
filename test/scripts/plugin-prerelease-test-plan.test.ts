@@ -364,7 +364,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "blacksmith-8vcpu-ubuntu-2404",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
