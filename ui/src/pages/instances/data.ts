@@ -1,10 +1,10 @@
-// Control UI controller manages presence gateway state.
-import type { GatewayBrowserClient } from "../gateway.ts";
-import type { PresenceEntry } from "../types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
-} from "./scope-errors.ts";
+} from "../../ui/controllers/scope-errors.ts";
+// Instances page owns presence gateway state.
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
+import type { PresenceEntry } from "../../ui/types.ts";
 
 export type PresenceState = {
   client: GatewayBrowserClient | null;
