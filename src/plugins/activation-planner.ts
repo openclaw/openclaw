@@ -103,8 +103,7 @@ export function resolveManifestActivationPlan(
       }
       if (
         params.requireExplicitManifestOwnerTrust &&
-        !isBundledManifestOwner(plugin) &&
-        !hasExplicitManifestOwnerTrust({
+        !hasExplicitActivationPlannerManifestOwnerTrust({
           plugin,
           normalizedConfig,
         })
@@ -138,6 +137,23 @@ export function resolveManifestActivationPluginIds(
   params: ResolveManifestActivationPlanParams,
 ): string[] {
   return [...resolveManifestActivationPlan(params).pluginIds];
+}
+
+function hasExplicitActivationPlannerManifestOwnerTrust(params: {
+  plugin: Pick<PluginManifestRecord, "id" | "origin">;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+}): boolean {
+  // plugins.load.paths is already an operator-selected trust boundary. Keep
+  // the trust local to planner callers so setup-only channel imports retain
+  // their stricter scoped-import policy.
+  return (
+    isBundledManifestOwner(params.plugin) ||
+    params.plugin.origin === "config" ||
+    hasExplicitManifestOwnerTrust({
+      plugin: params.plugin,
+      normalizedConfig: params.normalizedConfig,
+    })
+  );
 }
 
 function listManifestActivationTriggerReasons(

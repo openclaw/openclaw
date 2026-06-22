@@ -81,6 +81,18 @@ describe("activation planner", () => {
           origin: "workspace",
         },
         {
+          id: "load-path-harness-plugin",
+          providers: [],
+          channels: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          activation: {
+            onAgentHarnesses: ["load-path-harness"],
+          },
+          origin: "config",
+        },
+        {
           id: "demo-channel",
           channels: ["telegram"],
           providers: [],
@@ -214,6 +226,33 @@ describe("activation planner", () => {
         requireExplicitManifestOwnerTrust: true,
       }),
     ).toEqual(["custom-harness-plugin"]);
+  });
+
+  it("treats load-path manifest owners as explicitly trusted for activation planning", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "agentHarness",
+          runtime: "load-path-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual(["load-path-harness-plugin"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            deny: ["load-path-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "load-path-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual([]);
   });
 
   it("keeps ids-only provider, agent harness, channel, and route planning stable", () => {
