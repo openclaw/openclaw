@@ -67,6 +67,26 @@ async function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): Promise<st
   return await listConfiguredMessageChannels(cfg);
 }
 
+function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return false;
+  }
+  return Object.entries(channels).some(([channelId, entry]) => {
+    if (channelId === "defaults" || channelId === "modelByChannel") {
+      return false;
+    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    const record = entry as { enabled?: unknown };
+    if (record.enabled === false) {
+      return false;
+    }
+    return record.enabled === true || Object.keys(entry).some((key) => key !== "enabled");
+  });
+}
+
 async function assertConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
@@ -90,6 +110,9 @@ async function assertConfiguredAnnounceChannel(params: {
   }
 
   if (configuredChannels.length === 0) {
+    if (!hasExplicitChannelConfigEntry(params.cfg)) {
+      return;
+    }
     throw new Error(`${params.field} is not configured: ${normalizedChannel}`);
   }
 
