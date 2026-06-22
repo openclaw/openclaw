@@ -77,7 +77,7 @@ describe("Control UI Vite config", () => {
         { custom: {}, isEntry: false, ssr: false },
       );
 
-      expect(resolved).toBe(path.join(repoRoot, "ui/src/ui/browser-redact.ts"));
+      expect(resolved).toBe(path.join(repoRoot, "ui/src/lib/browser-redact.ts"));
     }
   });
 });
