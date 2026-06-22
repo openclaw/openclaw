@@ -2721,6 +2721,7 @@ export async function runCodexAppServerAttempt(
   turnIdRef.current = turn.turn.id;
   const activeTurnId = turn.turn.id;
   let assistantStreamEventEmitted = false;
+  let assistantStreamNeedsTerminalSnapshot = false;
   emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridgeRef.current = createCodexUserInputBridge({
     paramsForRun: params,
@@ -2740,6 +2741,7 @@ export async function runCodexAppServerAttempt(
       onAgentEvent: (event) => {
         if (event.stream === "assistant" && typeof event.data.delta === "string") {
           assistantStreamEventEmitted = true;
+          assistantStreamNeedsTerminalSnapshot ||= event.data.replaceable === true;
         }
         return dynamicToolParams.onAgentEvent?.(event);
       },
@@ -3013,7 +3015,7 @@ export async function runCodexAppServerAttempt(
     const terminalAssistantText = collectTerminalAssistantText(result);
     if (
       terminalAssistantText &&
-      !assistantStreamEventEmitted &&
+      (!assistantStreamEventEmitted || assistantStreamNeedsTerminalSnapshot) &&
       !finalAborted &&
       !finalPromptError
     ) {
