@@ -13,6 +13,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { formatCompactTokenCount } from "../../pages/chat/token-format.ts";
 import {
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
@@ -35,7 +36,6 @@ import type {
   SessionsPatchResult,
 } from "../types.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
-import { formatCompactTokenCount } from "./token-format.ts";
 
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
