@@ -1789,6 +1789,47 @@ export async function runReplyAgent(params: {
       }
     }
 
+    const transcriptPersistenceRunner = runResult.meta?.executionTrace?.runner;
+    const embeddedAssistantGapFill =
+      transcriptPersistenceRunner === "embedded" ||
+      (transcriptPersistenceRunner === undefined &&
+        Boolean(runResult.meta?.finalAssistantVisibleText?.trim()));
+
+    if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
+      try {
+        const attemptExecutionRuntime = await import(
+          "../../agents/command/attempt-execution.runtime.js"
+        );
+        const effectiveSessionId =
+          runResult.meta?.agentMeta?.sessionId ??
+          activeSessionEntry?.sessionId ??
+          followupRun.run.sessionId;
+        if (effectiveSessionId) {
+          activeSessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
+            body: commandBody,
+            transcriptBody: transcriptCommandBody,
+            result: runResult,
+            sessionId: effectiveSessionId,
+            sessionKey: sessionKey ?? effectiveSessionId,
+            sessionEntry: activeSessionEntry,
+            sessionStore: activeSessionStore,
+            storePath,
+            sessionAgentId: followupRun.run.agentId,
+            sessionCwd: followupRun.run.cwd,
+            config: cfg,
+            embeddedAssistantGapFill,
+          });
+          if (activeSessionStore && sessionKey && activeSessionEntry) {
+            activeSessionStore[sessionKey] = activeSessionEntry;
+          }
+        }
+      } catch (error) {
+        logVerbose(
+          `Turn transcript persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
     const payloadArray = runResult.payloads ?? [];
 
     if (blockReplyPipeline) {
