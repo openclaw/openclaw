@@ -2,8 +2,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-search";
 import {
-  normalizeResolvedSecretInputString,
   normalizeSecretInput,
+  resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -35,12 +35,18 @@ export function resolveTavilySearchConfig(cfg?: OpenClawConfig): TavilySearchCon
 }
 
 function normalizeConfiguredSecret(value: unknown, path: string): string | undefined {
-  return normalizeSecretInput(
-    normalizeResolvedSecretInputString({
-      value,
-      path,
-    }),
-  );
+  // Resolve with inspect mode so unresolved SecretRef input returns
+  // configured_unavailable instead of throwing. This lets callers fall
+  // back to process.env (or other runtime sources) without a try/catch.
+  const resolution = resolveSecretInputString({
+    value,
+    path,
+    mode: "inspect",
+  });
+  if (resolution.status === "available") {
+    return normalizeSecretInput(resolution.value);
+  }
+  return undefined;
 }
 
 export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
