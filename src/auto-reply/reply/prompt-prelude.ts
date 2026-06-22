@@ -35,15 +35,16 @@ export function buildReplyPromptBodies(params: {
   queuedBody: string;
   transcriptCommandBody: string;
 } {
-  const combinedEventsBlock = (params.systemEventBlocks ?? []).filter(Boolean).join("\n");
-  const prependEvents = (body: string) =>
-    combinedEventsBlock ? `${combinedEventsBlock}\n\n${body}` : body;
+  const systemEventEntries = (params.systemEventBlocks ?? []).filter(Boolean);
   const rawPrefixedBody = params.prefixedBody ?? params.effectiveBaseBody;
-  const bodyWithEvents = prependEvents(params.effectiveBaseBody);
-  const prefixedBodyWithEvents = appendUntrustedContext(
-    prependEvents(rawPrefixedBody),
-    params.sessionCtx.UntrustedContext,
-  );
+  // System events are runtime/operator-sourced metadata, not user instructions.
+  // Quarantine them under the untrusted-context header instead of raw-prepending,
+  // so an injected directive in a system event cannot ride the bare user turn.
+  const bodyWithEvents = appendUntrustedContext(params.effectiveBaseBody, systemEventEntries);
+  const prefixedBodyWithEvents = appendUntrustedContext(rawPrefixedBody, [
+    ...systemEventEntries,
+    ...(params.sessionCtx.UntrustedContext ?? []),
+  ]);
   const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]
     .filter(Boolean)
     .join("\n\n");
