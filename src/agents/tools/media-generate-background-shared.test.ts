@@ -4,12 +4,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
   deliverSubagentAnnouncement: vi.fn(),
+  loadRequesterSessionEntry: vi.fn(() => ({ entry: undefined })),
+}));
+const detachedTaskRuntimeMocks = vi.hoisted(() => ({
+  completeTaskRunByRunId: vi.fn(),
+  createRunningTaskRun: vi.fn(() => ({ taskId: "task-pinned-route" })),
+  failTaskRunByRunId: vi.fn(),
+  recordTaskRunProgressByRunId: vi.fn(),
 }));
 const taskRegistryDeliveryRuntimeMocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
 }));
 
 vi.mock("../subagent-announce-delivery.js", () => subagentAnnounceDeliveryMocks);
+vi.mock("../../tasks/detached-task-runtime.js", () => detachedTaskRuntimeMocks);
 vi.mock("../../tasks/task-registry-delivery-runtime.js", () => taskRegistryDeliveryRuntimeMocks);
 
 import {
@@ -20,6 +28,9 @@ import {
 
 beforeEach(() => {
   subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
+  subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReset();
+  subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({ entry: undefined });
+  detachedTaskRuntimeMocks.createRunningTaskRun.mockClear();
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
 });
 
@@ -378,6 +389,65 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
 });
 
 describe("createMediaGenerationTaskLifecycle", () => {
+  it("pins a missing requester target from session state when the task starts", async () => {
+    subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
+      entry: {
+        lastChannel: "telegram",
+        lastTo: "5866004662",
+        lastAccountId: "bot-1",
+      },
+    });
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: true,
+    });
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+
+    const handle = lifecycle.createTaskRun({
+      sessionKey: "agent:main:telegram:5866004662",
+      requesterOrigin: { channel: "telegram" },
+      prompt: "proof image",
+    });
+    expect(handle?.requesterOrigin).toEqual({
+      channel: "telegram",
+      to: "5866004662",
+      accountId: "bot-1",
+    });
+
+    // Later session drift cannot change the route stored on the task handle.
+    subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
+      entry: {
+        lastChannel: "telegram",
+        lastTo: "other-peer",
+        lastAccountId: "bot-1",
+      },
+    });
+    await lifecycle.wakeTaskCompletion({
+      handle,
+      status: "ok",
+      statusLabel: "completed successfully",
+      result: "generated",
+    });
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        completionDirectOrigin: {
+          channel: "telegram",
+          to: "5866004662",
+          accountId: "bot-1",
+        },
+      }),
+    );
+  });
+
   it("returns the completion wake delivery result", async () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: true,

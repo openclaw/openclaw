@@ -19,7 +19,12 @@ import {
   resolveRequiredCompletionDeliveryFailureTerminalResult,
   type RequiredCompletionTerminalResult,
 } from "../../tasks/task-completion-contract.js";
-import { normalizeDeliveryContext, type DeliveryContext } from "../../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -29,7 +34,10 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
-import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
+import {
+  deliverSubagentAnnouncement,
+  loadRequesterSessionEntry,
+} from "../subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
@@ -141,6 +149,12 @@ function createMediaGenerationTaskRun(params: {
   }
   const runId = `tool:${params.toolName}:${crypto.randomUUID()}`;
   try {
+    // Pin the complete requester route when detached work starts. Completion-time
+    // session state can move to another peer while generation is still running.
+    const requesterOrigin = mergeDeliveryContext(
+      normalizeDeliveryContext(params.requesterOrigin),
+      deliveryContextFromSession(loadRequesterSessionEntry(sessionKey).entry),
+    );
     const task = createRunningTaskRun({
       runtime: "cli",
       taskKind: params.taskKind,
@@ -148,7 +162,7 @@ function createMediaGenerationTaskRun(params: {
       requesterSessionKey: sessionKey,
       ownerKey: sessionKey,
       scopeKind: "session",
-      requesterOrigin: params.requesterOrigin,
+      requesterOrigin,
       childSessionKey: sessionKey,
       runId,
       label: params.label,
@@ -166,7 +180,7 @@ function createMediaGenerationTaskRun(params: {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
-      requesterOrigin: params.requesterOrigin,
+      requesterOrigin,
       taskLabel: params.prompt,
     };
     touchMediaGenerationTaskRunContext(handle);
