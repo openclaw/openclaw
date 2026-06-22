@@ -16,8 +16,8 @@ import {
   renderConfigForm,
   SECTION_META,
 } from "../../components/config-form.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { icons } from "../../ui/icons.ts";
 import {
   BORDER_RADIUS_STOPS,
   TEXT_SCALE_STOPS,

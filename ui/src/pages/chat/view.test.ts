@@ -145,7 +145,7 @@ function requireFirstAttachmentsChange(
   return attachments as ChatAttachment[];
 }
 
-vi.mock("../../ui/icons.ts", () => ({
+vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 

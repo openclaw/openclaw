@@ -6,9 +6,9 @@ import {
   titleForRoute,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-routes.ts";
+import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import type { AppViewState } from "../ui/app-view-state.ts";
-import { icons } from "../ui/icons.ts";
 
 function renderSettingsSectionNav(
   state: AppViewState,

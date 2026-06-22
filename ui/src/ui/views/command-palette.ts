@@ -2,10 +2,10 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type { RouteId } from "../../app-routes.ts";
+import { icons, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { SLASH_COMMANDS } from "../chat/slash-commands.ts";
-import { icons, type IconName } from "../icons.ts";
 
 type PaletteItem = {
   id: string;

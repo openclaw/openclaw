@@ -1,7 +1,7 @@
 // Control UI chat module implements run controls behavior.
 import { html, nothing } from "lit";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { icons } from "../icons.ts";
 
 export type ChatRunControlsProps = {
   canAbort: boolean;

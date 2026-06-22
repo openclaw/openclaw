@@ -2,6 +2,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { pathForRoute, type RouteId } from "../../app-routes.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -29,7 +30,6 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
-import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { collectQuotaWindowsFromAuthStatus, formatQuotaReset } from "../provider-quota-summary.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";

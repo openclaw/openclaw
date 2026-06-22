@@ -4,6 +4,7 @@ import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
 import {
@@ -68,7 +69,6 @@ import {
   syncToolCardExpansionState,
 } from "../../ui/chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
-import { icons } from "../../ui/icons.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../ui/session-goal.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import { detectTextDirection } from "../../ui/text-direction.ts";

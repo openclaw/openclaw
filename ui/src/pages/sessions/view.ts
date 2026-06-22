@@ -1,13 +1,13 @@
 // Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import { pathForRoute } from "../../app-routes.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../../lib/format.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
-import { icons } from "../../ui/icons.ts";
 import { formatSessionTokens } from "../../ui/presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../ui/session-goal.ts";
 import { sessionModelMatchesDefaults } from "../../ui/session-model-defaults.ts";

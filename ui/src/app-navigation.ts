@@ -1,7 +1,7 @@
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-routes.ts";
+import type { IconName } from "./components/icons.ts";
 import { t } from "./i18n/index.ts";
-import type { IconName } from "./ui/icons.js";
 
 type SidebarSection = {
   label: string;

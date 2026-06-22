@@ -1,6 +1,6 @@
 // Control UI chat module implements context notice behavior.
 import { html, nothing } from "lit";
-import { icons } from "../icons.ts";
+import { icons } from "../../components/icons.ts";
 import type { GatewaySessionRow } from "../types.ts";
 import { formatCompactTokenCount } from "./token-format.ts";
 

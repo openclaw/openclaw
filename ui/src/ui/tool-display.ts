@@ -8,8 +8,8 @@ import {
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../src/agents/tool-display-exec.js";
+import type { IconName } from "../components/icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
-import type { IconName } from "./icons.ts";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon?: string;
