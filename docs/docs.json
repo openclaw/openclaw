@@ -1654,6 +1654,19 @@
             ]
           },
           {
+            "tab": "Maturity",
+            "groups": [
+              {
+                "group": "Scorecard",
+                "pages": [
+                  "maturity/scorecard",
+                  "maturity/taxonomy",
+                  "maturity/taxonomy-outline"
+                ]
+              }
+            ]
+          },
+          {
             "tab": "Reference",
             "groups": [
               {
@@ -1851,14 +1864,6 @@
               {
                 "group": "Release and CI",
                 "pages": [
-                  {
-                    "group": "Maturity",
-                    "pages": [
-                      "maturity/scorecard",
-                      "maturity/taxonomy",
-                      "maturity/taxonomy-outline"
-                    ]
-                  },
                   "reference/RELEASING",
                   "reference/full-release-validation",
                   "reference/release-performance-sweep",
