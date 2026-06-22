@@ -2016,19 +2016,13 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    const compaction = expectCompactionResult(result);
-    // After fix for #41981: returns a compaction result (not cancel) to write
-    // a boundary entry and break the re-trigger loop.
-    // buildStructuredFallbackSummary(undefined) produces a minimal structured summary
-    expect(compaction.summary).toContain("## Decisions");
-    expect(compaction.summary).toContain("No prior history.");
-    expect(compaction.summary).toContain("## Open TODOs");
-    expect(compaction.firstKeptEntryId).toBe("entry-1");
-    expect(compaction.tokensBefore).toBe(1500);
+    // Cancelling avoids the session file write that can falsely trip the
+    // session lock fence (#95672). For zero-real-conversation sessions the
+    // re-trigger loop is harmless.
+    expect(result).toEqual({ cancel: true });
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
   });
-
-  it("returns compaction result with structured fallback summary sections", async () => {
+  it("cancels compaction when previous summary exists but no real messages", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
@@ -2051,14 +2045,12 @@ describe("compaction-safeguard double-compaction guard", () => {
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    const compaction = expectCompactionResult(result);
-    // Fallback preserves previous summary when it has required sections
-    expect(compaction.summary).toContain("## Decisions");
-    expect(compaction.summary).toContain("## Open TODOs");
-    expect(compaction.firstKeptEntryId).toBe("entry-2");
+    // Cancels regardless of previous summary when the current branch has
+    // no real conversation content to summarize (#95672).
+    expect(result).toEqual({ cancel: true });
   });
 
-  it("writes boundary again on repeated empty preparation (no cancel loop after new assistant message)", async () => {
+  it("cancels on repeated empty preparation (no fence trip on retry)", async () => {
     const sessionManager = stubSessionManager();
     const model = createAnthropicModelFixture();
     setCompactionSafeguardRuntime(sessionManager, { model });
@@ -2075,27 +2067,24 @@ describe("compaction-safeguard double-compaction guard", () => {
       signal: new AbortController().signal,
     };
 
-    // First call — writes boundary
+    // First call — cancels compaction (no boundary write, avoids fence trip)
     const { result: result1 } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    const compaction1 = expectCompactionResult(result1);
-    expect(compaction1.summary).toContain("## Decisions");
+    expect(result1).toEqual({ cancel: true });
 
-    // Simulate: after the boundary, a new assistant message arrives, SDK
-    // triggers compaction again with another empty preparation. The safeguard
-    // must write another boundary (not cancel) to avoid re-entering the
-    // cancel loop described in the maintainer review.
+    // Second call on empty preparation again — also cancels. Since there is
+    // no real conversation content in the session, the re-trigger is harmless
+    // and cancelling avoids the session file write that falsely trips the
+    // session lock fence (#95672).
     const { result: result2 } = await runCompactionScenario({
       sessionManager,
       event: mockEvent,
       apiKey: "sk-test", // pragma: allowlist secret
     });
-    const compaction2 = expectCompactionResult(result2);
-    expect(compaction2.summary).toContain("## Decisions");
-    expect(compaction2.firstKeptEntryId).toBe("entry-3");
+    expect(result2).toEqual({ cancel: true });
   });
 
   it("does not write boundary when turnPrefixMessages has real content (split-turn)", async () => {

@@ -6,6 +6,7 @@ export {
 export { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 export { resolveCronAgentLane } from "../../agents/lanes.js";
 export { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
+export { EmbeddedAttemptSessionTakeoverError } from "../../agents/embedded-agent-runner/run/attempt.session-lock.js";
 export { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 export { runWithModelFallback } from "../../agents/model-fallback.js";
 export { isCliProvider } from "../../agents/model-selection-cli.js";

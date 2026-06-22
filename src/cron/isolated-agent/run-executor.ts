@@ -18,6 +18,7 @@ import {
 } from "./channel-output-policy.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
+  EmbeddedAttemptSessionTakeoverError,
   getCliSessionId,
   ensureSelectedAgentHarnessPlugin,
   isCliProvider,
@@ -532,12 +533,27 @@ export async function executeCronRun(params: {
 
   const runStartedAt = params.runStartedAt ?? Date.now();
   const MAX_MODEL_SWITCH_RETRIES = 2;
+  const MAX_FENCE_RETRIES = 2;
   let modelSwitchRetries = 0;
+  let fenceRetries = 0;
   while (true) {
     try {
       await executor.runPrompt(params.commandBody);
       break;
     } catch (err) {
+      if (err instanceof EmbeddedAttemptSessionTakeoverError) {
+        fenceRetries += 1;
+        if (fenceRetries > MAX_FENCE_RETRIES) {
+          logWarn(
+            `[cron:${params.job.id}] EmbeddedAttemptSessionTakeoverError retry limit reached (${MAX_FENCE_RETRIES}); aborting`,
+          );
+          throw err;
+        }
+        logWarn(
+          `[cron:${params.job.id}] EmbeddedAttemptSessionTakeoverError (retry ${fenceRetries}/${MAX_FENCE_RETRIES}); retrying run`,
+        );
+        continue;
+      }
       if (!(err instanceof LiveSessionModelSwitchError)) {
         throw err;
       }

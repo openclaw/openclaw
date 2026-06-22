@@ -904,28 +904,24 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
       // When there are no summarizable messages AND no real turn-prefix content,
-      // cancelling compaction leaves context unchanged but the SDK re-triggers
-      // _checkCompaction after every assistant response — creating a cancel loop
-      // that blocks cron lanes (#41981).
+      // the session branch has no meaningful conversation to preserve. Writing a
+      // compaction boundary here modifies the session file, which can trigger a
+      // false-positive session takeover detection in the embedded prompt lock's
+      // fence mechanism — killing the run (#95672).
       //
-      // Strategy: always return a minimal compaction result so the SDK writes a
-      // boundary entry. The SDK's prepareCompaction() returns undefined when the
-      // last entry is a compaction, which blocks immediate re-triggering within
-      // the same turn. After a new assistant message arrives, if the SDK triggers
-      // compaction again with an empty preparation, we write another boundary —
-      // this is bounded to at most one boundary per LLM round-trip, not a tight
-      // loop.
+      // Previously (#41981), a boundary was written to suppress the SDK's
+      // re-trigger loop (_checkCompaction fires after every assistant response
+      // when the last entry is not a compaction boundary). Cancelling instead
+      // avoids the session file write that falsely trips the fence.
+      //
+      // The re-trigger loop for zero-real-conversation sessions is harmless:
+      // there is no meaningful context to compact, the SDK's compaction
+      // threshold/debounce bounds the frequency, and cancelling avoids the
+      // session file modification that falsely trips the fence.
       log.info(
-        "Compaction safeguard: no real conversation messages to summarize; writing compaction boundary to suppress re-trigger loop.",
+        "Compaction safeguard: no real conversation messages to summarize; cancelling compaction to avoid false fence takeover.",
       );
-      const fallbackSummary = buildStructuredFallbackSummary(preparation.previousSummary);
-      return {
-        compaction: {
-          summary: fallbackSummary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-        },
-      };
+      return { cancel: true };
     }
     const { readFiles, modifiedFiles } = computeFileLists(preparation.fileOps);
     const fileOpsSummary = formatFileOperations(readFiles, modifiedFiles);
