@@ -6,7 +6,6 @@ import officialExternalChannelCatalog from "../../scripts/lib/official-external-
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isRecord } from "../utils.js";
 import type {
   PluginManifestChannelConfig,
@@ -137,7 +136,7 @@ const OFFICIAL_CATALOG_SOURCES = [
 
 const OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSION = 1;
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL =
-  "https://register.openclaw.ai/official-external-plugin-catalog.json";
+  "https://register.openclaw.ai/official-marketplace.json";
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS = 5000;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES = 1024 * 1024;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS = 5000;
@@ -385,6 +384,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   let response: Response | undefined;
   let release: (() => Promise<void>) | undefined;
   try {
+    const { fetchWithSsrFGuard } = await import("../infra/net/fetch-guard.js");
     const guarded = await fetchWithSsrFGuard({
       url: url.href,
       fetchImpl: params?.fetchImpl,

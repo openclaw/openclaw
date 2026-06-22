@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import {
@@ -24,6 +25,16 @@ function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
 }
 
 describe("official external plugin catalog", () => {
+  it("keeps hosted fetch guard loading lazy for bundled catalog import paths", () => {
+    const source = readFileSync(
+      new URL("./official-external-plugin-catalog.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).not.toMatch(/from ["']\.\.\/infra\/net\/fetch-guard\.js["']/);
+    expect(source).toContain('await import("../infra/net/fetch-guard.js")');
+  });
+
   it("ships the official plugin catalog as a feed-shaped bundled fallback", () => {
     expect(isOfficialExternalPluginCatalogFeed(officialExternalPluginCatalog)).toBe(true);
     expect(officialExternalPluginCatalog).toMatchObject({
