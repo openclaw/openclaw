@@ -803,15 +803,21 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       normalizeTarget: normalizeMattermostMessagingTarget,
       inferTargetChatType: ({ to }) => {
         const trimmed = to.trim();
-        if (/^user:/i.test(trimmed)) return "direct";
-        if (/^group:/i.test(trimmed)) return "group";
+        if (/^user:/i.test(trimmed)) {
+          return "direct";
+        }
+        if (/^group:/i.test(trimmed)) {
+          return "group";
+        }
         // For channel: targets, consult the monitor-populated cache.
         // Private channels (type P) are authoritatively typed as group,
         // but addressed as channel:<id> — the cache resolves the real type.
         const channelMatch = /^channel:(.+?)$/i.exec(trimmed);
         if (channelMatch) {
           const cachedKind = mattermostChannelKindCache.get(channelMatch[1]);
-          if (cachedKind) return cachedKind;
+          if (cachedKind) {
+            return cachedKind;
+          }
         }
         return undefined;
       },

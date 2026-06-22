@@ -34,24 +34,27 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
   // as group. When the monitor has resolved the channel type, the cache
   // entry carries the authoritative Mattermost channel kind (D→direct,
   // G/P→group, O→channel).
-  const cachedKind = mattermostChannelKindCache.get(rawId);
-  const chatType = isUser
-    ? "direct"
-    : cachedKind === "group"
-      ? "group"
-      : "channel";
+  const cachedKind = mattermostChannelKindCache.get(rawId, params.accountId);
+  const chatType = isUser ? "direct" : cachedKind === "group" ? "group" : "channel";
+  // Align peer kind, from, and to with the resolved chatType so that
+  // private-channel group routes share the same session-key namespace.
+  const peerKind = isUser ? "direct" : cachedKind === "group" ? "group" : "channel";
   const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "mattermost",
     accountId: params.accountId,
     peer: {
-      kind: isUser ? "direct" : "channel",
+      kind: peerKind,
       id: rawId,
     },
     chatType,
-    from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
-    to: isUser ? `user:${rawId}` : `channel:${rawId}`,
+    from: isUser
+      ? `mattermost:${rawId}`
+      : peerKind === "group"
+        ? `mattermost:group:${rawId}`
+        : `mattermost:channel:${rawId}`,
+    to: isUser ? `user:${rawId}` : peerKind === "group" ? `group:${rawId}` : `channel:${rawId}`,
   });
   return buildThreadAwareOutboundSessionRoute({
     route: baseRoute,

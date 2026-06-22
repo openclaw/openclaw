@@ -1,19 +1,61 @@
 // Mattermost plugin module implements monitor gating behavior.
 import type { ChatType, OpenClawConfig } from "./runtime-api.js";
 
-// Module-level cache mapping Mattermost channel IDs to their resolved ChatType.
-// Populated by the monitor when channel info is fetched, consumed synchronously
-// by inferTargetChatType so channel: targets can be resolved to the correct
-// chat type (group for private channels, channel for public).
-export const mattermostChannelKindCache = new Map<string, ChatType>();
+// Channel-kind cache TTL (5 min) matches the per-resource channelCache TTL
+// in monitor-resources.ts so cached entries expire alongside their source.
+const CHANNEL_KIND_CACHE_TTL_MS = 5 * 60_000;
+
+type ChannelKindCacheEntry = {
+  kind: ChatType;
+  expiresAt: number;
+};
+
+// Per-account-scoped cache mapping Mattermost channel IDs to their resolved
+// ChatType. Populated by the monitor when channel info is fetched, consumed
+// synchronously by inferTargetChatType and resolveMattermostOutboundSessionRoute.
+// Entries expire after CHANNEL_KIND_CACHE_TTL_MS to prevent stale or
+// cross-account values from persisting beyond the source channel cache.
+const channelKindStore = new Map<string, ChannelKindCacheEntry>();
+
+function makeCacheKey(channelId: string, accountId?: string): string {
+  return accountId ? `${accountId}:${channelId}` : channelId;
+}
+
+/** Read a cached channel kind, optionally scoped to an account. */
+export function getMattermostChannelKind(
+  channelId: string,
+  accountId?: string,
+): ChatType | undefined {
+  const key = makeCacheKey(channelId, accountId);
+  const entry = channelKindStore.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    channelKindStore.delete(key);
+    return undefined;
+  }
+  return entry.kind;
+}
 
 /** Populate the channel kind cache (called by the Mattermost monitor). */
 export function setMattermostChannelKindCache(
   channelId: string,
   channelType: string | null | undefined,
+  accountId?: string,
 ): void {
-  mattermostChannelKindCache.set(channelId, mapMattermostChannelTypeToChatType(channelType));
+  const key = makeCacheKey(channelId, accountId);
+  channelKindStore.set(key, {
+    kind: mapMattermostChannelTypeToChatType(channelType),
+    expiresAt: Date.now() + CHANNEL_KIND_CACHE_TTL_MS,
+  });
 }
+
+// Backward-compatible module-level facade so existing callers that used
+// `mattermostChannelKindCache.get()` / `.set()` continue to work.
+export const mattermostChannelKindCache = {
+  get: (channelId: string, accountId?: string) => getMattermostChannelKind(channelId, accountId),
+  set: (channelId: string, channelType: string | null | undefined, accountId?: string) =>
+    setMattermostChannelKindCache(channelId, channelType, accountId),
+};
 
 export function mapMattermostChannelTypeToChatType(channelType?: string | null): ChatType {
   const normalized = channelType?.trim().toUpperCase();

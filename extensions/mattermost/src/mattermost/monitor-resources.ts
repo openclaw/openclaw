@@ -128,7 +128,7 @@ export function createMattermostMonitorResources(params: {
     const cached = getCachedValue(channelCache, channelId, asDateTimestampMs(rawNow));
     if (cached !== undefined) {
       if (cached?.type) {
-        setMattermostChannelKindCache(channelId, cached.type);
+        setMattermostChannelKindCache(channelId, cached.type, accountId);
       }
       return cached;
     }
@@ -136,7 +136,7 @@ export function createMattermostMonitorResources(params: {
       const info = await fetchMattermostChannel(client, channelId);
       setCachedValue(channelCache, channelId, info, CHANNEL_CACHE_TTL_MS, rawNow);
       if (info?.type) {
-        setMattermostChannelKindCache(channelId, info.type);
+        setMattermostChannelKindCache(channelId, info.type, accountId);
       }
       return info;
     } catch (err) {
