@@ -1,19 +1,19 @@
-// Control UI view renders login gate screen content.
-import { html } from "lit";
-import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { normalizeBasePath } from "../../app-routes.ts";
-import { icons } from "../../components/icons.ts";
-import { t } from "../../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
+// Control UI component renders the login gate.
+import { LitElement, html, nothing } from "lit";
+import { property } from "lit/decorators.js";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { normalizeBasePath } from "../app-routes.ts";
+import { t } from "../i18n/index.ts";
+import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import {
   resolveAuthHintKind,
   resolvePairingHint,
   shouldShowInsecureContextHint,
-} from "../../lib/overview-hints.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import type { AppViewState } from "../app-view-state.ts";
-import { agentLogoUrl } from "./agents-utils.ts";
+} from "../lib/overview-hints.ts";
+import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { controlUiPublicAssetPath } from "../ui/public-assets.ts";
 import { renderConnectCommand } from "./connect-command.ts";
+import { icons } from "./icons.ts";
 
 type LoginFailureKind =
   | "auth-required"
@@ -33,6 +33,26 @@ export type LoginFailureFeedback = {
   docsHref: string;
   docsLabel: string;
   rawError: string;
+};
+
+export type LoginGateProps = {
+  basePath: string;
+  connected: boolean;
+  lastError: string | null;
+  lastErrorCode?: string | null;
+  hasToken: boolean;
+  hasPassword: boolean;
+  gatewayUrl: string;
+  token: string;
+  password: string;
+  showGatewayToken: boolean;
+  showGatewayPassword: boolean;
+  onGatewayUrlChange: (value: string) => void;
+  onTokenChange: (value: string) => void;
+  onPasswordChange: (value: string) => void;
+  onToggleGatewayToken: () => void;
+  onToggleGatewayPassword: () => void;
+  onConnect: () => void;
 };
 
 type LoginFailureFeedbackParams = {
@@ -270,15 +290,15 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
   `;
 }
 
-export function renderLoginGate(state: AppViewState) {
-  const basePath = normalizeBasePath(state.basePath ?? "");
-  const faviconSrc = agentLogoUrl(basePath);
+function renderLoginGate(props: LoginGateProps) {
+  const basePath = normalizeBasePath(props.basePath);
+  const faviconSrc = controlUiPublicAssetPath("favicon.svg", basePath);
   const failure = resolveLoginFailureFeedback({
-    connected: state.connected,
-    lastError: state.lastError,
-    lastErrorCode: state.lastErrorCode,
-    hasToken: Boolean(state.settings.token.trim()),
-    hasPassword: Boolean(state.password.trim()),
+    connected: props.connected,
+    lastError: props.lastError,
+    lastErrorCode: props.lastErrorCode,
+    hasToken: props.hasToken,
+    hasPassword: props.hasPassword,
   });
 
   return html`
@@ -293,10 +313,9 @@ export function renderLoginGate(state: AppViewState) {
           <label class="field">
             <span>${t("overview.access.wsUrl")}</span>
             <input
-              .value=${state.settings.gatewayUrl}
+              .value=${props.gatewayUrl}
               @input=${(e: Event) => {
-                const v = (e.target as HTMLInputElement).value;
-                state.applySettings({ ...state.settings, gatewayUrl: v });
+                props.onGatewayUrlChange((e.target as HTMLInputElement).value);
               }}
               placeholder="ws://127.0.0.1:18789"
             />
@@ -305,32 +324,29 @@ export function renderLoginGate(state: AppViewState) {
             <span>${t("overview.access.token")}</span>
             <div class="login-gate__secret-row">
               <input
-                type=${state.loginShowGatewayToken ? "text" : "password"}
+                type=${props.showGatewayToken ? "text" : "password"}
                 autocomplete="off"
                 spellcheck="false"
-                .value=${state.settings.token}
+                .value=${props.token}
                 @input=${(e: Event) => {
-                  const v = (e.target as HTMLInputElement).value;
-                  state.applySettings({ ...state.settings, token: v });
+                  props.onTokenChange((e.target as HTMLInputElement).value);
                 }}
                 placeholder="OPENCLAW_GATEWAY_TOKEN (${t("login.passwordPlaceholder")})"
                 @keydown=${(e: KeyboardEvent) => {
                   if (e.key === "Enter") {
-                    state.connect();
+                    props.onConnect();
                   }
                 }}
               />
               <button
                 type="button"
-                class="btn btn--icon ${state.loginShowGatewayToken ? "active" : ""}"
-                title=${state.loginShowGatewayToken ? t("login.hideToken") : t("login.showToken")}
+                class="btn btn--icon ${props.showGatewayToken ? "active" : ""}"
+                title=${props.showGatewayToken ? t("login.hideToken") : t("login.showToken")}
                 aria-label=${t("login.toggleTokenVisibility")}
-                aria-pressed=${state.loginShowGatewayToken}
-                @click=${() => {
-                  state.loginShowGatewayToken = !state.loginShowGatewayToken;
-                }}
+                aria-pressed=${props.showGatewayToken}
+                @click=${props.onToggleGatewayToken}
               >
-                ${state.loginShowGatewayToken ? icons.eye : icons.eyeOff}
+                ${props.showGatewayToken ? icons.eye : icons.eyeOff}
               </button>
             </div>
           </label>
@@ -338,38 +354,35 @@ export function renderLoginGate(state: AppViewState) {
             <span>${t("overview.access.password")}</span>
             <div class="login-gate__secret-row">
               <input
-                type=${state.loginShowGatewayPassword ? "text" : "password"}
+                type=${props.showGatewayPassword ? "text" : "password"}
                 autocomplete="off"
                 spellcheck="false"
-                .value=${state.password}
+                .value=${props.password}
                 @input=${(e: Event) => {
-                  const v = (e.target as HTMLInputElement).value;
-                  state.password = v;
+                  props.onPasswordChange((e.target as HTMLInputElement).value);
                 }}
                 placeholder="${t("login.passwordPlaceholder")}"
                 @keydown=${(e: KeyboardEvent) => {
                   if (e.key === "Enter") {
-                    state.connect();
+                    props.onConnect();
                   }
                 }}
               />
               <button
                 type="button"
-                class="btn btn--icon ${state.loginShowGatewayPassword ? "active" : ""}"
-                title=${state.loginShowGatewayPassword
+                class="btn btn--icon ${props.showGatewayPassword ? "active" : ""}"
+                title=${props.showGatewayPassword
                   ? t("login.hidePassword")
                   : t("login.showPassword")}
                 aria-label=${t("login.togglePasswordVisibility")}
-                aria-pressed=${state.loginShowGatewayPassword}
-                @click=${() => {
-                  state.loginShowGatewayPassword = !state.loginShowGatewayPassword;
-                }}
+                aria-pressed=${props.showGatewayPassword}
+                @click=${props.onToggleGatewayPassword}
               >
-                ${state.loginShowGatewayPassword ? icons.eye : icons.eyeOff}
+                ${props.showGatewayPassword ? icons.eye : icons.eyeOff}
               </button>
             </div>
           </label>
-          <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
+          <button class="btn primary login-gate__connect" @click=${props.onConnect}>
             ${t("common.connect")}
           </button>
         </div>
@@ -396,4 +409,25 @@ export function renderLoginGate(state: AppViewState) {
       </div>
     </div>
   `;
+}
+
+export class LoginGate extends LitElement {
+  override createRenderRoot() {
+    return this;
+  }
+
+  @property({ attribute: false }) props?: LoginGateProps;
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.style.display = "contents";
+  }
+
+  override render() {
+    return this.props ? renderLoginGate(this.props) : nothing;
+  }
+}
+
+if (!customElements.get("openclaw-login-gate")) {
+  customElements.define("openclaw-login-gate", LoginGate);
 }

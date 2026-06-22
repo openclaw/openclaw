@@ -1,7 +1,7 @@
-// Control UI view renders connect command screen content.
+// Control UI component renders a copyable gateway connection command.
 import { html } from "lit";
-import { t } from "../../i18n/index.ts";
-import { renderCopyButton } from "../chat/copy-as-markdown.ts";
+import { t } from "../i18n/index.ts";
+import { renderCopyButton } from "../ui/chat/copy-as-markdown.ts";
 
 async function copyCommand(command: string) {
   try {
@@ -20,17 +20,17 @@ export function renderConnectCommand(command: string) {
       tabindex="0"
       title=${copyLabel}
       aria-label=${t("overview.connection.copyCommandAria", { command })}
-      @click=${async (e: Event) => {
-        if ((e.target as HTMLElement | null)?.closest(".chat-copy-btn")) {
+      @click=${async (event: Event) => {
+        if ((event.target as HTMLElement | null)?.closest(".chat-copy-btn")) {
           return;
         }
         await copyCommand(command);
       }}
-      @keydown=${async (e: KeyboardEvent) => {
-        if (e.key !== "Enter" && e.key !== " ") {
+      @keydown=${async (event: KeyboardEvent) => {
+        if (event.key !== "Enter" && event.key !== " ") {
           return;
         }
-        e.preventDefault();
+        event.preventDefault();
         await copyCommand(command);
       }}
     >

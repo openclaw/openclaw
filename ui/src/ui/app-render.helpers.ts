@@ -9,7 +9,6 @@ import {
 import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
 import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../app/settings.ts";
-import type { ThemeMode } from "../app/theme.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -856,77 +855,4 @@ function countHiddenCronSessions(state: AppViewState, sessions: SessionsListResu
       s.key !== state.sessionKey &&
       isSessionKeyTiedToAgent(s.key, activeAgentId, defaultAgentId),
   ).length;
-}
-
-type ThemeModeOption = { id: ThemeMode; labelKey: string; short: string };
-const THEME_MODE_OPTIONS: ThemeModeOption[] = [
-  { id: "system", labelKey: "common.system", short: "SYS" },
-  { id: "light", labelKey: "common.light", short: "LIGHT" },
-  { id: "dark", labelKey: "common.dark", short: "DARK" },
-];
-
-export function renderTopbarThemeModeToggle(state: AppViewState) {
-  const modeIcon = (mode: ThemeMode) => {
-    if (mode === "system") {
-      return icons.monitor;
-    }
-    if (mode === "light") {
-      return icons.sun;
-    }
-    return icons.moon;
-  };
-
-  const applyMode = (mode: ThemeMode, e: Event) => {
-    if (mode === state.themeMode) {
-      return;
-    }
-    state.setThemeMode(mode, { element: e.currentTarget as HTMLElement });
-  };
-
-  return html`
-    <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
-      ${THEME_MODE_OPTIONS.map((opt) => {
-        // Group aria-label already says "Color mode"; per-button label only needs
-        // the differentiating mode name (System/Light/Dark).
-        const label = t(opt.labelKey);
-        return html`
-          <button
-            type="button"
-            class="topbar-theme-mode__btn ${opt.id === state.themeMode
-              ? "topbar-theme-mode__btn--active"
-              : ""}"
-            title=${label}
-            aria-label=${label}
-            data-tooltip=${label}
-            aria-pressed=${opt.id === state.themeMode}
-            @click=${(e: Event) => applyMode(opt.id, e)}
-          >
-            ${modeIcon(opt.id)}
-          </button>
-        `;
-      })}
-    </div>
-  `;
-}
-
-/**
- * Sidebar footer status dot. The footer intentionally shows only live
- * connection state; the gateway version lives in Settings (Quick Settings
- * footer) instead of persistent chrome.
- */
-export function renderSidebarConnectionStatus(state: AppViewState) {
-  const label = state.connected ? t("common.online") : t("common.offline");
-  const toneClass = state.connected
-    ? "sidebar-connection-status--online"
-    : "sidebar-connection-status--offline";
-
-  return html`
-    <span
-      class="sidebar-status__dot ${toneClass}"
-      role="img"
-      aria-live="polite"
-      aria-label=${t("chat.gatewayStatus", { status: label })}
-      title=${t("chat.gatewayStatus", { status: label })}
-    ></span>
-  `;
 }

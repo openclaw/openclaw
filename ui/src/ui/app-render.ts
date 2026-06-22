@@ -1,8 +1,8 @@
 // Control UI module implements app render behavior.
-import { html, nothing } from "lit";
+import { html } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { SIDEBAR_SECTIONS, subtitleForRoute, titleForRoute } from "../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../app-navigation.ts";
 import {
   appRouter,
   pathForRoute,
@@ -16,9 +16,15 @@ import {
   routerOutlet,
   type RouterOutletSelection,
 } from "../app/router-outlet.ts";
-import { icons } from "../components/icons.ts";
+import "../components/app-sidebar.ts";
+import "../components/app-topbar.ts";
+import "../components/command-palette.ts";
+import "../components/exec-approval.ts";
+import "../components/gateway-url-confirmation.ts";
+import "../components/login-gate.ts";
+import "../components/page-header.ts";
+import "../components/update-banner.ts";
 import { t } from "../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -28,25 +34,16 @@ import {
   parseAgentSessionKey,
 } from "../lib/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChatCommands } from "../pages/chat/data.ts";
+import { resetChatStateForSessionSwitch } from "../pages/chat/session-switch.ts";
 import { runUpdate } from "../pages/config/data.ts";
-import "../components/dashboard-header.ts";
 import {
   createChatSession,
-  renderRouteNavItem,
   resolveDashboardHeaderContext,
-  renderSidebarConnectionStatus,
-  renderTopbarThemeModeToggle,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { renderChatSessionSelect } from "./chat/session-controls.ts";
-import { agentLogoUrl } from "./views/agents-utils.ts";
-import { renderCommandPalette } from "./views/command-palette.ts";
-import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
-import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
-import { renderLoginGate } from "./views/login-gate.ts";
 
 function isSidebarSessionBusy(state: AppViewState) {
   return (
@@ -108,193 +105,48 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
     .slice(0, 5);
 }
 
-function renderSidebarSessions(state: AppViewState, navigate: (routeId: RouteId) => void) {
-  const collapsed = state.settings.navCollapsed;
-  const busy = isSidebarSessionBusy(state);
-  const recent = collapsed ? [] : resolveSidebarRecentSessions(state);
-  const newSessionDisabled = !state.connected || state.sessionsLoading || busy || !state.client;
-  const newSessionTitle = !state.connected
-    ? "Connect to create a new session"
-    : busy
-      ? "Finish the active run before creating a new session"
-      : "New session";
-
-  return html`
-    <section class="sidebar-sessions ${collapsed ? "sidebar-sessions--collapsed" : ""}">
-      <button
-        type="button"
-        class="sidebar-new-session"
-        title=${newSessionTitle}
-        aria-label=${t("chat.runControls.newSession")}
-        ?disabled=${newSessionDisabled}
-        @click=${async () => {
-          if (newSessionDisabled) {
-            return;
-          }
-          if (await createChatSession(state, { source: "user" })) {
-            navigate("chat");
-          }
-        }}
-      >
-        <span class="sidebar-new-session__icon" aria-hidden="true">${icons.plus}</span>
-        ${collapsed
-          ? nothing
-          : html`<span class="sidebar-new-session__label"
-              >${t("chat.runControls.newSession")}</span
-            >`}
-      </button>
-      <div class="sidebar-session-select ${collapsed ? "sidebar-session-select--collapsed" : ""}">
-        ${renderChatSessionSelect(state, switchChatSession, {
-          compact: collapsed,
-          sessionSwitcherOnly: true,
-          surface: "sidebar",
-        })}
-      </div>
-      ${collapsed || recent.length === 0
-        ? nothing
-        : html`
-            <div
-              class="sidebar-recent-sessions ${state.settings.recentSessionsCollapsed
-                ? "sidebar-recent-sessions--collapsed"
-                : ""}"
-              aria-label=${t("overview.cards.recentSessions")}
-            >
-              <button
-                class="sidebar-recent-sessions__label"
-                type="button"
-                aria-expanded=${String(!state.settings.recentSessionsCollapsed)}
-                @click=${() => {
-                  state.applySettings({
-                    ...state.settings,
-                    recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
-                  });
-                }}
-              >
-                <span class="sidebar-recent-sessions__label-text"
-                  >${t("usage.sessions.recentShort")}</span
-                >
-                <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
-              </button>
-              <div class="sidebar-recent-sessions__list">
-                ${recent.map((row) => renderSidebarRecentSession(state, row, navigate))}
-              </div>
-            </div>
-          `}
-    </section>
-  `;
-}
-
-function renderSidebarRecentSession(
-  state: AppViewState,
-  row: GatewaySessionRow,
-  navigate: (routeId: RouteId) => void,
-) {
-  const active = row.key === state.sessionKey;
-  const label = resolveSessionDisplayName(row.key, row);
-  const meta = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a";
-  const href = `${pathForRoute("chat", state.basePath)}?session=${encodeURIComponent(row.key)}`;
-  return html`
-    <a
-      href=${href}
-      class="sidebar-recent-session ${active ? "sidebar-recent-session--active" : ""}"
-      data-session-key=${row.key}
-      title=${`${label} · ${row.key}`}
-      @click=${(event: MouseEvent) => {
-        if (
-          event.defaultPrevented ||
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
-          return;
-        }
-        event.preventDefault();
-        if (row.key !== state.sessionKey) {
-          switchChatSession(state, row.key);
-        }
-        navigate("chat");
-      }}
-    >
-      <span class="sidebar-recent-session__dot" aria-hidden="true"></span>
-      <span class="sidebar-recent-session__body">
-        <span class="sidebar-recent-session__name">${label}</span>
-        <span class="sidebar-recent-session__meta">${meta}</span>
-      </span>
-      ${row.hasActiveRun
-        ? html`<span
-            class="sidebar-recent-session__live"
-            aria-label=${t("sessions.sessionDetails.activeRun")}
-          ></span>`
-        : nothing}
-    </a>
-  `;
-}
-
-const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
-
-type DismissedUpdateBanner = {
-  latestVersion: string;
-  channel: string | null;
-  dismissedAtMs: number;
-};
-
-function loadDismissedUpdateBanner(): DismissedUpdateBanner | null {
-  try {
-    const raw = getSafeLocalStorage()?.getItem(UPDATE_BANNER_DISMISS_KEY);
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw) as Partial<DismissedUpdateBanner>;
-    if (!parsed || typeof parsed.latestVersion !== "string") {
-      return null;
-    }
-    return {
-      latestVersion: parsed.latestVersion,
-      channel: typeof parsed.channel === "string" ? parsed.channel : null,
-      dismissedAtMs: typeof parsed.dismissedAtMs === "number" ? parsed.dismissedAtMs : Date.now(),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function isUpdateBannerDismissed(updateAvailable: unknown): boolean {
-  const dismissed = loadDismissedUpdateBanner();
-  if (!dismissed) {
-    return false;
-  }
-  const info = updateAvailable as { latestVersion?: unknown; channel?: unknown };
-  const latestVersion = info && typeof info.latestVersion === "string" ? info.latestVersion : null;
-  const channel = info && typeof info.channel === "string" ? info.channel : null;
-  return Boolean(
-    latestVersion && dismissed.latestVersion === latestVersion && dismissed.channel === channel,
-  );
-}
-
-function dismissUpdateBanner(updateAvailable: unknown) {
-  const info = updateAvailable as { latestVersion?: unknown; channel?: unknown };
-  const latestVersion = info && typeof info.latestVersion === "string" ? info.latestVersion : null;
-  if (!latestVersion) {
-    return;
-  }
-  const channel = info && typeof info.channel === "string" ? info.channel : null;
-  const payload: DismissedUpdateBanner = {
-    latestVersion,
-    channel,
-    dismissedAtMs: Date.now(),
-  };
-  try {
-    getSafeLocalStorage()?.setItem(UPDATE_BANNER_DISMISS_KEY, JSON.stringify(payload));
-  } catch {
-    // ignore
-  }
-}
-
 export function renderApp(state: AppViewState, application: ApplicationContext) {
   if (!state.connected) {
-    return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
+    return html`
+      <openclaw-login-gate
+        .props=${{
+          basePath: state.basePath ?? "",
+          connected: state.connected,
+          lastError: state.lastError,
+          lastErrorCode: state.lastErrorCode,
+          hasToken: Boolean(state.settings.token.trim()),
+          hasPassword: Boolean(state.password.trim()),
+          gatewayUrl: state.settings.gatewayUrl,
+          token: state.settings.token,
+          password: state.password,
+          showGatewayToken: state.loginShowGatewayToken,
+          showGatewayPassword: state.loginShowGatewayPassword,
+          onGatewayUrlChange: (value: string) => {
+            state.applySettings({ ...state.settings, gatewayUrl: value });
+          },
+          onTokenChange: (value: string) => {
+            state.applySettings({ ...state.settings, token: value });
+          },
+          onPasswordChange: (value: string) => {
+            state.password = value;
+          },
+          onToggleGatewayToken: () => {
+            state.loginShowGatewayToken = !state.loginShowGatewayToken;
+          },
+          onToggleGatewayPassword: () => {
+            state.loginShowGatewayPassword = !state.loginShowGatewayPassword;
+          },
+          onConnect: () => state.connect(),
+        }}
+      ></openclaw-login-gate>
+      <openclaw-gateway-url-confirmation
+        .props=${{
+          pendingGatewayUrl: state.pendingGatewayUrl,
+          onConfirm: () => state.handleGatewayUrlConfirm(),
+          onCancel: () => state.handleGatewayUrlCancel(),
+        }}
+      ></openclaw-gateway-url-confirmation>
+    `;
   }
   const context = { state, navigate: application.navigate };
   return routerOutlet(
@@ -342,34 +194,52 @@ function renderConnectedApp(
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const basePath = state.basePath ?? "";
   const dashboardHeaderContext = resolveDashboardHeaderContext(state);
+  const recentSessions = resolveSidebarRecentSessions(state).map((row) => ({
+    key: row.key,
+    label: resolveSessionDisplayName(row.key, row),
+    meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a",
+    href: `${pathForRoute("chat", basePath)}?session=${encodeURIComponent(row.key)}`,
+    active: row.key === state.sessionKey,
+    hasActiveRun: Boolean(row.hasActiveRun),
+  }));
+  const sidebarBusy = isSidebarSessionBusy(state);
+  const newSessionDisabled =
+    !state.connected || state.sessionsLoading || sidebarBusy || !state.client;
+  const newSessionTitle = !state.connected
+    ? "Connect to create a new session"
+    : sidebarBusy
+      ? "Finish the active run before creating a new session"
+      : "New session";
   const routedPage = renderRouterOutlet(appRouter, context, routeView, {
     retryContext: application.routeLoadContext,
   });
   return html`
-    ${renderCommandPalette({
-      open: state.paletteOpen,
-      query: state.paletteQuery,
-      activeIndex: state.paletteActiveIndex,
-      onOpen: () => {
-        void refreshChatCommands(state).finally(requestHostUpdate);
-      },
-      onToggle: () => {
-        state.paletteOpen = !state.paletteOpen;
-      },
-      onQueryChange: (q) => {
-        state.paletteQuery = q;
-      },
-      onActiveIndexChange: (i) => {
-        state.paletteActiveIndex = i;
-      },
-      onNavigate: (routeId) => {
-        navigate(routeId);
-      },
-      onSlashCommand: (cmd) => {
-        navigate("chat");
-        state.handleChatDraftChange(cmd.endsWith(" ") ? cmd : `${cmd} `);
-      },
-    })}
+    <openclaw-command-palette
+      .props=${{
+        open: state.paletteOpen,
+        query: state.paletteQuery,
+        activeIndex: state.paletteActiveIndex,
+        onOpen: () => {
+          void refreshChatCommands(state).finally(requestHostUpdate);
+        },
+        onToggle: () => {
+          state.paletteOpen = !state.paletteOpen;
+        },
+        onQueryChange: (q: string) => {
+          state.paletteQuery = q;
+        },
+        onActiveIndexChange: (i: number) => {
+          state.paletteActiveIndex = i;
+        },
+        onNavigate: (routeId: RouteId) => {
+          navigate(routeId);
+        },
+        onSlashCommand: (cmd: string) => {
+          navigate("chat");
+          state.handleChatDraftChange(cmd.endsWith(" ") ? cmd : `${cmd} `);
+        },
+      }}
+    ></openclaw-command-palette>
     <div
       class="shell ${isChat ? "shell--chat" : ""} ${navCollapsed
         ? "shell--nav-collapsed"
@@ -388,178 +258,100 @@ function renderConnectedApp(
           state.navDrawerOpen = false;
         }}
       ></button>
-      <header
-        class="topbar"
-        ?inert=${state.onboarding}
-        aria-hidden=${state.onboarding ? "true" : nothing}
-      >
-        <div class="topnav-shell">
-          <button
-            type="button"
-            class="sidebar-menu-trigger topbar-nav-toggle"
-            @click=${() => {
-              state.navDrawerOpen = !navDrawerOpen;
-            }}
-            title="${navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
-            aria-label="${navDrawerOpen ? t("nav.collapse") : t("nav.expand")}"
-            aria-expanded=${navDrawerOpen}
-          >
-            <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
-          </button>
-          <div class="topnav-shell__content">
-            <dashboard-header
-              .routeId=${renderedRouteId}
-              .basePath=${state.basePath}
-              .agentLabel=${dashboardHeaderContext.agentLabel}
-              @navigate=${(event: CustomEvent<RouteId>) => {
-                navigate(event.detail);
-              }}
-            ></dashboard-header>
-          </div>
-          <div class="topnav-shell__actions">
-            <button
-              class="topbar-search"
-              @click=${() => {
-                state.paletteOpen = !state.paletteOpen;
-              }}
-              title=${t("chat.commandPaletteTitle")}
-              aria-label=${t("chat.openCommandPalette")}
-            >
-              <span class="topbar-search__label">${t("common.search")}</span>
-              <kbd class="topbar-search__kbd">⌘K</kbd>
-            </button>
-            <div class="topbar-status">
-              ${routeOwnsHeader && headerError
-                ? html`<div class="pill danger">${headerError}</div>`
-                : nothing}
-              ${renderTopbarThemeModeToggle(state)}
-            </div>
-          </div>
-        </div>
-      </header>
+      <openclaw-app-topbar
+        .routeId=${renderedRouteId}
+        .basePath=${state.basePath}
+        .agentLabel=${dashboardHeaderContext.agentLabel}
+        .navDrawerOpen=${navDrawerOpen}
+        .onboarding=${state.onboarding}
+        .routeOwnsHeader=${routeOwnsHeader}
+        .headerError=${headerError}
+        .themeMode=${state.themeMode}
+        .onToggleDrawer=${() => {
+          state.navDrawerOpen = !navDrawerOpen;
+        }}
+        .onOpenPalette=${() => {
+          state.paletteOpen = !state.paletteOpen;
+        }}
+        .onNavigate=${navigate}
+        @theme-change=${(
+          event: CustomEvent<{ mode: AppViewState["themeMode"]; element: HTMLElement }>,
+        ) => state.setThemeMode(event.detail.mode, { element: event.detail.element })}
+      ></openclaw-app-topbar>
       <div class="shell-nav">
-        <aside class="sidebar ${navCollapsed ? "sidebar--collapsed" : ""}">
-          <div class="sidebar-shell">
-            <div class="sidebar-shell__header">
-              <div class="sidebar-brand">
-                ${navCollapsed
-                  ? nothing
-                  : html`
-                      <img
-                        class="sidebar-brand__logo"
-                        src="${agentLogoUrl(basePath)}"
-                        alt="OpenClaw"
-                      />
-                      <span class="sidebar-brand__copy">
-                        <span class="sidebar-brand__eyebrow">${t("nav.control")}</span>
-                        <span class="sidebar-brand__title">OpenClaw</span>
-                      </span>
-                    `}
-              </div>
-              <button
-                type="button"
-                class="nav-collapse-toggle"
-                @click=${() => {
-                  if (navDrawerOpen) {
-                    state.navDrawerOpen = false;
-                    return;
-                  }
-                  state.applySettings({
-                    ...state.settings,
-                    navCollapsed: !state.settings.navCollapsed,
-                  });
-                }}
-                title="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-                aria-label="${navCollapsed ? t("nav.expand") : t("nav.collapse")}"
-              >
-                <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                  >${navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}</span
-                >
-              </button>
-            </div>
-            <div class="sidebar-shell__body">
-              ${renderSidebarSessions(state, navigate)}
-              <nav class="sidebar-nav">
-                ${SIDEBAR_SECTIONS.map((group) => {
-                  const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-                  const showItems = navCollapsed || !isGroupCollapsed;
-
-                  return html`
-                    <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
-                      ${!navCollapsed
-                        ? html`
-                            <button
-                              class="nav-section__label"
-                              @click=${() => {
-                                const next = { ...state.settings.navGroupsCollapsed };
-                                next[group.label] = !isGroupCollapsed;
-                                state.applySettings({
-                                  ...state.settings,
-                                  navGroupsCollapsed: next,
-                                });
-                              }}
-                              aria-expanded=${showItems}
-                            >
-                              <span class="nav-section__label-text"
-                                >${t(`nav.${group.label}`)}</span
-                              >
-                              <span class="nav-section__chevron"> ${icons.chevronDown} </span>
-                            </button>
-                          `
-                        : nothing}
-                      <div class="nav-section__items">
-                        ${group.routes.map((routeId) =>
-                          renderRouteNavItem(state, routeId, {
-                            activeRouteId: renderedRouteId,
-                            collapsed: navCollapsed,
-                            onNavigate: navigate,
-                            preloadRoute: application.preload,
-                          }),
-                        )}
-                      </div>
-                    </section>
-                  `;
-                })}
-              </nav>
-            </div>
-            <div class="sidebar-shell__footer">
-              <div class="sidebar-utility-group">
-                <a
-                  class="nav-item nav-item--external sidebar-utility-link"
-                  href="https://docs.openclaw.ai"
-                  target=${EXTERNAL_LINK_TARGET}
-                  rel=${buildExternalLinkRel()}
-                  title=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
-                >
-                  <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-                  ${!navCollapsed
-                    ? html`
-                        <span class="nav-item__text">${t("common.docs")}</span>
-                        <span class="nav-item__external-icon">${icons.externalLink}</span>
-                      `
-                    : nothing}
-                </a>
-                <div class="sidebar-mode-switch">${renderTopbarThemeModeToggle(state)}</div>
-                ${(() => {
-                  const version = state.hello?.server?.version ?? "";
-                  return version
-                    ? html`
-                        <div class="sidebar-version" title=${`v${version}`}>
-                          ${!navCollapsed
-                            ? html`
-                                <span class="sidebar-version__label">${t("common.version")}</span>
-                                <span class="sidebar-version__text">v${version}</span>
-                                ${renderSidebarConnectionStatus(state)}
-                              `
-                            : html` ${renderSidebarConnectionStatus(state)} `}
-                        </div>
-                      `
-                    : nothing;
-                })()}
-              </div>
-            </div>
-          </div>
-        </aside>
+        <openclaw-app-sidebar
+          .basePath=${basePath}
+          .activeRouteId=${renderedRouteId}
+          .collapsed=${navCollapsed}
+          .connected=${state.connected}
+          .navGroupsCollapsed=${state.settings.navGroupsCollapsed}
+          .recentSessions=${recentSessions}
+          .recentSessionsCollapsed=${state.settings.recentSessionsCollapsed}
+          .newSessionDisabled=${newSessionDisabled}
+          .newSessionTitle=${newSessionTitle}
+          .sessionSelector=${renderChatSessionSelect(state, switchChatSession, {
+            compact: navCollapsed,
+            sessionSwitcherOnly: true,
+            surface: "sidebar",
+          })}
+          .themeMode=${state.themeMode}
+          .onCreateSession=${async () => {
+            if (!newSessionDisabled && (await createChatSession(state, { source: "user" }))) {
+              navigate("chat");
+            }
+          }}
+          .onToggleCollapsed=${() => {
+            if (navDrawerOpen) {
+              state.navDrawerOpen = false;
+              return;
+            }
+            state.applySettings({
+              ...state.settings,
+              navCollapsed: !state.settings.navCollapsed,
+            });
+          }}
+          .onToggleGroup=${(label: string) => {
+            const next = { ...state.settings.navGroupsCollapsed };
+            next[label] = !next[label];
+            state.applySettings({
+              ...state.settings,
+              navGroupsCollapsed: next,
+            });
+          }}
+          .onToggleRecentSessions=${() => {
+            state.applySettings({
+              ...state.settings,
+              recentSessionsCollapsed: !state.settings.recentSessionsCollapsed,
+            });
+          }}
+          .onNavigate=${(routeId: RouteId) => {
+            if (routeId === "chat") {
+              if (!state.sessionKey) {
+                const mainSessionKey =
+                  (
+                    state.hello?.snapshot as
+                      | { sessionDefaults?: { mainSessionKey?: string } }
+                      | undefined
+                  )?.sessionDefaults?.mainSessionKey ?? "main";
+                resetChatStateForSessionSwitch(state, mainSessionKey);
+              }
+              if (renderedRouteId !== undefined && renderedRouteId !== "chat") {
+                void state.loadAssistantIdentity();
+              }
+            }
+            navigate(routeId);
+          }}
+          .onRecentSession=${(session: { key: string }) => {
+            if (session.key !== state.sessionKey) {
+              switchChatSession(state, session.key);
+            }
+            navigate("chat");
+          }}
+          .onPreloadRoute=${application.preload}
+          @theme-change=${(
+            event: CustomEvent<{ mode: AppViewState["themeMode"]; element: HTMLElement }>,
+          ) => state.setThemeMode(event.detail.mode, { element: event.detail.element })}
+        ></openclaw-app-sidebar>
       </div>
       <main
         class="content ${isChat ? "content--chat" : ""} ${typeof activeRouteModule === "object" &&
@@ -570,58 +362,46 @@ function renderConnectedApp(
           : ""}"
         ?aria-busy=${routeView.status === "loading"}
       >
-        ${state.updateStatusBanner
-          ? html`<div class="callout ${state.updateStatusBanner.tone}" role="alert">
-              ${state.updateStatusBanner.text}
-            </div>`
-          : nothing}
-        ${state.updateAvailable &&
-        state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
-        !isUpdateBannerDismissed(state.updateAvailable)
-          ? html`<div class="update-banner callout danger" role="alert">
-              <strong>${t("chat.updateAvailable")}</strong> v${state.updateAvailable.latestVersion}
-              (${t("chat.runningVersion", { version: state.updateAvailable.currentVersion })}).
-              <button
-                class="btn btn--sm update-banner__btn"
-                ?disabled=${state.updateRunning || !state.connected}
-                @click=${() => runUpdate(state)}
-              >
-                ${state.updateRunning ? t("chat.updating") : t("chat.updateNow")}
-              </button>
-              <button
-                class="update-banner__close"
-                type="button"
-                title=${t("common.dismiss")}
-                aria-label=${t("chat.dismissUpdateBanner")}
-                @click=${() => {
-                  dismissUpdateBanner(state.updateAvailable);
-                  state.updateAvailable = null;
-                }}
-              >
-                ${icons.x}
-              </button>
-            </div>`
-          : nothing}
-        ${routeOwnsHeader || isChat || !renderedRouteId
-          ? nothing
-          : html`<section
-              class=${chatHeaderHidden
-                ? "content-header content-header--chat-hidden"
-                : "content-header"}
-              ?inert=${chatHeaderHidden}
-              aria-hidden=${chatHeaderHidden ? "true" : nothing}
-            >
-              <div>
-                <div class="page-title">${titleForRoute(renderedRouteId)}</div>
-                <div class="page-sub">${subtitleForRoute(renderedRouteId)}</div>
-              </div>
-              <div class="page-meta">
-                ${headerError ? html`<div class="pill danger">${headerError}</div>` : nothing}
-              </div>
-            </section>`}
+        <openclaw-update-banner
+          .props=${{
+            statusBanner: state.updateStatusBanner,
+            updateAvailable: state.updateAvailable,
+            updateRunning: state.updateRunning,
+            connected: state.connected,
+            onUpdate: () => runUpdate(state),
+            onDismiss: () => {
+              state.updateAvailable = null;
+            },
+          }}
+        ></openclaw-update-banner>
+        <openclaw-page-header
+          .props=${{
+            title: renderedRouteId ? titleForRoute(renderedRouteId) : "",
+            subtitle: renderedRouteId ? subtitleForRoute(renderedRouteId) : "",
+            error: headerError,
+            hidden: routeOwnsHeader || isChat || !renderedRouteId,
+            inert: chatHeaderHidden,
+          }}
+        ></openclaw-page-header>
         ${routedPage}
       </main>
-      ${renderExecApprovalPrompt(state)} ${renderGatewayUrlConfirmation(state)} ${nothing}
+      <openclaw-exec-approval
+        .props=${{
+          queue: state.execApprovalQueue,
+          busy: state.execApprovalBusy,
+          error: state.execApprovalError,
+          onDecision: (
+            decision: Parameters<NonNullable<typeof state.handleExecApprovalDecision>>[0],
+          ) => state.handleExecApprovalDecision(decision),
+        }}
+      ></openclaw-exec-approval>
+      <openclaw-gateway-url-confirmation
+        .props=${{
+          pendingGatewayUrl: state.pendingGatewayUrl,
+          onConfirm: () => state.handleGatewayUrlConfirm(),
+          onCancel: () => state.handleGatewayUrlCancel(),
+        }}
+      ></openclaw-gateway-url-confirmation>
     </div>
   `;
 }

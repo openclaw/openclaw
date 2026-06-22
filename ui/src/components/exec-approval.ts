@@ -1,20 +1,27 @@
-// Control UI view renders exec approval screen content.
-import { html, nothing } from "lit";
-import { formatApprovalDisplayPath } from "../../../../src/infra/approval-display-paths.ts";
-import { t } from "../../i18n/index.ts";
-import type { AppViewState } from "../app-view-state.ts";
-import "../../components/modal-dialog.ts";
+// Control UI component renders exec approval.
+import { LitElement, html, nothing } from "lit";
+import { property } from "lit/decorators.js";
+import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
+import { t } from "../i18n/index.ts";
+import "./modal-dialog.ts";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
-} from "../controllers/exec-approval.ts";
+} from "../ui/controllers/exec-approval.ts";
 
 const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
+
+export type ExecApprovalProps = {
+  queue: readonly ExecApprovalRequest[];
+  busy: boolean;
+  error: string | null;
+  onDecision: (decision: ExecApprovalDecision) => void | Promise<void>;
+};
 
 function formatRemaining(ms: number): string {
   const remaining = Math.max(0, ms);
@@ -158,8 +165,8 @@ function renderUnavailableDecisionWarning(
     : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
 }
 
-export function renderExecApprovalPrompt(state: AppViewState) {
-  const active = state.execApprovalQueue[0];
+function renderExecApprovalPrompt(props: ExecApprovalProps) {
+  const active = props.queue[0];
   if (!active) {
     return nothing;
   }
@@ -169,7 +176,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
     remainingMs > 0
       ? t("execApproval.expiresIn", { time: formatRemaining(remainingMs) })
       : t("execApproval.expired");
-  const queueCount = state.execApprovalQueue.length;
+  const queueCount = props.queue.length;
   const isPlugin = active.kind === "plugin";
   const title = isPlugin
     ? (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"))
@@ -178,8 +185,8 @@ export function renderExecApprovalPrompt(state: AppViewState) {
   const descriptionId = "exec-approval-description";
   const decisions = resolveApprovalDecisions(active);
   const handleCancel = () => {
-    if (!state.execApprovalBusy && decisions.includes("deny")) {
-      void state.handleExecApprovalDecision("deny");
+    if (!props.busy && decisions.includes("deny")) {
+      void props.onDecision("deny");
     }
   };
   return html`
@@ -198,16 +205,14 @@ export function renderExecApprovalPrompt(state: AppViewState) {
         </div>
         ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
         ${renderUnavailableDecisionWarning(active, decisions)}
-        ${state.execApprovalError
-          ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
-          : nothing}
+        ${props.error ? html`<div class="exec-approval-error">${props.error}</div>` : nothing}
         <div class="exec-approval-actions">
           ${decisions.map(
             (decision) => html`
               <button
                 class=${approvalDecisionClass(decision)}
-                ?disabled=${state.execApprovalBusy}
-                @click=${() => state.handleExecApprovalDecision(decision)}
+                ?disabled=${props.busy}
+                @click=${() => props.onDecision(decision)}
               >
                 ${approvalDecisionLabel(decision)}
               </button>
@@ -217,4 +222,25 @@ export function renderExecApprovalPrompt(state: AppViewState) {
       </div>
     </openclaw-modal-dialog>
   `;
+}
+
+export class ExecApproval extends LitElement {
+  override createRenderRoot() {
+    return this;
+  }
+
+  @property({ attribute: false }) props?: ExecApprovalProps;
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.style.display = "contents";
+  }
+
+  override render() {
+    return this.props ? renderExecApprovalPrompt(this.props) : nothing;
+  }
+}
+
+if (!customElements.get("openclaw-exec-approval")) {
+  customElements.define("openclaw-exec-approval", ExecApproval);
 }

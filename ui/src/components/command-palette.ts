@@ -1,11 +1,12 @@
-// Control UI view renders command palette screen content.
-import { html, nothing } from "lit";
+// Control UI component renders the command palette.
+import { LitElement, html, nothing } from "lit";
+import { property } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
-import type { RouteId } from "../../app-routes.ts";
-import { icons, type IconName } from "../../components/icons.ts";
-import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
-import { SLASH_COMMANDS } from "../chat/slash-commands.ts";
+import type { RouteId } from "../app-routes.ts";
+import { t } from "../i18n/index.ts";
+import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { SLASH_COMMANDS } from "../ui/chat/slash-commands.ts";
+import { icons, type IconName } from "./icons.ts";
 
 type PaletteItem = {
   id: string;
@@ -319,7 +320,7 @@ function focusInput(el: Element | undefined) {
   }
 }
 
-export function renderCommandPalette(props: CommandPaletteProps) {
+function renderCommandPalette(props: CommandPaletteProps) {
   if (!props.open) {
     return nothing;
   }
@@ -417,4 +418,25 @@ export function renderCommandPalette(props: CommandPaletteProps) {
       </div>
     </dialog>
   `;
+}
+
+export class CommandPalette extends LitElement {
+  override createRenderRoot() {
+    return this;
+  }
+
+  @property({ attribute: false }) props?: CommandPaletteProps;
+
+  override connectedCallback() {
+    super.connectedCallback();
+    this.style.display = "contents";
+  }
+
+  override render() {
+    return this.props ? renderCommandPalette(this.props) : nothing;
+  }
+}
+
+if (!customElements.get("openclaw-command-palette")) {
+  customElements.define("openclaw-command-palette", CommandPalette);
 }
