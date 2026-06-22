@@ -3,6 +3,12 @@ import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../../api/types.ts";
 import {
+  BORDER_RADIUS_STOPS,
+  TEXT_SCALE_STOPS,
+  type BorderRadiusStop,
+  type TextScaleStop,
+} from "../../app/settings.ts";
+import {
   countSensitiveConfigValues,
   hintForPath,
   humanize,
@@ -19,12 +25,6 @@ import {
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  BORDER_RADIUS_STOPS,
-  TEXT_SCALE_STOPS,
-  type BorderRadiusStop,
-  type TextScaleStop,
-} from "../../ui/storage.ts";
 import type { ThemeTransitionContext } from "../../ui/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../ui/theme.ts";
 

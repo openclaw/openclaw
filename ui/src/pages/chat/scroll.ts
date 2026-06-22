@@ -1,5 +1,5 @@
 // Control UI module implements app scroll behavior.
-import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../../ui/storage.ts";
+import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../../app/settings.ts";
 
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;

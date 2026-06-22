@@ -1,15 +1,15 @@
 import { inferBasePathFromPathname, normalizeBasePath } from "../app-routes.ts";
 // Control UI module implements app settings behavior.
 import type { SettingsHost } from "../app/app-host.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import {
   normalizeTextScale,
   saveLocalUserIdentity,
   saveSettings,
   type LocalUserIdentity,
   type UiSettings,
-} from "./storage.ts";
+} from "../app/settings.ts";
+import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { startThemeTransition, type ThemeTransitionContext } from "./theme-transition.ts";
 import { resolveTheme, type ResolvedTheme, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity } from "./user-identity.ts";

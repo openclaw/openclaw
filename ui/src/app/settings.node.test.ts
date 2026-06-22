@@ -7,7 +7,7 @@ import {
   loadSettings,
   saveLocalUserIdentity,
   saveSettings,
-} from "./storage.ts";
+} from "./settings.ts";
 
 function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
   vi.stubGlobal("location", {

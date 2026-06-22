@@ -8,6 +8,7 @@ import {
 } from "../app-navigation.ts";
 import { appRouter, pathForRoute, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
+import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../app/settings.ts";
 import { icons } from "../components/icons.ts";
 import { t } from "../i18n/index.ts";
 import {
@@ -50,7 +51,6 @@ import {
 } from "./chat/session-controls.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
-import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 import type { ThemeMode } from "./theme.ts";
 
 export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };

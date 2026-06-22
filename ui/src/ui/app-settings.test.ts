@@ -46,7 +46,7 @@ type SettingsHost = {
     navWidth: number;
     navGroupsCollapsed: Record<string, boolean>;
     borderRadius: number;
-    textScale?: import("./storage.ts").TextScaleStop;
+    textScale?: import("../app/settings.ts").TextScaleStop;
     customTheme?: import("./custom-theme.ts").ImportedCustomTheme;
   };
   theme: ThemeName & ThemeMode;

@@ -22,6 +22,7 @@ import type {
   StatusSummary,
   ToolsCatalogResult,
 } from "../api/types.ts";
+import type { UiSettings } from "../app/settings.ts";
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
@@ -55,7 +56,6 @@ import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
-import type { UiSettings } from "./storage.ts";
 import type { ThemeTransitionContext } from "./theme-transition.ts";
 import type { ResolvedTheme, ThemeMode, ThemeName } from "./theme.ts";
 

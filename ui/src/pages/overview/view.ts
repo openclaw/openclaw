@@ -11,6 +11,7 @@ import type {
   SkillStatusReport,
 } from "../../api/types.ts";
 import type { RouteId } from "../../app-routes.ts";
+import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
@@ -23,7 +24,6 @@ import {
 } from "../../lib/overview-hints.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { GatewayHelloOk } from "../../ui/gateway.ts";
-import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../ui/storage.ts";
 import { renderConnectCommand } from "../../ui/views/connect-command.ts";
 import { renderOverviewAttention } from "./attention.ts";
 import { renderOverviewCards } from "./cards.ts";

@@ -1,6 +1,6 @@
 // Control UI tests cover app scroll behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatAutoScrollMode } from "../../ui/storage.ts";
+import type { ChatAutoScrollMode } from "../../app/settings.ts";
 import { handleChatScroll, scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 
 /* ------------------------------------------------------------------ */
