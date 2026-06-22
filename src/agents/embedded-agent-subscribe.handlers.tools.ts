@@ -1555,6 +1555,9 @@ export async function handleToolExecutionEnd(
     result,
     sanitizedResult,
   });
+  await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
+    ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
+  });
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? (await loadHookRunnerGlobal()).getGlobalHookRunner();

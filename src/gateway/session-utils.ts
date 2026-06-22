@@ -25,6 +25,7 @@ import {
 } from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveFastModeState } from "../agents/fast-mode.js";
 import {
   findModelCatalogEntry,
   modelSupportsInput,
@@ -2182,6 +2183,18 @@ export function buildGatewaySessionRow(params: {
   });
   const thinkingLevels = thinkingMetadata.levels;
   const thinkingDefault = thinkingMetadata.defaultLevel;
+  const fastModeState = resolveFastModeState({
+    cfg,
+    provider: selectedOrRuntimeModelProvider ?? DEFAULT_PROVIDER,
+    model: selectedOrRuntimeModel ?? DEFAULT_MODEL,
+    agentId: sessionAgentId,
+    sessionEntry:
+      entry?.fastMode !== undefined
+        ? {
+            fastMode: entry.fastMode,
+          }
+        : undefined,
+  });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
@@ -2214,6 +2227,9 @@ export function buildGatewaySessionRow(params: {
     thinkingOptions: thinkingLevels.map((level) => level.label),
     thinkingDefault,
     fastMode: entry?.fastMode,
+    effectiveFastMode: fastModeState.mode,
+    effectiveFastModeSource: fastModeState.source,
+    fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,

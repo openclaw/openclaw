@@ -4,6 +4,7 @@ import {
   logLaneDequeue,
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
+import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
@@ -244,7 +245,7 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   if (value === undefined || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
-  return Math.max(1, Math.floor(value));
+  return clampPositiveTimerTimeoutMs(value);
 }
 
 function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): number {
