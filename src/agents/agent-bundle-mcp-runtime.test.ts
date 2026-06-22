@@ -2035,4 +2035,79 @@ process.stdin.on("end", () => {
       }
     },
   );
+
+  // FIX #94162: regression test — parallel MCP catalog loading must complete
+  // in approx max(server delays) not sum(server delays).
+  // Under the original sequential for-await loop, this test would take
+  // ~1200ms (200+400+600) and fail the <900ms assertion.
+  // Under the parallel Promise.allSettled fix, it completes in ~600ms.
+  it(
+    "parallelizes MCP server catalog loading across multiple slow servers",
+    { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-parallel-"));
+      const delays = [200, 400, 600];
+      const serverPaths = delays.map((delay, i) => {
+        const serverPath = path.join(tempDir, `slow-server-${i}.mjs`);
+        const logPath = path.join(tempDir, `server-${i}.log`);
+        return { serverPath, logPath, delay, serverName: `slowServer${i}` };
+      });
+
+      await Promise.all(
+        serverPaths.map(({ serverPath, logPath, delay }) =>
+          writeListToolsMcpServer({ filePath: serverPath, logPath, delayMs: delay }),
+        ),
+      );
+
+      testing.setBundleMcpCatalogListTimeoutMsForTest(4_000);
+
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-parallel-catalog-test",
+        sessionKey: "agent:test:session-parallel-catalog-test",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: Object.fromEntries(
+              serverPaths.map(({ serverName, serverPath }) => [
+                serverName,
+                {
+                  command: process.execPath,
+                  args: [serverPath],
+                  connectionTimeoutMs: 2_000,
+                },
+              ]),
+            ),
+          },
+        },
+      });
+
+      try {
+        const sumDelays = delays.reduce((a, b) => a + b, 0);
+        const maxDelay = Math.max(...delays);
+        const tolerance = 350; // ms of overhead for process spawn, JSON serialization, etc.
+
+        const t0 = performance.now();
+        const catalog = await runtime.getCatalog();
+        const wallTime = performance.now() - t0;
+
+        // Must have successfully connected to all servers
+        expect(Object.keys(catalog.servers)).toHaveLength(delays.length);
+        expect(catalog.tools.map((t) => t.toolName)).toEqual([
+          "slow_tool",
+          "slow_tool",
+          "slow_tool",
+        ]);
+
+        // Wall time must be LESS than sum of all delays (proves parallelism).
+        // Under the original sequential loop this would exceed sumDelays + tolerance.
+        expect(wallTime).toBeLessThan(sumDelays + tolerance);
+
+        // Wall time must be at least the max delay (proves we wait for the slowest).
+        expect(wallTime).toBeGreaterThanOrEqual(maxDelay * 0.7);
+      } finally {
+        await runtime.dispose();
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 });
