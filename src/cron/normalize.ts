@@ -94,12 +94,18 @@ function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
-  const kind = rawKind === "at" || rawKind === "every" || rawKind === "cron" ? rawKind : undefined;
+  // Models frequently emit kind="everyMs" and the interval as "every"; heal both
+  // to the canonical kind="every"/everyMs shape instead of dropping the schedule.
+  const healedKind = rawKind === "everyms" ? "every" : rawKind;
+  const kind =
+    healedKind === "at" || healedKind === "every" || healedKind === "cron" ? healedKind : undefined;
   const exprRaw = normalizeOptionalString(schedule.expr) ?? "";
-  const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
+  const everyMs = coerceFiniteScheduleNumber(schedule.everyMs ?? schedule.every);
   const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
   const atString = normalizeOptionalString(schedule.at) ?? "";
   const parsedAtMs = atString ? parseAbsoluteTimeMs(atString) : null;
+
+  delete next.every;
 
   if (kind) {
     next.kind = kind;

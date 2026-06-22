@@ -158,6 +158,41 @@ describe("normalizeCronJobCreate", () => {
     expectNormalizedAtSchedule({ kind: "at", at: "2026-01-12T18:00:00" });
   });
 
+  it("heals hallucinated kind=everyMs to canonical every", () => {
+    const normalized = normalizeMainSystemEventCreateJob({
+      name: "heal kind",
+      schedule: { kind: "everyMs", everyMs: 60_000 },
+    });
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("every");
+    expect(schedule.everyMs).toBe(60_000);
+  });
+
+  it("heals interval alias every to everyMs", () => {
+    const normalized = normalizeMainSystemEventCreateJob({
+      name: "heal interval",
+      schedule: { kind: "every", every: 90_000 },
+    });
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("every");
+    expect(schedule.everyMs).toBe(90_000);
+    expect("every" in schedule).toBe(false);
+  });
+
+  it("prefers explicit everyMs over the every alias", () => {
+    const normalized = normalizeMainSystemEventCreateJob({
+      name: "prefer everyMs",
+      schedule: { kind: "everyMs", everyMs: 60_000, every: 5_000 },
+    });
+
+    const schedule = normalized.schedule as Record<string, unknown>;
+    expect(schedule.kind).toBe("every");
+    expect(schedule.everyMs).toBe(60_000);
+    expect("every" in schedule).toBe(false);
+  });
+
   it("defaults cron stagger for recurring top-of-hour schedules", () => {
     const normalized = normalizeMainSystemEventCreateJob({
       name: "hourly",
