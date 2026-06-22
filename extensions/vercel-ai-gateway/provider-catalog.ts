@@ -9,8 +9,10 @@ import {
 } from "./models.js";
 
 export function resolveVercelAiGatewayModel(modelId: string) {
+  const model = resolveVercelAiGatewayDynamicModel(modelId);
   return {
-    ...resolveVercelAiGatewayDynamicModel(modelId),
+    ...model,
+    input: model.input.includes("image") ? (["text", "image"] as const) : (["text"] as const),
     api: "anthropic-messages" as const,
     provider: VERCEL_AI_GATEWAY_PROVIDER_ID,
     baseUrl: VERCEL_AI_GATEWAY_BASE_URL,
