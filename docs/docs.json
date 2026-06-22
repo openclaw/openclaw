@@ -317,6 +317,10 @@
       "destination": "/channels/zalo"
     },
     {
+      "source": "/channels/openclaw-zaloclawbot",
+      "destination": "/channels/zaloclawbot"
+    },
+    {
       "source": "/providers/whatsapp",
       "destination": "/channels/whatsapp"
     },
@@ -1118,6 +1122,7 @@
                   "channels/mattermost",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/raft",
                   "channels/tlon",
                   "channels/synology-chat",
                   "channels/twitch"
@@ -1132,6 +1137,7 @@
                   "channels/feishu",
                   "channels/yuanbao",
                   "channels/zalo",
+                  "channels/zaloclawbot",
                   "channels/zalouser"
                 ]
               },
@@ -1385,7 +1391,9 @@
                 "pages": [
                   "clawhub/api",
                   "clawhub/http-api",
-                  "clawhub/acceptable-usage"
+                  "clawhub/acceptable-usage",
+                  "clawhub/moderation",
+                  "clawhub/security-audits"
                 ]
               }
             ]
@@ -1412,6 +1420,7 @@
                   "providers/azure-speech",
                   "providers/cerebras",
                   "providers/chutes",
+                  "providers/cohere",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",

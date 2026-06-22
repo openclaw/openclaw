@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
+import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -149,6 +150,7 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa check/i;
 const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
+const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE = /anthropic thinking error qa check/i;
 const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i;
 const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
@@ -189,6 +191,7 @@ const QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS = 48_000;
 const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 type MockScenarioState = {
+  anthropicThinkingErrorPhase: number;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
 };
@@ -196,7 +199,7 @@ type MockScenarioState = {
 function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
   return providerVariant === "anthropic"
     ? "repo/docs/help/testing.md"
-    : "repo/qa/scenarios/index.md";
+    : "repo/qa/scenarios/index.yaml";
 }
 
 function subagentHandoffTaskForProvider(providerVariant: MockOpenAiProviderVariant) {
@@ -225,21 +228,31 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+function parseJsonObjectBody(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = raw ? (JSON.parse(raw) as unknown) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeOpenAiMalformedJsonError(res: ServerResponse, label: string) {
+  writeJson(res, 400, {
+    error: {
+      type: "invalid_request_error",
+      message: `Malformed JSON body for ${label} request.`,
+    },
+  });
+}
+
 function transcriptionTextForAudioRequest(rawBody: string) {
   if (rawBody.length >= QA_GROUP_AUDIO_MIN_MULTIPART_BODY_CHARS) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
   }
   return QA_AUDIO_TRANSCRIPTION_TEXT;
-}
-
-function writeJson(res: ServerResponse, status: number, body: unknown) {
-  const text = JSON.stringify(body);
-  res.writeHead(status, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(text),
-    "cache-control": "no-store",
-  });
-  res.end(text);
 }
 
 function writeSse(res: ServerResponse, events: StreamEvent[]) {
@@ -727,6 +740,13 @@ function readTargetFromPrompt(prompt: string) {
     return repoScoped;
   }
 
+  const loosePath = /\b[A-Za-z0-9._-]+\.(?:md|json|ts|tsx|js|mjs|cjs|txt|yaml|yml)\b/i
+    .exec(prompt)?.[0]
+    ?.trim();
+  if (loosePath) {
+    return loosePath;
+  }
+
   if (/\bdocs?\b/i.test(prompt)) {
     return "repo/docs/help/testing.md";
   }
@@ -893,7 +913,6 @@ function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record
       label: "runtime-tool-fixture",
       mode: "run",
       thread: false,
-      runTimeoutSeconds: 30,
     };
   }
   if (targetTool === "memory_recall") {
@@ -946,7 +965,10 @@ function extractExactReplyDirective(text: string) {
   if (backtickedMatch) {
     return backtickedMatch;
   }
-  return extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i);
+  return (
+    extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i) ??
+    extractLastCapture(text, /reply(?: with)? exactly\s+(?!with\b)([^\s`.,;:!?]+)/i)
+  );
 }
 
 function extractFinishExactlyDirective(text: string) {
@@ -1094,18 +1116,12 @@ function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> |
   const label = extractQuotedToolArg(text, "label") ?? extractBareToolArg(text, "label");
   const mode = extractBareToolArg(text, "mode")?.toLowerCase();
   const context = extractBareToolArg(text, "context")?.toLowerCase();
-  const runTimeoutSecondsRaw = extractBareToolArg(text, "runTimeoutSeconds");
-  const runTimeoutSeconds =
-    runTimeoutSecondsRaw && /^\d+$/.test(runTimeoutSecondsRaw)
-      ? Number(runTimeoutSecondsRaw)
-      : undefined;
   return {
     task,
     ...(label ? { label } : {}),
     ...(extractBareToolArg(text, "thread")?.toLowerCase() === "true" ? { thread: true } : {}),
     ...(mode === "session" || mode === "run" ? { mode } : {}),
     ...(context === "fork" || context === "isolated" ? { context } : {}),
-    ...(runTimeoutSeconds !== undefined ? { runTimeoutSeconds } : {}),
   };
 }
 
@@ -1324,8 +1340,14 @@ function buildAssistantText(
   if (/silent snack recall check/i.test(prompt)) {
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
+  if (/qa private final reply warning check/i.test(prompt)) {
+    return "QA-STRANDED-85714 is present in this private final reply and I am not calling the message tool. This second sentence makes the omitted delivery substantive enough for the warning check.";
+  }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
+  }
+  if (toolOutput && promptExactReplyDirective) {
+    return promptExactReplyDirective;
   }
   if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
     const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
@@ -1459,7 +1481,7 @@ function buildAssistantText(
   ) {
     return [
       "Worked:",
-      "- Read all three seeded files: repo/qa/scenarios/index.md, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
+      "- Read all three seeded files: repo/qa/scenarios/index.yaml, repo/extensions/qa-lab/src/suite.ts, and repo/docs/help/testing.md.",
       "- Extra QA scenario candidates: config restart capability flip and image generation roundtrip.",
       "Failed:",
       "- None observed in mock mode.",
@@ -1468,6 +1490,16 @@ function buildAssistantText(
       "Follow-up:",
       "- Re-run with a real model for qualitative coverage.",
     ].join("\n");
+  }
+  if (
+    toolOutput &&
+    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+  ) {
+    const targetTool = extractToolSearchTarget(allInputText);
+    if (targetTool && toolOutput.includes(targetTool) && toolOutput.includes("FAKE_PLUGIN_OK")) {
+      return `FAKE_PLUGIN_OK ${targetTool}`;
+    }
   }
   if (toolOutput) {
     const snippet = toolOutput.replace(/\s+/g, " ").trim().slice(0, 220);
@@ -2052,7 +2084,6 @@ async function buildResponsesPayload(
         label: "qa-direct-fallback-worker",
         thread: false,
         mode: "run",
-        runTimeoutSeconds: 30,
       });
     }
     if (toolOutput && canCallSessionsYield && !/\byielded\b/i.test(toolOutput)) {
@@ -3128,6 +3159,90 @@ function buildAnthropicMessageResponse(params: {
   };
 }
 
+const QA_ANTHROPIC_THINKING_ERROR_TEXT =
+  "QA replay-safe read completed, but the provider stream failed after signed thinking.";
+const QA_ANTHROPIC_THINKING_ERROR_SIGNATURE = "qa_signed_thinking_block_91953";
+const QA_ANTHROPIC_THINKING_ERROR_MESSAGE = "QA injected provider stream failure";
+
+function buildAnthropicThinkingErrorResponse(params: { model: string }): Record<string, unknown> {
+  return {
+    type: "error",
+    error: {
+      type: "api_error",
+      message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
+    },
+    model: params.model || "claude-opus-4-8",
+  };
+}
+
+function buildAnthropicThinkingErrorStreamEvents(params: {
+  model: string;
+}): AnthropicStreamEvent[] {
+  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
+  return [
+    {
+      type: "message_start",
+      message: {
+        id: messageId,
+        type: "message",
+        role: "assistant",
+        model: params.model || "claude-opus-4-8",
+        content: [],
+        stop_reason: null,
+        stop_sequence: null,
+        usage: {
+          input_tokens: 64,
+          output_tokens: 0,
+        },
+      },
+    },
+    {
+      type: "content_block_start",
+      index: 0,
+      content_block: {
+        type: "thinking",
+        thinking: "",
+        signature: "",
+      },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "thinking_delta",
+        thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT,
+      },
+    },
+    {
+      type: "content_block_delta",
+      index: 0,
+      delta: {
+        type: "signature_delta",
+        signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE,
+      },
+    },
+    {
+      type: "content_block_stop",
+      index: 0,
+    },
+    {
+      type: "message_delta",
+      delta: {},
+      usage: {
+        input_tokens: 64,
+        output_tokens: 1120,
+      },
+    },
+    {
+      type: "error",
+      error: {
+        type: "api_error",
+        message: QA_ANTHROPIC_THINKING_ERROR_MESSAGE,
+      },
+    },
+  ];
+}
+
 function buildAnthropicMessageStreamEvents(params: {
   model: string;
   extracted: ExtractedAssistantOutput;
@@ -3254,6 +3369,35 @@ async function buildMessagesPayload(
     stream: false,
     ...(Array.isArray(body.tools) ? { tools: body.tools } : {}),
   };
+  const allInputText = extractAllRequestTexts(input, dispatchBody);
+  if (QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE.test(allInputText)) {
+    const toolOutput = extractToolOutput(input);
+    const shouldEmitThinkingError =
+      toolOutput.length > 0 && scenarioState.anthropicThinkingErrorPhase === 0;
+    const events =
+      toolOutput.length === 0
+        ? buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" })
+        : shouldEmitThinkingError
+          ? (() => {
+              scenarioState.anthropicThinkingErrorPhase = 1;
+              return buildAssistantEvents("");
+            })()
+          : buildAssistantEvents("ANTHROPIC-THINKING-ERROR-RECOVERED-OK");
+    const extracted = extractFinalAssistantOutputFromEvents(events);
+    const responseBody = shouldEmitThinkingError
+      ? buildAnthropicThinkingErrorResponse({ model: normalizedModel })
+      : buildAnthropicMessageResponse({
+          model: normalizedModel,
+          extracted,
+        });
+    const streamEvents = shouldEmitThinkingError
+      ? buildAnthropicThinkingErrorStreamEvents({ model: normalizedModel })
+      : buildAnthropicMessageStreamEvents({
+          model: normalizedModel,
+          extracted,
+        });
+    return { events, input, extracted, responseBody, streamEvents, model: normalizedModel };
+  }
   const events = await buildResponsesPayload(dispatchBody, scenarioState);
   const extracted = extractFinalAssistantOutputFromEvents(events);
   const responseBody = buildAnthropicMessageResponse({
@@ -3270,6 +3414,7 @@ async function buildMessagesPayload(
 export async function startQaMockOpenAiServer(params?: { host?: string; port?: number }) {
   const host = params?.host ?? "127.0.0.1";
   const scenarioState: MockScenarioState = {
+    anthropicThinkingErrorPhase: 0,
     subagentFanoutPhase: 0,
     subagentHandoffSpawned: false,
   };
@@ -3311,7 +3456,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/images/generations") {
         const raw = await readBody(req);
-        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const body = parseJsonObjectBody(raw);
+        if (!body) {
+          writeOpenAiMalformedJsonError(res, "OpenAI Images");
+          return;
+        }
         imageGenerationRequests.push(body);
         if (imageGenerationRequests.length > 20) {
           imageGenerationRequests.splice(0, imageGenerationRequests.length - 20);
@@ -3335,7 +3484,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/embeddings") {
         const raw = await readBody(req);
-        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const body = parseJsonObjectBody(raw);
+        if (!body) {
+          writeOpenAiMalformedJsonError(res, "OpenAI Embeddings");
+          return;
+        }
         const inputs = extractEmbeddingInputTexts(body.input);
         writeJson(res, 200, {
           object: "list",
@@ -3357,7 +3510,11 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/responses") {
         const raw = await readBody(req);
-        const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+        const body = parseJsonObjectBody(raw);
+        if (!body) {
+          writeOpenAiMalformedJsonError(res, "OpenAI Responses");
+          return;
+        }
         const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
         const events = await buildResponsesPayload(body, scenarioState);
         const resolvedModel = typeof body.model === "string" ? body.model : "";
@@ -3395,10 +3552,8 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
       }
       if (req.method === "POST" && url.pathname === "/v1/messages") {
         const raw = await readBody(req);
-        let body: AnthropicMessagesRequest;
-        try {
-          body = raw ? (JSON.parse(raw) as AnthropicMessagesRequest) : {};
-        } catch {
+        const body = parseJsonObjectBody(raw) as AnthropicMessagesRequest | null;
+        if (!body) {
           writeJson(res, 400, {
             type: "error",
             error: {

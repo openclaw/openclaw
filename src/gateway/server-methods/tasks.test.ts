@@ -136,6 +136,31 @@ describe("tasks gateway handlers", () => {
     expect(listedTask?.runId).toBe("run-running");
   });
 
+  it("treats explicit task agentId as authoritative over the session-key fallback", async () => {
+    // Cross-agent subagent task: the registry derives agentId=worker from the
+    // child session key, while owner/requester keys belong to main. tasks.list
+    // for main must not leak the worker task through the session-key fallback.
+    const workerTask = createTaskRecord({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:worker:subagent:child",
+      runId: "run-worker-authoritative",
+      task: "Inspect worker state",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    expect(workerTask.agentId).toBe("worker");
+
+    const mainView = await runTaskHandler("tasks.list", { agentId: "main" });
+    expect(mainView.calls[0]?.[0]).toBe(true);
+    expect(mainView.payload?.tasks ?? []).toEqual([]);
+
+    const workerView = await runTaskHandler("tasks.list", { agentId: "worker" });
+    expect(workerView.payload?.tasks?.map((task) => task.taskId)).toEqual([workerTask.taskId]);
+  });
+
   it("gets completed tasks with stable completed status", async () => {
     const task = createTaskRecord({
       runtime: "cli",

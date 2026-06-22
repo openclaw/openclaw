@@ -40,7 +40,7 @@ on:
           - stable
           - full
       run_release_soak:
-        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=full
+        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=stable and full
         required: false
         default: false
         type: boolean
@@ -152,7 +152,7 @@ jobs:
           fi
 
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ github.ref_name }}
@@ -173,7 +173,7 @@ jobs:
 
       - name: Checkout selected ref for reachability fallback
         if: steps.fast_ref.outputs.fallback == 'true'
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ inputs.ref }}
@@ -330,7 +330,7 @@ jobs:
               exit 1
               ;;
           esac
-          if [[ "$release_profile" == "full" ]]; then
+          if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then
             run_release_soak=true
           fi
           codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
@@ -507,7 +507,7 @@ jobs:
       source_sha: ${{ steps.package.outputs.source_sha }}
     steps:
       - name: Checkout trusted workflow ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ github.ref_name }}
@@ -559,7 +559,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release package artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-package-under-test
           path: |
@@ -717,7 +717,6 @@ jobs:
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
-      telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-status-command,telegram-other-bot-command-gating,telegram-context-command,telegram-mentioned-message-reply,telegram-long-final-reuses-preview,telegram-mention-gating
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -798,7 +797,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -849,7 +848,7 @@ jobs:
       - name: Upload parity lane artifacts
         id: upload_parity_lane_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -895,7 +894,7 @@ jobs:
 
       - name: Upload advisory status
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-check-status-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/release-check-status/qa_lab_parity_lane_release_checks-${{ matrix.lane }}.env
@@ -917,7 +916,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -930,7 +929,7 @@ jobs:
           install-bun: "true"
 
       - name: Download parity lane artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: release-qa-parity-*-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -955,7 +954,7 @@ jobs:
       - name: Upload parity artifacts
         id: upload_parity_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -999,7 +998,7 @@ jobs:
 
       - name: Upload advisory status
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-check-status-qa-parity-report-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/release-check-status/qa_lab_parity_report_release_checks.env
@@ -1028,7 +1027,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1127,7 +1126,7 @@ jobs:
       - name: Upload runtime parity artifacts
         id: upload_runtime_parity_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1171,7 +1170,7 @@ jobs:
 
       - name: Upload advisory status
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/release-check-status/qa_lab_runtime_parity_release_checks.env
@@ -1181,7 +1180,7 @@ jobs:
   runtime_tool_coverage_release_checks:
     name: Enforce QA Lab runtime tool coverage
     needs: [resolve_target, qa_lab_runtime_parity_release_checks]
-    if: always() && contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -1192,7 +1191,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1204,13 +1203,35 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
+      - name: Download runtime parity status
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-check-status-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/release-check-status/
+
+      - name: Verify runtime parity producer status
+        id: verify_runtime_parity_status
+        shell: bash
+        run: |
+          set -euo pipefail
+          status_path=".artifacts/release-check-status/qa_lab_runtime_parity_release_checks.env"
+          status="$(sed -n 's/^status=//p' "$status_path" | tail -n 1)"
+          if [[ "$status" != "success" ]]; then
+            echo "Runtime parity producer status is ${status:-missing}; skipping coverage artifact consumer."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
       - name: Download runtime parity artifacts
-        uses: actions/download-artifact@v8
+        if: steps.verify_runtime_parity_status.outputs.ready == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
 
       - name: Enforce standard runtime tool coverage
+        if: steps.verify_runtime_parity_status.outputs.ready == 'true'
         run: |
           set -euo pipefail
           pnpm openclaw qa coverage \
@@ -1221,7 +1242,7 @@ jobs:
 
       - name: Upload runtime tool coverage artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-runtime-tool-coverage-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/runtime-parity-standard-report/
@@ -1244,7 +1265,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1301,7 +1322,7 @@ jobs:
       - name: Upload Matrix QA artifacts
         id: upload_matrix_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1345,7 +1366,7 @@ jobs:
 
       - name: Upload advisory status
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-check-status-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/release-check-status/qa_live_matrix_release_checks.env
@@ -1368,7 +1389,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1412,7 +1433,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT: "1"
         run: |
           set -euo pipefail
 
@@ -1442,7 +1462,7 @@ jobs:
       - name: Upload Telegram QA artifacts
         id: upload_telegram_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1486,7 +1506,7 @@ jobs:
 
       - name: Upload advisory status
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-check-status-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/release-check-status/qa_live_telegram_release_checks.env
@@ -1509,7 +1529,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1582,7 +1602,7 @@ jobs:
       - name: Upload Discord QA artifacts
         id: upload_discord_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-discord-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1626,7 +1646,7 @@ jobs:
 
       - name: Upload advisory status
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-check-status-qa-live-discord-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/release-check-status/qa_live_discord_release_checks.env
@@ -1652,7 +1672,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1725,7 +1745,7 @@ jobs:
       - name: Upload WhatsApp QA artifacts
         id: upload_whatsapp_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1769,7 +1789,7 @@ jobs:
 
       - name: Upload advisory status
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-check-status-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/release-check-status/qa_live_whatsapp_release_checks.env
@@ -1792,7 +1812,7 @@ jobs:
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           ref: ${{ needs.resolve_target.outputs.revision }}
@@ -1865,7 +1885,7 @@ jobs:
       - name: Upload Slack QA artifacts
         id: upload_slack_qa_artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-live-slack-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
@@ -1909,7 +1929,7 @@ jobs:
 
       - name: Upload advisory status
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-check-status-qa-live-slack-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/release-check-status/qa_live_slack_release_checks.env
@@ -1943,7 +1963,7 @@ jobs:
       - name: Download advisory status artifacts
         if: always()
         continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: release-check-status-*
           path: .artifacts/release-check-status

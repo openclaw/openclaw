@@ -30,14 +30,15 @@ const queryOllamaModelShowInfoMock = vi.hoisted(() => vi.fn());
 const buildOllamaModelDefinitionMock = vi.hoisted(() =>
   vi.fn((modelId: string, contextWindow?: number, capabilities?: string[]) => {
     const normalized = modelId.trim().toLowerCase();
-    const isKnownCloudReasoningModel = /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
+    const isKnownCloudReasoningModel =
+      normalized === "glm-5.2:cloud" || /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
     return {
       id: modelId,
       name: modelId,
       reasoning: isKnownCloudReasoningModel || (capabilities?.includes("thinking") ?? false),
       input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: contextWindow ?? 8192,
+      contextWindow: contextWindow ?? (normalized === "glm-5.2:cloud" ? 1_000_000 : 8192),
       maxTokens: 8192,
       compat: capabilities
         ? { supportsTools: capabilities.includes("tools"), supportsUsageInStreaming: true }
@@ -458,6 +459,68 @@ describe("ollama plugin", () => {
       expect(resolved?.api).toBe("ollama");
       expect(resolved?.baseUrl).toBe("http://127.0.0.1:11434");
       expect(buildOllamaProviderMock).toHaveBeenCalledWith(undefined, { quiet: true });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previous;
+      }
+    }
+  });
+
+  it("preserves explicit api for configured dynamic Ollama models", async () => {
+    const provider = registerProvider();
+    const previous = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "ollama-live";
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "https://ollama.example.com",
+      api: "ollama",
+      models: [
+        {
+          id: "qwen3-coder:cloud",
+          name: "qwen3-coder:cloud",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 2048,
+        },
+      ],
+    });
+
+    try {
+      const config = {
+        models: {
+          providers: {
+            ollama: {
+              baseUrl: "https://ollama.example.com/v1",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      };
+
+      await provider.prepareDynamicModel?.({
+        config,
+        provider: "ollama",
+        modelId: "qwen3-coder:cloud",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+
+      const resolved = provider.resolveDynamicModel?.({
+        config,
+        provider: "ollama",
+        modelId: "qwen3-coder:cloud",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+      expect(resolved?.provider).toBe("ollama");
+      expect(resolved?.id).toBe("qwen3-coder:cloud");
+      expect(resolved?.api).toBe("openai-completions");
+      expect(resolved?.baseUrl).toBe("https://ollama.example.com/v1");
+      expect(buildOllamaProviderMock).toHaveBeenCalledWith("https://ollama.example.com/v1", {
+        quiet: true,
+      });
     } finally {
       if (previous === undefined) {
         delete process.env.OLLAMA_API_KEY;
@@ -1331,14 +1394,106 @@ describe("ollama plugin", () => {
       "kimi-k2.5:cloud",
       "minimax-m2.7:cloud",
       "glm-5.1:cloud",
+      "glm-5.2:cloud",
     ]);
 
     provider.createStreamFn?.({
       config: {},
-      model: { id: "kimi-k2.5:cloud" },
+      model: { api: "ollama", id: "kimi-k2.5:cloud" },
       provider: "ollama-cloud",
     } as never);
     expect(requireConfiguredStreamParams().providerBaseUrl).toBe("https://ollama.com");
+  });
+
+  it("uses Ollama Cloud auth for live catalog discovery", async () => {
+    const provider = registerOllamaCloudProvider();
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "https://ollama.com",
+      api: "ollama",
+      models: [buildOllamaModelDefinitionMock("glm-5.2:cloud")],
+    });
+
+    const result = await provider.catalog.run({
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "OLLAMA_API_KEY",
+        discoveryApiKey: "cloud-key",
+      }),
+    } as never);
+
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith("https://ollama.com", {
+      apiKey: "cloud-key",
+      quiet: true,
+    });
+    expect(result?.provider.apiKey).toBe("OLLAMA_API_KEY");
+    expect(result?.provider.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "glm-5.2:cloud", name: "glm-5.2:cloud" }),
+      ]),
+    );
+  });
+
+  it("confirms GLM-5.2 with authenticated show when cloud tags omit it", async () => {
+    const provider = registerOllamaCloudProvider();
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "https://ollama.com",
+      api: "ollama",
+      models: [buildOllamaModelDefinitionMock("kimi-k2.5:cloud")],
+    });
+    queryOllamaModelShowInfoMock.mockResolvedValueOnce({
+      contextWindow: 1_000_000,
+      capabilities: ["completion", "thinking", "tools"],
+    });
+    const result = await provider.catalog.run({
+      config: {
+        agents: { defaults: { model: { primary: "ollama-cloud/glm-5.2:cloud" } } },
+      },
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "secretref-managed",
+        discoveryApiKey: "cloud-key",
+      }),
+    } as never);
+
+    expect(buildOllamaProviderMock).toHaveBeenCalledWith("https://ollama.com", {
+      apiKey: "cloud-key",
+      quiet: true,
+    });
+    expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith(
+      "https://ollama.com",
+      "glm-5.2:cloud",
+      { apiKey: "cloud-key" },
+    );
+    expect(result?.provider.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "glm-5.2:cloud",
+          contextWindow: 1_000_000,
+          maxTokens: 8192,
+          reasoning: true,
+        }),
+      ]),
+    );
+  });
+
+  it("resolves GLM-5.2 from the cloud fallback catalog", () => {
+    const provider = registerOllamaCloudProvider();
+
+    expect(
+      provider.resolveDynamicModel?.({
+        provider: "ollama-cloud",
+        modelId: "glm-5.2:cloud",
+      } as never),
+    ).toEqual(
+      expect.objectContaining({
+        provider: "ollama-cloud",
+        id: "glm-5.2:cloud",
+        contextWindow: 1_000_000,
+        maxTokens: 8192,
+        reasoning: true,
+      }),
+    );
   });
 
   it("does not mint synthetic auth for public IPv4 baseUrl", () => {
@@ -1434,6 +1589,55 @@ describe("ollama plugin", () => {
     expect(nativePolicy?.validateAnthropicTurns).toBe(true);
   });
 
+  it.each([
+    {
+      providerId: "ollama",
+      register: registerProvider,
+      nativeBaseUrl: "http://127.0.0.1:11434",
+    },
+    {
+      providerId: "ollama-cloud",
+      register: registerOllamaCloudProvider,
+      nativeBaseUrl: "https://ollama.com",
+    },
+  ])(
+    "$providerId selects native /api/chat transport only for api=ollama",
+    ({ providerId, register, nativeBaseUrl }) => {
+      const provider = register();
+      const createStream = (api: "ollama" | "openai-completions", baseUrl: string) =>
+        provider.createStreamFn?.({
+          config: {
+            models: {
+              providers: {
+                [providerId]: {
+                  api,
+                  baseUrl,
+                  models: [],
+                },
+              },
+            },
+          },
+          model: {
+            api,
+            id: "qwen3:32b",
+            provider: providerId,
+          },
+          provider: providerId,
+        } as never);
+
+      const compatibleStream = createStream("openai-completions", `${nativeBaseUrl}/v1`);
+
+      expect(compatibleStream).toBeUndefined();
+      expect(createConfiguredOllamaStreamFnMock).not.toHaveBeenCalled();
+
+      const nativeStream = createStream("ollama", nativeBaseUrl);
+
+      expect(nativeStream).toBeDefined();
+      expect(createConfiguredOllamaStreamFnMock).toHaveBeenCalledOnce();
+      expect(requireConfiguredStreamParams().providerBaseUrl).toBe(nativeBaseUrl);
+    },
+  );
+
   it("routes createStreamFn to the correct provider baseUrl for ollama2", () => {
     const provider = registerProvider();
     const config = {
@@ -1452,7 +1656,7 @@ describe("ollama plugin", () => {
         },
       },
     };
-    const model = { id: "llama3.2", provider: "ollama2", baseUrl: undefined };
+    const model = { id: "llama3.2", provider: "ollama2", api: "ollama", baseUrl: undefined };
 
     provider.createStreamFn?.({ config, model, provider: "ollama2" } as never);
 
@@ -1472,7 +1676,7 @@ describe("ollama plugin", () => {
         },
       },
     };
-    const model = { id: "llama3.2", provider: "ollama2", baseUrl: undefined };
+    const model = { id: "llama3.2", provider: "ollama2", api: "ollama", baseUrl: undefined };
 
     provider.createStreamFn?.({ config, model, provider: "ollama2" } as never);
 
@@ -1497,7 +1701,7 @@ describe("ollama plugin", () => {
         },
       },
     };
-    const model = { id: "llama3.2", provider: "ollama", baseUrl: undefined };
+    const model = { id: "llama3.2", provider: "ollama", api: "ollama", baseUrl: undefined };
 
     provider.createStreamFn?.({ config, model, provider: "ollama" } as never);
 

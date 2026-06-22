@@ -444,6 +444,65 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(JSON.stringify(result)).not.toContain("partial error output");
   });
 
+  it("drops max-token reasoning-only transport assistant turns before replay", () => {
+    const messages: Context["messages"] = [
+      {
+        role: "assistant",
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+        model: "global.anthropic.claude-sonnet-4-6",
+        stopReason: "length",
+        timestamp: Date.now(),
+        content: [
+          {
+            type: "thinking",
+            thinking: "partial hidden reasoning",
+            thinkingSignature: "partial-signature",
+          },
+        ],
+      } as Extract<Context["messages"][number], { role: "assistant" }>,
+      { role: "user", content: "retry after max token thinking", timestamp: Date.now() },
+    ];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel(
+        "bedrock-converse-stream" as Api,
+        "amazon-bedrock",
+        "global.anthropic.claude-sonnet-4-6",
+      ),
+    );
+
+    expect(result.map((msg) => msg.role)).toEqual(["user"]);
+    expect(JSON.stringify(result)).not.toContain("partial-signature");
+  });
+
+  it("keeps max-token transport turns with visible or tool content", () => {
+    const messages: Context["messages"] = [
+      {
+        role: "assistant",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+        stopReason: "length",
+        timestamp: Date.now(),
+        content: [
+          { type: "thinking", thinking: "partial", thinkingSignature: "sig-visible" },
+          { type: "text", text: "partial visible answer" },
+        ],
+      },
+      assistantToolCall("call_length", "exec", "length"),
+    ] as Context["messages"];
+
+    const result = transformTransportMessages(
+      messages,
+      makeModel("anthropic-messages", "anthropic", "claude-sonnet-4-6"),
+    );
+
+    expect(result[0]).toMatchObject({ role: "assistant", stopReason: "length" });
+    expect(result[1]).toMatchObject({ role: "assistant", stopReason: "length" });
+  });
+
   it("drops errored Anthropic transport assistant tool calls and matching results before replay", () => {
     const messages: Context["messages"] = [
       assistantToolCall("call_error", "exec", "error"),

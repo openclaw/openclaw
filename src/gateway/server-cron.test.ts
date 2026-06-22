@@ -7,6 +7,10 @@ import type { CliDeps } from "../cli/deps.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
+type RunCronIsolatedAgentTurnMock = (params: {
+  abortSignal?: AbortSignal;
+}) => Promise<{ status: "ok"; summary: string }>;
+
 const {
   enqueueSystemEventMock,
   consumeSelectedSystemEventEntriesMock,
@@ -20,6 +24,7 @@ const {
   runCronChangedMock,
   abortAndDrainEmbeddedAgentRunMock,
   retireSessionMcpRuntimeMock,
+  requestSafeGatewayRestartMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   consumeSelectedSystemEventEntriesMock: vi.fn((_sessionKey, entries) => entries ?? []),
@@ -29,7 +34,10 @@ const {
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
+    status: "ok",
+    summary: "ok",
+  })),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
   runCronChangedMock: vi.fn(async () => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
@@ -42,6 +50,32 @@ const {
     forceCleared: false,
   })),
   retireSessionMcpRuntimeMock: vi.fn(async () => true),
+  requestSafeGatewayRestartMock: vi.fn(() => ({
+    ok: true,
+    status: "scheduled",
+    preflight: {
+      safe: true,
+      counts: {
+        queueSize: 0,
+        pendingReplies: 0,
+        embeddedRuns: 0,
+        activeTasks: 0,
+        totalActive: 0,
+      },
+      blockers: [],
+      summary: "safe to restart now",
+    },
+    restart: {
+      ok: true,
+      pid: 123,
+      signal: "SIGUSR1",
+      delayMs: 0,
+      reason: "cron.isolated_agent_setup_timeout",
+      mode: "emit",
+      coalesced: false,
+      cooldownMsApplied: 0,
+    },
+  })),
 }));
 
 function enqueueSystemEvent(text: string, opts?: unknown) {
@@ -90,6 +124,16 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
 vi.mock("../infra/heartbeat-runner.js", () => ({
   runHeartbeatOnce,
 }));
+
+vi.mock("../infra/restart-coordinator.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/restart-coordinator.js")>(
+    "../infra/restart-coordinator.js",
+  );
+  return {
+    ...actual,
+    requestSafeGatewayRestart: requestSafeGatewayRestartMock,
+  };
+});
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
@@ -234,10 +278,53 @@ describe("buildGatewayCronService", () => {
     getGlobalHookRunnerMock.mockClear();
     abortAndDrainEmbeddedAgentRunMock.mockClear();
     retireSessionMcpRuntimeMock.mockClear();
+    requestSafeGatewayRestartMock.mockClear();
     getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: runCronChangedMock,
     });
+  });
+
+  it("requests a safe gateway restart when isolated cron setup times out", async () => {
+    vi.useFakeTimers();
+    const cfg = createCronConfig("server-cron-isolated-setup-timeout");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "isolated setup timeout",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
+      });
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(
+        async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
+          abortSignal?.addEventListener("abort", () => undefined, { once: true });
+          return await new Promise<never>(() => {});
+        },
+      );
+
+      const runPromise = state.cron.run(job.id, "force");
+      await vi.advanceTimersByTimeAsync(60_100);
+      const runResult = await runPromise;
+
+      expect(runResult).toEqual({ ok: true, ran: true });
+      expect(requestSafeGatewayRestartMock).toHaveBeenCalledTimes(1);
+      expect(requestSafeGatewayRestartMock).toHaveBeenCalledWith({
+        reason: "cron.isolated_agent_setup_timeout",
+        delayMs: 0,
+        preservePendingEmitHooks: true,
+      });
+    } finally {
+      state.cron.stop();
+      vi.useRealTimers();
+    }
   });
 
   it("emits cron_changed hooks with computed next run state", async () => {

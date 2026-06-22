@@ -1,6 +1,7 @@
 /**
  * Shared parameter types for embedded-agent run orchestration.
  */
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
@@ -15,7 +16,7 @@ import type { ImageContent } from "../../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
-import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
@@ -25,6 +26,7 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
+import type { FastModeAutoProgressState } from "../../fast-mode.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
@@ -44,6 +46,8 @@ export type CurrentInboundPromptContext = {
 export type RunEmbeddedAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
+  lifecycleGeneration?: string;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
   promptCacheKey?: string;
   /** Session-like key for sandbox and tool-policy resolution. Defaults to sessionKey. */
@@ -81,8 +85,12 @@ export type RunEmbeddedAgentParams = {
   senderE164?: string | null;
   /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
+  /** Routable target for the current conversation when it differs from the native channel ID. */
+  currentMessagingTarget?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
@@ -138,7 +146,15 @@ export type RunEmbeddedAgentParams = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
+  fastModeStartedAtMs?: number;
+  /** Effective auto fast-mode cutoff for this run, in seconds. */
+  fastModeAutoOnSeconds?: number;
+  /** Shared notification state for nested harnesses that can observe the same tool boundary. */
+  fastModeAutoProgressState?: FastModeAutoProgressState;
+  /** True when the outer model fallback loop has reached its final candidate. */
+  isFinalFallbackAttempt?: boolean;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
@@ -173,7 +189,7 @@ export type RunEmbeddedAgentParams = {
   runTimeoutOverrideMs?: number;
   runId: string;
   abortSignal?: AbortSignal;
-  onExecutionStarted?: () => void;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -185,12 +201,14 @@ export type RunEmbeddedAgentParams = {
     itemId?: string;
     firstModelCallStarted?: boolean;
   }) => void;
+  onLaneWait?: (info: { waitMs: number; queuedAhead: number; waiting?: boolean }) => void;
   onRunProgress?: (info: {
     reason: string;
     provider?: string;
     model?: string;
     backend?: string;
   }) => void;
+  onSessionIdChanged?: (sessionId: string) => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
@@ -207,15 +225,20 @@ export type RunEmbeddedAgentParams = {
   }) => void | Promise<void>;
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  /** Synchronous private observer for the sanitized per-tool result. */
+  onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   onAgentEvent?: (evt: {
     stream: string;
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  onToolStreamBoundary?: () => void | Promise<void>;
   /**
-   * Emit lifecycle "finishing" when the model turn ends; the caller owns the
-   * final lifecycle "end" after durable post-turn maintenance completes.
+   * Emit lifecycle "finishing" when the attempt ends; the caller owns the
+   * final lifecycle "end" or "error" after fallback and post-turn work settle.
    */
+  deferTerminalLifecycle?: boolean;
+  /** @deprecated Use deferTerminalLifecycle. */
   deferTerminalLifecycleEnd?: boolean;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
@@ -257,4 +280,6 @@ export type RunEmbeddedAgentParams = {
    * exit promptly after emitting the final JSON result.
    */
   cleanupBundleMcpOnRunEnd?: boolean;
+  /** Mark explicit one-shot local CLI runs so plugin tools can release resources promptly. */
+  oneShotCliRun?: boolean;
 };

@@ -2,6 +2,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -27,6 +28,19 @@ vi.mock("../plugins/plugin-registry.js", () => ({
       },
     ],
   }),
+}));
+
+vi.mock("../plugins/manifest-metadata-scan.js", () => ({
+  listOpenClawPluginManifestMetadata: () => [
+    {
+      pluginDir: "/bundled/anthropic-vertex",
+      origin: "bundled",
+      manifest: {
+        id: "anthropic-vertex",
+        nonSecretAuthMarkers: ["gcp-vertex-credentials"],
+      },
+    },
+  ],
 }));
 
 vi.mock("../plugins/providers.js", () => ({
@@ -198,30 +212,22 @@ describe("createRuntimeProviderAuthLookup", () => {
 });
 
 async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const previous = process.env[key];
-  delete process.env[key];
+  const snapshot = captureEnv([key]);
+  deleteTestEnvValue(key);
   try {
     return await fn();
   } finally {
-    if (previous === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = previous;
-    }
+    snapshot.restore();
   }
 }
 
 async function withEnv<T>(key: string, value: string, fn: () => Promise<T>): Promise<T> {
-  const previous = process.env[key];
-  process.env[key] = value;
+  const snapshot = captureEnv([key]);
+  setTestEnvValue(key, value);
   try {
     return await fn();
   } finally {
-    if (previous === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = previous;
-    }
+    snapshot.restore();
   }
 }
 

@@ -257,6 +257,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           respond(false, undefined, resolvedSession.error);
           return;
         }
+        if ("missing" in resolvedSession) {
+          respondInvalidRequest(respond, `No session found: ${params.sessionKey}`);
+          return;
+        }
         const handoff = createTalkHandoff({
           sessionKey: resolvedSession.key,
           provider: normalizeOptionalString(params.provider),

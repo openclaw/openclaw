@@ -224,7 +224,7 @@ describe("onboard-search provider resolution", () => {
     expect(mod.applySearchProviderSelection(cfg, "firecrawl")).toBe(cfg);
   });
 
-  it("defaults to a keyless provider when no search credentials exist", async () => {
+  it("supports explicit keyless provider selection without defaulting to it", async () => {
     const duckduckgoEntry = createBundledDuckDuckGoEntry();
     mocks.resolvePluginWebSearchProviders.mockImplementation((params) =>
       params?.config ? [duckduckgoEntry] : [duckduckgoEntry],
@@ -248,6 +248,9 @@ describe("onboard-search provider resolution", () => {
 
     const result = await mod.setupSearch({} as OpenClawConfig, {} as never, prompter as never);
 
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({ initialValue: "__skip__" }),
+    );
     expect(result.tools?.web?.search?.provider).toBe("duckduckgo");
     expect(result.plugins?.entries?.duckduckgo?.enabled).toBe(true);
     expect(notes.join("\n")).toContain("works without an API key");

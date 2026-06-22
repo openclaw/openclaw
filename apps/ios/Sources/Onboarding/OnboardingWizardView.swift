@@ -17,10 +17,6 @@ private enum OnboardingStep: Int, CaseIterable {
         Self(rawValue: self.rawValue - 1)
     }
 
-    var next: Self? {
-        Self(rawValue: self.rawValue + 1)
-    }
-
     /// Progress label for the manual setup flow (mode → connect → auth → success).
     var manualProgressTitle: String {
         let manualSteps: [OnboardingStep] = [.mode, .connect, .auth, .success]

@@ -29,7 +29,7 @@ import {
   type PluginSessionExtensionProjection,
   type PluginSessionExtensionRegistration,
 } from "./host-hooks.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import { getActivePluginRegistry, getActivePluginSessionExtensionRegistry } from "./runtime.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
 const log = createSubsystemLogger("plugins/host-hook-state");
@@ -398,26 +398,6 @@ export async function drainPluginNextTurnInjectionContext(params: {
   };
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Session-extension JSON reads are caller-typed by namespace.
-export function getPluginSessionExtensionSync<T extends PluginJsonValue = PluginJsonValue>(params: {
-  cfg: OpenClawConfig;
-  pluginId: string;
-  sessionKey?: string;
-  namespace: string;
-}): T | undefined {
-  const pluginId = params.pluginId.trim();
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  const namespace = normalizeNamespace(params.namespace);
-  if (!pluginId || !sessionKey || !namespace) {
-    return undefined;
-  }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
-  const value = loaded.entry?.pluginExtensions?.[pluginId]?.[namespace] as
-    | PluginJsonValue
-    | undefined;
-  return value as T | undefined;
-}
-
 export function getPluginSessionExtensionStateSync(params: {
   cfg: OpenClawConfig;
   pluginId: string;
@@ -458,7 +438,7 @@ export async function patchPluginSessionExtension(params: {
     return { ok: false, error: "plugin session extension value is required unless unset is true" };
   }
   const nextPluginValue = params.value as PluginJsonValue;
-  const registry = getActivePluginRegistry();
+  const registry = getActivePluginSessionExtensionRegistry();
   const registration = (registry?.sessionExtensions ?? []).find(
     (entry) => entry.pluginId === pluginId && entry.extension.namespace === namespace,
   );
@@ -591,7 +571,7 @@ function collectPluginSessionExtensionProjections(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): PluginSessionExtensionProjection[] {
-  const registry = getActivePluginRegistry();
+  const registry = getActivePluginSessionExtensionRegistry();
   const extensions = registry?.sessionExtensions ?? [];
   if (extensions.length === 0) {
     return [];

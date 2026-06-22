@@ -8,14 +8,12 @@ import {
 } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
+import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { HealthFinding } from "./health-checks.js";
+import { normalizeHealthCheck } from "./health-check-adapter.js";
+import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
-export {
-  doctorHealthConversionRules,
-  type DoctorHealthConversionKind,
-  type DoctorHealthConversionRule,
-} from "./doctor-health-conversion-plan.js";
 
 type DoctorFlowMode = "local" | "remote";
 
@@ -29,7 +27,7 @@ type DoctorConfigResult = {
   preservedLegacyRootKeys?: readonly string[];
 };
 
-type DoctorHealthFlowContext = {
+export type DoctorHealthFlowContext = {
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;
@@ -45,16 +43,30 @@ type DoctorHealthFlowContext = {
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
+  postInstallDoctorResult?: UpdatePostInstallDoctorResult;
 };
 
 type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
+  // Structured checks listed here belong to this ordered doctor contribution;
+  // when legacy run() is absent they also own the doctor execution path.
+  healthChecks: readonly HealthCheckInput[];
   healthCheckIds: readonly string[];
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
-const PRE_HEALTH_POSITIONAL_HEALTH_CHECK_IDS = new Set(["core/doctor/ui-protocol-freshness"]);
+type DoctorContributionHealthCheck =
+  | (Omit<HealthCheck, "id" | "kind" | "source"> & {
+      readonly id?: string;
+      readonly kind?: "core";
+      readonly source?: string;
+    })
+  | (Omit<RunnableHealthCheck, "id" | "kind" | "source"> & {
+      readonly id?: string;
+      readonly kind?: "core";
+      readonly source?: string;
+    });
 
 const loadAgentDefaultsModule = async () => await import("../agents/defaults.js");
 const loadAgentScopeModule = async () => await import("../agents/agent-scope.js");
@@ -99,13 +111,22 @@ export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
   return true;
 }
 
-function createDoctorHealthContribution(params: {
+export function createDoctorHealthContribution(params: {
   id: string;
   label: string;
   healthCheckIds?: readonly string[];
+  healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
   hint?: string;
-  run: (ctx: DoctorHealthFlowContext) => Promise<void>;
+  run?: (ctx: DoctorHealthFlowContext) => Promise<void>;
 }): DoctorHealthContribution {
+  const healthChecks = normalizeHealthChecks({
+    contributionId: params.id,
+    healthChecks: params.healthChecks,
+  });
+  const healthCheckIds = params.healthCheckIds ?? healthChecks.map((check) => check.id);
+  if (params.run === undefined && healthChecks.length === 0) {
+    throw new Error(`doctor contribution ${params.id} must define run or healthChecks`);
+  }
   return {
     id: params.id,
     kind: "core",
@@ -116,22 +137,121 @@ function createDoctorHealthContribution(params: {
       ...(params.hint ? { hint: params.hint } : {}),
     },
     source: "doctor",
-    healthCheckIds: params.healthCheckIds ?? [],
-    run: params.run,
+    healthChecks,
+    healthCheckIds,
+    run:
+      params.run ??
+      ((ctx) =>
+        runStructuredDoctorHealthContribution({
+          contributionId: params.id,
+          ctx,
+          checks: healthChecks,
+        })),
   };
 }
 
-function resolvePositionalHealthCheckIds(): ReadonlySet<string> {
-  const ids = new Set(PRE_HEALTH_POSITIONAL_HEALTH_CHECK_IDS);
-  for (const contribution of resolveDoctorHealthContributions()) {
-    if (contribution.id === "doctor:structured-health-repairs") {
-      continue;
-    }
-    for (const checkId of contribution.healthCheckIds) {
-      ids.add(checkId);
+function normalizeHealthChecks(params: {
+  contributionId: string;
+  healthChecks?: DoctorContributionHealthCheck | readonly DoctorContributionHealthCheck[];
+}): readonly HealthCheckInput[] {
+  if (params.healthChecks === undefined) {
+    return [];
+  }
+  const checks = Array.isArray(params.healthChecks) ? params.healthChecks : [params.healthChecks];
+  return checks.map((check) =>
+    normalizeContributionHealthCheck({
+      check,
+      contributionId: params.contributionId,
+      count: checks.length,
+    }),
+  );
+}
+
+function normalizeContributionHealthCheck(params: {
+  check: DoctorContributionHealthCheck;
+  contributionId: string;
+  count: number;
+}): HealthCheckInput {
+  const id =
+    params.check.id ??
+    (params.count === 1 ? deriveCoreHealthCheckId(params.contributionId) : undefined);
+  if (id === undefined) {
+    throw new Error(
+      `doctor contribution ${params.contributionId} must specify health check ids when it declares multiple healthChecks`,
+    );
+  }
+  return {
+    ...params.check,
+    id,
+    kind: params.check.kind ?? "core",
+    source: params.check.source ?? "doctor",
+  };
+}
+
+function deriveCoreHealthCheckId(contributionId: string): string {
+  if (contributionId.startsWith("doctor:")) {
+    return `core/doctor/${contributionId.slice("doctor:".length)}`;
+  }
+  return `core/doctor/${contributionId}`;
+}
+
+async function runStructuredDoctorHealthContribution(params: {
+  contributionId: string;
+  ctx: DoctorHealthFlowContext;
+  checks: readonly HealthCheckInput[];
+}): Promise<void> {
+  if (params.checks.length === 0) {
+    throw new Error(`doctor contribution ${params.contributionId} has no structured health`);
+  }
+  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
+  const workspaceDir = resolveAgentWorkspaceDir(
+    params.ctx.cfg,
+    resolveDefaultAgentId(params.ctx.cfg),
+  );
+  const result = await runDoctorHealthRepairs(
+    {
+      mode: "fix",
+      runtime: params.ctx.runtime,
+      cfg: params.ctx.cfg,
+      cwd: workspaceDir,
+      configPath: params.ctx.configPath,
+      dryRun: !params.ctx.prompter.shouldRepair,
+      allowExecSecretRefs: params.ctx.options.allowExec === true,
+    },
+    {
+      checks: params.checks,
+      dryRun: !params.ctx.prompter.shouldRepair,
+    },
+  );
+  params.ctx.cfg = result.config;
+  renderStructuredHealthFindings(params.ctx, result.findings);
+  for (const warning of result.warnings) {
+    params.ctx.runtime.error(warning);
+  }
+  for (const change of result.changes) {
+    params.ctx.runtime.log(change);
+  }
+}
+
+function renderStructuredHealthFindings(
+  ctx: DoctorHealthFlowContext,
+  findings: readonly HealthFinding[],
+): void {
+  for (const finding of findings) {
+    const write = finding.severity === "error" ? ctx.runtime.error : ctx.runtime.log;
+    write(formatStructuredHealthFinding(finding));
+    if (finding.fixHint !== undefined) {
+      ctx.runtime.log(`  fix: ${finding.fixHint}`);
     }
   }
-  return ids;
+}
+
+function formatStructuredHealthFinding(finding: HealthFinding): string {
+  const where = finding.path !== undefined ? ` ${finding.path}` : "";
+  const line = finding.line !== undefined ? `:${finding.line}` : "";
+  return `[${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}`;
 }
 
 async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -319,18 +439,15 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
   if (!ctx.prompter.shouldRepair) {
     return;
   }
-  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
-  const { listHealthChecks } = await loadHealthCheckRegistryModule();
+  const { listExtensionHealthChecksForDoctor } = await loadHealthCheckRegistryModule();
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
   const { note } = await loadNoteModule();
 
-  registerCoreHealthChecks();
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
   registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
-  const positionalHealthCheckIds = resolvePositionalHealthCheckIds();
-  const checks = listHealthChecks().filter((check) => !positionalHealthCheckIds.has(check.id));
+  const checks = listExtensionHealthChecksForDoctor(await resolveDoctorContributionHealthChecks());
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -353,6 +470,44 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
 async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
   noteClaudeCliHealth(ctx.cfg);
+}
+
+async function runCoreContributionHealthRepair(
+  ctx: DoctorHealthFlowContext,
+  checkIds: readonly string[],
+): Promise<void> {
+  if (!ctx.prompter.shouldRepair || checkIds.length === 0) {
+    return;
+  }
+  const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
+  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await import("../agents/agent-scope.js");
+  const { note } = await import("../../packages/terminal-core/src/note.js");
+
+  const selectedIds = new Set(checkIds);
+  const checks = CORE_HEALTH_CHECKS.filter((check) => selectedIds.has(check.id));
+  if (checks.length === 0) {
+    return;
+  }
+  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const result = await runDoctorHealthRepairs(
+    {
+      mode: "fix",
+      runtime: ctx.runtime,
+      cfg: ctx.cfg,
+      cwd: workspaceDir,
+      configPath: ctx.configPath,
+    },
+    { checks },
+  );
+  ctx.cfg = result.config;
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
 }
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -424,6 +579,9 @@ async function runReleaseConfiguredPluginInstallsHealth(
     env: ctx.env ?? process.env,
     touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
   });
+  if (result.postInstallDoctorResult) {
+    ctx.postInstallDoctorResult = result.postInstallDoctorResult;
+  }
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
@@ -505,7 +663,7 @@ async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
-    await import("../commands/doctor-cron.js");
+    await import("../commands/doctor/cron/index.js");
   await noteLegacyWhatsAppCrontabHealthCheck();
   await maybeRepairLegacyCronStore({
     cfg: ctx.cfg,
@@ -563,11 +721,13 @@ async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
+  await runCoreContributionHealthRepair(ctx, ["core/doctor/browser-clawd-profile-residue"]);
   await noteChromeMcpBrowserReadiness(ctx.cfg);
 }
 
 async function runOpenAIOAuthTlsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteOpenAIOAuthTlsPrerequisites } = await import("../commands/oauth-tls-preflight.js");
+  const { noteOpenAIOAuthTlsPrerequisites } =
+    await import("../plugins/provider-openai-chatgpt-oauth-tls.js");
   await noteOpenAIOAuthTlsPrerequisites({
     cfg: ctx.cfg,
     deep: ctx.options.deep === true,
@@ -1105,6 +1265,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:ui-protocol-freshness",
+      label: "UI protocol freshness",
+      healthCheckIds: ["core/doctor/ui-protocol-freshness"],
+      run: async () => {},
+    }),
+    createDoctorHealthContribution({
       id: "doctor:disk-space",
       label: "Disk space",
       run: runDiskSpaceHealth,
@@ -1117,6 +1283,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:codex-session-routes",
       label: "Codex session routes",
+      healthCheckIds: ["core/doctor/codex-session-routes"],
       run: runCodexSessionRouteHealth,
     }),
     createDoctorHealthContribution({
@@ -1170,7 +1337,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:browser",
       label: "Browser",
-      healthCheckIds: ["core/doctor/browser"],
+      healthCheckIds: ["core/doctor/browser", "core/doctor/browser-clawd-profile-residue"],
       run: runBrowserHealth,
     }),
     createDoctorHealthContribution({
@@ -1210,7 +1377,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
-      healthCheckIds: ["core/doctor/workspace-status"],
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({
@@ -1279,6 +1445,28 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runFinalConfigValidationHealth,
     }),
   ];
+}
+
+export async function resolveDoctorContributionHealthChecks(): Promise<readonly HealthCheck[]> {
+  const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
+  const checksById = new Map(CORE_HEALTH_CHECKS.map((check) => [check.id, check]));
+  const checks: HealthCheck[] = [];
+  for (const contribution of resolveDoctorHealthContributions()) {
+    if (contribution.healthChecks.length > 0) {
+      checks.push(...contribution.healthChecks.map(normalizeHealthCheck));
+      continue;
+    }
+    for (const id of contribution.healthCheckIds) {
+      const check = checksById.get(id);
+      if (check === undefined) {
+        throw new Error(
+          `doctor contribution ${contribution.id} references unknown core health check ${id}`,
+        );
+      }
+      checks.push(check);
+    }
+  }
+  return checks;
 }
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {

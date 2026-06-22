@@ -14,6 +14,7 @@ import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   resolveAgentHarnessPolicy,
   resolveAvailableAgentHarnessPolicy,
+  resolvePluginHarnessPolicyToolsAllow,
   runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";
@@ -489,6 +490,30 @@ describe("runAgentHarnessAttempt", () => {
     const attempt = runAttempt.mock.calls[0]?.[0];
     expect(attempt?.toolsAllow).toEqual([]);
     expect(attempt?.extraSystemPrompt).toContain("this chat is not allowed by policy");
+  });
+
+  it.each([
+    {
+      name: "narrow allowlist",
+      config: { tools: { allow: ["message"] } } as OpenClawConfig,
+    },
+    {
+      name: "specific denylist",
+      config: { tools: { deny: ["exec"] } } as OpenClawConfig,
+    },
+    {
+      name: "narrow profile",
+      config: { tools: { profile: "coding" } } as OpenClawConfig,
+    },
+  ])("marks plugin side questions restricted for a $name", ({ config }) => {
+    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toEqual([]);
+  });
+
+  it.each([
+    { name: "full tool profile", config: { tools: { profile: "full" } } as OpenClawConfig },
+    { name: "explicit empty allowlist", config: { tools: { allow: [] } } as OpenClawConfig },
+  ])("leaves plugin side questions unrestricted for an $name", ({ config }) => {
+    expect(resolvePluginHarnessPolicyToolsAllow(createAttemptParams(config))).toBeUndefined();
   });
 
   it("leaves OpenClaw harness params unchanged for channel group sender deny-all policy", async () => {

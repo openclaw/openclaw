@@ -42,6 +42,24 @@ function responseFromText(text: string): Response {
   );
 }
 
+function responseFromReaderText(text: string, releaseLock: () => void): Response {
+  const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
+    { done: false, value: new TextEncoder().encode(text) },
+    { done: true, value: undefined },
+  ];
+  const reader = {
+    read: async () => chunks.shift() ?? { done: true, value: undefined },
+    cancel: async () => undefined,
+    releaseLock,
+  } as ReadableStreamDefaultReader<Uint8Array>;
+
+  return {
+    ok: true,
+    status: 200,
+    body: { getReader: () => reader },
+  } as Response;
+}
+
 describe("streamProxy", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -117,6 +135,37 @@ describe("streamProxy", () => {
       sessionId: "run-session",
       promptCacheKey: "stable-cache-key",
     });
+  });
+
+  it("releases the proxy response reader after a terminal stream", async () => {
+    let resolveReleased: (() => void) | undefined;
+    const released = new Promise<void>((resolve) => {
+      resolveReleased = resolve;
+    });
+    const releaseLock = vi.fn(() => {
+      resolveReleased?.();
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromReaderText(
+          `data: ${JSON.stringify({
+            type: "done",
+            reason: "stop",
+            usage,
+          })}\n\n`,
+          releaseLock,
+        ),
+      ),
+    );
+
+    await streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    }).result();
+    await released;
+
+    expect(releaseLock).toHaveBeenCalledTimes(1);
   });
 
   it("returns an error result when EOF arrives without a terminal event", async () => {

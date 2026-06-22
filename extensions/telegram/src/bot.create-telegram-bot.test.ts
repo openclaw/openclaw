@@ -70,6 +70,7 @@ const {
   TelegramSpooledReplayProcessingError,
   withTelegramSpooledReplayUpdate,
 } = await import("./bot-processing-outcome.js");
+const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
 const { clearAccountThrottlersForTest } = await import("./account-throttler.js");
 const {
@@ -398,6 +399,81 @@ describe("createTelegramBot", () => {
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
     expect(middlewareUseSpy).toHaveBeenCalledWith(sequentializeSpy.mock.results[0]?.value);
     expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
+  });
+
+  it("answers callback queries before same-chat sequentialize delays handlers", async () => {
+    installPerKeySequentializer();
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      getOnHandler("callback_query") as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+    let releaseBusyUpdate: (() => void) | undefined;
+    const busyUpdateGate = new Promise<void>((resolve) => {
+      releaseBusyUpdate = resolve;
+    });
+    const busyMessagePayload = {
+      chat: { id: 1234, type: "private" },
+      date: 1736380800,
+      from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      message_id: 41,
+      text: "busy",
+    };
+    const callbackQueryPayload = {
+      id: "cbq-pre-sequentialize-1",
+      data: "cmd:option_a",
+      from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      message: {
+        chat: { id: 1234, type: "private" },
+        date: 1736380800,
+        message_id: 42,
+      },
+    };
+    const busyMessage = {
+      update: { update_id: 401, message: busyMessagePayload },
+      message: busyMessagePayload,
+      me: { username: "openclaw_bot" },
+    };
+    const callbackCtx = {
+      update: { update_id: 402, callback_query: callbackQueryPayload },
+      callbackQuery: callbackQueryPayload,
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    const busyPromise = runTelegramMiddlewareChain({
+      ctx: busyMessage,
+      finalHandler: async () => {
+        await busyUpdateGate;
+      },
+    });
+    await flushTelegramTestMicrotasks();
+
+    let callbackHandlerStarted = false;
+    const callbackPromise = runTelegramMiddlewareChain({
+      ctx: callbackCtx,
+      finalHandler: async (ctx) => {
+        callbackHandlerStarted = true;
+        await callbackHandler(ctx);
+      },
+    });
+    await flushTelegramTestMicrotasks();
+
+    expect(callbackHandlerStarted).toBe(false);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-pre-sequentialize-1");
+
+    if (!releaseBusyUpdate) {
+      throw new Error("Expected Telegram busy update release callback to be initialized");
+    }
+    releaseBusyUpdate();
+    await busyPromise;
+    await callbackPromise;
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
   });
 
   it("lets /status bypass a busy Telegram topic lane", async () => {
@@ -1174,7 +1250,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("routes callback_query payloads as messages and answers callbacks", async () => {
+  it("routes generic callback_query payloads as callback_data messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = requireValue(
       onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
@@ -1200,8 +1276,39 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
-    expect(payload.Body).toContain("cmd:option_a");
+    expect(payload.Body).toContain("callback_data: cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+
+  it("preserves raw slash callback_query payloads as command text", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-slash-1",
+        data: "/fast status",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("/fast status");
+    expect(payload.Body).not.toContain("callback_data: /fast status");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-slash-1");
   });
 
   it("does not route opaque callback_query payloads as synthetic commands", async () => {
@@ -3651,6 +3758,37 @@ describe("createTelegramBot", () => {
       }
     }
   });
+  it("marks explicit Telegram bot-handle mentions in the inbound context", async () => {
+    resetHarnessSpies();
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+
+    await dispatchMessage({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "@openclaw_bot status",
+        entities: [{ type: "mention", offset: 0, length: "@openclaw_bot".length }],
+        date: 1736380800,
+        message_id: 4,
+        from: { id: 9, first_name: "Ada" },
+      },
+      me: { id: 999, username: "openclaw_bot" },
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.WasMentioned).toBe(true);
+    expect(payload.ExplicitlyMentionedBot).toBe(true);
+    expect(payload.MentionSource).toBe("explicit_bot");
+    expect(payload.BotUsername).toBe("openclaw_bot");
+  });
+
   it("keeps group envelope headers stable (sender identity is separate)", async () => {
     resetHarnessSpies();
 
@@ -4192,7 +4330,7 @@ describe("createTelegramBot", () => {
     }
   });
   it("sends replies without native reply threading", async () => {
-    replySpy.mockResolvedValue({ text: "a".repeat(4500) });
+    replySpy.mockResolvedValue({ text: "a".repeat(TELEGRAM_RICH_TEXT_LIMIT + 1024) });
 
     createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
@@ -4284,7 +4422,7 @@ describe("createTelegramBot", () => {
       sendMessageSpy.mockClear();
       replySpy.mockClear();
       replySpy.mockResolvedValue({
-        text: "a".repeat(4500),
+        text: "a".repeat(TELEGRAM_RICH_TEXT_LIMIT + 1024),
         replyToId: String(messageId),
       });
       loadConfig.mockReturnValue({
@@ -5284,8 +5422,8 @@ describe("createTelegramBot", () => {
       await dispatch(0);
     };
 
-    const updateSessionStoreSpy = vi.spyOn(sessionStoreRuntime, "updateSessionStore");
-    updateSessionStoreSpy.mockRejectedValueOnce(new Error("session store boom"));
+    const patchSessionEntrySpy = vi.spyOn(sessionStoreRuntime, "patchSessionEntry");
+    patchSessionEntrySpy.mockRejectedValueOnce(new Error("session store boom"));
 
     const ctx = {
       update: { update_id: 890 },
@@ -5307,7 +5445,7 @@ describe("createTelegramBot", () => {
       await expect(runMiddlewareChain(ctx)).rejects.toThrow("session store boom");
       await runMiddlewareChain(ctx);
     } finally {
-      updateSessionStoreSpy.mockRestore();
+      patchSessionEntrySpy.mockRestore();
     }
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);

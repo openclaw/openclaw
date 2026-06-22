@@ -19,6 +19,17 @@
   box-shadow: none !important;
 }
 
+.chat-workbench__main {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Chat header - fixed at top, transparent */
 .chat-header {
   display: flex;
@@ -779,7 +790,7 @@
 
 .chat-settings-popover__label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -922,7 +933,15 @@
 }
 
 .agent-chat__talk-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--text);
+}
+
+.agent-chat__talk-status-text {
+  min-width: 0;
+  flex: 1;
 }
 
 .agent-chat__voice-turns {
@@ -1038,8 +1057,8 @@
   background-repeat: no-repeat;
 }
 
-.agent-chat__talk-options input:focus,
-.agent-chat__talk-options select:focus {
+.agent-chat__talk-options input:focus-visible,
+.agent-chat__talk-options select:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -1405,6 +1424,12 @@
   .agent-chat__composer-controls .chat-controls__model,
   .chat-composer-model-control {
     min-width: 0;
+  }
+
+  /* Desktop restores the quota pill in the composer flex row (#93041); the mobile composer is a
+     fixed 2-col grid (model | settings), so the pill would push the settings chip to a new row. */
+  .agent-chat__composer-controls .chat-controls__quota {
+    display: none;
   }
 
   .chat-settings-popover-wrapper {
@@ -1980,7 +2005,7 @@
 
 .chat-session-picker__option-meta {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
 }
 
 .chat-session-picker__option-check {
@@ -2205,7 +2230,7 @@
 .chat-controls__inline-select-section-label {
   padding: 4px 8px 3px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2228,13 +2253,14 @@
   display: grid;
   gap: 6px;
   width: 180px;
-  max-height: min(430px, calc(100vh - 148px));
+  max-height: min(520px, calc(100vh - 96px));
   padding: 8px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   opacity: 0;
   pointer-events: none;
   transform: translateX(-4px);
@@ -2658,7 +2684,7 @@
 .agent-chat__hint kbd {
   display: inline-block;
   padding: 1px 6px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-family: var(--font-mono);
   background: var(--panel-strong);
   border: 1px solid var(--border);

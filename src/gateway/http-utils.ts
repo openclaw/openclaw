@@ -6,17 +6,25 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
-import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  isValidAgentId,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-auth-utils.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 
 export {
+  authorizeOpenAiCompatibleHttpModelOverride,
   authorizeGatewayHttpRequestOrReply,
   authorizeScopedGatewayHttpRequestOrReply,
   checkGatewayHttpRequestAuth,
@@ -37,6 +45,36 @@ export const OPENCLAW_MODEL_ID = "openclaw";
 /** Default OpenAI-compatible model alias that targets the default OpenClaw agent. */
 export const OPENCLAW_DEFAULT_MODEL_ID = "openclaw/default";
 
+export class UnknownGatewayAgentError extends Error {
+  constructor(readonly agentId: string) {
+    super(`Unknown agent '${agentId}'.`);
+    this.name = "UnknownGatewayAgentError";
+  }
+}
+
+export class GatewaySessionKeyOverrideError extends Error {
+  constructor() {
+    super("`x-openclaw-session-key` cannot use reserved internal session namespaces.");
+    this.name = "GatewaySessionKeyOverrideError";
+  }
+}
+
+export function isUnknownGatewayAgentError(err: unknown): err is UnknownGatewayAgentError {
+  return err instanceof UnknownGatewayAgentError;
+}
+
+export function isGatewaySessionKeyOverrideError(
+  err: unknown,
+): err is GatewaySessionKeyOverrideError {
+  return err instanceof GatewaySessionKeyOverrideError;
+}
+
+function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
+  if (!listAgentIds(cfg).includes(agentId)) {
+    throw new UnknownGatewayAgentError(agentId);
+  }
+}
+
 function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
     normalizeOptionalString(getHeader(req, "x-openclaw-agent-id")) ||
@@ -44,6 +82,9 @@ function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
     "";
   if (!raw) {
     return undefined;
+  }
+  if (!isValidAgentId(raw)) {
+    throw new UnknownGatewayAgentError(raw);
   }
   return normalizeAgentId(raw);
 }
@@ -139,11 +180,17 @@ export function resolveAgentIdForRequest(params: {
   const cfg = getRuntimeConfig();
   const fromHeader = resolveAgentIdFromHeader(params.req);
   if (fromHeader) {
+    assertKnownAgentId(fromHeader, cfg);
     return fromHeader;
   }
 
   const fromModel = resolveAgentIdFromModel(params.model, cfg);
-  return fromModel ?? resolveDefaultAgentId(cfg);
+  if (fromModel) {
+    assertKnownAgentId(fromModel, cfg);
+    return fromModel;
+  }
+
+  return resolveDefaultAgentId(cfg);
 }
 
 function resolveSessionKey(params: {
@@ -154,12 +201,27 @@ function resolveSessionKey(params: {
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
+    if (isReservedSessionKeyOverride(explicit)) {
+      throw new GatewaySessionKeyOverrideError();
+    }
     return explicit;
   }
 
   const user = params.user?.trim();
   const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
+}
+
+function isReservedSessionKeyOverride(sessionKey: string): boolean {
+  const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
+  return (
+    lowered.startsWith("subagent:") ||
+    lowered.startsWith("cron:") ||
+    lowered.startsWith("acp:") ||
+    isSubagentSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey)
+  );
 }
 
 /** Resolves gateway agent/session/channel context for OpenAI-compatible handlers. */

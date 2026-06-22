@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type {
   MemorySource,
+  MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +28,7 @@ type MemoryIndexEntry = {
 type SyncParams = {
   reason?: string;
   force?: boolean;
+  sessions?: MemorySyncParams["sessions"];
   sessionFiles?: string[];
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
@@ -38,6 +40,25 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
+    chunking: {
+      overlap: 0,
+      tokens: 256,
+    },
+    extraPaths: [],
+    multimodal: {
+      enabled: false,
+      modalities: [],
+      maxFileBytes: 0,
+    },
+    provider: "none",
+    store: {
+      fts: {
+        tokenizer: "unicode61",
+      },
+      vector: {
+        enabled: false,
+      },
+    },
     sync: {
       sessions: {
         deltaBytes: 100_000,
@@ -45,7 +66,7 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
         postCompactionForce: true,
       },
     },
-  } as ResolvedMemorySearchConfig;
+  } as unknown as ResolvedMemorySearchConfig;
   protected readonly batch = {
     enabled: false,
     wait: false,
@@ -60,6 +81,7 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected db: DatabaseSync;
 
   readonly syncCalls: SyncParams[] = [];
+  readonly indexedPaths: string[] = [];
 
   constructor(sourceRows: SourceStateRow[]) {
     super();
@@ -81,6 +103,10 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return await this.markSessionStartupCatchupDirtyFiles();
   }
 
+  async runSyncForTest(params?: MemorySyncParams): Promise<void> {
+    await this.runSync(params);
+  }
+
   getDirtySessionFiles(): string[] {
     return Array.from(this.sessionsDirtyFiles);
   }
@@ -93,7 +119,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return "test";
   }
 
-  protected async sync(params?: SyncParams): Promise<void> {
+  protected resolveProviderIndexIdentities() {
+    return [];
+  }
+
+  protected async sync(params?: MemorySyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
   }
 
@@ -116,9 +146,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
-    _entry: MemoryIndexEntry,
+    entry: MemoryIndexEntry,
     _options: { source: MemorySource; content?: string },
-  ): Promise<void> {}
+  ): Promise<void> {
+    this.indexedPaths.push(entry.path);
+  }
 }
 
 describe("session startup catch-up", () => {
@@ -299,5 +331,29 @@ describe("session startup catch-up", () => {
     } finally {
       openSpy.mockRestore();
     }
+  });
+
+  it("does not fall back to full session sync when identity targets normalize away", async () => {
+    await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+
+    await harness.runSyncForTest({
+      reason: "queued-sessions",
+      sessions: [{ agentId: "other", sessionId: "thread" }],
+    });
+
+    expect(harness.indexedPaths).toEqual([]);
+  });
+
+  it("does not fall back to full session sync for malformed identity session ids", async () => {
+    await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+
+    await harness.runSyncForTest({
+      reason: "queued-sessions",
+      sessions: [{ agentId: "main", sessionId: "bad/nested" }],
+    });
+
+    expect(harness.indexedPaths).toEqual([]);
   });
 });

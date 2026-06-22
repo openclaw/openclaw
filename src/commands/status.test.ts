@@ -407,7 +407,6 @@ async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>):
 }
 
 const mocks = vi.hoisted(() => ({
-  hasPotentialConfiguredChannels: vi.fn(() => true),
   loadConfig: vi.fn().mockReturnValue({ session: {} }),
   loadSessionStore: vi.fn().mockReturnValue({
     "+1000": createDefaultSessionStoreEntry(),
@@ -501,7 +500,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
   hasMeaningfulChannelConfig: (entry: unknown) =>
     Boolean(
       entry && typeof entry === "object" && Object.keys(entry as Record<string, unknown>).length,
@@ -550,8 +548,12 @@ vi.mock("../config/sessions/main-session.js", () => ({
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: mocks.resolveStorePath,
 }));
-vi.mock("../config/sessions/store-read.js", () => ({
-  readSessionStoreReadOnly: mocks.loadSessionStore,
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: (opts?: { storePath?: string }) =>
+    Object.entries(mocks.loadSessionStore(opts?.storePath)).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    })),
 }));
 vi.mock("../config/sessions/types.js", () => ({
   resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
@@ -718,6 +720,10 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
+  readBestEffortConfigSnapshot: vi.fn(async () => {
+    const config = mocks.loadConfig();
+    return { config, sourceConfig: config };
+  }),
   resolveGatewayPort: vi.fn(() => 18789),
 }));
 vi.mock("../daemon/service.js", () => ({
@@ -844,7 +850,6 @@ vi.mock("../channels/chat-meta.js", () => {
   return {
     CHAT_CHANNEL_ALIASES: {},
     listChatChannels: () => entries,
-    listChatChannelAliases: () => [],
     getChatChannelMeta: (id: (typeof mockChatChannels)[number]) => byId[id],
     normalizeChatChannelId: (raw?: string | null) => {
       const value = raw?.trim().toLowerCase();
@@ -889,8 +894,6 @@ vi.mock("./status.daemon.js", () => ({
 
 describe("statusCommand", () => {
   afterEach(() => {
-    mocks.hasPotentialConfiguredChannels.mockReset();
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
     mocks.loadSessionStore.mockReset();
@@ -995,7 +998,6 @@ describe("statusCommand", () => {
   });
 
   it("prints JSON and includes security audit only when all is requested", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);

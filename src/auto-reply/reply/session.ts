@@ -30,10 +30,11 @@ import {
   resolveThreadFlag,
   type SessionFreshness,
 } from "../../config/sessions/reset.js";
+import { persistSessionRolloverLifecycle } from "../../config/sessions/session-accessor.js";
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
-import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
+import { loadSessionStore } from "../../config/sessions/store.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
@@ -54,7 +55,6 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeSessionDeliveryFields,
@@ -78,13 +78,6 @@ import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./sess
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
-const sessionArchiveRuntimeLoader = createLazyImportLoader(
-  () => import("../../gateway/session-archive.runtime.js"),
-);
-
-function loadSessionArchiveRuntime() {
-  return sessionArchiveRuntimeLoader.load();
-}
 
 function stripThreadFromSessionRoute(route: SessionEntry["route"]): SessionEntry["route"] {
   const normalized = normalizeDeliveryChannelRoute(route);
@@ -543,16 +536,20 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount =
         preservedSelection.authProfileOverrideCompactionCount;
-    }
-    // When a reset trigger (/new, /reset) starts a new session, carry over
-    // user-set behavior overrides (verbose, thinking, reasoning, ttsAuto)
-    // so the user doesn't have to re-enable them every time.
-    if (resetTriggered && entry) {
+      // Behavior overrides carry across ANY new-session mint (explicit /new AND
+      // implicit daily/idle rollover), mirroring the model/auth carry above
+      // (#90119). Any persisted level is safe to forward — user `/think` or a
+      // spawn-applied default (subagent-spawn-thinking.ts) — so unlike model
+      // overrides these need no fallback-provenance filtering (#92562).
       persistedThinking = entry.thinkingLevel;
       persistedVerbose = entry.verboseLevel;
       persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+    }
+    // When a reset trigger (/new, /reset) starts a new session, also rotate the
+    // underlying CLI conversation and carry forward spawn lineage/label.
+    if (resetTriggered && entry) {
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;
@@ -738,6 +735,7 @@ export async function initSessionState(params: {
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
+  let inheritedParentContext = false;
   if (
     parentSessionKey &&
     parentSessionKey !== sessionKey &&
@@ -772,6 +770,11 @@ export async function initSessionState(params: {
         sessionEntry.sessionId = forked.sessionId;
         sessionEntry.sessionFile = forked.sessionFile;
         sessionEntry.forkedFromParent = true;
+        // The fork replaces the target transcript with inherited parent
+        // history, so any prior target-session token snapshot is stale.
+        sessionEntry.totalTokens = undefined;
+        sessionEntry.totalTokensFresh = false;
+        inheritedParentContext = true;
         log.warn(`forked session created: file=${forked.sessionFile}`);
       }
     }
@@ -803,6 +806,15 @@ export async function initSessionState(params: {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
+    // Runtime model fields are persisted last-run cache, not user selection.
+    // Reset must drop them so the next turn resolves current defaults or the
+    // explicit providerOverride/modelOverride values preserved above.
+    sessionEntry.modelProvider = undefined;
+    sessionEntry.model = undefined;
+    sessionEntry.fallbackNoticeSelectedModel = undefined;
+    sessionEntry.fallbackNoticeActiveModel = undefined;
+    sessionEntry.fallbackNoticeReason = undefined;
+    sessionEntry.systemPromptReport = undefined;
     // Clear stale context hash so the first flush in the new session is not
     // incorrectly skipped due to a hash match with the old transcript (#30115).
     sessionEntry.memoryFlushContextHash = undefined;
@@ -810,12 +822,15 @@ export async function initSessionState(params: {
     sessionEntry.endedAt = undefined;
     sessionEntry.runtimeMs = undefined;
     sessionEntry.status = undefined;
-    // Clear stale token metrics from previous session so /status doesn't
-    // display the old session's context usage after /new or /reset.
-    sessionEntry.totalTokens = undefined;
+    // New empty transcripts have a known zero context. Parent-context forks
+    // inherit history without a fresh count, so keep those explicitly unknown.
+    sessionEntry.totalTokens = inheritedParentContext ? undefined : 0;
+    sessionEntry.totalTokensFresh = !inheritedParentContext;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
+    sessionEntry.cacheRead = undefined;
+    sessionEntry.cacheWrite = undefined;
     sessionEntry.contextTokens = undefined;
     sessionEntry.contextBudgetStatus = undefined;
     sessionEntry.goal = undefined;
@@ -825,56 +840,36 @@ export async function initSessionState(params: {
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
-  await updateSessionStore(
-    storePath,
-    (store) => {
-      // Preserve per-session overrides while resetting compaction state on /new.
-      store[sessionKey] = { ...store[sessionKey], ...sessionEntry };
-      if (retiredLegacyMainDelivery) {
-        store[retiredLegacyMainDelivery.key] = retiredLegacyMainDelivery.entry;
-      }
-    },
-    {
-      activeSessionKey: sessionKey,
-      maintenanceConfig,
-      onWarn: (warning) =>
-        deliverSessionMaintenanceWarning({
-          cfg,
-          sessionKey,
-          entry: sessionEntry,
-          warning,
-        }),
-    },
-  );
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
-  let previousSessionTranscript: {
-    sessionFile?: string;
-    transcriptArchived?: boolean;
-  } = {};
+  const rollover = await persistSessionRolloverLifecycle({
+    activeSessionKey: sessionKey,
+    agentId,
+    maintenanceConfig,
+    onArchiveError: (error, sourcePath) => {
+      log.warn(
+        `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry?.sessionId}`,
+        { error: String(error) },
+      );
+    },
+    onMaintenanceWarning: (warning) =>
+      deliverSessionMaintenanceWarning({
+        cfg,
+        sessionKey,
+        entry: sessionEntry,
+        warning,
+      }),
+    previousEntry: previousSessionEntry,
+    retiredEntry: retiredLegacyMainDelivery,
+    sessionEntry,
+    sessionKey,
+    storePath,
+  });
+  sessionEntry = rollover.sessionEntry;
+  sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+  const previousSessionTranscript = rollover.previousSessionTranscript;
+
   if (previousSessionEntry?.sessionId) {
-    const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
-      await loadSessionArchiveRuntime();
-    const archivedTranscripts = archiveSessionTranscriptsDetailed({
-      sessionId: previousSessionEntry.sessionId,
-      storePath,
-      sessionFile: previousSessionEntry.sessionFile,
-      agentId,
-      reason: "reset",
-      onArchiveError: (error, sourcePath) => {
-        log.warn(
-          `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry.sessionId}`,
-          { error: String(error) },
-        );
-      },
-    });
-    previousSessionTranscript = resolveStableSessionEndTranscript({
-      sessionId: previousSessionEntry.sessionId,
-      storePath,
-      sessionFile: previousSessionEntry.sessionFile,
-      agentId,
-      archivedTranscripts,
-    });
     await retireSessionMcpRuntime({
       sessionId: previousSessionEntry.sessionId,
       reason: "reply-session-rollover",

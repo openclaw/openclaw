@@ -1,10 +1,9 @@
 // Chat transcript injection appends gateway-authored assistant rows while
 // preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
-import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
@@ -119,21 +118,33 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
-      transcriptPath: params.transcriptPath,
-      message: messageBody,
-      now,
-      useRawWhenLinear: true,
-      config: params.config,
-    });
-    emitSessionTranscriptUpdate({
-      sessionFile: params.transcriptPath,
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      message: appendedMessage,
-      messageId,
-    });
-    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
+    const turn = await persistSessionTranscriptTurn(
+      {
+        sessionFile: params.transcriptPath,
+        sessionKey: params.sessionKey ?? "",
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      },
+      {
+        updateMode: "inline",
+        ...(params.config ? { config: params.config } : {}),
+        messages: [
+          {
+            message: messageBody,
+            now,
+            useRawWhenLinear: true,
+          },
+        ],
+      },
+    );
+    const appended = turn.messages[0];
+    if (!appended) {
+      return { ok: false, error: "gateway-injected assistant message was not appended" };
+    }
+    return {
+      ok: true,
+      messageId: appended.messageId,
+      message: appended.message as Record<string, unknown>,
+    };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

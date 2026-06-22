@@ -1380,6 +1380,78 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it.each([
+    {
+      input: "/reset soft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      input: "/reset\tsoft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      input: "/reset\nsoft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+    {
+      input: "/reset: soft please reload system prompt",
+      expected: "/reset soft please reload system prompt",
+    },
+  ])("preserves $input args and skips confirmation dialog", async ({ input, expected }) => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: input,
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host);
+
+    expect(confirm).not.toHaveBeenCalled();
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "chat send payload",
+    );
+    expect(payload.sessionKey).toBe("agent:main");
+    expect(payload.message).toBe(expected);
+    expect(host.chatMessage).toBe("");
+  });
+
+  it.each([
+    "/reset softish please archive",
+    "/reset\tsoftish please archive",
+    "/reset\nsoftish please archive",
+    "/reset: softish please archive",
+  ])("keeps %s on the hard-reset confirmation path", async (message) => {
+    const confirm = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirm);
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep this draft",
+      sessionKey: "agent:main",
+    });
+
+    await handleSendChat(host, message, {
+      confirmReset: true,
+      restoreDraft: true,
+    });
+
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(request).not.toHaveBeenCalled();
+    expect(host.chatMessage).toBe("keep this draft");
+  });
+
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -2745,6 +2817,10 @@ describe("handleSendChat", () => {
       agentsList: { defaultId: "main" },
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
+      chatMessagesBySession: new Map([
+        ["agent:work:main", [{ role: "assistant", content: "work history" }]],
+        ["agent:main:main", [{ role: "assistant", content: "main history" }]],
+      ]),
     });
 
     await handleSendChat(host);
@@ -2759,6 +2835,8 @@ describe("handleSendChat", () => {
       limit: 100,
     });
     expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatMessagesBySession?.has("agent:work:main")).toBe(false);
+    expect(host.chatMessagesBySession?.has("agent:main:main")).toBe(true);
   });
 
   it("shows a visible pending item for /steer on the active run", async () => {

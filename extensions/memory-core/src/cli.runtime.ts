@@ -884,8 +884,14 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
     if (embeddingProbe) {
-      const state = embeddingProbe.ok ? "ready" : "unavailable";
-      const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
+      const state =
+        embeddingProbe.ok && embeddingProbe.checked === false
+          ? "skipped"
+          : embeddingProbe.ok
+            ? "ready"
+            : "unavailable";
+      const stateColor =
+        state === "skipped" ? theme.muted : embeddingProbe.ok ? theme.success : theme.warn;
       lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
       if (embeddingProbe.error) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);

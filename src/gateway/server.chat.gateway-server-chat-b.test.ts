@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -24,7 +25,7 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const FAST_WAIT_OPTS = { timeout: 250, interval: 2 } as const;
+const FAST_WAIT_OPTS = { timeout: 2_000, interval: 5 } as const;
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 type GatewaySocket = Awaited<ReturnType<GatewayHarness["openWs"]>>;
 let harness: GatewayHarness;
@@ -52,19 +53,6 @@ const sendReq = (
     }),
   );
 };
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
@@ -97,12 +85,24 @@ async function withGatewayChatHarness(
   }
 }
 
-async function writeMainSessionStore() {
+function testSessionFilePath(sessionDir: string, sessionId: string): string {
+  return path.join(sessionDir, `${sessionId}.jsonl`);
+}
+
+async function writeMainSessionStore(sessionDir?: string, sessionId = "sess-main") {
   await writeSessionStore({
     entries: {
-      main: { sessionId: "sess-main", updatedAt: Date.now() },
+      main: {
+        sessionId,
+        updatedAt: futureFixtureUpdatedAt(),
+        ...(sessionDir ? { sessionFile: testSessionFilePath(sessionDir, sessionId) } : {}),
+      },
     },
   });
+}
+
+function futureFixtureUpdatedAt(): number {
+  return Date.now() + 60_000;
 }
 
 async function writeGatewayConfig(config: Record<string, unknown>) {
@@ -115,8 +115,16 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   clearConfigCache();
 }
 
-async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
-  await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
+async function writeMainSessionTranscript(
+  sessionDir: string,
+  lines: string[],
+  sessionId = "sess-main",
+) {
+  await fs.writeFile(testSessionFilePath(sessionDir, sessionId), `${lines.join("\n")}\n`, "utf-8");
+}
+
+async function removeTempDir(dir: string): Promise<void> {
+  await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
 
 async function readTimelineEvents(filePath: string): Promise<Array<Record<string, unknown>>> {
@@ -193,13 +201,14 @@ async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
   createSessionDir: () => Promise<string>;
   historyMaxBytes?: number;
+  sessionId?: string;
 }) {
   if (params.historyMaxBytes !== undefined) {
     setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
   }
   await connectOk(params.ws);
   const sessionDir = await params.createSessionDir();
-  await writeMainSessionStore();
+  await writeMainSessionStore(sessionDir, params.sessionId);
   return sessionDir;
 }
 
@@ -296,7 +305,7 @@ describe("gateway server chat", () => {
       clearConfigCache();
       testState.agentConfig = undefined;
       testState.sessionStorePath = undefined;
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -527,7 +536,7 @@ describe("gateway server chat", () => {
       expect(payload?.metadata).toBeUndefined();
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -687,7 +696,7 @@ describe("gateway server chat", () => {
       );
     } finally {
       testState.sessionStorePath = undefined;
-      await fs.rm(sessionDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -759,7 +768,7 @@ describe("gateway server chat", () => {
 
   test("chat.send returns in_flight when duplicate attachment send wins parsing race", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    const dispatchRelease = createDeferred<void>();
+    const dispatchRelease = createDeferred();
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -892,7 +901,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1082,7 +1091,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1234,14 +1243,14 @@ describe("gateway server chat", () => {
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
         clearConfigCache();
-        await fs.rm(sessionDir, { recursive: true, force: true });
+        await removeTempDir(sessionDir);
       }
     },
   );
 
   test("chat.send reuses only active WebChat text sends with the same system context", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
-    const dispatchRelease = createDeferred<void>();
+    const dispatchRelease = createDeferred();
     try {
       testState.sessionStorePath = path.join(sessionDir, "sessions.json");
       await writeSessionStore({
@@ -1421,7 +1430,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1536,7 +1545,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1670,7 +1679,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1821,7 +1830,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1973,7 +1982,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
-      await fs.rm(sessionDir, { recursive: true, force: true });
+      await removeTempDir(sessionDir);
     }
   });
 
@@ -1981,6 +1990,7 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
       const sessionDir = await createSessionDir();
+      const sessionId = "sess-claude-cli-backfill";
       const originalHome = process.env.HOME;
       const homeDir = path.join(sessionDir, "home");
       const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
@@ -2024,8 +2034,9 @@ describe("gateway server chat", () => {
         await writeSessionStore({
           entries: {
             main: {
-              sessionId: "sess-main",
-              updatedAt: Date.now(),
+              sessionId,
+              sessionFile: testSessionFilePath(sessionDir, sessionId),
+              updatedAt: futureFixtureUpdatedAt(),
               modelProvider: "claude-cli",
               model: "claude-sonnet-4-6",
               cliSessionBindings: {
@@ -2235,6 +2246,16 @@ describe("gateway server chat", () => {
       >;
       expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
       expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
+
+      await vi.waitFor(async () => {
+        const completed = await rpcReq<{ status?: string }>(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-route",
+        });
+        expect(completed.ok).toBe(true);
+        expect(completed.payload?.status).toBe("ok");
+      }, FAST_WAIT_OPTS);
     });
   });
 
@@ -2354,7 +2375,7 @@ describe("gateway server chat", () => {
       } else {
         process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = previousTimelinePath;
       }
-      await fs.rm(timelineDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      await removeTempDir(timelineDir);
     }
   });
 
@@ -2721,6 +2742,40 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.message.get returns archive-backed rows surfaced by history", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionId = "sess-archive-backed";
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir, sessionId });
+      await fs.writeFile(
+        `${testSessionFilePath(sessionDir, sessionId)}.reset.2026-02-16T22-26-34.000Z`,
+        [
+          JSON.stringify({ type: "session", version: 1, id: sessionId }),
+          JSON.stringify({
+            id: "msg-archive-full-assistant",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "archive abcdefghij" }],
+              timestamp: Date.now(),
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const historyMessages = await fetchHistoryMessages(ws, { maxChars: 12 });
+      expect(JSON.stringify(historyMessages)).toContain("archive abcd\\n...(truncated)...");
+
+      const full = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-archive-full-assistant",
+      });
+      expect(full.ok).toBe(true);
+      expect(full.unavailableReason).toBeUndefined();
+      expect(JSON.stringify(full.message)).toContain("archive abcdefghij");
+      expect(JSON.stringify(full.message)).not.toContain("...(truncated)...");
+    });
+  });
+
   test("chat.message.get accepts the selected agent for global sessions", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await writeGatewayConfig({
@@ -2813,6 +2868,21 @@ describe("gateway server chat", () => {
             timestamp: Date.now(),
           },
         }),
+        JSON.stringify({
+          id: "msg-side-delivery",
+          parentId: "msg-active",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "side delivery" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          type: "leaf",
+          id: "active-leaf",
+          parentId: "msg-side-delivery",
+          targetId: "msg-active",
+        }),
       ]);
 
       const stale = await fetchChatMessage(ws, {
@@ -2822,12 +2892,20 @@ describe("gateway server chat", () => {
       expect(stale.ok).toBe(false);
       expect(stale.unavailableReason).toBe("not_found");
 
+      const sideDelivery = await fetchChatMessage(ws, {
+        sessionKey: "main",
+        messageId: "msg-side-delivery",
+      });
+      expect(sideDelivery.ok).toBe(false);
+      expect(sideDelivery.unavailableReason).toBe("not_found");
+
       const active = await fetchChatMessage(ws, {
         sessionKey: "main",
         messageId: "msg-active",
       });
       expect(active.ok).toBe(true);
       expect(JSON.stringify(active.message)).toContain("active branch");
+      expect(JSON.stringify(await fetchHistoryMessages(ws))).not.toContain("side delivery");
     });
   });
 

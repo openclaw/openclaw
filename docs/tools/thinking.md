@@ -34,8 +34,8 @@ title: "Thinking levels"
   - Stale configured OpenRouter Hunter Alpha refs skip proxy reasoning injection because that retired route could return final answer text through reasoning fields.
   - Google Gemini maps `/think adaptive` to Gemini's provider-owned dynamic thinking. Gemini 3 requests omit a fixed `thinkingLevel`, while Gemini 2.5 requests send `thinkingBudget: -1`; fixed levels still map to the closest Gemini `thinkingLevel` or budget for that model family.
   - MiniMax M2.x (`minimax/MiniMax-M2*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from M2.x's non-native Anthropic stream format. MiniMax-M3 (and M3.x) is exempt: M3 emits proper Anthropic thinking blocks and returns empty content when thinking is disabled, so OpenClaw keeps M3 on the provider's omitted/adaptive thinking path.
-  - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
-  - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
+  - Z.AI (`zai/*`) is binary (`on`/`off`) for most GLM models. GLM-5.2 is the exception: it exposes `/think off|low|high|max`, maps `low` and `high` to Z.AI `reasoning_effort: "high"`, and maps `max` to `reasoning_effort: "max"`.
+  - Moonshot Kimi K2.7 Code (`moonshot/kimi-k2.7-code`) always thinks. Its profile exposes only `on`, and OpenClaw omits the outbound `thinking` field as required by Moonshot. Other `moonshot/*` models map `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
 
 ## Resolution order
 
@@ -60,21 +60,22 @@ title: "Thinking levels"
 
 ## Fast mode (/fast)
 
-- Levels: `on|off|default`.
-- Directive-only message toggles a session fast-mode override and replies `Fast mode enabled.` / `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
+- Levels: `auto|on|off|default`.
+- Directive-only message toggles a session fast-mode override and replies `Fast mode set to auto.`, `Fast mode enabled.`, or `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
-  1. Inline/directive-only `/fast on|off` override (`/fast default` clears this layer)
+  1. Inline/directive-only `/fast auto|on|off` override (`/fast default` clears this layer)
   2. Session override
   3. Per-agent default (`agents.list[].fastModeDefault`)
   4. Per-model config: `agents.defaults.models["<provider>/<model>"].params.fastMode`
   5. Fallback: `off`
+- `auto` keeps the session/config mode as auto but resolves each new model call independently. Calls that start before the auto cutoff have fast mode enabled; later retry, fallback, tool-result, or continuation calls start with fast mode disabled. The cutoff defaults to 60 seconds; set `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds` on the active model to change it.
 - For `openai/*`, fast mode maps to OpenAI priority processing by sending `service_tier=priority` on supported Responses requests.
-- For Codex-backed `openai/*` models, fast mode sends the same `service_tier=priority` flag on Codex Responses. OpenClaw keeps one shared `/fast` toggle across both auth paths.
+- For Codex-backed `openai/*` / `openai-codex/*` models, fast mode sends the same `service_tier=priority` flag on Codex Responses. Native Codex app-server turns receive the tier only on `turn/start` or thread start/resume, so `auto` cannot retier one already-running app-server turn; it applies to the next model turn OpenClaw starts.
 - For direct public `anthropic/*` requests, including OAuth-authenticated traffic sent to `api.anthropic.com`, fast mode maps to Anthropic service tiers: `/fast on` sets `service_tier=auto`, `/fast off` sets `service_tier=standard_only`.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
-- `/status` shows `Fast` only when fast mode is enabled.
+- `/status` shows `Fast` when fast mode is enabled and `Fast:auto` when the configured mode is auto.
 
 ## Verbose directives (/verbose or /v)
 

@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-// openclaw-state-db.ts hardens permissions via the named import `chmodSync`
-// from node:fs. A namespace `vi.spyOn(fs, ...)` cannot rebind an
+// The permission helper hardens via the named import `chmodSync` from node:fs.
+// A namespace `vi.spyOn(fs, ...)` cannot rebind an
 // already-captured named import, so we mock node:fs and route chmodSync
 // (named + default) through a single controllable failure hook.
 const chmodFailHook = vi.hoisted(() => ({

@@ -623,6 +623,24 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("session rows preserve fresh zero-token usage", () => {
+    const row = buildGatewaySessionRow({
+      cfg: {} as OpenClawConfig,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "fresh-zero-token-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    });
+
+    expect(row.totalTokens).toBe(0);
+    expect(row.totalTokensFresh).toBe(true);
+  });
+
   test("selected global rows read transcript usage from the selected agent", async () => {
     await withStateDirEnv("session-utils-selected-global-usage-", async ({ stateDir }) => {
       const sessionId = "selected-global-usage";
@@ -1673,6 +1691,45 @@ describe("gateway session utils", () => {
   });
 
   test("listAgentsForGateway reports per-agent thinking defaults from the agent model", () => {
+    const resolveDeepSeekThinkingProfile = vi.fn(() => ({
+      levels: [
+        { id: "off" as const },
+        { id: "minimal" as const },
+        { id: "low" as const },
+        { id: "medium" as const },
+        { id: "high" as const },
+        { id: "xhigh" as const },
+      ],
+      defaultLevel: "medium" as const,
+    }));
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push(
+      {
+        pluginId: "test-minimax",
+        source: "test",
+        provider: {
+          id: "minimax",
+          label: "MiniMax",
+          auth: [],
+          resolveThinkingProfile: () => ({
+            levels: [{ id: "off" }],
+            defaultLevel: "off",
+          }),
+        },
+      },
+      {
+        pluginId: "test-deepseek",
+        source: "test",
+        provider: {
+          id: "deepseek",
+          label: "DeepSeek",
+          auth: [],
+          resolveThinkingProfile: resolveDeepSeekThinkingProfile,
+        },
+      },
+    );
+    setActivePluginRegistry(registry);
+
     const cfg = {
       session: { mainKey: "main" },
       agents: {
@@ -1695,6 +1752,12 @@ describe("gateway session utils", () => {
     const agent = result.agents.find((row) => row.id === "investment-master");
 
     expect(agent?.model).toEqual({ primary: "deepseek/deepseek-v4-flash" });
+    expect(resolveDeepSeekThinkingProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "deepseek",
+        modelId: "deepseek-v4-flash",
+      }),
+    );
     expect(agent?.thinkingDefault).toBe("xhigh");
     expect(agent?.thinkingLevels?.map((level) => level.id)).toEqual(
       expect.arrayContaining(["off", "minimal", "low", "medium", "high", "xhigh"]),

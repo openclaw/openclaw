@@ -10,6 +10,7 @@ vi.mock("../agent-scope.js", () => ({
   resolveSessionAgentId: () => "agent-123",
 }));
 
+import { getToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool flat-params", () => {
@@ -25,6 +26,48 @@ describe("cron tool flat-params", () => {
     }
     return call as [string, unknown, TParams];
   }
+
+  it("presents read-only cron metadata without job content", () => {
+    const tool = createCronTool();
+    const terminalPresentation = getToolTerminalPresentation(tool);
+    if (!terminalPresentation) {
+      throw new Error("expected cron terminal presentation");
+    }
+
+    expect(
+      terminalPresentation(
+        { action: "list" },
+        {
+          content: [],
+          details: {
+            total: 2,
+            jobs: [
+              { id: "one", name: "private reminder", payload: { text: "secret" } },
+              { id: "two", name: "another reminder" },
+            ],
+          },
+        },
+      ),
+    ).toEqual({ text: "Cron jobs listed.\nCount: 2" });
+    expect(
+      terminalPresentation(
+        { action: "list" },
+        {
+          content: [],
+          details: {
+            total: 250,
+            jobs: [{ id: "one" }, { id: "two" }],
+          },
+        },
+      ),
+    ).toEqual({ text: "Cron jobs listed.\nCount: 250" });
+    expect(
+      terminalPresentation(
+        { action: "add" },
+        { content: [], details: { id: "three", name: "private reminder" } },
+      ),
+    ).toBeUndefined();
+  });
 
   it("preserves explicit top-level sessionKey during flat-params recovery", async () => {
     const tool = createCronTool(

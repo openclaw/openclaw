@@ -42,7 +42,7 @@ import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { convertResponsesTools } from "./openai-responses-tools.js";
+import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
@@ -158,7 +158,7 @@ export interface ConvertResponsesMessagesOptions {
   includeSystemPrompt?: boolean;
   replayResponsesItemIds?: boolean;
 }
-export { convertResponsesTools };
+export { convertResponsesToolPayload, convertResponsesTools };
 export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
 
 type ResponsesRequestOptions = {
@@ -464,8 +464,11 @@ export function applyCommonResponsesParams<TApi extends Api>(
     params.temperature = options.temperature;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    params.tools = convertResponsesTools(context.tools, { model });
+  if (context.tools) {
+    const converted = convertResponsesToolPayload(context.tools, { model });
+    if (converted.tools.length > 0) {
+      params.tools = converted.tools;
+    }
   }
 
   if (!model.reasoning) {

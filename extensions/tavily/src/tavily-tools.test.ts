@@ -47,6 +47,7 @@ function fakeApi(): OpenClawPluginApi {
 
 describe("tavily tools", () => {
   let createTavilyWebSearchProvider: typeof import("./tavily-search-provider.js").createTavilyWebSearchProvider;
+  let createTavilyContractWebSearchProvider: typeof import("../web-search-contract-api.js").createTavilyWebSearchProvider;
   let createTavilySearchTool: typeof import("./tavily-search-tool.js").createTavilySearchTool;
   let createTavilyExtractTool: typeof import("./tavily-extract-tool.js").createTavilyExtractTool;
   let tavilyClientTesting: typeof import("./tavily-client.js").testing;
@@ -54,6 +55,8 @@ describe("tavily tools", () => {
 
   beforeAll(async () => {
     ({ createTavilyWebSearchProvider } = await import("./tavily-search-provider.js"));
+    ({ createTavilyWebSearchProvider: createTavilyContractWebSearchProvider } =
+      await import("../web-search-contract-api.js"));
     ({ createTavilySearchTool } = await import("./tavily-search-tool.js"));
     ({ createTavilyExtractTool } = await import("./tavily-extract-tool.js"));
     ({ testing: tavilyClientTesting } =
@@ -107,6 +110,32 @@ describe("tavily tools", () => {
       cfg: { test: true },
       query: "weather sf",
       maxResults: 7,
+    });
+  });
+
+  it("keeps the contract web search provider executable", async () => {
+    const provider = createTavilyContractWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: "contract" },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected contract provider tool definition");
+    }
+
+    const result = await tool.execute({
+      query: "runtime registration",
+      count: 3,
+    });
+
+    expect(runTavilySearch).toHaveBeenCalledWith({
+      cfg: { test: "contract" },
+      query: "runtime registration",
+      maxResults: 3,
+    });
+    expect(result).toEqual({
+      cfg: { test: "contract" },
+      query: "runtime registration",
+      maxResults: 3,
     });
   });
 

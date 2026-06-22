@@ -53,7 +53,7 @@ function parseArgs(argv) {
     const arg = args[index];
     const readValue = () => {
       const value = args[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`Missing value for ${arg}`);
       }
       index += 1;
@@ -444,7 +444,7 @@ export const testing = {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch(
     /** @param {unknown} error */ (error) => {
-      console.error(error instanceof Error ? error.stack : String(error));
+      console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },
   );

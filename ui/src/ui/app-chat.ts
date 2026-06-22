@@ -24,6 +24,7 @@ import {
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
+import { clearChatMessagesFromCache, type ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import {
@@ -99,6 +100,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatQueueBySession?: Record<string, ChatQueueItem[]>;
+  chatMessagesBySession?: ChatMessageCache;
   chatRunId: string | null;
   chatSending: boolean;
   lastError?: string | null;
@@ -245,15 +247,17 @@ export function isChatStopCommand(text: string) {
 }
 
 function isChatResetCommand(text: string) {
-  const trimmed = text.trim();
-  if (!trimmed) {
+  const parsed = parseSlashCommand(text);
+  if (!parsed || (parsed.command.key !== "new" && parsed.command.key !== "reset")) {
     return false;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (normalized === "/new" || normalized === "/reset") {
+  if (parsed.command.key === "new") {
     return true;
   }
-  return normalized.startsWith("/new ") || normalized.startsWith("/reset ");
+  if (/^soft(?:\s|$)/.test(normalizeLowercaseStringOrEmpty(parsed.args))) {
+    return false;
+  }
+  return true;
 }
 
 function confirmChatResetCommand(text: string) {
@@ -1888,7 +1892,7 @@ async function dispatchSlashCommand(
       await host.onSlashAction("new-session");
       return;
     case "reset":
-      await sendChatMessageNow(host, "/reset", {
+      await sendChatMessageNow(host, args ? `/reset ${args}` : "/reset", {
         refreshSessions: true,
         previousDraft: sendOpts?.previousDraft,
         restoreDraft: sendOpts?.restoreDraft,
@@ -1956,6 +1960,13 @@ async function dispatchSlashCommand(
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 
+function clearCachedChatMessagesForSession(host: ChatHost, sessionKey: string) {
+  if (!host.chatMessagesBySession) {
+    return;
+  }
+  clearChatMessagesFromCache(host.chatMessagesBySession, host, { sessionKey });
+}
+
 async function clearChatHistory(host: ChatHost) {
   if (!host.client || !host.connected) {
     return;
@@ -1967,6 +1978,7 @@ async function clearChatHistory(host: ChatHost) {
       ...scopedAgentParamsForSession(host, host.sessionKey),
     });
     host.chatMessages = [];
+    clearCachedChatMessagesForSession(host, host.sessionKey);
     host.chatSideResult = null;
     reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
       outcome: hadActiveRun ? "interrupted" : undefined,

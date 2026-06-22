@@ -52,6 +52,7 @@ describe("gateway startup benchmark script", () => {
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
+    expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
     expect(testing.parsePositiveInt("5", 1, "--runs")).toBe(5);
     expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
     expect(
@@ -83,6 +84,26 @@ describe("gateway startup benchmark script", () => {
     expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
   });
 
+  it("rejects unknown benchmark CLI args before running cases", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-gateway-startup.ts", "--wat"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
   it("does not disable local-check policy in the child gateway environment", () => {
     const env = testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
       config: {},
@@ -92,6 +113,14 @@ describe("gateway startup benchmark script", () => {
 
     expect(env.OPENCLAW_LOCAL_CHECK).toBeUndefined();
     expect(env.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
+  });
+
+  it("rejects malformed ps RSS samples", () => {
+    expect(testing.parseProcessRssKb("2048\n")).toBe(2048);
+    expect(testing.parseProcessRssKb("2048kb\n")).toBeNull();
+    expect(testing.parseProcessRssKb("2048 4096\n")).toBeNull();
+    expect(testing.parseProcessRssKb("0\n")).toBeNull();
+    expect(testing.parseProcessRssKb("")).toBeNull();
   });
 
   it("classifies HTTP listen and gateway ready logs separately", () => {

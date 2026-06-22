@@ -116,12 +116,8 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
+    await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
     await fsPromises.mkdir(hostPath, { recursive: true });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$1"',
-      args: [target.containerPath],
-      signal: params.signal,
-    });
   }
 
   async remove(params: {
@@ -140,17 +136,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: params.force !== false,
       allowFinalSymlinkForUnlink: true,
     });
+    await this.backend.removeRemotePath(target.containerPath, {
+      recursive: params.recursive ?? false,
+      signal: params.signal,
+      ignoreMissing: params.force !== false,
+    });
     await fsPromises.rm(hostPath, {
       recursive: params.recursive ?? false,
       force: params.force !== false,
-    });
-    await this.backend.runRemoteShellScript({
-      script: params.recursive
-        ? 'rm -rf -- "$1"'
-        : 'if [ -d "$1" ] && [ ! -L "$1" ]; then rmdir -- "$1"; elif [ -e "$1" ] || [ -L "$1" ]; then rm -f -- "$1"; fi',
-      args: [target.containerPath],
-      signal: params.signal,
-      allowFailure: params.force !== false,
     });
   }
 
@@ -175,13 +168,9 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowMissingLeaf: true,
       allowFinalSymlinkForUnlink: false,
     });
+    await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
     await fsPromises.mkdir(path.dirname(toHostPath), { recursive: true });
     await movePathWithCopyFallback({ from: fromHostPath, to: toHostPath });
-    await this.backend.runRemoteShellScript({
-      script: 'mkdir -p -- "$(dirname -- "$2")" && mv -- "$1" "$2"',
-      args: [from.containerPath, to.containerPath],
-      signal: params.signal,
-    });
   }
 
   async stat(params: {
@@ -480,10 +469,4 @@ async function resolveCanonicalCandidate(targetPath: string): Promise<string> {
     missing.unshift(path.basename(cursor));
     cursor = parent;
   }
-}
-
-export function setReadOpenFlagsResolverForTest(
-  _resolver: (() => { flags: number; supportsNoFollow: boolean }) | undefined,
-): void {
-  // Retained for older OpenShell tests; pinned reads now delegate to fs-safe.
 }

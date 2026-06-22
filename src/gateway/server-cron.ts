@@ -32,6 +32,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { requestSafeGatewayRestart } from "../infra/restart-coordinator.js";
 import {
   consumeSelectedSystemEventEntries,
   enqueueSystemEventEntry,
@@ -388,6 +389,7 @@ export function buildGatewayCronService(params: {
       abortSignal,
       onExecutionStarted,
       onExecutionPhase,
+      onLaneWait,
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
@@ -400,6 +402,7 @@ export function buildGatewayCronService(params: {
           abortSignal,
           onExecutionStarted,
           onExecutionPhase,
+          onLaneWait,
           agentId,
           sessionKey,
           lane: "cron",
@@ -542,6 +545,26 @@ export function buildGatewayCronService(params: {
           );
         },
       }).catch(() => {});
+    },
+    onIsolatedAgentSetupTimeout: ({ job, error, timeoutMs }) => {
+      const restart = requestSafeGatewayRestart({
+        reason: "cron.isolated_agent_setup_timeout",
+        delayMs: 0,
+        preservePendingEmitHooks: true,
+      });
+      cronLogger.warn(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          timeoutMs,
+          error,
+          restartStatus: restart.status,
+          restartCoalesced: restart.restart.coalesced,
+          restartSummary: restart.preflight.summary,
+          restartDelayMs: restart.restart.delayMs,
+        },
+        "cron: isolated agent setup timed out before runner start; requested safe gateway restart",
+      );
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
       await sendGatewayCronFailureAlert({

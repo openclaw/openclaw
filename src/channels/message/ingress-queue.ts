@@ -186,9 +186,19 @@ function normalizePart(value: string | undefined, fallback: string): string {
   return normalized ? normalized : fallback;
 }
 
+// Keep inherited lookups for HOME/etc. without enumerating large Kubernetes service envs.
+export function createStateDirEnv(
+  stateDir: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = Object.create(baseEnv) as NodeJS.ProcessEnv;
+  env.OPENCLAW_STATE_DIR = stateDir;
+  return env;
+}
+
 function openStateDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
-    env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
+    env: stateDir ? createStateDirEnv(stateDir) : process.env,
   });
 }
 

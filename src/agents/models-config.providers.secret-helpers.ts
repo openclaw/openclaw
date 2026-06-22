@@ -35,7 +35,7 @@ export type SecretDefaults = {
 };
 
 /** Resolved API key value plus provenance for discovery and secret-marker handling. */
-export type ProfileApiKeyResolution = {
+type ProfileApiKeyResolution = {
   apiKey: string;
   source: "plaintext" | "env-ref" | "non-env-ref";
   discoveryApiKey?: string;

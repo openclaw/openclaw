@@ -34,6 +34,15 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
     listSessionFilesForAgent: vi.fn(async () => []),
+    parseCanonicalSessionSyncTargetFromPath: (filePath: string) => ({
+      agentId: "main",
+      sessionId: basename(filePath).replace(/\.jsonl$/, ""),
+    }),
+    resolveSessionFileForSyncTarget: (target: { agentId?: string; sessionId: string }) => ({
+      agentId: target.agentId ?? "main",
+      sessionFile: `/tmp/${target.sessionId}.jsonl`,
+      sessionId: target.sessionId,
+    }),
     sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
   };
 });
@@ -42,6 +51,7 @@ vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
   resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
     providerId === "local" ? "local" : "remote",
+  resolveEmbeddingProviderIndexIdentity: () => undefined,
   createEmbeddingProvider: vi.fn(),
 }));
 
@@ -114,6 +124,10 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
   protected computeProviderKey(): string {
     return "test";
+  }
+
+  protected resolveProviderIndexIdentities() {
+    return [];
   }
 
   protected async sync(): Promise<void> {}

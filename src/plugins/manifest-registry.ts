@@ -53,6 +53,7 @@ import {
   type PluginManifestToolMetadata,
   type PluginPackageChannel,
   type PluginPackageInstall,
+  normalizeManifestChannelCommandDefaults,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import {
@@ -65,7 +66,7 @@ import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import type { PluginDependencySpecMap } from "./status-dependencies.js";
+import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 function resolvePluginSourcePath(sourcePath: string): string {
   if (fs.existsSync(sourcePath)) {
@@ -295,29 +296,6 @@ function normalizePreferredPluginIds(raw: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(raw);
 }
 
-function normalizePackageChannelCommands(
-  commands: unknown,
-): PluginManifestChannelCommandDefaults | undefined {
-  if (!commands || typeof commands !== "object" || Array.isArray(commands)) {
-    return undefined;
-  }
-  const record = commands as Record<string, unknown>;
-  const nativeCommandsAutoEnabled =
-    typeof record.nativeCommandsAutoEnabled === "boolean"
-      ? record.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof record.nativeSkillsAutoEnabled === "boolean"
-      ? record.nativeSkillsAutoEnabled
-      : undefined;
-  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
-    ? {
-        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
-        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
-      }
-    : undefined;
-}
-
 function mergePackageChannelMetaIntoChannelConfigs(params: {
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   packageChannel?: OpenClawPackageManifest["channel"];
@@ -342,7 +320,7 @@ function mergePackageChannelMetaIntoChannelConfigs(params: {
   const preferOver =
     existing.preferOver ?? normalizePreferredPluginIds(params.packageChannel?.preferOver);
   const commands =
-    existing.commands ?? normalizePackageChannelCommands(params.packageChannel?.commands);
+    existing.commands ?? normalizeManifestChannelCommandDefaults(params.packageChannel?.commands);
 
   const merged: Record<string, PluginManifestChannelConfig> = Object.create(null);
   for (const [key, value] of Object.entries(params.channelConfigs)) {
@@ -501,7 +479,7 @@ function buildRecord(params: {
     }),
     packageChannel: params.candidate.packageManifest?.channel,
   });
-  const packageChannelCommands = normalizePackageChannelCommands(
+  const packageChannelCommands = normalizeManifestChannelCommandDefaults(
     params.candidate.packageManifest?.channel?.commands,
   );
   return {

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import {
   appendMemoryHostEvent,
+  readMemoryHostEventRecords,
   readMemoryHostEvents,
   resolveMemoryHostEventLogPath,
 } from "./memory-host-events.js";
@@ -75,6 +76,72 @@ describe("memory host event journal helpers", () => {
     expect(events[1]?.type).toBe("memory.dream.completed");
     expect(tail).toHaveLength(1);
     expect(tail[0]?.type).toBe("memory.dream.completed");
+  });
+
+  it("keeps legacy event readers stable when diagnostic records are present", async () => {
+    const workspaceDir = await createTempDir("memory-host-events-diagnostics-");
+
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.skipped",
+      timestamp: "2026-04-05T12:00:00.000Z",
+      query: "durable memory",
+      reason: "non-short-term-memory-path",
+      eligibleResultCount: 0,
+      skippedResultCount: 1,
+      results: [
+        {
+          path: "MEMORY.md",
+          startLine: 3,
+          endLine: 3,
+          score: 0.9,
+          reason: "non-short-term-memory-path",
+        },
+      ],
+    });
+
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.recorded",
+      timestamp: "2026-04-05T12:05:00.000Z",
+      query: "daily memory",
+      resultCount: 1,
+      results: [
+        {
+          path: "memory/2026-04-05.md",
+          startLine: 1,
+          endLine: 3,
+          score: 0.95,
+        },
+      ],
+    });
+    await appendMemoryHostEvent(workspaceDir, {
+      type: "memory.recall.skipped",
+      timestamp: "2026-04-05T12:10:00.000Z",
+      query: "durable memory again",
+      reason: "non-short-term-memory-path",
+      eligibleResultCount: 1,
+      skippedResultCount: 1,
+      results: [
+        {
+          path: "MEMORY.md",
+          startLine: 4,
+          endLine: 4,
+          score: 0.8,
+          reason: "non-short-term-memory-path",
+        },
+      ],
+    });
+
+    const legacyEvents = await readMemoryHostEvents({ workspaceDir });
+    const legacyTail = await readMemoryHostEvents({ workspaceDir, limit: 1 });
+    const records = await readMemoryHostEventRecords({ workspaceDir });
+
+    expect(legacyEvents.map((event) => event.type)).toEqual(["memory.recall.recorded"]);
+    expect(legacyTail.map((event) => event.type)).toEqual(["memory.recall.recorded"]);
+    expect(records.map((event) => event.type)).toEqual([
+      "memory.recall.skipped",
+      "memory.recall.recorded",
+      "memory.recall.skipped",
+    ]);
   });
 });
 

@@ -2,15 +2,14 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
-import {
-  configValidationIssuesToHealthFindings,
-  registerCoreHealthChecks,
-} from "../flows/doctor-core-checks.js";
+import { configValidationIssuesToHealthFindings } from "../flows/doctor-core-checks.js";
+import { resolveDoctorContributionHealthChecks } from "../flows/doctor-health-contributions.js";
 import {
   exitCodeFromFindings,
   runDoctorLintChecks,
   type DoctorLintRunOptions,
 } from "../flows/doctor-lint-flow.js";
+import { listExtensionHealthChecksForDoctor } from "../flows/health-check-registry.js";
 import {
   healthFindingMeetsSeverity,
   parseHealthFindingSeverity,
@@ -19,7 +18,7 @@ import {
 } from "../flows/health-checks.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-export interface DoctorLintCliOptions {
+interface DoctorLintCliOptions {
   readonly json?: boolean;
   readonly severityMin?: string;
   readonly skipIds?: readonly string[];
@@ -44,8 +43,6 @@ export async function runDoctorLintCli(
   runtime: RuntimeEnv,
   opts: DoctorLintCliOptions,
 ): Promise<number> {
-  registerCoreHealthChecks();
-
   const sevMin =
     opts.severityMin === undefined ? "info" : parseHealthFindingSeverity(opts.severityMin);
   if (sevMin === null) {
@@ -81,8 +78,11 @@ export async function runDoctorLintCli(
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
   registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
+  const coreChecks = await resolveDoctorContributionHealthChecks();
+  const extensionChecks = listExtensionHealthChecksForDoctor(coreChecks);
 
   const runOpts: DoctorLintRunOptions = {
+    checks: [...coreChecks, ...extensionChecks],
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };

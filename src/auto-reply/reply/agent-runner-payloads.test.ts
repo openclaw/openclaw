@@ -1,7 +1,11 @@
 // Tests reply payload construction and metadata propagation from agent runs.
 import { beforeEach, describe, expect, it } from "vitest";
+import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -17,6 +21,10 @@ const baseParams = {
   blockReplyPipeline: null,
   replyToMode: "off" as const,
 };
+
+type ResolveReplyTransportParams = Parameters<
+  NonNullable<ChannelThreadingAdapter["resolveReplyTransport"]>
+>[0];
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
@@ -46,6 +54,85 @@ async function expectSameTargetRepliesDelivered(params: { provider: string; to: 
 describe("buildReplyPayloads media filter integration", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            threading: {
+              resolveReplyTransport: ({
+                threadId,
+                replyToId,
+                replyDelivery,
+              }: ResolveReplyTransportParams) => ({
+                replyToId:
+                  replyDelivery?.replyToMode === "off"
+                    ? threadId != null
+                      ? String(threadId)
+                      : undefined
+                    : (replyToId ?? (threadId != null ? String(threadId) : undefined)),
+                threadId: null,
+              }),
+            },
+          },
+          source: "test",
+        },
+        {
+          pluginId: "mattermost",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "mattermost" }),
+            threading: {
+              resolveReplyTransport: ({
+                threadId,
+                replyToId,
+                replyToIsExplicit,
+                replyDelivery,
+              }: ResolveReplyTransportParams) => {
+                const ambientThreadId = threadId != null ? String(threadId) : undefined;
+                const resolvedThreadId =
+                  replyDelivery?.chatType === "direct"
+                    ? undefined
+                    : replyToIsExplicit
+                      ? (replyToId ?? ambientThreadId)
+                      : replyDelivery
+                        ? (ambientThreadId ?? replyToId ?? undefined)
+                        : (replyToId ?? ambientThreadId);
+                return {
+                  replyToId: resolvedThreadId,
+                  threadId: resolvedThreadId ?? null,
+                };
+              },
+            },
+          },
+          source: "test",
+        },
+        {
+          pluginId: "telegram",
+          plugin: createChannelTestPluginBase({ id: "telegram" }),
+          source: "test",
+        },
+        {
+          pluginId: "discord",
+          plugin: createChannelTestPluginBase({ id: "discord" }),
+          source: "test",
+        },
+      ]),
+    );
+  });
+
+  it("records the reply policy used by dedupe and final delivery", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello" }],
+      replyToMode: "first",
+      originatingChatType: "dm",
+    });
+
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.replyDelivery).toEqual({
+      chatType: "direct",
+      replyToMode: "first",
+    });
   });
 
   it("strips legacy bracket tool blocks from heartbeat replies", async () => {
@@ -398,6 +485,332 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("keeps same-channel final text when the message tool sent it to another thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "thread reply" }],
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "222.000",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("thread reply");
+  });
+
+  it("dedupes a top-level Slack reply that starts the same implicit thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "thread reply" }],
+      replyToMode: "first",
+      replyToChannel: "slack",
+      currentMessageId: "111.000",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("dedupes an existing Slack thread by its root instead of the current child message", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "thread reply" }],
+      replyToMode: "all",
+      replyToChannel: "slack",
+      currentMessageId: "111.222",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "111.000",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps an explicit Slack reply when tool evidence only matches the ambient thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "thread reply", replyToId: "999.000" }],
+      replyToMode: "all",
+      replyToChannel: "slack",
+      currentMessageId: "111.222",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "111.000",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+  });
+
+  it("dedupes an explicit Slack reply against tool evidence for that reply thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "thread reply", replyToId: "999.000", replyToTag: true }],
+      replyToMode: "all",
+      replyToChannel: "slack",
+      currentMessageId: "111.222",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "111.000",
+      messagingToolSentTexts: ["thread reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "999.000",
+          text: "thread reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps an unthreaded later Slack payload when only the first payload starts a thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "intro" }, { text: "result" }],
+      replyToMode: "first",
+      replyToChannel: "slack",
+      currentMessageId: "111.000",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["result"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "result",
+        },
+      ],
+    });
+
+    expect(replyPayloads.map((payload) => payload.text)).toEqual(["intro", "result"]);
+  });
+
+  it("does not treat a Discord native reply id as a thread route", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply" }],
+      replyToMode: "all",
+      replyToChannel: "discord",
+      currentMessageId: "native-message-1",
+      messageProvider: "discord",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "discord",
+          provider: "discord",
+          to: "channel:C1",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("dedupes an explicit Mattermost DM reply against its top-level delivery route", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "post-1", replyToTag: true }],
+      replyToMode: "off",
+      replyToChannel: "mattermost",
+      messageProvider: "mattermost",
+      originatingChatType: "direct",
+      originatingTo: "user:U1",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "mattermost",
+          provider: "mattermost",
+          to: "user:U1",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("dedupes an implicit Mattermost send in the active thread", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply" }],
+      replyToMode: "all",
+      replyToChannel: "mattermost",
+      currentMessageId: "child-post",
+      messageProvider: "mattermost",
+      originatingTo: "channel:C1",
+      originatingThreadId: "root-post",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "mattermost",
+          provider: "mattermost",
+          to: "channel:C1",
+          threadId: "root-post",
+          threadImplicit: true,
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("does not dedupe an explicit Mattermost reply to another thread root", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "other-root", replyToTag: true }],
+      replyToMode: "all",
+      replyToChannel: "mattermost",
+      messageProvider: "mattermost",
+      originatingChatType: "channel",
+      originatingTo: "channel:C1",
+      originatingThreadId: "root-post",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "mattermost",
+          provider: "mattermost",
+          to: "channel:C1",
+          threadId: "root-post",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+  });
+
+  it("dedupes an explicit Mattermost reply to the same thread root", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "root-post", replyToTag: true }],
+      replyToMode: "all",
+      replyToChannel: "mattermost",
+      messageProvider: "mattermost",
+      originatingChatType: "channel",
+      originatingTo: "channel:C1",
+      originatingThreadId: "ambient-root",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "mattermost",
+          provider: "mattermost",
+          to: "channel:C1",
+          threadId: "root-post",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("dedupes an off-mode explicit Slack reply against its top-level delivery route", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "111.000", replyToTag: true }],
+      replyToMode: "off",
+      replyToChannel: "slack",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("dedupes an off-mode explicit Slack reply against the ambient thread route", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "same reply", replyToId: "999.000", replyToTag: true }],
+      replyToMode: "off",
+      replyToChannel: "slack",
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      originatingThreadId: "111.000",
+      messagingToolSentTexts: ["same reply"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "same reply",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("does not dedupe short commentary that appears inside a longer same-target message", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
@@ -492,7 +905,7 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("drops all final payloads when block pipeline streamed successfully", async () => {
+  it("preserves unsent text-only final payloads after block pipeline streamed partial content", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
       isAborted: () => false,
@@ -503,8 +916,36 @@ describe("buildReplyPayloads media filter integration", () => {
       hasBuffered: () => false,
       getSentMediaUrls: () => [],
     };
-    // shouldDropFinalPayloads short-circuits to [] when the pipeline streamed
-    // without aborting, so hasSentPayload is never reached.
+    // The pipeline streamed some partial content, but the final text payload was
+    // never sent (hasSentPayload returns false). The old bug dropped all text-only
+    // finals unconditionally; the fix preserves unsent finals.
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      replyToMode: "all",
+      payloads: [{ text: "response", replyToId: "post-123" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("response");
+  });
+
+  it("drops already-sent text-only final payloads after block pipeline streamed the exact same text", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => true,
+      hasSentExactPayload: (payload) =>
+        payload.text === "response" && !payload.mediaUrl && !payload.mediaUrls,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => [],
+    };
+    // The final text-only payload matches what the pipeline already sent,
+    // so it should be dropped.
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       blockStreamingEnabled: true,
@@ -514,6 +955,60 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("drops a text-only final with an empty envelope assembled from multiple streamed blocks", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => true,
+      hasSentExactPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => [],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "first block second block", channelData: {} }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("preserves final rich content when only its text was streamed", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: () => true,
+      hasSentExactPayload: () => false,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => [],
+    };
+    const presentation = {
+      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "response", presentation }],
+    });
+
+    expect(replyPayloads).toEqual([
+      expect.objectContaining({
+        text: "response",
+        presentation,
+      }),
+    ]);
   });
 
   it("keeps unsent final media after block pipeline streamed the text", async () => {

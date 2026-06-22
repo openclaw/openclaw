@@ -18,6 +18,7 @@ describe("Codex app-server attempt context", () => {
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
     const tools = [
       {
+        type: "function",
         name: "message",
         description: "Send a message.",
         inputSchema: {
@@ -28,15 +29,23 @@ describe("Codex app-server attempt context", () => {
         },
       },
       {
-        name: "web_search",
-        description: "Search the web.",
-        inputSchema: {
-          type: "object",
-          properties: {
-            query: { type: "string" },
+        type: "namespace",
+        name: "openclaw",
+        description: "",
+        tools: [
+          {
+            type: "function",
+            name: "web_search",
+            description: "Search the web.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+            },
+            deferLoading: true,
           },
-        },
-        deferLoading: true,
+        ],
       },
     ] as CodexDynamicToolSpec[];
 

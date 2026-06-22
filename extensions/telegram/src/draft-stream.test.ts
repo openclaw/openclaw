@@ -2,14 +2,21 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import type { TelegramInputRichMessage } from "./rich-message.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
 function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number }>) {
+  const sendRichMessage = vi.fn(sendMessageImpl ?? (async () => ({ message_id: 17 })));
+  const editRichMessageText = vi.fn().mockResolvedValue(true);
   return {
     sendMessage: vi.fn(sendMessageImpl ?? (async () => ({ message_id: 17 }))),
     editMessageText: vi.fn().mockResolvedValue(true),
     deleteMessage: vi.fn().mockResolvedValue(true),
+    raw: {
+      sendRichMessage,
+      editMessageText: editRichMessageText,
+    },
   };
 }
 
@@ -40,8 +47,51 @@ async function expectInitialForumSend(
   text = "Hello",
 ): Promise<void> {
   await vi.waitFor(() =>
-    expect(api.sendMessage).toHaveBeenCalledWith(123, text, { message_thread_id: 99 }),
+    expect(api.sendMessage).toHaveBeenCalledWith(123, text, {
+      message_thread_id: 99,
+    }),
   );
+}
+
+function expectPreviewSend(
+  api: ReturnType<typeof createMockDraftApi>,
+  text: string,
+  params: Record<string, unknown> = {},
+) {
+  expect(api.sendMessage).toHaveBeenCalledWith(123, text, params);
+}
+
+function expectNthPreviewSend(
+  api: ReturnType<typeof createMockDraftApi>,
+  call: number,
+  text: string,
+  params: Record<string, unknown> = {},
+) {
+  expect(api.sendMessage).toHaveBeenNthCalledWith(call, 123, text, params);
+}
+
+function requireSendMessageCallText(
+  api: ReturnType<typeof createMockDraftApi>,
+  callIndex: number,
+): string {
+  const calls = api.sendMessage.mock.calls as unknown[][];
+  const call = calls[callIndex];
+  expect(call, `sendMessage call ${callIndex}`).toBeDefined();
+  const text = call?.[1];
+  expect(typeof text).toBe("string");
+  return typeof text === "string" ? text : "";
+}
+
+function expectPreviewEdit(
+  api: ReturnType<typeof createMockDraftApi>,
+  text: string,
+  params?: Record<string, unknown>,
+) {
+  if (params) {
+    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, text, params);
+    return;
+  }
+  expect(api.editMessageText).toHaveBeenCalledWith(123, 17, text);
 }
 
 function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
@@ -76,7 +126,7 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello again");
     await stream.flush();
 
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+    expectPreviewEdit(api, "Hello again");
   });
 
   it("waits for in-flight updates before final flush edit", async () => {
@@ -96,7 +146,7 @@ describe("createTelegramDraftStream", () => {
     resolveSend?.({ message_id: 17 });
     await flushPromise;
 
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello final");
+    expectPreviewEdit(api, "Hello final");
   });
 
   it("omits message_thread_id for general topic id", async () => {
@@ -105,23 +155,21 @@ describe("createTelegramDraftStream", () => {
 
     stream.update("Hello");
 
-    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined));
+    await vi.waitFor(() => expectPreviewSend(api, "Hello"));
   });
 
-  it("uses sendMessage/editMessageText for dm thread previews", async () => {
+  it("uses text send/edit for dm thread previews", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
     stream.update("Hello");
-    await vi.waitFor(() =>
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 }),
-    );
+    await vi.waitFor(() => expectPreviewSend(api, "Hello", { message_thread_id: 42 }));
     expect(api.editMessageText).not.toHaveBeenCalled();
 
     stream.update("Hello again");
     await stream.flush();
 
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+    expectPreviewEdit(api, "Hello again");
   });
 
   it("tracks when a message preview first became visible", async () => {
@@ -163,7 +211,7 @@ describe("createTelegramDraftStream", () => {
       await stream.flush();
 
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
+      expectPreviewSend(api, "Hello", { message_thread_id: 42 });
       expect(warn).toHaveBeenCalledWith(
         "telegram stream preview failed: 400: Bad Request: message thread not found",
       );
@@ -184,7 +232,7 @@ describe("createTelegramDraftStream", () => {
     await stream.stop();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", undefined);
+    expectPreviewSend(api, "Hello");
     expect(warn).toHaveBeenCalledWith("telegram stream preview failed: temporary send failure");
   });
 
@@ -198,10 +246,12 @@ describe("createTelegramDraftStream", () => {
     stream.update("Hello");
     await stream.flush();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", {
+    expectPreviewSend(api, "Hello", {
       message_thread_id: 42,
-      reply_to_message_id: 411,
-      allow_sending_without_reply: true,
+      reply_parameters: {
+        message_id: 411,
+        allow_sending_without_reply: true,
+      },
     });
   });
 
@@ -221,10 +271,10 @@ describe("createTelegramDraftStream", () => {
 
     expect(materializedId).toBe(17);
     expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>bold</b>", {
-      message_thread_id: 42,
       parse_mode: "HTML",
+      message_thread_id: 42,
     });
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
   });
 
   it("returns existing preview id when materializing message transport", async () => {
@@ -239,6 +289,7 @@ describe("createTelegramDraftStream", () => {
 
     expect(materializedId).toBe(17);
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
   });
 
   it("deletes message preview on clear after finalization", async () => {
@@ -251,8 +302,8 @@ describe("createTelegramDraftStream", () => {
     await stream.stop();
     await stream.clear();
 
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", { message_thread_id: 42 });
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello again");
+    expectPreviewSend(api, "Hello", { message_thread_id: 42 });
+    expectPreviewEdit(api, "Hello again");
     expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
   });
 
@@ -267,7 +318,7 @@ describe("createTelegramDraftStream", () => {
     // Normal edit (same message)
     stream.update("Hello edited");
     await stream.flush();
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello edited");
+    expectPreviewEdit(api, "Hello edited");
 
     // Force new message (e.g. after thinking block ends)
     stream.forceNewMessage();
@@ -276,7 +327,7 @@ describe("createTelegramDraftStream", () => {
 
     // Should have sent a second new message, not edited the first
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "After thinking", undefined);
+    expectNthPreviewSend(api, 2, "After thinking");
   });
 
   it("creates new message after cleanup and forceNewMessage", async () => {
@@ -293,7 +344,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "Next preview", undefined);
+    expectNthPreviewSend(api, 2, "Next preview");
   });
 
   it("sends first update immediately after forceNewMessage within throttle window", async () => {
@@ -310,7 +361,7 @@ describe("createTelegramDraftStream", () => {
       stream.forceNewMessage();
       stream.update("Second message");
       await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(2));
-      expect(api.sendMessage).toHaveBeenLastCalledWith(123, "Second message", undefined);
+      expectNthPreviewSend(api, 2, "Second message");
     } finally {
       vi.useRealTimers();
     }
@@ -321,11 +372,8 @@ describe("createTelegramDraftStream", () => {
     const firstSend = new Promise<{ message_id: number }>((resolve) => {
       resolveFirstSend = resolve;
     });
-    const api = {
-      sendMessage: vi.fn().mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 }),
-      editMessageText: vi.fn().mockResolvedValue(true),
-      deleteMessage: vi.fn().mockResolvedValue(true),
-    };
+    const api = createMockDraftApi();
+    api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
     const onSupersededPreview = vi.fn();
     const stream = createDraftStream(api, { onSupersededPreview });
 
@@ -343,14 +391,13 @@ describe("createTelegramDraftStream", () => {
     expect(supersededPreview).toEqual({
       messageId: 17,
       textSnapshot: "Message A partial",
-      parseMode: undefined,
       visibleSinceMs: supersededPreview.visibleSinceMs,
       retain: true,
     });
     expect(typeof supersededPreview.visibleSinceMs).toBe("number");
     expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Message B partial", undefined);
+    expectNthPreviewSend(api, 2, "Message B partial");
     expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
   });
 
@@ -498,7 +545,7 @@ describe("createTelegramDraftStream", () => {
     expect(warn).toHaveBeenCalledWith("telegram stream preview failed: read ECONNRESET");
   });
 
-  it("supports rendered previews with parse_mode", async () => {
+  it("supports rendered previews with HTML parse mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
@@ -508,13 +555,186 @@ describe("createTelegramDraftStream", () => {
 
     stream.update("hello");
     await stream.flush();
-    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>hello</i>", { parse_mode: "HTML" });
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<i>hello</i>", {
+      parse_mode: "HTML",
+    });
 
     stream.update("hello again");
     await stream.flush();
     expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "<i>hello again</i>", {
       parse_mode: "HTML",
     });
+  });
+
+  it("sends caller-provided rich previews through standard text transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.updatePreview({
+      text: "Shelling\n\n`🛠️ Exec`",
+      richMessage: {
+        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
+
+    stream.updatePreview({
+      text: "Shelling\n\n`🛠️ Exec`\n• _Checking files_",
+      richMessage: {
+        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      123,
+      17,
+      "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
+      { parse_mode: "HTML" },
+    );
+    expect(api.raw.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("sends marked progress rich previews through HTML text transport", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api);
+
+    stream.updatePreview({
+      text: "Shelling\n\n🛠️ Exec",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
+
+    stream.updatePreview({
+      text: "Shelling\n\n🛠️ Exec\n• Checking files",
+      richMessage: {
+        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><b>Update</b> <code>Checking files</code>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenCalledWith(
+      123,
+      17,
+      "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>Update</b> <code>Checking files</code>",
+      { parse_mode: "HTML" },
+    );
+    expect(api.raw.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("falls back to plain preview text when rich preview HTML parsing fails", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockRejectedValueOnce(new Error("can't parse entities: unsupported tag"))
+      .mockResolvedValueOnce({ message_id: 17 });
+    const stream = createDraftStream(api);
+
+    stream.updatePreview({
+      text: "Shelling\n\n🛠️ Exec",
+      richMessage: {
+        html: "<b>Shelling</b>\n<b>🛠️ Exec</b>",
+        skip_entity_detection: true,
+      },
+    });
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "<b>Shelling</b>\n<b>🛠️ Exec</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "Shelling\n\n🛠️ Exec", {});
+  });
+
+  it("uses rich send and edit for previews when explicitly enabled", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true });
+
+    stream.updatePreview({
+      text: "Plan",
+      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+    });
+    expect(api.sendMessage).not.toHaveBeenCalled();
+
+    stream.updatePreview({
+      text: "Plan updated",
+      richMessage: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.editMessageText).toHaveBeenCalledWith({
+      chat_id: 123,
+      message_id: 17,
+      rich_message: { html: "<h2>Plan updated</h2><table><tr><td>B</td></tr></table>" },
+    });
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("keeps rich preview html out of plain preview gating", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true, minInitialChars: 10 });
+
+    stream.updatePreview({
+      text: "Plan",
+      richMessage: { html: "<h2>Plan</h2><table><tr><td>A</td></tr></table>" },
+    });
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).not.toHaveBeenCalled();
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("clamps rich previews to the block limit", async () => {
+    const api = createMockDraftApi();
+    const text = Array.from({ length: 501 }, (_, index) => `paragraph ${index}`).join("\n\n");
+    const stream = createDraftStream(api, { richMessages: true });
+
+    stream.update(text);
+    await stream.flush();
+
+    const calls = api.raw.sendRichMessage.mock.calls as unknown[][];
+    const params = calls[0]?.[0] as { rich_message?: TelegramInputRichMessage } | undefined;
+    const richMessage = params?.rich_message;
+    expect(richMessage?.html).toContain("paragraph 499");
+    expect(richMessage?.html).not.toContain("paragraph 500");
+  });
+
+  it("clamps rendered previews to the text-message limit", async () => {
+    const api = createMockDraftApi();
+    const text = `# Long\n\n${"rich line\n".repeat(600)}`;
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      renderText: (value) => ({ text: value }),
+    });
+
+    stream.update(text);
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    const sentText = requireSendMessageCallText(api, 0);
+    expect(sentText.length).toBeLessThanOrEqual(4000);
+    expect(sentText.startsWith("# Long\n\nrich line")).toBe(true);
   });
 
   it("keeps non-final overflow in one editable preview", async () => {
@@ -528,8 +748,8 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello world", undefined);
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello world foo bar");
+    expectNthPreviewSend(api, 1, "Hello world");
+    expectPreviewEdit(api, "Hello world foo bar");
     expect(onSupersededPreview).not.toHaveBeenCalled();
     expect(stream.lastDeliveredText?.()).toBe("Hello world foo bar");
   });
@@ -548,7 +768,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "Hello world foo bar");
+    expectPreviewEdit(api, "Hello world foo bar");
     expect(onSupersededPreview).not.toHaveBeenCalled();
   });
 
@@ -565,8 +785,8 @@ describe("createTelegramDraftStream", () => {
     await stream.stop();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "Hello world", undefined);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "foo bar baz qux", undefined);
+    expectNthPreviewSend(api, 1, "Hello world");
+    expectNthPreviewSend(api, 2, "foo bar baz qux");
   });
 
   it("clamps a first oversized non-final preview", async () => {
@@ -577,7 +797,7 @@ describe("createTelegramDraftStream", () => {
     await stream.flush();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", undefined);
+    expectNthPreviewSend(api, 1, "1234567890");
     expect(stream.lastDeliveredText?.()).toBe("1234567890");
   });
 
@@ -597,8 +817,8 @@ describe("createTelegramDraftStream", () => {
     await stream.stop();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", undefined);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
+    expectNthPreviewSend(api, 1, "1234567890");
+    expectNthPreviewSend(api, 2, "ABCDEFGHIJ");
     expect(stream.lastDeliveredText?.()).toBe("1234567890ABCDEFGHIJ");
     expect(onSupersededPreview).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -621,9 +841,9 @@ describe("createTelegramDraftStream", () => {
     await stream.stop();
 
     expect(api.sendMessage).toHaveBeenCalledTimes(3);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", undefined);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
-    expect(api.sendMessage).toHaveBeenNthCalledWith(3, 123, "KLMNOPQRST", undefined);
+    expectNthPreviewSend(api, 1, "1234567890");
+    expectNthPreviewSend(api, 2, "ABCDEFGHIJ");
+    expectNthPreviewSend(api, 3, "KLMNOPQRST");
     expect(stream.lastDeliveredText?.()).toBe("1234567890ABCDEFGHIJKLMNOPQRST");
   });
 
@@ -648,7 +868,6 @@ describe("createTelegramDraftStream", () => {
     expect(supersededPreview).toEqual({
       messageId: 17,
       textSnapshot: "Hello world",
-      parseMode: undefined,
       visibleSinceMs: supersededPreview.visibleSinceMs,
       retain: true,
     });
@@ -663,7 +882,10 @@ describe("createTelegramDraftStream", () => {
       api: api as unknown as Bot["api"],
       chatId: 123,
       maxChars: 100,
-      renderText: () => ({ text: `<b>${"<".repeat(120)}</b>`, parseMode: "HTML" }),
+      renderText: () => ({
+        text: `<b>${"<".repeat(120)}</b>`,
+        parseMode: "HTML",
+      }),
       warn,
     });
 
@@ -677,11 +899,7 @@ describe("createTelegramDraftStream", () => {
 });
 
 describe("draft stream initial message debounce", () => {
-  const createMockApi = () => ({
-    sendMessage: vi.fn().mockResolvedValue({ message_id: 42 }),
-    editMessageText: vi.fn().mockResolvedValue(true),
-    deleteMessage: vi.fn().mockResolvedValue(true),
-  });
+  const createMockApi = () => createMockDraftApi(async () => ({ message_id: 42 }));
 
   function createDebouncedStream(api: ReturnType<typeof createMockApi>, minInitialChars = 30) {
     return createTelegramDraftStream({
@@ -708,7 +926,7 @@ describe("draft stream initial message debounce", () => {
       await stream.stop();
       await stream.flush();
 
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Y", undefined);
+      expectPreviewSend(api, "Y");
     });
 
     it("sends immediately on stop() with short sentence", async () => {
@@ -719,7 +937,7 @@ describe("draft stream initial message debounce", () => {
       await stream.stop();
       await stream.flush();
 
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Ok.", undefined);
+      expectPreviewSend(api, "Ok.");
     });
   });
 
@@ -785,7 +1003,7 @@ describe("draft stream initial message debounce", () => {
   });
 
   describe("default behavior without debounce params", () => {
-    it("sends immediately without minInitialChars set (backward compatible)", async () => {
+    it("sends plain preview text immediately without minInitialChars set", async () => {
       const api = createMockApi();
       const stream = createTelegramDraftStream({
         api: api as unknown as Bot["api"],
@@ -795,7 +1013,7 @@ describe("draft stream initial message debounce", () => {
       stream.update("Hi");
       await stream.flush();
 
-      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hi", undefined);
+      expectPreviewSend(api, "Hi");
     });
   });
 });

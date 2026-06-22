@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
@@ -20,8 +22,9 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
 import llamaCppPlugin from "./index.js";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-  createLlamaCppEmbeddingProvider,
+  createLlamaCppMemoryEmbeddingProvider,
   formatLlamaCppSetupError,
+  llamaCppEmbeddingProviderAdapter,
 } from "./src/embedding-provider.js";
 
 afterEach(() => {
@@ -67,14 +70,16 @@ describe("llama.cpp provider plugin", () => {
     });
     const abortController = new AbortController();
 
-    const provider = await createLlamaCppEmbeddingProvider(
-      {
-        config: {},
-        provider: "local",
-        model: "text-embedding-3-small",
-      },
-      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
-    );
+    const result = await llamaCppEmbeddingProviderAdapter.create({
+      config: {},
+      provider: "local",
+      model: "text-embedding-3-small",
+    });
+    const provider = result.provider;
+    expect(provider).not.toBeNull();
+    if (!provider) {
+      throw new Error("expected llama.cpp provider");
+    }
 
     await expect(provider.embed("hello")).resolves.toEqual([0.6, 0.8]);
     await expect(
@@ -96,7 +101,7 @@ describe("llama.cpp provider plugin", () => {
         },
       },
       {
-        nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js",
+        nodeLlamaCppImportUrl: expect.stringContaining("node-llama-cpp"),
       },
     );
     const workerProvider =
@@ -104,6 +109,328 @@ describe("llama.cpp provider plugin", () => {
     expect(workerProvider.embedBatchInputs).toHaveBeenCalledWith([{ text: "doc" }], {
       signal: abortController.signal,
     });
+  });
+
+  it("includes output dimensionality in local cache and index identities", async () => {
+    memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockResolvedValue({
+      id: "local",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      embedQuery: vi.fn(),
+      embedBatch: vi.fn(),
+    });
+
+    const result = await createLlamaCppMemoryEmbeddingProvider(
+      {
+        config: {},
+        provider: "local",
+        fallback: "none",
+        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+        outputDimensionality: 512,
+      },
+      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
+    );
+    const resolvedIdentity = llamaCppEmbeddingProviderAdapter.resolveIndexIdentity?.({
+      config: {},
+      provider: "local",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      dimensions: 512,
+    });
+
+    expect(result.runtime?.cacheKeyData).toMatchObject({ outputDimensionality: 512 });
+    expect(result.runtime?.indexIdentityAliases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          cacheKeyData: expect.objectContaining({ outputDimensionality: 512 }),
+        }),
+      ]),
+    );
+    expect(resolvedIdentity?.cacheKeyData).toMatchObject({ outputDimensionality: 512 });
+    expect(resolvedIdentity?.aliases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          cacheKeyData: expect.objectContaining({ outputDimensionality: 512 }),
+        }),
+      ]),
+    );
+  });
+
+  it("keeps the default model identity when configured with its exact cache artifact path", async () => {
+    const modelPath = path.join(
+      os.homedir(),
+      ".node-llama-cpp",
+      "models",
+      "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+    );
+    memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockResolvedValue({
+      id: "local",
+      model: modelPath,
+      embedQuery: vi.fn(),
+      embedBatch: vi.fn(),
+    });
+
+    const result = await createLlamaCppMemoryEmbeddingProvider(
+      {
+        config: {},
+        provider: "local",
+        fallback: "none",
+        model: modelPath,
+        local: { modelPath },
+      },
+      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
+    );
+
+    expect(result.provider?.model).toBe(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL);
+    expect(result.runtime?.cacheKeyData).toEqual({
+      provider: "local",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+    });
+    expect(result.runtime?.indexIdentityAliases).toEqual([
+      {
+        model: modelPath,
+        cacheKeyData: {
+          provider: "local",
+          model: modelPath,
+        },
+      },
+      {
+        model: "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+        cacheKeyData: {
+          provider: "local",
+          model: "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+        },
+      },
+    ]);
+    expect(
+      llamaCppEmbeddingProviderAdapter.resolveIndexIdentity?.({
+        config: {},
+        provider: "local",
+        model: modelPath,
+        local: { modelPath },
+      }),
+    ).toEqual({
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      cacheKeyData: {
+        provider: "local",
+        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      },
+      aliases: [
+        {
+          model: modelPath,
+          cacheKeyData: {
+            provider: "local",
+            model: modelPath,
+          },
+        },
+        {
+          model: "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+          cacheKeyData: {
+            provider: "local",
+            model: "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+          },
+        },
+      ],
+    });
+    expect(memoryHostEmbeddingMocks.createLocalEmbeddingProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: modelPath,
+        local: { modelPath },
+      }),
+      {
+        nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js",
+      },
+    );
+  });
+
+  it("keeps an arbitrary same-basename model path as a distinct identity", async () => {
+    const modelPath = path.join(
+      os.tmpdir(),
+      "custom-models",
+      DEFAULT_LLAMA_CPP_EMBEDDING_MODEL.split("/").at(-1)!,
+    );
+    memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockResolvedValue({
+      id: "local",
+      model: modelPath,
+      embedQuery: vi.fn(),
+      embedBatch: vi.fn(),
+    });
+
+    const result = await createLlamaCppMemoryEmbeddingProvider(
+      {
+        config: {},
+        provider: "local",
+        fallback: "none",
+        model: modelPath,
+        local: { modelPath },
+      },
+      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
+    );
+
+    expect(result.provider?.model).toBe(modelPath);
+    expect(result.runtime?.cacheKeyData).toEqual({
+      provider: "local",
+      model: modelPath,
+    });
+    expect(result.runtime).not.toHaveProperty("indexIdentityAliases");
+  });
+
+  it("keeps a bare same-basename file in the default cache as a distinct identity", async () => {
+    const modelPath = path.join(
+      os.homedir(),
+      ".node-llama-cpp",
+      "models",
+      DEFAULT_LLAMA_CPP_EMBEDDING_MODEL.split("/").at(-1)!,
+    );
+    memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockResolvedValue({
+      id: "local",
+      model: modelPath,
+      embedQuery: vi.fn(),
+      embedBatch: vi.fn(),
+    });
+
+    const result = await createLlamaCppMemoryEmbeddingProvider(
+      {
+        config: {},
+        provider: "local",
+        fallback: "none",
+        model: modelPath,
+        local: { modelPath },
+      },
+      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
+    );
+
+    expect(result.provider?.model).toBe(modelPath);
+    expect(result.runtime).not.toHaveProperty("indexIdentityAliases");
+  });
+
+  it("keeps the default model identity with a custom cache directory", async () => {
+    const modelCacheDir = path.join(os.tmpdir(), "llama-cpp-model-cache");
+    const modelPath = path.join(modelCacheDir, "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf");
+    memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockResolvedValue({
+      id: "local",
+      model: modelPath,
+      embedQuery: vi.fn(),
+      embedBatch: vi.fn(),
+    });
+
+    const result = await createLlamaCppMemoryEmbeddingProvider(
+      {
+        config: {},
+        provider: "local",
+        fallback: "none",
+        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+        local: { modelPath: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL, modelCacheDir },
+      },
+      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
+    );
+
+    expect(result.provider?.model).toBe(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL);
+    expect(result.runtime?.cacheKeyData).toEqual({
+      provider: "local",
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+    });
+    expect(result.runtime?.indexIdentityAliases).toEqual([
+      {
+        model: modelPath,
+        cacheKeyData: {
+          provider: "local",
+          model: modelPath,
+        },
+      },
+      {
+        model: "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+        cacheKeyData: {
+          provider: "local",
+          model: "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+        },
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      direction: "default URI to exact relative cache artifact",
+      modelPath: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+    },
+    {
+      direction: "exact relative cache artifact to default URI",
+      modelPath: "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
+    },
+  ])("keeps $direction compatible", ({ modelPath }) => {
+    const modelCacheDir = path.join(os.tmpdir(), "llama-cpp-relative-model-cache");
+    const relativeModelPath = "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf";
+    const resolvedModelPath = path.join(modelCacheDir, relativeModelPath);
+
+    expect(
+      llamaCppEmbeddingProviderAdapter.resolveIndexIdentity?.({
+        config: {},
+        provider: "local",
+        model: modelPath,
+        local: { modelPath, modelCacheDir },
+      }),
+    ).toEqual({
+      model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      cacheKeyData: {
+        provider: "local",
+        model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      },
+      aliases: [
+        {
+          model: resolvedModelPath,
+          cacheKeyData: {
+            provider: "local",
+            model: resolvedModelPath,
+          },
+        },
+        {
+          model: relativeModelPath,
+          cacheKeyData: {
+            provider: "local",
+            model: relativeModelPath,
+          },
+        },
+      ],
+    });
+  });
+
+  it("keeps the default model identity for its exact relative cache artifact", async () => {
+    const modelCacheDir = path.join(os.tmpdir(), "llama-cpp-relative-model-cache");
+    const modelPath = "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf";
+    const resolvedModelPath = path.join(modelCacheDir, modelPath);
+    memoryHostEmbeddingMocks.createLocalEmbeddingProvider.mockResolvedValue({
+      id: "local",
+      model: modelPath,
+      embedQuery: vi.fn(),
+      embedBatch: vi.fn(),
+    });
+
+    const result = await createLlamaCppMemoryEmbeddingProvider(
+      {
+        config: {},
+        provider: "local",
+        fallback: "none",
+        model: modelPath,
+        local: { modelPath, modelCacheDir },
+      },
+      { nodeLlamaCppImportUrl: "file:///plugin/node-llama-cpp.js" },
+    );
+
+    expect(result.provider?.model).toBe(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL);
+    expect(result.runtime?.indexIdentityAliases).toEqual([
+      {
+        model: resolvedModelPath,
+        cacheKeyData: {
+          provider: "local",
+          model: resolvedModelPath,
+        },
+      },
+      {
+        model: modelPath,
+        cacheKeyData: {
+          provider: "local",
+          model: modelPath,
+        },
+      },
+    ]);
   });
 
   it("formats missing runtime errors with the plugin install command", () => {

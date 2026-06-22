@@ -22,7 +22,6 @@ import {
   isHighSignalLiveModelRef,
   isModernModelRef,
   isPrioritizedHighSignalLiveModelRef,
-  isPrioritizedSmallLiveModelRef,
   isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
   listPrioritizedSmallLiveModelRefs,
@@ -658,6 +657,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "moonshot", id: "kimi-k2.7-code" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
@@ -686,11 +686,8 @@ describe("isSmallLiveModelRef", () => {
   });
 });
 
-describe("isPrioritizedSmallLiveModelRef", () => {
+describe("listPrioritizedSmallLiveModelRefs", () => {
   it("lists priority refs as provider/id pairs", () => {
-    expect(isPrioritizedSmallLiveModelRef({ provider: "lmstudio", id: "qwen/qwen3.5-9b" })).toBe(
-      true,
-    );
     expect(listPrioritizedSmallLiveModelRefs()).toStrictEqual([
       { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
       { provider: "vllm", id: "qwen/qwen3-8b" },
