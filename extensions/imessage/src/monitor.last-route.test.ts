@@ -346,6 +346,13 @@ describe("iMessage monitor last-route updates", () => {
       expect.objectContaining({ typing: true }),
       expect.anything(),
     );
+    await vi.waitFor(() => {
+      expect(earlyTypingClient.request).toHaveBeenCalledWith(
+        "typing",
+        expect.objectContaining({ typing: false, to: "+15550001111" }),
+        expect.any(Object),
+      );
+    });
   });
 
   it.each(["never", "message", "thinking"] as const)(

@@ -1072,22 +1072,54 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           sender: decision.sender,
         })
       : undefined;
+    let stopEarlyDirectTyping: (() => void) | undefined;
     if (earlyDirectTypingTarget) {
       // Start channel-native feedback before the expensive history/context/model
       // path. Use a short-lived client so a slow typing RPC cannot block the
-      // monitor client's watch stream or later dispatcher typing teardown.
-      void sendIMessageTyping(earlyDirectTypingTarget, true, {
+      // monitor client's watch stream. Stop is sequenced after start so fast
+      // command replies cannot leave a late true after typing:false.
+      const earlyDirectTypingStarted = sendIMessageTyping(earlyDirectTypingTarget, true, {
         cfg,
         accountId: accountInfo.accountId,
-      }).catch((err) => {
-        logTypingFailure({
-          log: (msg) => logVerbose(msg),
-          channel: "imessage",
-          action: "start",
-          target: earlyDirectTypingTarget,
-          error: err,
-        });
-      });
+      }).then(
+        () => true,
+        (err) => {
+          logTypingFailure({
+            log: (msg) => logVerbose(msg),
+            channel: "imessage",
+            action: "start",
+            target: earlyDirectTypingTarget,
+            error: err,
+          });
+          return false;
+        },
+      );
+      let earlyTypingStopQueued = false;
+      stopEarlyDirectTyping = () => {
+        if (earlyTypingStopQueued) {
+          return;
+        }
+        earlyTypingStopQueued = true;
+        void earlyDirectTypingStarted
+          .then(async (started) => {
+            if (!started) {
+              return;
+            }
+            await sendIMessageTyping(earlyDirectTypingTarget, false, {
+              cfg,
+              accountId: accountInfo.accountId,
+            });
+          })
+          .catch((err) => {
+            logTypingFailure({
+              log: (msg) => logVerbose(msg),
+              channel: "imessage",
+              action: "stop",
+              target: earlyDirectTypingTarget,
+              error: err,
+            });
+          });
+      };
     }
     const stagedAttachments = remoteHost
       ? []
@@ -1352,11 +1384,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyMap: groupHistories,
             limit: historyLimit,
           },
-          onPreDispatchFailure: () =>
+          onPreDispatchFailure: () => {
+            stopEarlyDirectTyping?.();
             settleReplyDispatcher({
               dispatcher,
               onSettled: () => markDispatchIdle(),
-            }),
+            });
+          },
           runDispatch: async () => {
             try {
               return await dispatchInboundMessage({
@@ -1375,6 +1409,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               });
             } finally {
               markDispatchIdle();
+              stopEarlyDirectTyping?.();
             }
           },
         }),
