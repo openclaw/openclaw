@@ -1000,6 +1000,8 @@ export class TelegramPollingSession {
       forceCycleResolve = resolve;
     });
     const stalledBacklogKeys = new Set<string>();
+    let requestImmediateDrain: () => void = () => undefined;
+    let drainRequested = false;
     const unsubscribe = worker.onMessage((message) => {
       const ackSpooledUpdate = (
         requestId: string,
@@ -1053,6 +1055,7 @@ export class TelegramPollingSession {
         }).then(
           (updateId) => {
             ackSpooledUpdate(message.requestId, { ok: true, updateId });
+            requestImmediateDrain();
           },
           (err: unknown) => {
             ackSpooledUpdate(message.requestId, {
@@ -1065,6 +1068,7 @@ export class TelegramPollingSession {
       }
       if (message.type === "spooled") {
         liveness.noteGetUpdatesActivity();
+        requestImmediateDrain();
       }
     });
     const stopOnAbort = () => {
@@ -1105,10 +1109,15 @@ export class TelegramPollingSession {
       }
     };
     const drainOnce = async () => {
-      if (restartRequested || drainActive || this.opts.abortSignal?.aborted) {
+      if (restartRequested || this.opts.abortSignal?.aborted) {
+        return;
+      }
+      if (drainActive) {
+        drainRequested = true;
         return;
       }
       drainActive = true;
+      drainRequested = false;
       try {
         const drain = await this.#drainSpooledUpdates({ bot, spoolDir });
         consecutiveDrainFailures = 0;
@@ -1151,7 +1160,14 @@ export class TelegramPollingSession {
         );
       } finally {
         drainActive = false;
+        if (drainRequested && !restartRequested && !this.opts.abortSignal?.aborted) {
+          drainRequested = false;
+          void drainOnce();
+        }
       }
+    };
+    requestImmediateDrain = () => {
+      void drainOnce();
     };
     await drainOnce();
     const drainTimer = setInterval(() => {
