@@ -54,6 +54,68 @@ const SECRET_FLAG_NAMES = new Set([
 const SECRET_FLAG_SUFFIX_PATTERN =
   /^--(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?(?:token|secret|password|passwd|api[-_]?key|api[-_]?secret|webhook|credential|bearer|pat|private[-_]?key|recovery[-_]?key|signing[-_]?key|encryption[-_]?key|master[-_]?key|session[-_]?key|gateway[-_]?key|service[-_]?key|hook[-_]?key)$/;
 
+const CONFIG_SET_BOOLEAN_FLAGS = new Set([
+  "--strict-json",
+  "--json",
+  "--dry-run",
+  "--allow-exec",
+  "--merge",
+  "--replace",
+  "--provider-json-only",
+  "--provider-allow-insecure-path",
+  "--provider-allow-symlink-command",
+]);
+
+const CONFIG_SET_VALUE_FLAGS = new Set([
+  "--ref-provider",
+  "--ref-source",
+  "--ref-id",
+  "--provider-source",
+  "--provider-allowlist",
+  "--provider-path",
+  "--provider-mode",
+  "--provider-timeout-ms",
+  "--provider-max-bytes",
+  "--provider-command",
+  "--provider-arg",
+  "--provider-no-output-timeout-ms",
+  "--provider-max-output-bytes",
+  "--provider-env",
+  "--provider-pass-env",
+  "--provider-trusted-dir",
+  "--batch-json",
+  "--batch-file",
+]);
+
+const CONFIG_SET_REDACT_VALUE_FLAGS = new Set(["--batch-json"]);
+
+const SECRET_PATH_KEY_PREFIXES = new Set([
+  "access",
+  "active",
+  "api",
+  "client",
+  "encryption",
+  "gateway",
+  "hook",
+  "master",
+  "private",
+  "recovery",
+  "refresh",
+  "service",
+  "session",
+  "signing",
+]);
+
+const SECRET_PATH_TERMINAL_WORDS = new Set([
+  "bearer",
+  "credential",
+  "password",
+  "passwd",
+  "pat",
+  "secret",
+  "token",
+]);
+
 function isSecretFlagName(flagName: string | null): boolean {
   if (flagName === null) {
     return false;
@@ -72,6 +134,141 @@ function parseFlagName(arg: string): string | null {
   return (eq === -1 ? arg : arg.slice(0, eq)).toLowerCase();
 }
 
+function splitConfigPathSegments(pathValue: string): string[] {
+  const normalized = pathValue
+    .replace(
+      /\[(?:"([^"]+)"|'([^']+)'|([^\]]+))\]/g,
+      (_match, doubleQuoted, singleQuoted, bare) => {
+        const value = doubleQuoted ?? singleQuoted ?? bare;
+        return `.${String(value).trim()}`;
+      },
+    )
+    .replace(/^\.+|\.+$/g, "");
+  return normalized
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+}
+
+function splitConfigPathSegmentWords(segment: string): string[] {
+  const normalized = segment
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .toLowerCase()
+    .replace(/^-+|-+$/g, "");
+  return normalized.split("-").filter((word) => word.length > 0);
+}
+
+function isSecretConfigPathSegment(segment: string): boolean {
+  const words = splitConfigPathSegmentWords(segment);
+  if (words.length === 0) {
+    return false;
+  }
+  const terminal = words[words.length - 1];
+  if (!terminal) {
+    return false;
+  }
+  if (SECRET_PATH_TERMINAL_WORDS.has(terminal)) {
+    return true;
+  }
+  if (terminal !== "key") {
+    return false;
+  }
+  return words.slice(0, -1).some((word) => SECRET_PATH_KEY_PREFIXES.has(word));
+}
+
+function isSecretConfigSetPath(pathValue: string): boolean {
+  return splitConfigPathSegments(pathValue).some(isSecretConfigPathSegment);
+}
+
+function consumeConfigSetOption(argv: readonly string[], index: number): number {
+  const flagName = parseFlagName(argv[index] ?? "");
+  if (flagName === null) {
+    return 0;
+  }
+  if (CONFIG_SET_BOOLEAN_FLAGS.has(flagName)) {
+    return 1;
+  }
+  if (!CONFIG_SET_VALUE_FLAGS.has(flagName)) {
+    return 1;
+  }
+  return argv[index]?.includes("=") ? 1 : 2;
+}
+
+function redactConfigSetOptionValue(argv: readonly string[], redacted: string[], index: number) {
+  const current = argv[index];
+  if (typeof current !== "string") {
+    return;
+  }
+  const eq = current.indexOf("=");
+  if (eq !== -1) {
+    redacted[index] = `${current.slice(0, eq + 1)}***`;
+    return;
+  }
+  if (typeof argv[index + 1] === "string") {
+    redacted[index + 1] = "***";
+  }
+}
+
+function redactConfigSetPositionalSecrets(
+  argv: readonly string[],
+  redacted: string[],
+): string[] {
+  const configIndex = argv.findIndex(
+    (arg, index) => arg === "config" && argv[index + 1] === "set",
+  );
+  if (configIndex === -1) {
+    return redacted;
+  }
+
+  const positionals: Array<{ index: number; value: string }> = [];
+  for (let i = configIndex + 2; i < argv.length; i++) {
+    const current = argv[i];
+    if (typeof current !== "string") {
+      continue;
+    }
+    if (current === "--") {
+      for (let j = i + 1; j < argv.length; j++) {
+        const value = argv[j];
+        if (typeof value === "string") {
+          positionals.push({ index: j, value });
+        }
+      }
+      break;
+    }
+    if (current.startsWith("-") && positionals.length === 0) {
+      const flagName = parseFlagName(current);
+      if (CONFIG_SET_REDACT_VALUE_FLAGS.has(flagName ?? "")) {
+        redactConfigSetOptionValue(argv, redacted, i);
+      }
+      const consumed = consumeConfigSetOption(argv, i);
+      i += Math.max(0, consumed - 1);
+      continue;
+    }
+    if (current.startsWith("-")) {
+      const flagName = parseFlagName(current);
+      const isKnownOption =
+        flagName !== null &&
+        (CONFIG_SET_BOOLEAN_FLAGS.has(flagName) || CONFIG_SET_VALUE_FLAGS.has(flagName));
+      if (isKnownOption) {
+        if (CONFIG_SET_REDACT_VALUE_FLAGS.has(flagName)) {
+          redactConfigSetOptionValue(argv, redacted, i);
+        }
+        const consumed = consumeConfigSetOption(argv, i);
+        i += Math.max(0, consumed - 1);
+        continue;
+      }
+    }
+    positionals.push({ index: i, value: current });
+  }
+
+  const [pathArg, valueArg] = positionals;
+  if (pathArg && valueArg && isSecretConfigSetPath(pathArg.value)) {
+    redacted[valueArg.index] = "***";
+  }
+  return redacted;
+}
+
 // Redacts CLI argv before it lands in the persistent config-audit log.
 // Layers, applied per element:
 //  1. `--flag=value` form for any name matching the explicit list or the
@@ -84,6 +281,9 @@ function parseFlagName(arg: string): string | null {
 //     `KEY=VALUE` env-style assignments, raw token shapes (sk-, ghp_, xox*,
 //     gsk_, AIza*, npm_, Telegram bot tokens, PEM blocks, Bearer headers,
 //     URL query secrets) using the shared redaction patterns.
+//  4. `config set <credential-path> <value>` positional values — mask the
+//     value because plain provider keys/passwords often have no recognizable
+//     token shape for layer 3 to catch.
 export function redactConfigAuditArgv(argv: readonly string[]): string[] {
   const result: string[] = [];
   let redactNext = false;
@@ -111,7 +311,7 @@ export function redactConfigAuditArgv(argv: readonly string[]): string[] {
     }
     result.push(redactToolPayloadText(current));
   }
-  return result;
+  return redactConfigSetPositionalSecrets(argv, result);
 }
 
 function capArgv(argv: readonly string[] | undefined): string[] {
