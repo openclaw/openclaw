@@ -41,7 +41,7 @@ const GEMINI_TOOL_PARAMETERS = {
     freshness: {
       type: "string",
       description:
-        "Ask Gemini to prioritize recent sources: day, week, month, or year. This is a recency hint, not a hard Google Search time range.",
+        "Filter Gemini search freshness: week, month, and year use hard Google Search time ranges; day prioritizes the last 24 hours as a recency hint.",
     },
     date_after: {
       type: "string",

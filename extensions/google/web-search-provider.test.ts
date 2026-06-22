@@ -479,7 +479,38 @@ describe("google web search provider", () => {
     );
   });
 
-  it("uses soft recency hints for Gemini freshness instead of time ranges", async () => {
+  it("uses a soft recency hint for Gemini day freshness shortcuts instead of a 24-hour range", async () => {
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await tool?.execute({ query: "latest ai news timestamp precision", freshness: "pd" });
+
+    const body = parseGeminiFetchBody(mockFetch);
+    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toBeUndefined();
+    expect(body.contents?.[0]?.parts?.[0]?.text).toContain(
+      "Prioritize web sources published in the last 24 hours.",
+    );
+  });
+
+  it("preserves hard Gemini time ranges for wider freshness values", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool({
@@ -502,13 +533,16 @@ describe("google web search provider", () => {
     await tool?.execute({ query: "latest ai news timestamp precision", freshness: "week" });
 
     const body = parseGeminiFetchBody(mockFetch);
-    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toBeUndefined();
-    expect(body.contents?.[0]?.parts?.[0]?.text).toContain(
-      "Prioritize web sources published in the last 7 days.",
-    );
+    expect(body.contents?.[0]?.parts?.[0]?.text).toBe("latest ai news timestamp precision");
+    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
+      startTime: "2026-04-08T12:00:00Z",
+      endTime: "2026-04-15T12:00:00Z",
+    });
   });
 
-  it("keeps freshness out of the hard filter while partitioning the cache", async () => {
+  it("partitions Gemini cache entries for soft day freshness, hard week freshness, and no freshness", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
     const mockFetch = installGeminiFetch();
     const provider = createGeminiWebSearchProvider();
     const tool = provider.createTool({
@@ -529,10 +563,11 @@ describe("google web search provider", () => {
     });
 
     await tool?.execute({ query: "same query cache partition", freshness: "day" });
+    await tool?.execute({ query: "same query cache partition", freshness: "week" });
     await tool?.execute({ query: "same query cache partition" });
 
     const postCalls = mockFetch.mock.calls.filter(([, init]) => typeof init?.body === "string");
-    expect(postCalls).toHaveLength(2);
+    expect(postCalls).toHaveLength(3);
     const parsePostedBody = (call: (typeof postCalls)[number] | undefined) => {
       const body = call?.[1]?.body;
       if (typeof body !== "string") {
@@ -545,11 +580,18 @@ describe("google web search provider", () => {
     };
     const firstBody = parsePostedBody(postCalls[0]);
     const secondBody = parsePostedBody(postCalls[1]);
+    const thirdBody = parsePostedBody(postCalls[2]);
     expect(firstBody.tools?.[0]?.google_search?.timeRangeFilter).toBeUndefined();
     expect(firstBody.contents?.[0]?.parts?.[0]?.text).toContain(
       "Prioritize web sources published in the last 24 hours.",
     );
+    expect(secondBody.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
+      startTime: "2026-04-08T12:00:00Z",
+      endTime: "2026-04-15T12:00:00Z",
+    });
     expect(secondBody.contents?.[0]?.parts?.[0]?.text).toBe("same query cache partition");
+    expect(thirdBody.tools?.[0]?.google_search?.timeRangeFilter).toBeUndefined();
+    expect(thirdBody.contents?.[0]?.parts?.[0]?.text).toBe("same query cache partition");
   });
 
   it("strips sub-second precision from date-range timestamps so Gemini accepts them", async () => {
