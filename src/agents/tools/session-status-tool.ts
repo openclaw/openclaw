@@ -574,15 +574,16 @@ export function createSessionStatusTool(opts?: {
       if (isImplicitRunSessionStatus) {
         requestedKeyRaw = opts?.runSessionKey;
       }
+      let requestedKeyInput = requestedKeyRaw?.trim() ?? "";
 
       // Track whether this is a semantic-current request (literal "current" or a
       // current-client alias) BEFORE any rewrite, so visibility treats it as self.
       const isSemanticCurrentRequest =
-        requestedKeyRaw === "current" ||
+        requestedKeyInput === "current" ||
         isImplicitRunSessionStatus ||
         Boolean(
           resolveCurrentSessionClientAlias({
-            key: requestedKeyRaw ?? "",
+            key: requestedKeyInput,
             requesterInternalKey: effectiveRequesterKey,
           }),
         );
@@ -590,24 +591,26 @@ export function createSessionStatusTool(opts?: {
       // Resolve semantic "current" to the live run session key for lookup purposes (#76708).
       // In sandboxed channel runs there may be no separate runSessionKey because the sandbox
       // key already is the live requester; avoid probing literal "current" through the gateway.
-      if (requestedKeyRaw === "current" && (opts?.runSessionKey || opts?.sandboxed === true)) {
+      if (requestedKeyInput === "current" && (opts?.runSessionKey || opts?.sandboxed === true)) {
         requestedKeyRaw = opts.runSessionKey ?? effectiveRequesterKey;
+        requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       }
 
       const currentSessionAlias = resolveCurrentSessionClientAlias({
-        key: requestedKeyRaw ?? "",
+        key: requestedKeyInput,
         requesterInternalKey: effectiveRequesterKey,
       });
       if (currentSessionAlias) {
         requestedKeyRaw = opts?.runSessionKey ?? currentSessionAlias;
+        requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       }
-      const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       const effectiveRequesterLookupKey = effectiveRequesterKey.trim();
       let resolvedViaSessionId = false;
       let resolvedViaImplicitCurrentFallback = false;
-      if (!requestedKeyRaw?.trim()) {
+      if (!requestedKeyInput) {
         throw new Error("sessionKey required");
       }
+      requestedKeyRaw = requestedKeyInput;
       const ensureAgentAccess = (targetAgentId: string) => {
         if (targetAgentId === requesterAgentId) {
           return;
@@ -623,20 +626,20 @@ export function createSessionStatusTool(opts?: {
         }
       };
 
-      if (requestedKeyRaw.startsWith("agent:") && !isSemanticCurrentRequest) {
-        const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyRaw);
+      if (requestedKeyInput.startsWith("agent:") && !isSemanticCurrentRequest) {
+        const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyInput);
         ensureAgentAccess(requestedAgentId);
         const access = visibilityGuard.check(
-          normalizeVisibilityTargetSessionKey(requestedKeyRaw, requestedAgentId),
+          normalizeVisibilityTargetSessionKey(requestedKeyInput, requestedAgentId),
         );
         if (!access.allowed) {
           throw new Error(access.error);
         }
       }
 
-      const isExplicitAgentKey = requestedKeyRaw.startsWith("agent:");
+      const isExplicitAgentKey = requestedKeyInput.startsWith("agent:");
       let agentId = isExplicitAgentKey
-        ? resolveAgentIdFromSessionKey(requestedKeyRaw)
+        ? resolveAgentIdFromSessionKey(requestedKeyInput)
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
       let store = loadSessionStore(storePath);
@@ -653,15 +656,15 @@ export function createSessionStatusTool(opts?: {
         alias,
         mainKey,
         requesterInternalKey: storeScopedRequesterKey,
-        includeAliasFallback: requestedKeyRaw !== "current",
+        includeAliasFallback: requestedKeyInput !== "current",
       });
 
       if (
         !resolved &&
-        (requestedKeyRaw === "current" || shouldResolveSessionIdInput(requestedKeyRaw))
+        (requestedKeyInput === "current" || shouldResolveSessionIdInput(requestedKeyInput))
       ) {
         const resolvedSession = await resolveSessionReference({
-          sessionKey: requestedKeyRaw,
+          sessionKey: requestedKeyInput,
           alias,
           mainKey,
           requesterInternalKey: effectiveRequesterKey,
@@ -672,7 +675,7 @@ export function createSessionStatusTool(opts?: {
             resolvedSession,
             requesterSessionKey: effectiveRequesterKey,
             restrictToSpawned: opts?.sandboxed === true,
-            visibilitySessionKey: requestedKeyRaw,
+            visibilitySessionKey: requestedKeyInput,
           });
           if (!visibleSession.ok) {
             throw new Error("Session status visibility is restricted to the current session tree.");
@@ -681,6 +684,7 @@ export function createSessionStatusTool(opts?: {
           ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
           resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
+          requestedKeyInput = requestedKeyRaw.trim();
           agentId = resolveAgentIdFromSessionKey(visibleSession.key);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
           store = loadSessionStore(storePath);
@@ -701,7 +705,7 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      if (!resolved && requestedKeyRaw === "current" && effectiveRequesterLookupKey) {
+      if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
         resolved = resolveSessionEntry({
           store,
           keyRaw: effectiveRequesterLookupKey,
@@ -712,7 +716,7 @@ export function createSessionStatusTool(opts?: {
         });
       }
 
-      if (!resolved && requestedKeyRaw === "current") {
+      if (!resolved && requestedKeyInput === "current") {
         resolved = resolveSessionEntry({
           store,
           keyRaw: requestedKeyRaw,
@@ -761,8 +765,8 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved) {
-        const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
-        throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
+        const kind = shouldResolveSessionIdInput(requestedKeyInput) ? "sessionId" : "sessionKey";
+        throw new Error(`Unknown ${kind}: ${requestedKeyInput}`);
       }
 
       // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.

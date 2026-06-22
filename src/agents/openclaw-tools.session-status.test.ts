@@ -573,6 +573,43 @@ describe("session_status tool", () => {
     });
   });
 
+  it("resolves whitespace-decorated webchat sessionKey=current to the full requester main key (#89800)", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-fallback-main",
+        updatedAt: 5,
+        thinkingLevel: "high",
+      },
+      "agent:admin:main": {
+        sessionId: "s-admin-main",
+        updatedAt: 10,
+        thinkingLevel: "low",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:admin:main",
+      activeDeliveryContext: {
+        channel: "webchat",
+        to: "control-ui-conversation",
+      },
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-webchat-main-spaced", {
+      sessionKey: " current ",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:admin:main");
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    expectRecordFields(statusArg.sessionEntry, {
+      sessionId: "s-admin-main",
+      thinkingLevel: "low",
+    });
+  });
+
   it("synthesizes webchat sessionKey=current from the full requester main key (#89773)", async () => {
     resetSessionStore({});
 
