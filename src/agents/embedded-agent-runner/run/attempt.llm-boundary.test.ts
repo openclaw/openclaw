@@ -822,6 +822,6 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // System event is present in Message A (runtime-context).
     expect(contextMsg?.content).toContain(systemEvent);
     // System event is absent from Message B (model-facing user turn).
-    expect(String(userTurn?.content)).not.toContain(systemEvent);
+    expect(JSON.stringify(userTurn?.content)).not.toContain(systemEvent);
   });
 });
