@@ -824,6 +824,24 @@ describe("agentLoop tool termination", () => {
       "assistant",
     ]);
     expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(events.map((event) => event.type)).toEqual([
+      "agent_start",
+      "turn_start",
+      "message_start",
+      "message_end",
+      "message_start",
+      "message_end",
+      "tool_execution_start",
+      "tool_execution_end",
+      "message_start",
+      "message_end",
+      "turn_end",
+      "message_start",
+      "message_end",
+      "turn_start",
+      "turn_end",
+      "agent_end",
+    ]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 
@@ -877,6 +895,24 @@ describe("agentLoop tool termination", () => {
       "assistant",
     ]);
     expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(events.map((event) => event.type)).toEqual([
+      "agent_start",
+      "turn_start",
+      "message_start",
+      "message_end",
+      "message_start",
+      "message_end",
+      "tool_execution_start",
+      "tool_execution_end",
+      "message_start",
+      "message_end",
+      "turn_end",
+      "message_start",
+      "message_end",
+      "turn_start",
+      "turn_end",
+      "agent_end",
+    ]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 });
