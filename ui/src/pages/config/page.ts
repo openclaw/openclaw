@@ -20,6 +20,7 @@ import { patchSession } from "../../ui/controllers/sessions.ts";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../ui/session-key.ts";
 import { loadLocalAssistantIdentity } from "../../ui/storage.ts";
 import { normalizeOptionalString } from "../../ui/string-coerce.ts";
+import type { FastMode } from "../../ui/types.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
 import { getPresetById } from "../../ui/views/config-presets.ts";
 import { renderQuickSettings, type QuickSettingsChannel } from "../../ui/views/config-quick.ts";
@@ -312,10 +313,10 @@ function renderConfigPage({ state, navigate, pageId }: ConfigRenderContext) {
       : typeof agentsDefaults?.thinkingLevel === "string"
         ? agentsDefaults.thinkingLevel
         : "off";
-  const fastMode =
-    typeof activeSession?.fastMode === "boolean"
-      ? activeSession.fastMode
-      : agentsDefaults?.fastMode === true;
+  const resolvedFastMode =
+    activeSession?.effectiveFastMode ?? activeSession?.fastMode ?? agentsDefaults?.fastMode;
+  const fastMode: FastMode =
+    resolvedFastMode === "auto" || typeof resolvedFastMode === "boolean" ? resolvedFastMode : false;
 
   const common: Omit<
     ConfigProps,
@@ -609,8 +610,8 @@ function renderConfigPage({ state, navigate, pageId }: ConfigRenderContext) {
           },
           onThinkingChange: (level) =>
             void patchSession(state, state.sessionKey, { thinkingLevel: level }),
-          onFastModeToggle: () =>
-            void patchSession(state, state.sessionKey, { fastMode: !fastMode }),
+          onFastModeChange: (mode) =>
+            void patchSession(state, state.sessionKey, { fastMode: mode }),
           onChannelConfigure: () => navigate("channels"),
           onManageCron: () => navigate("cron"),
           onBrowseSkills: () => navigate("skills"),
