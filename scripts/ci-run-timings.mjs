@@ -416,7 +416,7 @@ function consumePositiveIntFlag(args, index, flag) {
     return null;
   }
   const rawValue = args[index + 1];
-  if (!rawValue || rawValue.startsWith("--")) {
+  if (!rawValue || rawValue.startsWith("-")) {
     throw new Error(`${flag} requires a value`);
   }
   return {

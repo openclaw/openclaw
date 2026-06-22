@@ -9,7 +9,7 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { DeviceAuthEntry } from "../shared/device-auth.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   loadConfigMock as getRuntimeConfig,
@@ -331,12 +331,12 @@ describe("callGateway url resolution", () => {
 
   beforeEach(() => {
     envSnapshot.restore();
-    delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
-    delete process.env.OPENCLAW_CONFIG_PATH;
-    delete process.env.OPENCLAW_GATEWAY_PORT;
-    delete process.env.OPENCLAW_GATEWAY_URL;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_STATE_DIR;
+    deleteTestEnvValue("OPENCLAW_ALLOW_INSECURE_PRIVATE_WS");
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
     resetGatewayCallMocks();
   });
 
@@ -1220,8 +1220,8 @@ describe("buildGatewayConnectionDetails", () => {
 
   it("falls back to the default config loader when test deps drift", () => {
     const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_CONFIG_PATH = path.join(tempStateDir, "missing-config.json");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(tempStateDir, "missing-config.json"));
     try {
       getRuntimeConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
       resolveGatewayPort.mockReturnValue(18800);
@@ -2552,7 +2552,7 @@ describe("callGateway password resolution", () => {
   });
 
   it.each(explicitAuthCases)("uses explicit $label when url override is set", async (testCase) => {
-    process.env[testCase.envKey] = testCase.envValue;
+    setTestEnvValue(testCase.envKey, testCase.envValue);
     const auth = { [testCase.authKey]: testCase.configValue } as {
       password?: string;
       token?: string;

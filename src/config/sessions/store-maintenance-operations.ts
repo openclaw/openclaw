@@ -6,10 +6,8 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
-  pruneQuotaSuspensions,
   pruneStaleEntries,
   shouldRunSessionEntryMaintenance,
-  type QuotaSuspensionMaintenanceResult,
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
@@ -285,19 +283,4 @@ export async function applyFileBackedSessionStoreMaintenance(
     beforeCount,
     forceMaintenance,
   });
-}
-
-/**
- * Applies quota-suspension TTL maintenance to a store image.
- *
- * SQLite should implement this as a row transaction that returns the resumed
- * lane records and clear count before callers resume in-process quota lanes.
- */
-export function applyQuotaSuspensionTtlMaintenance(params: {
-  store: Record<string, SessionEntry>;
-  now: number;
-  ttlMs?: number;
-  log?: boolean;
-}): QuotaSuspensionMaintenanceResult {
-  return pruneQuotaSuspensions(params);
 }

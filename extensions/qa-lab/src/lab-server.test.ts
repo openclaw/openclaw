@@ -11,6 +11,7 @@ import {
   writeQaLabServerError,
   type QaLabServerStartParams,
 } from "./lab-server.js";
+import { resolveUiAssetVersion } from "./lab-server-ui.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -818,6 +819,12 @@ describe("qa-lab server", () => {
     const rootResponse = await fetchWithRetry(`${lab.baseUrl}/`);
     expect(rootResponse.status).toBe(200);
     expect(await rootResponse.text()).toContain("repo-root-ui");
+
+    const versionResponse = await fetchWithRetry(`${lab.baseUrl}/api/ui-version`);
+    expect(versionResponse.status).toBe(200);
+    const versionPayload = (await versionResponse.json()) as { version?: string | null };
+    expect(versionPayload.version).toBe(resolveUiAssetVersion(null, repoRoot));
+    expect(versionPayload.version).toMatch(/^[0-9a-f]{12}$/);
 
     const runnerCatalog = await waitForRunnerCatalog(lab.baseUrl);
     expect(runnerCatalog.status).toBe("ready");
