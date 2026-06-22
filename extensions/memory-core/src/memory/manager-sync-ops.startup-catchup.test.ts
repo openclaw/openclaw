@@ -135,6 +135,10 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return Array.from(this.sessionPendingTargets.values());
   }
 
+  getPendingSessionFiles(): string[] {
+    return Array.from(this.sessionPendingFiles);
+  }
+
   isSessionsDirty(): boolean {
     return this.sessionsDirty;
   }
@@ -447,13 +451,12 @@ describe("session startup catch-up", () => {
       sessionKey: "agent:main:thread",
     });
 
-    expect(harness.getPendingSessionTargets()).toEqual([
-      { agentId: "main", sessionId: "thread", sessionKey: "agent:main:thread" },
-    ]);
+    expect(harness.getPendingSessionFiles()).toEqual([session.filePath]);
+    expect(harness.getPendingSessionTargets()).toEqual([]);
     harness.stopTranscriptListener();
   });
 
-  it("prefers transcript update identity before path compatibility", async () => {
+  it("prefers transcript update path compatibility before identity", async () => {
     vi.useFakeTimers();
     const session = await writeSessionFile("thread.jsonl");
     const harness = new SessionStartupCatchupHarness([]);
@@ -468,9 +471,8 @@ describe("session startup catch-up", () => {
       },
     });
 
-    expect(harness.getPendingSessionTargets()).toEqual([
-      { agentId: "main", sessionId: "identity-target", sessionKey: "agent:main:identity-target" },
-    ]);
+    expect(harness.getPendingSessionFiles()).toEqual([session.filePath]);
+    expect(harness.getPendingSessionTargets()).toEqual([]);
     harness.stopTranscriptListener();
   });
 });

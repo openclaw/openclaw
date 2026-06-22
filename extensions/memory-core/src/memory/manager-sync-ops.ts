@@ -1456,16 +1456,18 @@ export abstract class MemoryManagerSyncOps {
       if (this.closed) {
         return;
       }
+      const sessionFile = update.sessionFile;
+      if (sessionFile && isSessionArchiveArtifactName(path.basename(sessionFile))) {
+        return;
+      }
+      if (sessionFile && this.isSessionFileForAgent(sessionFile)) {
+        this.scheduleSessionDirty(sessionFile);
+        return;
+      }
       const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
       if (target) {
         this.scheduleSessionDirty(target);
-        return;
       }
-      const sessionFile = update.sessionFile;
-      if (!sessionFile || !this.isSessionFileForAgent(sessionFile)) {
-        return;
-      }
-      this.scheduleSessionDirty(sessionFile);
     });
   }
 
