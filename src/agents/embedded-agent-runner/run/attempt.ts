@@ -70,7 +70,8 @@ import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
-import { resolveSkillsPromptForRun } from "../../../skills/loading/workspace.js";
+import { resolveSkillRoute } from "../../../skills/loading/router-integration.js";
+import { resolveSkillsPromptStateForRun } from "../../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -352,6 +353,7 @@ import {
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import {
   applyEmbeddedAttemptToolsAllow,
+  isRestrictiveEmbeddedAttemptToolsAllow,
   mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
   shouldCreateBundleLspRuntimeForAttempt,
@@ -394,6 +396,7 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagn
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
+  loadSkillRouteRecentMessages,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptMediaTaskSystemPromptAddition,
@@ -1113,7 +1116,7 @@ export async function runEmbeddedAttempt(
       skillsPromptWorkspaceDir: effectiveSkillsPromptWorkspace,
     });
 
-    const skillsPrompt = resolveSkillsPromptForRun({
+    const skillsPromptState = resolveSkillsPromptStateForRun({
       skillsSnapshot: skillsSnapshotForRun,
       entries: promptSkillEntries,
       config: params.config,
@@ -1121,11 +1124,34 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       eligibility: skillsEligibility,
     });
+    const skillsPrompt = skillsPromptState.prompt;
+    const isRawModelRun = params.modelRun === true || params.promptMode === "none";
+    const skipSkillRouting =
+      isRawModelRun || isRestrictiveEmbeddedAttemptToolsAllow(params.toolsAllow);
+
+    // Pre-filter: call configured skill router before building the system prompt.
+    // When a router matches, its narrowed result replaces the full skills catalog.
+    const skillRouterConfig = params.config?.skills?.router;
+    const skillRoute = skipSkillRouting
+      ? undefined
+      : await resolveSkillRoute({
+          routerName: skillRouterConfig?.name,
+          routerConfig: skillRouterConfig?.config,
+          resolvedSkills: skillsPromptState.resolvedSkills,
+          query: params.prompt,
+          recentMessages: () => {
+            return loadSkillRouteRecentMessages({
+              config: params.config,
+              sessionFile: params.sessionFile,
+              sessionKey: params.sessionKey,
+            });
+          },
+        });
+
     prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const contextInjectionMode = resolveContextInjectionMode(params.config, sessionAgentId);
-    const isRawModelRun = params.modelRun === true || params.promptMode === "none";
     if (isRawModelRun && log.isEnabled("debug")) {
       log.debug(
         `raw model run enabled: modelRun=${params.modelRun === true} promptMode=${params.promptMode ?? "unset"}`,
@@ -1937,9 +1963,19 @@ export async function runEmbeddedAttempt(
       (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
 
-    // When toolsAllow is set, use minimal prompt and strip skills catalog
-    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
-    const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
+    // Restrictive toolsAllow runs use minimal prompt and strip skills catalog.
+    const effectivePromptMode = isRestrictiveEmbeddedAttemptToolsAllow(params.toolsAllow)
+      ? ("minimal" as const)
+      : promptMode;
+    // Suppress full skills catalog when:
+    // - restrictive toolsAllow is set (minimal mode)
+    // - router returned a match (narrowed result goes into user prompt)
+    // - router explicitly said nomatch (no skill applies)
+    // Fall back to full catalog when no router is configured or router failed.
+    const suppressSkillsCatalog =
+      isRestrictiveEmbeddedAttemptToolsAllow(params.toolsAllow) ||
+      (typeof skillRoute === "object" && !("error" in skillRoute));
+    const effectiveSkillsPrompt = suppressSkillsCatalog ? undefined : skillsPrompt;
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -3985,6 +4021,19 @@ export async function runEmbeddedAttempt(
             );
           }
         }
+        // Apply skill router result to prompt (narrowed match or full fallback).
+        let skillRoutePromptInjected = false;
+        if (skillRoute && typeof skillRoute === "object") {
+          if ("xml" in skillRoute && !isRawModelRun) {
+            effectivePrompt = skillRoute.xml + "\n\n" + effectivePrompt;
+            skillRoutePromptInjected = true;
+            log.debug(`skill router: injected ${skillRoute.mode} match`);
+          } else if ("error" in skillRoute) {
+            log.warn(`skill router: ${skillRoute.reason}, falling back to full catalog`);
+          }
+          // { mode: "nomatch" } — no injection, no log. Router said no skill applies.
+        }
+
         // The model identity line is appended below; for a marker-free hook systemPrompt
         // override ensure the cache boundary first so the identity lands in the dynamic
         // suffix, not the cached prefix — otherwise an idle turn's prefix (O + identity)
@@ -4183,9 +4232,10 @@ export async function runEmbeddedAttempt(
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt: promptForRuntimeContextSplit,
             transcriptPrompt: transcriptPromptForRuntimeSplit,
-            modelPrompt: hasPromptBuildContext
-              ? promptForModelBeforeRuntimeContextSplit
-              : undefined,
+            modelPrompt:
+              hasPromptBuildContext || skillRoutePromptInjected
+                ? promptForModelBeforeRuntimeContextSplit
+                : undefined,
             emptyTranscriptMode: params.suppressNextUserMessagePersistence
               ? "model-prompt"
               : "runtime-event",

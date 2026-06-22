@@ -23,6 +23,11 @@ import {
 } from "../memory-host-sdk/dreaming.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
+  clearSkillRouterRegistry,
+  restoreSkillRouterRegistry,
+  snapshotSkillRouterRegistry,
+} from "../skills/loading/router-registry.js";
+import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
   restoreDetachedTaskLifecycleRuntimeRegistration,
@@ -376,6 +381,7 @@ type CachedPluginState = {
   embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
+  skillRouterRegistry: ReturnType<typeof snapshotSkillRouterRegistry>;
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -436,6 +442,7 @@ export function clearActivatedPluginRuntimeState(): void {
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();
+  clearSkillRouterRegistry();
 }
 
 export function clearPluginRegistryLoadCache(): void {
@@ -1883,6 +1890,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           corpusSupplements: cached.state.memoryCorpusSupplements,
           promptSupplements: cached.state.memoryPromptSupplements,
         });
+        restoreSkillRouterRegistry(cached.state.skillRouterRegistry);
         activatePluginRegistry(
           cached.state.registry,
           cached.cacheKey,
@@ -2676,10 +2684,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             );
             continue;
           }
+          const setupSkillRouterRegistrySnapshot = snapshotSkillRouterRegistry();
           if (!runtimeSetterApplied) {
             try {
               mergedSetupRegistration.setChannelRuntime?.(api.runtime);
             } catch (err) {
+              restoreSkillRouterRegistry(setupSkillRouterRegistrySnapshot);
               recordPluginError({
                 logger,
                 registry,
@@ -2707,6 +2717,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
                 );
               } catch (err) {
                 restorePluginRegistry(registry, registrySnapshot);
+                restoreSkillRouterRegistry(setupSkillRouterRegistrySnapshot);
                 recordPluginError({
                   logger,
                   registry,
@@ -2728,6 +2739,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           try {
             api.registerChannel(mergedSetupPlugin);
           } catch (err) {
+            restoreSkillRouterRegistry(setupSkillRouterRegistrySnapshot);
             recordPluginError({
               logger,
               registry,
@@ -2742,6 +2754,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               diagnosticCode: "channel-setup-failure",
             });
             continue;
+          }
+          if (!shouldActivate) {
+            restoreSkillRouterRegistry(setupSkillRouterRegistrySnapshot);
           }
           registry.plugins.push(record);
           seenIds.set(pluginId, candidate.origin);
@@ -2852,6 +2867,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
+      const previousSkillRouterRegistry = snapshotSkillRouterRegistry();
 
       const beforeRegister = performance.now();
       let registerFailed = false;
@@ -2873,6 +2889,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             corpusSupplements: previousMemoryCorpusSupplements,
             promptSupplements: previousMemoryPromptSupplements,
           });
+          restoreSkillRouterRegistry(previousSkillRouterRegistry);
         }
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
@@ -2889,6 +2906,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           corpusSupplements: previousMemoryCorpusSupplements,
           promptSupplements: previousMemoryPromptSupplements,
         });
+        restoreSkillRouterRegistry(previousSkillRouterRegistry);
         recordPluginError({
           logger,
           registry,
@@ -2965,6 +2983,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           embeddingProviders: listRegisteredEmbeddingProviders(),
           memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
           memoryPromptSupplements: listMemoryPromptSupplements(),
+          skillRouterRegistry: snapshotSkillRouterRegistry(),
         },
         onlyPluginIds,
       );

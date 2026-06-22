@@ -64,8 +64,8 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
-    (home): home is string => Boolean(home),
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter((home): home is string =>
+    Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
@@ -111,15 +111,15 @@ function resolvePromptTildeRoots(): string[] {
     return [];
   }
   const realNativeHome = tryRealpath(resolvedNativeHome);
-  return uniqueStrings([
-    resolvedNativeHome,
-    ...(realNativeHome ? [realNativeHome] : []),
-  ]);
+  return uniqueStrings([resolvedNativeHome, ...(realNativeHome ? [realNativeHome] : [])]);
 }
 
 function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
   const configDir = path.resolve(resolveConfigDir());
-  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
+  return (
+    home === "/data" &&
+    (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir))
+  );
 }
 
 function shouldPreservePromptSkillPath(
@@ -164,6 +164,16 @@ function normalizeCompactedSkillPath(filePath: string, matchedHomePrefix: string
 
 function compactPathForConsoleMessage(filePath: string): string {
   return compactHomePath(filePath, resolveCompactHomePrefixes());
+}
+
+export function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
+  if (entry.exposure) {
+    return entry.exposure.includeInAvailableSkillsPrompt ?? true;
+  }
+  if (entry.invocation) {
+    return !entry.invocation.disableModelInvocation;
+  }
+  return !entry.skill.disableModelInvocation;
 }
 
 function filterSkillEntries(
@@ -1508,20 +1518,41 @@ export function resolveSkillsPromptForRun(params: {
   agentId?: string;
   eligibility?: SkillEligibilityContext;
 }): string {
-  const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
-  if (snapshotPrompt) {
-    return snapshotPrompt;
-  }
+  return resolveSkillsPromptStateForRun(params).prompt;
+}
+
+export function resolveSkillsPromptStateForRun(params: {
+  skillsSnapshot?: SkillSnapshot;
+  entries?: SkillEntry[];
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  agentId?: string;
+  eligibility?: SkillEligibilityContext;
+}): { prompt: string; resolvedSkills: Skill[] } {
+  const snapshotPrompt = params.skillsSnapshot?.prompt?.trim() ?? "";
+  const snapshotResolvedSkills = params.skillsSnapshot?.resolvedSkills;
   if (params.entries && params.entries.length > 0) {
-    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+    const state = resolveWorkspaceSkillPromptState(params.workspaceDir, {
       entries: params.entries,
       config: params.config,
       agentId: params.agentId,
       eligibility: params.eligibility,
     });
-    return prompt.trim() ? prompt : "";
+    if (!snapshotPrompt) {
+      return {
+        prompt: state.prompt.trim() ? state.prompt : "",
+        resolvedSkills: state.resolvedSkills,
+      };
+    }
+    return {
+      prompt: snapshotPrompt,
+      resolvedSkills: snapshotResolvedSkills ?? state.resolvedSkills,
+    };
   }
-  return "";
+  return {
+    prompt: snapshotPrompt,
+    resolvedSkills: snapshotResolvedSkills ?? [],
+  };
 }
 
 export function loadWorkspaceSkillEntries(

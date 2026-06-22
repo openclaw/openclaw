@@ -1166,10 +1166,13 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         skillsSnapshot: undefined,
       },
     );
-    expectFields(mockParams(hoisted.resolveSkillsPromptForRunMock, 0, "skills prompt params"), {
-      workspaceDir: sandboxWorkspace,
-      skillsSnapshot: undefined,
-    });
+    expectFields(
+      mockParams(hoisted.resolveSkillsPromptStateForRunMock, 0, "skills prompt params"),
+      {
+        workspaceDir: sandboxWorkspace,
+        skillsSnapshot: undefined,
+      },
+    );
   });
 
   it("keeps before_prompt_build context in the model prompt and out of transcript messages", async () => {
@@ -2232,6 +2235,16 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       runBeforeAgentStart: vi.fn(async () => ({ prependContext: "legacy hook context" })),
       runLlmInput,
     });
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills></available_skills>",
+      resolvedSkills: [
+        {
+          name: "raw-run-skill",
+          description: "Should not be routed",
+          filePath: "/tmp/skills/raw-run-skill/SKILL.md",
+        },
+      ],
+    });
     const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
     const result = await createContextEngineAttemptRunner({
@@ -2249,6 +2262,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         promptMode: "none",
         disableTools: true,
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:discord:source",
@@ -2272,6 +2290,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seen.systemPrompt ?? "").toBe("");
     expect(result.finalPromptText).toBe("hello");
     expect(result.systemPromptReport?.systemPrompt ?? "").toBe("");
+    expect(hoisted.resolveSkillRouteMock).not.toHaveBeenCalled();
     expect(result.messagesSnapshot).toHaveLength(1);
     expectFields(requireRecord(result.messagesSnapshot[0], "gateway model snapshot"), {
       role: "assistant",
@@ -2283,6 +2302,226 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(afterTurn).not.toHaveBeenCalled();
     expect(runBeforePromptBuild).not.toHaveBeenCalled();
     expect(runLlmInput).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "non-empty allowlist", toolsAllow: ["sessions_spawn"] },
+    { label: "empty allowlist", toolsAllow: [] },
+  ])("skips skill routing for toolsAllow restricted runs: $label", async ({ toolsAllow }) => {
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills></available_skills>",
+      resolvedSkills: [
+        {
+          name: "restricted-run-skill",
+          description: "Should not be routed",
+          filePath: "/tmp/skills/restricted-run-skill/SKILL.md",
+        },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        toolsAllow,
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
+      },
+    });
+
+    expect(hoisted.resolveSkillsPromptStateForRunMock).toHaveBeenCalled();
+    expect(hoisted.systemPromptTexts.at(-1) ?? "").not.toContain("<available_skills>");
+    expect(hoisted.resolveSkillRouteMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps skill routing enabled for wildcard toolsAllow runs", async () => {
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills></available_skills>",
+      resolvedSkills: [
+        {
+          name: "wildcard-run-skill",
+          description: "Can be routed",
+          filePath: "/tmp/skills/wildcard-run-skill/SKILL.md",
+        },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        toolsAllow: ["*"],
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
+      },
+    });
+
+    expect(hoisted.resolveSkillRouteMock).toHaveBeenCalledWith({
+      routerName: "test-router",
+      routerConfig: undefined,
+      resolvedSkills: [
+        {
+          name: "wildcard-run-skill",
+          description: "Can be routed",
+          filePath: "/tmp/skills/wildcard-run-skill/SKILL.md",
+        },
+      ],
+      query: "hello",
+      recentMessages: expect.any(Function),
+    });
+    const routeParams = mockParams(hoisted.resolveSkillRouteMock, 0, "skill route params");
+    expect(routeParams.recentMessages()).toStrictEqual([]);
+  });
+
+  it("sends routed skill XML to the provider prompt without persisting it as user text", async () => {
+    const runLlmInput = vi.fn(async () => {});
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "llm_input"),
+      runLlmInput,
+    });
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills><skill><name>full-catalog</name></skill></available_skills>",
+      resolvedSkills: [
+        {
+          name: "routed-skill",
+          description: "Can be routed",
+          filePath: "/tmp/skills/routed-skill/SKILL.md",
+        },
+      ],
+    });
+    hoisted.resolveSkillRouteMock.mockResolvedValue({
+      xml: "<available_skills><skill><name>routed-skill</name></skill></available_skills>",
+      mode: "direct",
+    });
+    const seen: { prompt?: string } = {};
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
+      },
+      sessionPrompt: async (_session, prompt) => {
+        seen.prompt = prompt;
+      },
+    });
+
+    expect(seen.prompt).toBe("hello");
+    expect(hoisted.systemPromptTexts.at(-1) ?? "").not.toContain("full-catalog");
+    const llmInput = mockParams(runLlmInput, 0, "llm input params");
+    expect(llmInput.prompt).toContain("<available_skills>");
+    expect(llmInput.prompt).toContain("routed-skill");
+    expect(llmInput.prompt).toContain("hello");
+  });
+
+  it("passes recent session text into skill routing queries", async () => {
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills></available_skills>",
+      resolvedSkills: [
+        {
+          name: "github-skill",
+          description: "GitHub PR work",
+          filePath: "/tmp/skills/github-skill/SKILL.md",
+        },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionFileEntries: [
+        {
+          type: "session",
+          version: 1,
+          id: "session-with-router-context",
+          timestamp: "2026-05-29T00:00:00.000Z",
+          cwd: "/tmp/openclaw",
+        },
+        {
+          type: "message",
+          id: "u1",
+          parentId: null,
+          timestamp: "2026-05-29T00:00:01.000Z",
+          message: {
+            role: "user",
+            content: "I need to review a GitHub pull request.",
+            timestamp: 1,
+          },
+        },
+        {
+          type: "message",
+          id: "a1",
+          parentId: "u1",
+          timestamp: "2026-05-29T00:00:02.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Use the GitHub workflow for that review." }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            stopReason: "stop",
+            timestamp: 2,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+        },
+      ],
+      attemptOverrides: {
+        prompt: "do that",
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
+      },
+    });
+
+    const routeParams = mockParams(hoisted.resolveSkillRouteMock, 0, "skill route params");
+    expect(routeParams.query).toBe("do that");
+    expect(routeParams.recentMessages()).toStrictEqual([
+      {
+        role: "user",
+        content: "I need to review a GitHub pull request.",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Use the GitHub workflow for that review." }],
+        api: "test",
+        provider: "test",
+        model: "test",
+        stopReason: "stop",
+        timestamp: 2,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+    ]);
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {

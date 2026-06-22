@@ -85,6 +85,10 @@ function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
   return toolsAllow.some((entry) => normalizeToolName(entry) === "*");
 }
 
+export function isRestrictiveEmbeddedAttemptToolsAllow(toolsAllow?: string[]): boolean {
+  return toolsAllow !== undefined && !hasWildcardToolAllowlist(toolsAllow);
+}
+
 function isKnownLocalCodingToolName(normalized: string): boolean {
   // Unknown non-bundle names are treated as plugin tools so installed plugin
   // catalog entries still materialize under narrow allowlists.
