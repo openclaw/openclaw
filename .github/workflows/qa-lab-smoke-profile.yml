@@ -88,8 +88,9 @@ jobs:
           INPUT_QA_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.qa_profile || 'smoke-ci' }}
           INPUT_SURFACE: ${{ github.event_name == 'workflow_dispatch' && inputs.surface || '' }}
           INPUT_CATEGORY: ${{ github.event_name == 'workflow_dispatch' && inputs.category || '' }}
-          INPUT_SCENARIO_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario_id || '' }}
-          INPUT_CONCURRENCY: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrency || '8' }}
+          INPUT_SCENARIO_ID: ${{ github.event_name == 'pull_request' && 'dm-chat-baseline' || inputs.scenario_id || '' }}
+          INPUT_CHANNEL_DRIVER: ${{ github.event_name == 'pull_request' && 'crabline' || '' }}
+          INPUT_CONCURRENCY: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrency || '1' }}
           INPUT_EVIDENCE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.evidence_mode || 'slim' }}
           INPUT_FAST: ${{ github.event_name != 'workflow_dispatch' || inputs.fast }}
         run: |
@@ -112,6 +113,9 @@ jobs:
               --concurrency "$INPUT_CONCURRENCY"
               --output-dir "$output_dir"
             )
+            if [[ -n "$INPUT_CHANNEL_DRIVER" ]]; then
+              command+=(--channel-driver "$INPUT_CHANNEL_DRIVER")
+            fi
           else
             command=(
               pnpm openclaw qa run
@@ -130,9 +134,6 @@ jobs:
             fi
           fi
 
-          # After the Crabline channel-driver PR lands, this profile can add:
-          #   --channel-driver crabline
-          # The current branch intentionally stays main-compatible.
           if [[ "$INPUT_FAST" == "true" ]]; then
             command+=(--fast)
           fi
