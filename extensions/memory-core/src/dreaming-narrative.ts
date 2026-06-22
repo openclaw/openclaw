@@ -66,6 +66,12 @@ type Logger = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
+const LANGUAGE_INSTRUCTIONS: Record<string, string> = {
+  "zh-CN": "IMPORTANT: Write entries in Chinese (\u4e2d\u6587). Use first-person poetic prose in Chinese.",
+  "zh-TW": "IMPORTANT: Write entries in Chinese (\u4e2d\u6587). Use first-person poetic prose in Chinese.",
+  "ja-JP": "IMPORTANT: Write entries in Japanese. Use first-person poetic prose in Japanese.",
+};
+
 const NARRATIVE_SYSTEM_PROMPT = [
   "You are keeping a dream diary. Write a single entry in first person.",
   "",
@@ -231,6 +237,20 @@ function formatNarrativeTerminalStatus(params: { status: string; error?: string 
   return detail ? `status=${params.status} (${detail})` : `status=${params.status}`;
 }
 
+function buildLanguageAwarePrompt(): string {
+  try {
+    const runtimeConfig = getRuntimeConfig();
+    const dreamingConfig = (runtimeConfig as any)?.plugins?.entries?.["memory-core"]?.config?.dreaming;
+    const language = dreamingConfig?.language;
+    if (language && LANGUAGE_INSTRUCTIONS[language]) {
+      return NARRATIVE_SYSTEM_PROMPT + "\n\n" + LANGUAGE_INSTRUCTIONS[language];
+    }
+  } catch {
+    // Best-effort: fall back to default English prompt.
+  }
+  return NARRATIVE_SYSTEM_PROMPT;
+}
+
 async function startNarrativeRunOrFallback(params: {
   subagent: SubagentSurface;
   sessionKey: string;
@@ -248,7 +268,7 @@ async function startNarrativeRunOrFallback(params: {
       sessionKey: params.sessionKey,
       message: params.message,
       ...(params.model ? { model: params.model } : {}),
-      extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      extraSystemPrompt: buildLanguageAwarePrompt(),
       lane: `dreaming-narrative:${params.sessionKey}`,
       lightContext: true,
       deliver: false,
