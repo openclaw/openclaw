@@ -542,7 +542,7 @@ function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
     toolOutputs: config.toolOutputs === true,
     systemPrompt: config.systemPrompt === true,
     toolDefinitions: config.toolDefinitions === true,
-    logBodies: false,
+    logBodies: config.logBodies === true,
   };
 }
 
