@@ -38,7 +38,7 @@ import {
   reconcileInspectableTasks,
   reconcileTaskLookupToken,
 } from "../tasks/task-registry.reconcile.js";
-import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
+import { summarizeTaskPressure, summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildTaskSystemAuditFindings,
@@ -341,6 +341,7 @@ export async function tasksListCommand(
           count: tasks.length,
           runtime: runtimeFilter ?? null,
           status: statusFilter ?? null,
+          summary: summarizeTaskPressure(tasks),
           tasks,
         },
         null,

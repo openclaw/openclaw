@@ -11,6 +11,7 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
+import { summarizeTaskPressure } from "../tasks/task-registry.summary.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tasksAuditJsonCommand, tasksListJsonCommand } from "./tasks-json.js";
@@ -110,8 +111,53 @@ describe("tasks JSON commands", () => {
         count: 1,
         runtime: "cli",
         status: "running",
+        summary: jsonRoundTrip(summarizeTaskPressure([cliTask])),
         tasks: [jsonRoundTrip(cliTask)],
       });
+    });
+  });
+
+  it("separates active and terminal session_queued delivery rows in JSON summaries", async () => {
+    await withTaskJsonStateDir(async () => {
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-terminal-session-queued",
+        status: "succeeded",
+        deliveryStatus: "session_queued",
+        task: "Terminal delivery routed through requester session",
+      });
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-active-session-queued",
+        status: "running",
+        deliveryStatus: "session_queued",
+        task: "Active delivery routed through requester session",
+      });
+
+      const runtime = createRuntime();
+      await tasksListJsonCommand({ json: true }, runtime);
+
+      const payload = readJsonLog(runtime) as {
+        summary: {
+          active: number;
+          terminal: number;
+          activeSessionQueued: number;
+          terminalSessionQueued: number;
+          activeDelivery: { session_queued: number };
+          terminalDelivery: { session_queued: number };
+        };
+      };
+
+      expect(payload.summary.active).toBe(1);
+      expect(payload.summary.terminal).toBe(1);
+      expect(payload.summary.activeSessionQueued).toBe(1);
+      expect(payload.summary.terminalSessionQueued).toBe(1);
+      expect(payload.summary.activeDelivery.session_queued).toBe(1);
+      expect(payload.summary.terminalDelivery.session_queued).toBe(1);
     });
   });
 

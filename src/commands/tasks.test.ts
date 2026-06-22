@@ -24,6 +24,7 @@ import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
+  tasksListCommand,
   tasksMaintenanceCommand,
   tasksShowCommand,
 } from "./tasks.js";
@@ -128,6 +129,53 @@ describe("tasks commands", () => {
     resetTaskFlowRegistryForTests({ persist: false });
     closeOpenClawAgentDatabasesForTest();
     mocks.callGateway.mockReset();
+  });
+
+  it("reports terminal session_queued rows separately from active work in list JSON", async () => {
+    await withTaskCommandStateDir(async () => {
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-terminal-session-queued",
+        status: "failed",
+        deliveryStatus: "session_queued",
+        task: "Terminal delivery routed through requester session",
+      });
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-running-pending",
+        status: "running",
+        deliveryStatus: "pending",
+        task: "Running pending delivery",
+      });
+
+      const runtime = createRuntime();
+      await tasksListCommand({ json: true }, runtime);
+
+      const payload = readFirstJsonLog(runtime) as {
+        summary: {
+          active: number;
+          terminal: number;
+          activeSessionQueued: number;
+          terminalSessionQueued: number;
+          byDeliveryStatus: { session_queued: number };
+          activeDelivery: { session_queued: number; pending: number };
+          terminalDelivery: { session_queued: number };
+        };
+      };
+
+      expect(payload.summary.active).toBe(1);
+      expect(payload.summary.terminal).toBe(1);
+      expect(payload.summary.byDeliveryStatus.session_queued).toBe(1);
+      expect(payload.summary.activeSessionQueued).toBe(0);
+      expect(payload.summary.terminalSessionQueued).toBe(1);
+      expect(payload.summary.activeDelivery.pending).toBe(1);
+      expect(payload.summary.activeDelivery.session_queued).toBe(0);
+      expect(payload.summary.terminalDelivery.session_queued).toBe(1);
+    });
   });
 
   it("keeps audit JSON stable and sorts combined findings before limiting", async () => {
