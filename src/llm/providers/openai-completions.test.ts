@@ -874,6 +874,47 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(eventTypes.filter((type) => type === "thinking_end")).toHaveLength(1);
   });
 
+  it("keeps one native reasoning block when content and reasoning co-occur", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [{ index: 0, delta: { reasoning_content: "First thought." } }],
+      },
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "Visible text that shares the reasoning chunk.",
+              reasoning_content: " Second thought.",
+            },
+          },
+        ],
+      },
+      makeTextChunk(" Final answer."),
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "medium",
+    });
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes.filter((type) => type === "thinking_start")).toHaveLength(1);
+    expect(eventTypes.filter((type) => type === "thinking_end")).toHaveLength(1);
+    expect(result.content).toContainEqual({
+      type: "thinking",
+      thinking: "First thought. Second thought.",
+      thinkingSignature: "reasoning_content",
+    });
+  });
+
   it("promotes silent tool_calls with finish_reason stop to toolUse", async () => {
     mockChunksRef.chunks = [
       makeToolCallChunk("call_1", "bash", '{"cmd":"ls"}'),

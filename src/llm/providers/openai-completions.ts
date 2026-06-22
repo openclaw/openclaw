@@ -265,8 +265,12 @@ export const streamOpenAICompletions: StreamFunction<
           thinkingBlock = null;
         }
       };
-      const appendTextDelta = (delta: string) => {
-        sealNativeReasoningBeforeText();
+      const appendTextDelta = (delta: string, hasNativeReasoning = false) => {
+        // Compatible endpoints can co-emit content and native reasoning in one chunk.
+        // Keep that reasoning block open; a later text-only chunk closes it.
+        if (!hasNativeReasoning) {
+          sealNativeReasoningBeforeText();
+        }
         const block = ensureTextBlock();
         block.text += delta;
         stream.push({
@@ -330,7 +334,7 @@ export const streamOpenAICompletions: StreamFunction<
           : reasoningTagTextPartitioner.pushVisible(text);
         for (const delta of routedDeltas) {
           if (delta.kind === "text") {
-            appendTextDelta(delta.text);
+            appendTextDelta(delta.text, hasMirroredReasoning);
           }
         }
       };
