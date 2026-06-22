@@ -17,7 +17,6 @@ import {
   resolveAssistantAttachmentAuthToken,
   switchChatSession,
 } from "../../ui/app-render.helpers.ts";
-import { scheduleChatScroll } from "../../ui/app-scroll.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadLocalAssistantIdentity } from "../../ui/storage.ts";
 import { isRenderableControlUiAvatarUrl } from "../../ui/views/agents-utils.ts";
@@ -32,6 +31,7 @@ import {
   scopedAgentParamsForSession,
   scopedAgentListParamsForSession,
 } from "./data.ts";
+import { scheduleChatScroll } from "./scroll.ts";
 import { createSessionWorkspaceProps } from "./session-workspace.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
 

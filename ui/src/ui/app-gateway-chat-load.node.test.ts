@@ -123,7 +123,7 @@ vi.mock("../pages/chat/data.ts", () => ({
   refreshChatAvatar: refreshChatAvatarMock,
 }));
 
-vi.mock("./app-scroll.ts", () => ({
+vi.mock("../pages/chat/scroll.ts", () => ({
   scheduleChatScroll: scheduleChatScrollMock,
 }));
 
@@ -183,7 +183,7 @@ afterAll(() => {
   vi.doUnmock("../app-routes.ts");
   vi.doUnmock("./gateway.ts");
   vi.doUnmock("../pages/chat/data.ts");
-  vi.doUnmock("./app-scroll.ts");
+  vi.doUnmock("../pages/chat/scroll.ts");
   vi.doUnmock("./app-settings.ts");
   vi.doUnmock("../pages/agents/data.ts");
   vi.doUnmock("./controllers/assistant-identity.ts");

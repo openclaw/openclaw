@@ -44,6 +44,7 @@ import {
   type ChatState,
 } from "../pages/chat/gateway.ts";
 import { reconcileChatRunLifecycle } from "../pages/chat/run-lifecycle.ts";
+import { scheduleChatScroll } from "../pages/chat/scroll.ts";
 import { parseChatSideResult, type ChatSideResult } from "../pages/chat/side-result.ts";
 import type { ChatQueueItem, ChatSessionRefreshTarget } from "../pages/chat/types.ts";
 import { loadDevices, type DevicesState } from "../pages/nodes/devices.ts";
@@ -56,7 +57,6 @@ import {
 } from "../pages/sessions/data.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { switchChatSession } from "./app-render.helpers.ts";
-import { scheduleChatScroll } from "./app-scroll.ts";
 import { applySettings, setLastActiveSessionKey, syncUrlWithSessionKey } from "./app-settings.ts";
 import {
   handleAgentEvent,

@@ -1,6 +1,5 @@
 import type { SettingsAppHost, SettingsHost } from "../app/app-host.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../lib/session-key.ts";
-import { scheduleChatScroll } from "../ui/app-scroll.ts";
 import { loadModelAuthStatusState } from "../ui/controllers/model-auth-status.ts";
 import { loadAgents } from "./agents/data.ts";
 import {
@@ -8,6 +7,7 @@ import {
   refreshChat,
   scopedAgentListParamsForSession,
 } from "./chat/data.ts";
+import { scheduleChatScroll } from "./chat/scroll.ts";
 import { loadConfig, loadConfigSchema } from "./config/data.ts";
 import {
   loadDreamDiary,

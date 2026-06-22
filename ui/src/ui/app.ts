@@ -9,6 +9,10 @@ import { resolveAgentIdFromSessionKey } from "../lib/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import {
+  handleActivityScroll as handleActivityScrollInternal,
+  scheduleActivityScroll as scheduleActivityScrollInternal,
+} from "../pages/activity/scroll.ts";
+import {
   loadToolsEffective as loadToolsEffectiveInternal,
   refreshVisibleToolsEffectiveForCurrentSession as refreshVisibleToolsEffectiveForCurrentSessionInternal,
 } from "../pages/agents/data.ts";
@@ -56,6 +60,11 @@ import {
   type RealtimeTalkStatus,
 } from "../pages/chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "../pages/chat/run-lifecycle.ts";
+import {
+  handleChatScroll as handleChatScrollInternal,
+  resetChatScroll as resetChatScrollInternal,
+  scheduleChatScroll as scheduleChatScrollInternal,
+} from "../pages/chat/scroll.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { ChatSideResult } from "../pages/chat/side-result.ts";
 import type { ChatStreamSegment } from "../pages/chat/stream-text.ts";
@@ -87,13 +96,6 @@ import {
 import { initNativeBridge } from "./app-native-bridge.ts";
 import { createChatSession as createChatSessionInternal } from "./app-render.helpers.ts";
 import { renderApp } from "./app-render.ts";
-import {
-  handleActivityScroll as handleActivityScrollInternal,
-  handleChatScroll as handleChatScrollInternal,
-  resetChatScroll as resetChatScrollInternal,
-  scheduleActivityScroll as scheduleActivityScrollInternal,
-  scheduleChatScroll as scheduleChatScrollInternal,
-} from "./app-scroll.ts";
 import {
   applySettings as applySettingsInternal,
   applyLocalUserIdentity as applyLocalUserIdentityInternal,

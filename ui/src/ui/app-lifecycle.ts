@@ -1,5 +1,6 @@
 import { appRouter, type ApplicationContext, startAppRouter } from "../app-routes.ts";
 import { createBrowserHistory } from "../app/browser.ts";
+import { observeTopbar } from "../app/topbar.ts";
 import {
   persistChatComposerState,
   restoreChatComposerState,
@@ -11,7 +12,6 @@ import { stopNodesPolling } from "../pages/nodes/polling.ts";
 import { stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "../pages/workboard/data.ts";
 // Control UI module implements app lifecycle behavior.
 import { connectGateway } from "./app-gateway.ts";
-import { observeTopbar } from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
   detachThemeListener,

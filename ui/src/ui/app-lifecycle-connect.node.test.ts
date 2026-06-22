@@ -53,7 +53,7 @@ vi.mock("../pages/nodes/polling.ts", () => ({
   stopNodesPolling: vi.fn(),
 }));
 
-vi.mock("./app-scroll.ts", () => ({
+vi.mock("../app/topbar.ts", () => ({
   observeTopbar: vi.fn(),
 }));
 

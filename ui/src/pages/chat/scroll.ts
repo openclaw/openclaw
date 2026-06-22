@@ -1,5 +1,5 @@
 // Control UI module implements app scroll behavior.
-import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
+import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "../../ui/storage.ts";
 
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
@@ -7,10 +7,9 @@ const FOLLOW_REACQUIRE_THRESHOLD = 8;
 const HEADER_HIDE_SCROLL_DELTA = 12;
 const HEADER_SHOW_TOP_THRESHOLD = 24;
 
-type ScrollHost = {
+type ChatScrollHost = {
   updateComplete: Promise<unknown>;
   querySelector: (selectors: string) => Element | null;
-  style: CSSStyleDeclaration;
   chatScrollFrame: number | null;
   chatScrollTimeout: number | null;
   chatLastScrollTop: number;
@@ -24,13 +23,9 @@ type ScrollHost = {
   settings?: {
     chatAutoScroll?: ChatAutoScrollMode;
   };
-  activityScrollFrame?: number | null;
-  activityAutoFollow?: boolean;
-  activityAtBottom?: boolean;
-  topbarObserver: ResizeObserver | null;
 };
 
-function queryHost(host: Partial<ScrollHost>, selectors: string): Element | null {
+function queryHost(host: Partial<ChatScrollHost>, selectors: string): Element | null {
   return typeof host.querySelector === "function" ? host.querySelector(selectors) : null;
 }
 
@@ -39,7 +34,7 @@ type ChatScrollOptions = {
 };
 
 export function scheduleChatScroll(
-  host: ScrollHost,
+  host: ChatScrollHost,
   force = false,
   smooth = false,
   options: ChatScrollOptions = {},
@@ -147,33 +142,7 @@ export function scheduleChatScroll(
   });
 }
 
-export function scheduleActivityScroll(host: ScrollHost, force = false) {
-  if (host.activityScrollFrame) {
-    cancelAnimationFrame(host.activityScrollFrame);
-  }
-  void host.updateComplete.then(() => {
-    host.activityScrollFrame = requestAnimationFrame(() => {
-      host.activityScrollFrame = null;
-      const container = queryHost(host, ".activity-stream") as HTMLElement | null;
-      if (!container) {
-        return;
-      }
-      const distanceFromBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight;
-      const shouldStick =
-        force ||
-        (host.activityAutoFollow !== false &&
-          (host.activityAtBottom !== false || distanceFromBottom < 120));
-      if (!shouldStick) {
-        return;
-      }
-      container.scrollTop = container.scrollHeight;
-      host.activityAtBottom = true;
-    });
-  });
-}
-
-export function handleChatScroll(host: ScrollHost, event: Event) {
+export function handleChatScroll(host: ChatScrollHost, event: Event) {
   const container = event.currentTarget as HTMLElement | null;
   if (!container) {
     return;
@@ -218,16 +187,7 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   }
 }
 
-export function handleActivityScroll(host: ScrollHost, event: Event) {
-  const container = event.currentTarget as HTMLElement | null;
-  if (!container) {
-    return;
-  }
-  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  host.activityAtBottom = distanceFromBottom < 120;
-}
-
-export function resetChatScroll(host: ScrollHost) {
+export function resetChatScroll(host: ChatScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
   host.chatFollowLocked = false;
@@ -236,21 +196,4 @@ export function resetChatScroll(host: ScrollHost) {
   host.chatNewMessagesBelow = false;
   host.chatIsProgrammaticScroll = false;
   host.chatProgrammaticScrollTarget = 0;
-}
-
-export function observeTopbar(host: ScrollHost) {
-  if (typeof ResizeObserver === "undefined") {
-    return;
-  }
-  const topbar = queryHost(host, ".topbar");
-  if (!topbar) {
-    return;
-  }
-  const update = () => {
-    const { height } = topbar.getBoundingClientRect();
-    host.style.setProperty("--topbar-height", `${height}px`);
-  };
-  update();
-  host.topbarObserver = new ResizeObserver(() => update());
-  host.topbarObserver.observe(topbar);
 }
