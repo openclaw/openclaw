@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectManifestModelIdNormalizationPolicies,
   normalizeConfiguredProviderCatalogModelId,
+  normalizeProviderModelIdWithPolicies,
   normalizeStaticProviderModelIdWithPolicies,
   stripSelfProviderModelPrefix,
 } from "./provider-model-id-normalization.js";
@@ -87,5 +88,37 @@ describe("provider model id policy normalization", () => {
     expect(stripSelfProviderModelPrefix("vercel-ai-gateway", "vercel-ai-gateway/opus-4.6")).toBe(
       "opus-4.6",
     );
+  });
+
+  describe("stripPrefixes whitespace handling", () => {
+    it("trims leading whitespace from stripPrefixes entry", () => {
+      const policies = new Map([["openai", { stripPrefixes: [" openai/"], aliases: undefined }]]);
+      const result = normalizeProviderModelIdWithPolicies({
+        provider: "openai",
+        policies,
+        context: { modelId: "openai/gpt-4" },
+      });
+      expect(result).toBe("gpt-4");
+    });
+
+    it("trims trailing whitespace from stripPrefixes entry", () => {
+      const policies = new Map([["openai", { stripPrefixes: ["openai/ "], aliases: undefined }]]);
+      const result = normalizeProviderModelIdWithPolicies({
+        provider: "openai",
+        policies,
+        context: { modelId: "openai/gpt-4" },
+      });
+      expect(result).toBe("gpt-4");
+    });
+
+    it("handles whitespace-free prefix without regression", () => {
+      const policies = new Map([["openai", { stripPrefixes: ["openai/"], aliases: undefined }]]);
+      const result = normalizeProviderModelIdWithPolicies({
+        provider: "openai",
+        policies,
+        context: { modelId: "openai/gpt-4" },
+      });
+      expect(result).toBe("gpt-4");
+    });
   });
 });
