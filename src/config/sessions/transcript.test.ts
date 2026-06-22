@@ -1765,7 +1765,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
     const raw = fs.readFileSync(sessionFile, "utf-8");
     expect(raw).not.toContain("ya29.fake-access-token");
-    expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
+    // App passwords in generic text fields are not redacted
+    // per the narrowing in #94254 to Apple/iCloud-specific fields only
+    expect(raw).toContain("abcd-efgh-ijkl-mnop");
     expect(raw).not.toContain("AIzaSyD-very-real-looking");
     expect(raw).not.toContain("1//0fake-refresh-token");
   });

@@ -232,7 +232,9 @@ describe("config io audit helpers", () => {
     );
     expect(raw).not.toContain("AIzaSyD-very-real-looking");
     expect(raw).not.toContain("ya29.fake-access-token");
-    expect(raw).not.toContain("abcd-efgh-ijkl-mnop");
+    // App passwords in generic errorMessage fields are not redacted
+    // per the narrowing in #94254 to Apple/iCloud-specific fields only
+    expect(raw).toContain("abcd-efgh-ijkl-mnop");
   });
 
   it("redacts argv values that follow known secret flag names", () => {
