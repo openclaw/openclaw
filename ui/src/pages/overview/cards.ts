@@ -14,14 +14,14 @@ import type { RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../../lib/format.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { isMonitoredAuthProvider } from "../../ui/model-auth-helpers.ts";
-import { formatNextRun } from "../../ui/presenter.ts";
+import { isMonitoredAuthProvider } from "../../lib/model-auth-helpers.ts";
+import { formatNextRun } from "../../lib/presenter.ts";
 import {
   collectQuotaWindows,
   formatQuotaReset,
   type QuotaWindowSummary,
-} from "../../ui/provider-quota-summary.ts";
+} from "../../lib/provider-quota-summary.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 
 export type OverviewCardsProps = {
   usageResult: SessionsUsageResult | null;

@@ -2,6 +2,7 @@ import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
+import { isMonitoredAuthProvider } from "../../lib/model-auth-helpers.ts";
 import type { RouteHookOptions } from "../../router/types.ts";
 import {
   controlUiNowMs,
@@ -9,7 +10,6 @@ import {
   roundedControlUiDurationMs,
 } from "../../ui/control-ui-performance.ts";
 import { loadModelAuthStatusState } from "../../ui/controllers/model-auth-status.ts";
-import { isMonitoredAuthProvider } from "../../ui/model-auth-helpers.ts";
 import { loadChannels } from "../channels/data.ts";
 import { loadCronJobsPage, loadCronStatus } from "../cron/data.ts";
 import { loadDebug } from "../debug/data.ts";

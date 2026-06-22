@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import { formatEventPayload } from "../../ui/presenter.ts";
+import { formatEventPayload } from "../../lib/presenter.ts";
 
 export type DebugProps = {
   loading: boolean;
