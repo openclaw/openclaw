@@ -68,6 +68,11 @@ import {
   isSilentOverflowProneModel,
 } from "../agent-settings.js";
 import { createOpenClawCodingTools, resolveProcessToolScopeKey } from "../agent-tools.js";
+import {
+  ensureAuthProfileStore,
+  externalCliDiscoveryForProviderAuth,
+  resolveAuthProfileOrder,
+} from "../auth-profiles.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import {
   makeBootstrapWarn,
@@ -459,6 +464,132 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactRe
   };
 }
 
+function resolveCompactionAuthProfileCandidates(params: {
+  params: CompactEmbeddedAgentSessionParams;
+  provider: string;
+  agentDir: string;
+}): string[] | null {
+  const preferredProfile = params.params.authProfileId?.trim();
+  if (!preferredProfile || params.params.authProfileIdSource !== "auto") {
+    return null;
+  }
+  const store = ensureAuthProfileStore(params.agentDir, {
+    externalCli: externalCliDiscoveryForProviderAuth({
+      cfg: params.params.config,
+      provider: params.provider,
+      profileId: preferredProfile,
+      preferredProfile,
+    }),
+  });
+  const orderedProfiles = resolveAuthProfileOrder({
+    cfg: params.params.config,
+    store,
+    provider: params.provider,
+    preferredProfile,
+  });
+  const candidates = [
+    preferredProfile,
+    ...orderedProfiles.filter((profileId) => profileId !== preferredProfile),
+  ];
+  return candidates.length > 1 ? candidates : null;
+}
+
+function shouldRetryCompactionWithNextAuthProfile(result: EmbeddedAgentCompactResult): boolean {
+  if (result.ok) {
+    return false;
+  }
+  return result.failure?.reason === "rate_limit" || result.failure?.reason === "overloaded";
+}
+
+type CompactionRetryTranscriptState = Awaited<
+  ReturnType<typeof readSessionLeafStateFromTranscriptAsync>
+>;
+
+async function readCompactionRetryTranscriptState(
+  sessionFile: string,
+): Promise<CompactionRetryTranscriptState | undefined> {
+  try {
+    return await readSessionLeafStateFromTranscriptAsync(sessionFile);
+  } catch {
+    return undefined;
+  }
+}
+
+function isSameCompactionRetryTranscriptState(
+  left: CompactionRetryTranscriptState | undefined,
+  right: CompactionRetryTranscriptState | undefined,
+): boolean {
+  if (left === undefined || right === undefined) {
+    return true;
+  }
+  return left?.entryId === right?.entryId && left?.leafId === right?.leafId;
+}
+
+async function compactEmbeddedAgentSessionDirectWithAuthProfileFailover(
+  params: CompactEmbeddedAgentSessionParams,
+): Promise<EmbeddedAgentCompactResult> {
+  const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
+    config: params.config,
+    provider: params.provider,
+    modelId: params.model,
+    authProfileId: params.authProfileId,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const provider = resolvedCompactionTarget.provider ?? DEFAULT_PROVIDER;
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
+  const authProfileCandidates = resolveCompactionAuthProfileCandidates({
+    params,
+    provider,
+    agentDir,
+  });
+  if (!authProfileCandidates) {
+    return await compactEmbeddedAgentSessionDirectOnce(params);
+  }
+
+  const diagId = params.diagId?.trim() || createCompactionDiagId();
+  const initialTranscriptState = await readCompactionRetryTranscriptState(params.sessionFile);
+  let lastResult: EmbeddedAgentCompactResult | null = null;
+  for (let index = 0; index < authProfileCandidates.length; index += 1) {
+    const authProfileId = authProfileCandidates[index];
+    if (index > 0) {
+      const currentTranscriptState = await readCompactionRetryTranscriptState(params.sessionFile);
+      if (!isSameCompactionRetryTranscriptState(initialTranscriptState, currentTranscriptState)) {
+        log.warn(
+          `[compaction] stopping same-provider auth profile retry because transcript changed ` +
+            `during compaction attempt diagId=${diagId}`,
+        );
+        return lastResult ?? (await compactEmbeddedAgentSessionDirectOnce(params));
+      }
+    }
+    const result = await compactEmbeddedAgentSessionDirectOnce({
+      ...params,
+      diagId,
+      authProfileId,
+      authProfileIdSource: "auto",
+    });
+    if (result.ok || index === authProfileCandidates.length - 1) {
+      return result;
+    }
+    lastResult = result;
+    if (!shouldRetryCompactionWithNextAuthProfile(result)) {
+      return result;
+    }
+    log.warn(
+      `[compaction] ${provider} auth profile ${authProfileId} failed with ${result.failure?.reason}; ` +
+        `retrying compaction with next same-provider auth profile ` +
+        `(${index + 2}/${authProfileCandidates.length}) diagId=${diagId}`,
+    );
+  }
+
+  return lastResult ?? (await compactEmbeddedAgentSessionDirectOnce(params));
+}
+
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
@@ -467,7 +598,7 @@ export async function compactEmbeddedAgentSessionDirect(
   params: CompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
   if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
-    return await compactEmbeddedAgentSessionDirectOnce(params);
+    return await compactEmbeddedAgentSessionDirectWithAuthProfileFailover(params);
   }
   const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
     config: params.config,
@@ -515,12 +646,16 @@ export async function compactEmbeddedAgentSessionDirect(
         const preservesPrimaryAuth =
           provider === primaryProvider || provider === requestedPrimaryProvider;
         const authProfileId = preservesPrimaryAuth ? params.authProfileId : undefined;
-        return await compactEmbeddedAgentSessionDirectOnce({
+        const nextParams = {
           ...params,
           provider,
           model,
           authProfileId,
-        });
+          authProfileIdSource: preservesPrimaryAuth ? params.authProfileIdSource : undefined,
+        };
+        return preservesPrimaryAuth
+          ? await compactEmbeddedAgentSessionDirectWithAuthProfileFailover(nextParams)
+          : await compactEmbeddedAgentSessionDirectOnce(nextParams);
       },
     });
     return fallbackResult.result;
@@ -664,6 +799,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       model: runtimeModel,
       cfg: params.config,
       profileId: authProfileId,
+      lockedProfile: params.authProfileIdSource === "user",
       agentDir,
       workspaceDir: resolvedWorkspace,
     });

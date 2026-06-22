@@ -83,6 +83,18 @@ export const resolveSessionAgentIdsMock = vi.fn(() => ({
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 export const resolveContextWindowInfoMock = vi.fn(() => ({ tokens: 128_000 }));
+export const ensureAuthProfileStoreMock = vi.fn(() => ({ profiles: {}, order: {} }));
+export const externalCliDiscoveryForProviderAuthMock = vi.fn(() => ({ mode: "scoped" }));
+export const resolveAuthProfileOrderMock = vi.fn((): string[] => []);
+export const getApiKeyForModelMock = vi.fn(async () => ({
+  apiKey: "test",
+  mode: "env",
+  source: "test harness",
+}));
+type MockSessionLeafState = { entryId: string; leafId: string | null } | null;
+export const readSessionLeafStateFromTranscriptAsyncMock = vi.fn(
+  async (): Promise<MockSessionLeafState> => null,
+);
 function createDefaultSessionMessages(): unknown[] {
   return [
     { role: "user", content: "hello", timestamp: 1 },
@@ -337,6 +349,20 @@ export function resetCompactSessionStateMocks(): void {
   resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
   resolveContextWindowInfoMock.mockReset();
   resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
+  ensureAuthProfileStoreMock.mockReset();
+  ensureAuthProfileStoreMock.mockReturnValue({ profiles: {}, order: {} });
+  externalCliDiscoveryForProviderAuthMock.mockReset();
+  externalCliDiscoveryForProviderAuthMock.mockReturnValue({ mode: "scoped" });
+  resolveAuthProfileOrderMock.mockReset();
+  resolveAuthProfileOrderMock.mockReturnValue([]);
+  getApiKeyForModelMock.mockReset();
+  getApiKeyForModelMock.mockResolvedValue({
+    apiKey: "test",
+    mode: "env",
+    source: "test harness",
+  });
+  readSessionLeafStateFromTranscriptAsyncMock.mockReset();
+  readSessionLeafStateFromTranscriptAsyncMock.mockResolvedValue(null);
   rotateTranscriptAfterCompactionMock.mockReset();
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
   enqueueCommandInLaneMock.mockReset();
@@ -543,13 +569,30 @@ export async function loadCompactHooksHarness(): Promise<{
       (auth: { mode: string; source: string }, provider: string) =>
         `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
     ),
-    getApiKeyForModel: vi.fn(async () => ({
-      apiKey: "test",
-      mode: "env",
-      source: "test harness",
-    })),
+    getApiKeyForModel: getApiKeyForModelMock,
     resolveModelAuthMode: vi.fn(() => "env"),
   }));
+
+  vi.doMock("../../gateway/session-compaction-checkpoints.js", async () => {
+    const actual = await vi.importActual<
+      typeof import("../../gateway/session-compaction-checkpoints.js")
+    >("../../gateway/session-compaction-checkpoints.js");
+    return {
+      ...actual,
+      readSessionLeafStateFromTranscriptAsync: readSessionLeafStateFromTranscriptAsyncMock,
+    };
+  });
+
+  vi.doMock("../auth-profiles.js", async () => {
+    const actual =
+      await vi.importActual<typeof import("../auth-profiles.js")>("../auth-profiles.js");
+    return {
+      ...actual,
+      ensureAuthProfileStore: ensureAuthProfileStoreMock,
+      externalCliDiscoveryForProviderAuth: externalCliDiscoveryForProviderAuthMock,
+      resolveAuthProfileOrder: resolveAuthProfileOrderMock,
+    };
+  });
 
   vi.doMock("../sandbox.js", () => ({
     resolveSandboxContext: resolveSandboxContextMock,

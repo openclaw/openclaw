@@ -33,6 +33,7 @@ type EmbeddedCompactionRuntimeContext = {
   currentThreadTs?: string;
   currentMessageId?: string | number;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
   agentHarnessId?: string;
   workspaceDir: string;
   cwd?: string;
@@ -247,6 +248,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
   authProfileId?: string | null;
+  authProfileIdSource?: "auto" | "user";
   workspaceDir: string;
   cwd?: string | null;
   agentDir: string;
@@ -290,6 +292,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
     authProfileId: resolved.authProfileId,
+    authProfileIdSource: params.authProfileIdSource,
     agentHarnessId,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
