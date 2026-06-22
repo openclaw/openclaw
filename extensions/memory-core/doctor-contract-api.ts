@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   ensureMemoryIndexSchema,
   importLegacyMemorySidecarIndex,
+  loadSqliteVecExtension,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -156,7 +157,7 @@ async function migrateLegacyMemorySidecarSource(params: {
 }): Promise<void> {
   await fs.mkdir(path.dirname(params.source.agentDatabasePath), { recursive: true });
   const sqlite = requireNodeSqlite();
-  const db = new sqlite.DatabaseSync(params.source.agentDatabasePath);
+  const db = new sqlite.DatabaseSync(params.source.agentDatabasePath, { allowExtension: true });
   try {
     const migrationEnv = {
       ...params.env,
@@ -169,6 +170,7 @@ async function migrateLegacyMemorySidecarSource(params: {
       register: true,
     });
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+    await loadSqliteVecExtension({ db });
     const result = importLegacyMemorySidecarIndex({
       db,
       legacySidecarDatabasePath: params.source.legacyPath,

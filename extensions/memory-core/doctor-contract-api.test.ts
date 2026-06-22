@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  ensureMemoryIndexSchema,
+  loadSqliteVecExtension,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -20,6 +23,7 @@ import {
   configureMemoryCoreDreamingState,
   resetMemoryCoreDreamingStateForTests,
 } from "./src/dreaming-state.js";
+import { searchVector } from "./src/memory/manager-search.js";
 import { testing as shortTermTesting } from "./src/short-term-promotion.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
@@ -43,7 +47,14 @@ function legacyMemoryIndexMigration() {
   return migration;
 }
 
-async function writeLegacyMemorySidecar(legacyPath: string): Promise<void> {
+function vectorToBlob(embedding: number[]): Buffer {
+  return Buffer.from(new Float32Array(embedding).buffer);
+}
+
+async function writeLegacyMemorySidecar(
+  legacyPath: string,
+  params: { vector?: boolean } = {},
+): Promise<void> {
   await fs.mkdir(path.dirname(legacyPath), { recursive: true });
   const db = new DatabaseSync(legacyPath);
   try {
@@ -88,6 +99,13 @@ async function writeLegacyMemorySidecar(legacyPath: string): Promise<void> {
         'openai', 'embed-model', 'key', 'chunk-hash', '[1,0,0]', 3, 40
       );
     `);
+    if (params.vector) {
+      db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
+      db.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)").run(
+        "chunk-1",
+        vectorToBlob([1, 0, 0]),
+      );
+    }
   } finally {
     db.close();
   }
@@ -136,6 +154,27 @@ function readMemoryRows(agentPath: string) {
       chunks: db.prepare("SELECT id, text FROM memory_index_chunks").all(),
       cache: db.prepare("SELECT provider, hash FROM memory_embedding_cache").all(),
     };
+  } finally {
+    db.close();
+  }
+}
+
+async function searchMigratedVectorRows(agentPath: string) {
+  const db = new DatabaseSync(agentPath, { allowExtension: true });
+  try {
+    const loaded = await loadSqliteVecExtension({ db });
+    expect(loaded.ok, loaded.error).toBe(true);
+    return await searchVector({
+      db,
+      vectorTable: "memory_index_chunks_vec",
+      providerModel: "embed-model",
+      queryVec: [1, 0, 0],
+      limit: 1,
+      snippetMaxChars: 200,
+      ensureVectorReady: async () => true,
+      sourceFilterVec: { sql: "", params: [] },
+      sourceFilterChunks: { sql: "", params: [] },
+    });
   } finally {
     db.close();
   }
@@ -394,6 +433,23 @@ describe("memory-core doctor dreaming migration", () => {
       chunks: [{ id: "chunk-1", text: "remember this" }],
       cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("restores legacy sidecar vector rows for vector-backed search", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath, { vector: true });
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toContain(
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+    );
+    const rows = await searchMigratedVectorRows(agentPath);
+    expect(rows.map((row) => row.id)).toEqual(["chunk-1"]);
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
