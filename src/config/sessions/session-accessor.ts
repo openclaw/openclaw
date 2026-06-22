@@ -851,22 +851,6 @@ export async function persistSessionRolloverLifecycle(params: {
   };
 }
 
-/** Reads parsed transcript records from an explicit or derived transcript target. */
-export async function loadTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
-): Promise<TranscriptEvent[]> {
-  const transcript = await resolveTranscriptReadAccess(scope);
-  const events: TranscriptEvent[] = [];
-  for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
-    try {
-      events.push(JSON.parse(line) as TranscriptEvent);
-    } catch {
-      continue;
-    }
-  }
-  return events;
-}
-
 /**
  * Appends a non-message transcript record such as session or metadata events.
  * Message records must use appendTranscriptMessage so parent links, idempotency,
@@ -1781,32 +1765,6 @@ function resolveAccessStorePath(scope: SessionAccessScope): string {
     agentId,
     env: scope.env,
   });
-}
-
-async function resolveTranscriptReadAccess(scope: SessionTranscriptAccessScope): Promise<{
-  sessionFile: string;
-}> {
-  if (scope.sessionFile?.trim()) {
-    return { sessionFile: scope.sessionFile };
-  }
-  if (scope.sessionKey) {
-    return await resolveTranscriptAccess({ ...scope, sessionKey: scope.sessionKey });
-  }
-  if (scope.storePath) {
-    return {
-      sessionFile: resolveSessionTranscriptPathInDir(
-        scope.sessionId,
-        path.dirname(path.resolve(scope.storePath)),
-        scope.threadId,
-      ),
-    };
-  }
-  if (scope.agentId) {
-    return {
-      sessionFile: resolveSessionTranscriptPath(scope.sessionId, scope.agentId, scope.threadId),
-    };
-  }
-  throw new Error(`Cannot resolve transcript read scope without a session target`);
 }
 
 async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Promise<{

@@ -21,23 +21,24 @@ const MANUAL_EXEC_TOKEN = "proof-manual-exec-token";
 const PLUGIN_EXEC_TOKEN = "proof-plugin-exec-token";
 const OPENAI_PROFILE = "openai:secretref-proof";
 const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.5";
-const COMMAND_TIMEOUT_MS = readPositiveInt(
+const MAX_SECRET_PROOF_TIMER_TIMEOUT_MS = 2_147_000_000;
+const COMMAND_TIMEOUT_MS = readPositiveTimerMs(
   process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS,
   120000,
   "OPENCLAW_SECRET_PROOF_COMMAND_MS",
 );
 const COMMAND_TIMEOUT_KILL_GRACE_MS = 1000;
-const READY_TIMEOUT_MS = readPositiveInt(
+const READY_TIMEOUT_MS = readPositiveTimerMs(
   process.env.OPENCLAW_SECRET_PROOF_READY_MS,
   120000,
   "OPENCLAW_SECRET_PROOF_READY_MS",
 );
-const RPC_TIMEOUT_MS = readPositiveInt(
+const RPC_TIMEOUT_MS = readPositiveTimerMs(
   process.env.OPENCLAW_SECRET_PROOF_RPC_MS,
   15000,
   "OPENCLAW_SECRET_PROOF_RPC_MS",
 );
-const TEARDOWN_GRACE_MS = readPositiveInt(
+const TEARDOWN_GRACE_MS = readPositiveTimerMs(
   process.env.OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS,
   5000,
   "OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS",
@@ -99,6 +100,15 @@ function readPositiveInt(raw, fallback, label) {
     throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
   }
   return parsed;
+}
+
+function clampSecretProofTimerTimeoutMs(valueMs) {
+  const value = Number.isFinite(valueMs) ? valueMs : 1;
+  return Math.min(Math.max(1, Math.floor(value)), MAX_SECRET_PROOF_TIMER_TIMEOUT_MS);
+}
+
+function readPositiveTimerMs(raw, fallback, label) {
+  return clampSecretProofTimerTimeoutMs(readPositiveInt(raw, fallback, label));
 }
 
 function remainingDeadlineMs(started, timeoutMs) {
@@ -347,7 +357,7 @@ async function cleanupEnv(root, options = {}) {
 }
 
 function runCommand(command, args, options = {}) {
-  const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
+  const timeoutMs = clampSecretProofTimerTimeoutMs(options.timeoutMs ?? COMMAND_TIMEOUT_MS);
   return new Promise((resolve, reject) => {
     const usesProcessGroup = options.detached ?? process.platform !== "win32";
     const child = childProcess.spawn(command, args, {
@@ -1825,8 +1835,10 @@ async function runPtySecretsConfigurePreset(envCtx, options = {}) {
     let timedOut = false;
     let forceKillAt;
     let forceKillTimer;
-    const timeoutMs = options.timeoutMs ?? 60000;
-    const timeoutKillGraceMs = options.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS;
+    const timeoutMs = clampSecretProofTimerTimeoutMs(options.timeoutMs ?? 60000);
+    const timeoutKillGraceMs = clampSecretProofTimerTimeoutMs(
+      options.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS,
+    );
     const timer = setTimeout(() => {
       timedOut = true;
       signalPtyProcessTree(child, "SIGHUP");
@@ -2152,11 +2164,13 @@ async function main() {
 
 export {
   assertAllowedFailureCommandSucceeded,
+  clampSecretProofTimerTimeoutMs,
   collectBlockingProofResults,
   cleanupEnv,
   expectGatewayStartupFails,
   gatewayCall,
   parseJsonOutput,
+  readPositiveTimerMs,
   runPtySecretsConfigurePreset,
   runWithProof,
   runCommand,

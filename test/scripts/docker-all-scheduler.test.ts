@@ -4,7 +4,6 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
@@ -484,8 +483,8 @@ postgres Created
       )}`,
       env: process.env,
       label: "oversized-command-timeout",
-      timeoutKillGraceMs: MAX_TIMER_TIMEOUT_MS + 1,
-      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
     expect(result).toMatchObject({
@@ -502,7 +501,7 @@ postgres Created
       )}`,
       env: process.env,
       label: "oversized-no-output-timeout",
-      noOutputTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      noOutputTimeoutMs: Number.MAX_SAFE_INTEGER,
       timeoutMs: 5_000,
     });
 
@@ -520,8 +519,8 @@ postgres Created
       )}`,
       env: process.env,
       label: "oversized-capture-timeout",
-      timeoutKillGraceMs: MAX_TIMER_TIMEOUT_MS + 1,
-      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
     expect(result).toMatchObject({
@@ -609,7 +608,7 @@ setInterval(() => {}, 1000);
       command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
       env: process.env,
       label: "oversized-timeout-grace",
-      timeoutKillGraceMs: MAX_TIMER_TIMEOUT_MS + 1,
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
       timeoutMs: 500,
     });
 
