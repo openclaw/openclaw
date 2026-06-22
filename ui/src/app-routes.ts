@@ -129,7 +129,7 @@ export function createApplicationContext(
     navigate,
     preload: (routeId) => appRouter.preloadRoute(routeId, loadContext),
     notifyStateChange: (state, changed) => {
-      const active = appRouter.getState().matches[0]?.module;
+      const active = routeSnapshot.get().active?.module;
       if (active && "onStateChange" in active && typeof active.onStateChange === "function") {
         active.onStateChange({ state, navigate }, changed);
       }
