@@ -343,6 +343,7 @@ describe("openrouter-model-capabilities", () => {
       expect(pullCount).toBeLessThanOrEqual(2);
       expect(cancel).toHaveBeenCalledOnce();
       expect(module.getOpenRouterModelCapabilities("acme/anything")).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
     });
   });
 

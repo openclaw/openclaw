@@ -298,12 +298,17 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
 export function getOpenRouterModelCapabilities(
   modelId: string,
 ): OpenRouterModelCapabilities | undefined {
-  ensureOpenRouterModelCache();
+  // A failed awaited load, such as an oversized catalog body, already attempted
+  // a refresh. Do not let the follow-up sync lookup immediately retry it.
+  const skipMissRefresh = skipNextMissRefresh.delete(modelId);
+  if (!skipMissRefresh) {
+    ensureOpenRouterModelCache();
+  }
   const result = cache?.get(modelId);
 
   // Model not found but cache exists — may be a newly added model.
   // Trigger a refresh so the next call picks it up.
-  if (!result && skipNextMissRefresh.delete(modelId)) {
+  if (!result && skipMissRefresh) {
     return undefined;
   }
   if (!result && cache && !fetchInFlight) {
