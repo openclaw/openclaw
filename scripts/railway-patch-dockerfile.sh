@@ -1,37 +1,41 @@
 #!/usr/bin/env bash
-# Idempotently patch the OpenClaw Dockerfile for Railway compatibility.
-# Single source of truth for the Railway-specific Dockerfile changes; called by
-# .github/workflows/upstream-sync.yml after merging a new upstream release, and
-# mirrors the logic in .github/workflows/railway-compat.yml. Safe to run twice.
+# Railway compatibility for the OpenClaw Dockerfile.
+#
+# Railway's builder is BuildKit-based and supports cache AND bind mounts, so we
+# DO NOT strip mounts anymore (that was the old breakage). We append, as a
+# marker-guarded block at the END of the file (so it survives any upstream
+# Dockerfile restructure):
+#   1. the PaaS Control UI config (host-header fallback + skip device auth), and
+#   2. a root entrypoint that chowns the root-owned Railway volume, then drops to
+#      the node user to start the gateway on $PORT.
+# Safe to run repeatedly (guarded by the marker).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 [ -f Dockerfile ] || { echo "no Dockerfile, nothing to patch"; exit 0; }
 
-# 1) Strip BuildKit cache mounts — Railway's builder does not support them.
-if grep -q '\-\-mount=type=cache' Dockerfile; then
-  sed -i 's/ *--mount=type=cache[^ ]* *\\\?//g' Dockerfile
-  sed -i '/^RUN \\$/d' Dockerfile
-  sed -i '/^[[:space:]]*\\$/d' Dockerfile
-  echo "patched: stripped BuildKit cache mounts"
+MARKER_START="# >>> railway-paas-control-ui >>>"
+if grep -qF "$MARKER_START" Dockerfile; then
+  echo "patched: Railway block already present (idempotent no-op)"
+  exit 0
 fi
 
-# 2) PaaS gateway config — host-header origin fallback for the Control UI.
-if ! grep -q 'dangerouslyAllowHostHeaderOriginFallback' Dockerfile; then
-  sed -i '/^USER node$/i \
-# PaaS gateway config: allow host-header origin fallback for the Control UI\
-# since Railway\/Render\/Fly proxy traffic through their own domains.\
-RUN mkdir -p \/app\/.openclaw \&\& \\\
-    printf '"'"'{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}}}\\n'"'"' \\\
-      > \/app\/.openclaw\/openclaw.json \&\& \\\
-    chown -R node:node \/app\/.openclaw\
-ENV OPENCLAW_CONFIG_PATH=\/app\/.openclaw\/openclaw.json\
-' Dockerfile
-  echo "patched: restored PaaS gateway config"
-fi
+cat >> Dockerfile <<'BLOCK'
 
-# 3) Railway-compatible HEALTHCHECK + CMD — honor $PORT and bind to lan (0.0.0.0).
-sed -i '/^HEALTHCHECK/,/CMD node/{
-  s|CMD node -e "fetch(.http://127.0.0.1:18789/healthz.).*|CMD node -e "const p=process.env.PORT\|\|18789;fetch('"'"'http://127.0.0.1:'"'"'+p+'"'"'/healthz'"'"').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"|
-}' Dockerfile
-sed -i 's|^CMD \["node", "openclaw.mjs", "gateway", "--allow-unconfigured"\]|CMD ["sh", "-c", "exec node --max-old-space-size=4096 openclaw.mjs gateway --bind lan --port ${PORT:-18789} --allow-unconfigured"]|' Dockerfile
-echo "patched: ensured Railway-compatible CMD and HEALTHCHECK"
+# >>> railway-paas-control-ui >>>
+# Railway/Render/Fly proxy traffic through their own domains, so allow the
+# Control UI host-header origin fallback and skip device auth. Appended by
+# scripts/railway-patch-dockerfile.sh (marker-guarded; safe to re-run).
+USER root
+RUN mkdir -p /app/.openclaw \
+ && printf '{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}}}\n' > /app/.openclaw/openclaw.json \
+ && chown -R node:node /app/.openclaw
+ENV OPENCLAW_CONFIG_PATH=/app/.openclaw/openclaw.json
+# Railway volumes mount root-owned; this entrypoint (run as root) chowns the
+# mounted state dir, then drops to the unprivileged node user to start the gateway.
+COPY scripts/railway-entrypoint.sh /usr/local/bin/railway-entrypoint.sh
+RUN chmod +x /usr/local/bin/railway-entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/railway-entrypoint.sh"]
+CMD []
+# <<< railway-paas-control-ui <<<
+BLOCK
+echo "patched: appended Railway PaaS config + volume-perms entrypoint"
