@@ -373,6 +373,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
       } as never,
       runtime: { log: vi.fn() } as never,
+      workspaceDir: "/tmp/workspace",
     });
 
     expect(select).not.toHaveBeenCalled();
@@ -410,6 +411,7 @@ describe("ensureOnboardingPluginInstalled", () => {
         reason: "source-changed",
         policyPluginIds: ["demo-plugin"],
         traceCommand: "onboarding-plugin-install",
+        workspaceDir: "/tmp/workspace",
       }),
     );
   });

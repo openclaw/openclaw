@@ -826,6 +826,7 @@ async function installPluginFromOverride(params: {
   override: PluginInstallOverride;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  workspaceDir?: string;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime } = params;
   runtime.log?.(
@@ -944,7 +945,7 @@ async function installPluginFromOverride(params: {
       pluginId: result.pluginId,
       status: "installed",
     },
-    { runtime: params.runtime, pluginId: result.pluginId },
+    { runtime: params.runtime, workspaceDir: params.workspaceDir, pluginId: result.pluginId },
   );
 }
 
@@ -1043,6 +1044,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       override: installOverride,
       prompter,
       runtime,
+      workspaceDir,
     });
   }
   const allowLocal = hasGitWorkspace(workspaceDir);
