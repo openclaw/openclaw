@@ -279,6 +279,32 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   sentinelPersisted: boolean;
   restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | undefined;
 }> {
+  // Defense-in-depth invariant for sandpaw-ai#326: a rejected `config.patch` /
+  // `config.apply` must never reach the restart scheduler. Callers only invoke
+  // this helper after `commitGatewayConfigWrite` succeeds, so `changedPaths`
+  // must be non-empty here. If a future refactor wires this up against a
+  // rejected path (or a no-op write), refuse to write the restart sentinel
+  // and refuse to queue SIGUSR1 rather than silently restarting on a phantom
+  // diff. This is the structural guard that backs the regression tests in
+  // server.config-patch.test.ts.
+  if (params.changedPaths.length === 0) {
+    params.context?.logGateway?.warn(
+      `${params.mode} restart skipped ${formatControlPlaneActor(params.actor)} (no changed paths; rejected or no-op write)`,
+    );
+    return {
+      payload: buildConfigRestartSentinelPayload({
+        kind: params.kind,
+        mode: params.mode,
+        configPath: params.configPath,
+        sessionKey: undefined,
+        deliveryContext: undefined,
+        threadId: undefined,
+        note: undefined,
+      }),
+      sentinelPath: null,
+      restart: undefined,
+    };
+  }
   const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
     resolveConfigRestartRequest(params.requestParams);
   const restartRequirement = resolveConfigRestartRequirement({

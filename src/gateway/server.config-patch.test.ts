@@ -3,9 +3,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
+import * as restartModule from "../infra/restart.js";
 import { testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
@@ -883,6 +884,137 @@ describe("gateway config.apply", () => {
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("raw");
+  });
+});
+
+// Regression coverage for sandpaw-ai#326:
+// https://github.com/gregstiehl/sandpaw-ai/issues/326
+//
+// A rejected `config.patch` / `config.apply` must never queue a SIGUSR1
+// gateway restart. The customer incident traced a permanent "draining for
+// restart" zombie state to phantom restarts queued for patches the gateway
+// had already rejected. The structural fix lives in
+// `resolveGatewayConfigRestartWriteResult` (refuses to schedule when
+// `changedPaths` is empty) and in the request handlers themselves (which
+// short-circuit before calling `commitGatewayConfigWrite` on any validation
+// failure). These tests pin that invariant.
+describe("gateway rejected config writes do not queue restart (sandpaw-ai#326)", () => {
+  let scheduleSpy: ReturnType<typeof vi.spyOn> | null = null;
+
+  beforeEach(() => {
+    if (scheduleSpy) {
+      scheduleSpy.mockRestore();
+    }
+    // Wrap the real scheduler so we observe every call but still produce a
+    // valid ScheduledRestart shape if the production code reaches it. The
+    // gateway test harness keeps `commands.restart=false` by default so the
+    // real implementation does not actually emit SIGUSR1 during tests.
+    scheduleSpy = vi.spyOn(restartModule, "scheduleGatewaySigusr1Restart");
+  });
+
+  it("does not schedule SIGUSR1 when config.patch is rejected for invalid JSON", async () => {
+    const beforeHash = await getConfigHash();
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      raw: "{ not: valid json",
+      baseHash: beforeHash,
+    });
+    expect(res.ok).toBe(false);
+    expect(scheduleSpy).not.toHaveBeenCalled();
+    expect(await getConfigHash()).toBe(beforeHash);
+  });
+
+  it("does not schedule SIGUSR1 when config.patch is rejected for non-object raw", async () => {
+    const beforeHash = await getConfigHash();
+    const res = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      raw: "null",
+      baseHash: beforeHash,
+    });
+    expect(res.ok).toBe(false);
+    expect(scheduleSpy).not.toHaveBeenCalled();
+    expect(await getConfigHash()).toBe(beforeHash);
+  });
+
+  it("does not schedule SIGUSR1 when config.patch is rejected for SecretRef resolution failure", async () => {
+    const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_NO_RESTART_${Date.now()}`;
+    delete process.env[missingEnvVar];
+    const beforeHash = await getConfigHash();
+    const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
+      requireWs(),
+      "config.patch",
+      {
+        raw: JSON.stringify({
+          gateway: {
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: missingEnvVar,
+              },
+            },
+          },
+        }),
+        baseHash: beforeHash,
+      },
+      CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+    );
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("active SecretRef resolution failed");
+    expect(scheduleSpy).not.toHaveBeenCalled();
+    expect(await getConfigHash()).toBe(beforeHash);
+  });
+
+  it("does not schedule SIGUSR1 when config.apply is rejected for invalid raw", async () => {
+    const beforeHash = await getConfigHash();
+    const res = await sendConfigApply({ raw: "{", baseHash: beforeHash });
+    expect(res.ok).toBe(false);
+    expect(scheduleSpy).not.toHaveBeenCalled();
+    expect(await getConfigHash()).toBe(beforeHash);
+  });
+
+  it("does not schedule SIGUSR1 when config.apply is rejected for SecretRef resolution failure", async () => {
+    const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_NO_RESTART_${Date.now()}`;
+    delete process.env[missingEnvVar];
+    const current = await rpcReq<{
+      hash?: string;
+      config?: Record<string, unknown>;
+    }>(requireWs(), "config.get", {});
+    expect(current.ok).toBe(true);
+    const beforeHash = String(current.payload?.hash);
+    const nextConfig = structuredClone(current.payload?.config ?? {});
+    const gateway = (nextConfig.gateway ??= {}) as Record<string, unknown>;
+    gateway.auth = {
+      mode: "token",
+      token: { source: "env", provider: "default", id: missingEnvVar },
+    };
+    const res = await sendConfigApply(
+      { raw: JSON.stringify(nextConfig, null, 2), baseHash: beforeHash },
+      CONFIG_SECRETREF_RPC_TIMEOUT_MS,
+    );
+    expect(res.ok).toBe(false);
+    expect(scheduleSpy).not.toHaveBeenCalled();
+    expect(await getConfigHash()).toBe(beforeHash);
+  });
+
+  it("does not schedule SIGUSR1 when two rejected patches arrive consecutively", async () => {
+    // Mirrors the customer incident: Ada called config.patch, the gateway
+    // rejected, Ada retried with config.apply, the gateway rejected again.
+    // The original bug queued two restarts that raced into a permanent
+    // "draining for restart" zombie state. Both rejections must be no-ops.
+    const beforeHash = await getConfigHash();
+    const rejectedRaw = "{ not: valid json";
+    const patchRes = await rpcReq<{ ok?: boolean }>(requireWs(), "config.patch", {
+      raw: rejectedRaw,
+      baseHash: beforeHash,
+    });
+    expect(patchRes.ok).toBe(false);
+    const applyRes = await rpcReq<{ ok?: boolean }>(requireWs(), "config.apply", {
+      raw: rejectedRaw,
+      baseHash: beforeHash,
+    });
+    expect(applyRes.ok).toBe(false);
+    expect(scheduleSpy).not.toHaveBeenCalled();
+    expect(await getConfigHash()).toBe(beforeHash);
   });
 });
 
