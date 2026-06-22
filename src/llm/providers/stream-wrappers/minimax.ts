@@ -104,6 +104,7 @@ export function createMinimaxFastModeWrapper(
 export function createMinimaxThinkingDisabledWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
+  serviceTierPriority?: boolean,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -118,6 +119,9 @@ export function createMinimaxThinkingDisabledWrapper(
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
+          if (requiresThinking && serviceTierPriority && payloadObj.service_tier === undefined) {
+            payloadObj.service_tier = "priority";
+          }
           if (requiresThinking) {
             if (thinkingLevel === undefined && isDisabledThinkingPayload(payloadObj.thinking)) {
               delete payloadObj.thinking;
