@@ -677,6 +677,42 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("does not report qmd lexical search mode as embedding unavailable", async () => {
+    const close = vi.fn(async () => {});
+    const probeVectorStoreAvailability = vi.fn(async () => true);
+    const probeVectorAvailability = vi.fn(async () => false);
+    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true, checked: false }));
+    mockManager({
+      probeVectorStoreAvailability,
+      probeVectorAvailability,
+      probeEmbeddingAvailability,
+      status: () =>
+        makeMemoryStatus({
+          backend: "qmd",
+          provider: "qmd",
+          model: "qmd",
+          requestedProvider: "qmd",
+          vector: {
+            enabled: false,
+            semanticAvailable: false,
+            available: false,
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(probeVectorStoreAvailability).not.toHaveBeenCalled();
+    expect(probeVectorAvailability).toHaveBeenCalled();
+    expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expectLogged(log, "Vector: disabled");
+    expectLogged(log, "Embeddings: skipped");
+    expectNotLogged(log, "Embeddings error:");
+    expect(close).toHaveBeenCalled();
+  });
+
   it("prints recall-store audit details during status", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -1327,6 +1363,12 @@ describe("memory cli", () => {
     await withTempWorkspace(async (workspaceDir) => {
       const nowMs = Date.now();
       const isoDay = new Date(nowMs).toISOString().slice(0, 10);
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `${isoDay}.md`),
+        "Always check weather before suggesting outdoor plans.\n",
+        "utf-8",
+      );
       await recordShortTermRecalls({
         workspaceDir,
         query: "weather plans",

@@ -36,7 +36,6 @@ const isGatewayTransportError = vi.hoisted(() =>
 const agentCommand = vi.hoisted(() => vi.fn());
 const agentModuleLoadCount = vi.hoisted(() => vi.fn());
 const loadAgentSessionModuleMock = vi.hoisted(() => vi.fn());
-const ensureSessionStateMigratedForCommand = vi.hoisted(() => vi.fn(async () => undefined));
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -155,45 +154,12 @@ function createSignalProcess() {
   };
 }
 
-async function waitForAgentCommandCall(expectedAdditionalCalls = 1) {
-  const initialCalls = agentCommand.mock.calls.length;
-  const expectedCalls = initialCalls + expectedAdditionalCalls;
-  await vi.waitFor(() => {
-    expect(agentCommand.mock.calls.length).toBeGreaterThanOrEqual(expectedCalls);
-  });
-}
-
-async function waitForSignalListener(
-  signals: ReturnType<typeof createSignalProcess>,
-  signal: "SIGINT" | "SIGTERM",
-) {
-  const deadline = Date.now() + 10_000;
-  while (signals.listenerCount(signal) === 0 && Date.now() < deadline) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  expect(signals.listenerCount(signal)).toBeGreaterThan(0);
-}
-
-function runAbortHandlerWhenReady(signal: AbortSignal | undefined, onAbort: () => void): void {
-  if (signal?.aborted) {
-    onAbort();
-    return;
-  }
-  signal?.addEventListener("abort", onAbort, { once: true });
+async function waitForAgentCommandCall(expectedCalls = 1) {
+  await vi.waitFor(() => expect(agentCommand).toHaveBeenCalledTimes(expectedCalls));
 }
 
 async function waitForGatewayCall(expectedCalls = 1) {
   await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(expectedCalls));
-}
-
-function createDeferredVoid() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((value) => {
-    resolve = value;
-  });
-  return { promise, resolve };
 }
 
 function mockMessages(mock: unknown): string[] {
@@ -257,9 +223,6 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayExplicitAuthRequiredError,
   isGatewayTransportError,
   randomIdempotencyKey: () => "idem-1",
-}));
-vi.mock("./session-state-migration.js", () => ({
-  ensureSessionStateMigratedForCommand,
 }));
 vi.mock("./agent.js", () => {
   agentModuleLoadCount();
@@ -338,7 +301,7 @@ describe("agentCliCommand", () => {
       expect(request.clientName).toBe("cli");
       expect(request.mode).toBe("cli");
       expect(request).not.toHaveProperty("scopes");
-      expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+      expect(request.params).toHaveProperty("cleanupBundleMcpOnRunEnd", true);
       expect(agentCommand).not.toHaveBeenCalled();
       expect(agentModuleLoadCount).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
@@ -381,6 +344,23 @@ describe("agentCliCommand", () => {
       expect(params.to).toBeUndefined();
       expect(request.config).toBe(loadConfig.mock.results[0]?.value);
       expect(loadConfig).toHaveBeenCalledWith();
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("uses an agent-scoped --to value as the gateway session selector", async () => {
+    await withTempStore(async () => {
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: sessionKey }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.sessionKey).toBe(sessionKey);
+      expect(params.to).toBeUndefined();
       expect(agentCommand).not.toHaveBeenCalled();
       expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
     });
@@ -1131,33 +1111,28 @@ describe("agentCliCommand", () => {
   it("passes SIGTERM abort signals into local agent runs", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
-      const abortListenerAttached = createDeferredVoid();
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
         expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
-        if (opts.abortSignal?.aborted) {
-          const err = new Error("local agent aborted");
-          err.name = "AbortError";
-          throw err;
-        }
         return await new Promise((_, reject) => {
-          runAbortHandlerWhenReady(opts.abortSignal, () => {
-            const err = new Error("local agent aborted");
-            err.name = "AbortError";
-            reject(err);
-          });
-          abortListenerAttached.resolve();
+          opts.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              const err = new Error("local agent aborted");
+              err.name = "AbortError";
+              reject(err);
+            },
+            { once: true },
+          );
         });
       });
 
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
       });
-      await waitForSignalListener(signals, "SIGTERM");
-      await abortListenerAttached.promise;
+      await waitForAgentCommandCall();
       signals.emit("SIGTERM");
 
       await run;
-      expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(callGateway).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(143);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
@@ -1168,34 +1143,28 @@ describe("agentCliCommand", () => {
   it("exits for local runs that resolve after SIGTERM aborts them", async () => {
     await withTempStore(async () => {
       const signals = createSignalProcess();
-      const abortListenerAttached = createDeferredVoid();
       agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
-        if (opts.abortSignal?.aborted) {
-          return {
-            payloads: [],
-            meta: { aborted: true },
-          } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
-        }
         return await new Promise((resolve) => {
-          runAbortHandlerWhenReady(opts.abortSignal, () => {
-            resolve({
-              payloads: [],
-              meta: { aborted: true },
-            } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
-          });
-          abortListenerAttached.resolve();
+          opts.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              resolve({
+                payloads: [],
+                meta: { aborted: true },
+              } as unknown as Awaited<ReturnType<typeof AgentCommand>>);
+            },
+            { once: true },
+          );
         });
       });
 
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
       });
-      await waitForSignalListener(signals, "SIGTERM");
-      await abortListenerAttached.promise;
+      await waitForAgentCommandCall();
       signals.emit("SIGTERM");
 
       await expect(run).resolves.toBeUndefined();
-      expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(callGateway).not.toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(143);
     });
@@ -1549,29 +1518,6 @@ describe("agentCliCommand", () => {
     });
   });
 
-  it("does not run a fresh embedded session when a /compact control command times out", async () => {
-    await withTempStore(async () => {
-      callGateway.mockRejectedValue(createGatewayTimeoutError());
-
-      await expect(
-        agentCliCommand(
-          {
-            message: "/compact",
-            sessionId: "locked-session",
-            runId: "locked-run",
-          },
-          runtime,
-        ),
-      ).rejects.toThrow("gateway timeout");
-
-      expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(
-        mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
-      ).toBe(false);
-    });
-  });
-
   it("uses the explicit session key agent for timeout fallback sessions", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(createGatewayTimeoutError());
@@ -1735,10 +1681,6 @@ describe("agentCliCommand", () => {
       );
 
       expect(callGateway).not.toHaveBeenCalled();
-      expect(ensureSessionStateMigratedForCommand).toHaveBeenCalledTimes(1);
-      expect(ensureSessionStateMigratedForCommand).toHaveBeenCalledWith(
-        loadRuntimeConfig.mock.results[0]?.value,
-      );
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const localOpts = requireRecord(
         requireFirstCallArg(agentCommand, "embedded agent"),
@@ -1746,6 +1688,7 @@ describe("agentCliCommand", () => {
       );
       expect(localOpts.cleanupBundleMcpOnRunEnd).toBe(true);
       expect(localOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
+      expect(localOpts.oneShotCliRun).toBe(true);
       expect(localOpts).not.toHaveProperty("resultMetaOverrides");
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
@@ -1841,6 +1784,50 @@ describe("agentCliCommand", () => {
       );
       expect(fallbackOpts.cleanupBundleMcpOnRunEnd).toBe(true);
       expect(fallbackOpts.cleanupCliLiveSessionOnRunEnd).toBe(true);
+      expect(fallbackOpts.oneShotCliRun).toBe(false);
     });
+  });
+
+  for (const message of [
+    "/compact",
+    "/compact Keep recent decisions.",
+    "/compact:Keep recent decisions.",
+    "/COMPACT",
+    "  /Compact  ",
+  ]) {
+    it(`rejects ${JSON.stringify(message)} from the CLI before any gateway or embedded turn`, async () => {
+      await withTempStore(async () => {
+        callGateway.mockRejectedValue(createGatewayTimeoutError());
+
+        await agentCliCommand(
+          { message, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
+          runtime,
+        );
+      });
+
+      // The slash-command handler rejects CLI senders, so a /compact turn would
+      // otherwise fall through to a normal turn and exit 0 without compacting.
+      // It must fail loudly before touching the gateway or a fresh embedded session.
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      const errorMessages = mockMessages(runtime.error);
+      expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
+      expect(errorMessages.some((m) => m.includes("EMBEDDED FALLBACK"))).toBe(false);
+    });
+  }
+
+  it("does not mistake a /compacting-prefixed message for the /compact control command", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand(
+        { message: "/compacting the report, please", to: "+15555550123", timeout: "0" },
+        runtime,
+      );
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).not.toHaveBeenCalledWith(1);
   });
 });

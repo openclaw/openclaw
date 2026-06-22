@@ -1,8 +1,6 @@
 // Qa Lab plugin module implements runtime parity behavior.
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asFiniteNumber as readFiniteNumber,
@@ -14,6 +12,7 @@ import {
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
+import { compareToolCallShape, stableHash } from "./parity-shared.js";
 
 export type RuntimeId = "openclaw" | "codex";
 
@@ -121,6 +120,7 @@ type RuntimeParityTranscriptRecord = {
 };
 
 type RuntimeParityMockRequestSnapshot = {
+  allInputText?: string;
   plannedToolName?: string;
   plannedToolArgs?: unknown;
   toolOutput?: string;
@@ -142,29 +142,6 @@ const TOOL_RESULT_ERROR_RE = /\b(?:error|failed|failure|timeout|denied|enoent|no
 
 function normalizeTextForParity(text: string) {
   return text.replace(/\s+/gu, " ").trim();
-}
-
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function normalizeForStableHash(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => normalizeForStableHash(entry));
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .toSorted((left, right) => left.localeCompare(right))
-        .map((key) => [key, normalizeForStableHash(record[key])]),
-    );
-  }
-  return value;
-}
-
-function stableHash(value: unknown) {
-  return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
 }
 
 function readUsageTotals(raw: unknown): RuntimeParityUsage {
@@ -713,26 +690,6 @@ function aggregateUsage(records: RuntimeParityTranscriptRecord[]): RuntimeParity
   return totals;
 }
 
-function compareToolCallShape(
-  left: RuntimeParityToolCall[],
-  right: RuntimeParityToolCall[],
-): string | undefined {
-  if (left.length !== right.length) {
-    return `tool call count differs (${left.length} vs ${right.length})`;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    const leftCall = left[index];
-    const rightCall = right[index];
-    if (!leftCall || !rightCall) {
-      return `tool call row ${index + 1} missing`;
-    }
-    if (leftCall.tool !== rightCall.tool || leftCall.argsHash !== rightCall.argsHash) {
-      return `tool call ${index + 1} differs (${leftCall.tool}/${leftCall.argsHash} vs ${rightCall.tool}/${rightCall.argsHash})`;
-    }
-  }
-  return undefined;
-}
-
 function compareToolResultShape(
   left: RuntimeParityToolCall[],
   right: RuntimeParityToolCall[],
@@ -799,6 +756,20 @@ function resolveRuntimeParityToolCalls(params: {
   return params.mockToolCalls;
 }
 
+function filterMockRequestsForParentPrompt(
+  requests: RuntimeParityMockRequestSnapshot[],
+  parentPrompt: string,
+) {
+  const normalizedParentPrompt = normalizeTextForParity(parentPrompt);
+  if (!normalizedParentPrompt) {
+    return requests;
+  }
+  const matching = requests.filter((request) =>
+    normalizeTextForParity(request.allInputText ?? "").includes(normalizedParentPrompt),
+  );
+  return matching.length > 0 ? matching : requests;
+}
+
 function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFinding[]) {
   if (findings.length === 0) {
     return undefined;
@@ -840,6 +811,21 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
+  if (
+    params.openclawScenarioStatus === "fail" ||
+    params.codexScenarioStatus === "fail" ||
+    !isRuntimeParityCellPassable(params.openclaw) ||
+    !isRuntimeParityCellPassable(params.codex)
+  ) {
+    return {
+      drift: "failure-mode",
+      driftDetails:
+        params.openclawScenarioStatus === params.codexScenarioStatus
+          ? "at least one runtime failed"
+          : `scenario status differs (${params.openclawScenarioStatus} vs ${params.codexScenarioStatus})`,
+    };
+  }
+
   const toolCallShapeDetails = compareToolCallShape(
     params.openclaw.toolCalls,
     params.codex.toolCalls,
@@ -870,21 +856,6 @@ function classifyRuntimeParityCells(params: {
     return {
       drift: "structural",
       driftDetails: `transcript/final-text structure differs (${openclawTranscriptLines} lines vs ${codexTranscriptLines})`,
-    };
-  }
-
-  if (
-    params.openclawScenarioStatus === "fail" ||
-    params.codexScenarioStatus === "fail" ||
-    !isRuntimeParityCellPassable(params.openclaw) ||
-    !isRuntimeParityCellPassable(params.codex)
-  ) {
-    return {
-      drift: "failure-mode",
-      driftDetails:
-        params.openclawScenarioStatus === params.codexScenarioStatus
-          ? "at least one runtime failed"
-          : `scenario status differs (${params.openclawScenarioStatus} vs ${params.codexScenarioStatus})`,
     };
   }
 
@@ -938,14 +909,16 @@ async function readRuntimeParitySessionEntries(params: {
     "sessions",
     "sessions.json",
   );
-  const parsed = loadSessionStore(storePath, { skipCache: true }) as Record<
-    string,
-    RuntimeParitySessionEntry
-  >;
-  const entries = Object.values(parsed).filter((entry) => readNonEmptyString(entry?.sessionId));
-  const rootEntries = entries.filter(isRuntimeParityRootSession);
-  const candidates = rootEntries.length > 0 ? rootEntries : entries;
-  return candidates.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  try {
+    const raw = await fs.readFile(storePath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, RuntimeParitySessionEntry>;
+    const entries = Object.values(parsed).filter((entry) => readNonEmptyString(entry?.sessionId));
+    const rootEntries = entries.filter(isRuntimeParityRootSession);
+    const candidates = rootEntries.length > 0 ? rootEntries : entries;
+    return candidates.toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+  } catch {
+    return [];
+  }
 }
 
 async function loadRuntimeParityTranscripts(params: {
@@ -992,6 +965,7 @@ async function loadRuntimeParityTranscripts(params: {
 
 async function loadRuntimeParityMockToolCalls(
   mockBaseUrl: string | undefined,
+  parentPrompt: string,
 ): Promise<RuntimeParityToolCall[] | null> {
   const normalizedBaseUrl = mockBaseUrl?.trim().replace(/\/+$/u, "");
   if (!normalizedBaseUrl) {
@@ -1017,12 +991,15 @@ async function loadRuntimeParityMockToolCalls(
     }
     const requests = payload.filter(isMessageRecord).map(
       (entry): RuntimeParityMockRequestSnapshot => ({
+        allInputText: readNonEmptyString(entry.allInputText),
         plannedToolName: readNonEmptyString(entry.plannedToolName),
         plannedToolArgs: entry.plannedToolArgs ?? null,
         toolOutput: readNonEmptyString(entry.toolOutput) ?? "",
       }),
     );
-    return resolveToolCallOrderFromMockRequests(requests);
+    return resolveToolCallOrderFromMockRequests(
+      filterMockRequestsForParentPrompt(requests, parentPrompt),
+    );
   } catch {
     return null;
   }
@@ -1038,7 +1015,12 @@ export async function captureRuntimeParityCell(
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
   const transcriptToolCalls = resolveToolCallOrder(transcriptRecords);
-  const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl);
+  const parentPrompt =
+    transcriptRecords
+      .filter((record) => record.role === "user" && !isToolResultLikeMessage(record.message))
+      .map((record) => extractAssistantText(record.message))
+      .find(Boolean) ?? "";
+  const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl, parentPrompt);
   const gatewayLogs = params.gateway.logs?.();
   const sentinelFindings = [
     ...scanGatewayLogSentinels(gatewayLogs),
@@ -1086,6 +1068,7 @@ export async function runRuntimeParityScenario(params: {
 
 export const testing = {
   classifyRuntimeParityCells,
+  filterMockRequestsForParentPrompt,
   resolveRuntimeParityToolCalls,
   resolveToolCallOrderFromMockRequests,
 };

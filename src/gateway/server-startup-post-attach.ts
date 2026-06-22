@@ -1,8 +1,5 @@
 // Gateway post-attach startup sidecars.
 // Schedules warmups, sentinels, update checks, memory backend, and plugin services.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -11,6 +8,7 @@ import type { GatewayTailscaleMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import type { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
@@ -38,7 +36,6 @@ const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
-const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -153,9 +150,6 @@ function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): bo
 
 function resolveGatewayMemoryStartupPolicy(cfg: OpenClawConfig): GatewayMemoryStartupPolicy {
   if (cfg.memory?.backend !== "qmd") {
-    return { mode: "off" };
-  }
-  if (cfg.memory.qmd?.update?.onBoot === false) {
     return { mode: "off" };
   }
   const startup = cfg.memory.qmd?.update?.startup;
@@ -509,67 +503,14 @@ function scheduleTranscriptsAutoStartSidecar(params: {
   });
 }
 
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.promises.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveRestartSentinelPathFast(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<string> {
-  const normalizePathEnv = (value: string | undefined) => {
-    const trimmed = value?.trim();
-    return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
-  };
-  const resolveRawOsHome = () => normalizePathEnv(env.HOME) ?? normalizePathEnv(env.USERPROFILE);
-  const expandHomePrefix = (input: string, home: string) => input.replace(/^~(?=$|[\\/])/, home);
-  const resolveHome = () => {
-    const explicitHome = normalizePathEnv(env.OPENCLAW_HOME);
-    if (explicitHome) {
-      const osHome = resolveRawOsHome() ?? os.homedir();
-      return path.resolve(expandHomePrefix(explicitHome, osHome));
-    }
-    return path.resolve(resolveRawOsHome() ?? os.homedir());
-  };
-  const resolveUserPath = (input: string) => {
-    const trimmed = input.trim();
-    if (trimmed.startsWith("~")) {
-      return path.resolve(expandHomePrefix(trimmed, resolveHome()));
-    }
-    return path.resolve(trimmed);
-  };
-  const override = normalizePathEnv(env.OPENCLAW_STATE_DIR);
-  if (override) {
-    return path.join(resolveUserPath(override), RESTART_SENTINEL_FILENAME);
-  }
-  const home = resolveHome();
-  const newStateDir = path.join(home, ".openclaw");
-  if (env.OPENCLAW_TEST_FAST === "1" || (await pathExists(newStateDir))) {
-    return path.join(newStateDir, RESTART_SENTINEL_FILENAME);
-  }
-  const legacyStateDir = path.join(home, ".clawdbot");
-  if (await pathExists(legacyStateDir)) {
-    return path.join(legacyStateDir, RESTART_SENTINEL_FILENAME);
-  }
-  return path.join(newStateDir, RESTART_SENTINEL_FILENAME);
-}
-
-async function hasRestartSentinelFileFast(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
-  try {
-    return await pathExists(await resolveRestartSentinelPathFast(env));
-  } catch {
-    return false;
-  }
+async function hasRestartSentinelFast(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+  return await hasRestartSentinel(env);
 }
 
 async function refreshLatestUpdateRestartSentinelIfPresent(): Promise<Awaited<
   ReturnType<typeof refreshLatestUpdateRestartSentinel>
 > | null> {
-  if (!(await hasRestartSentinelFileFast())) {
+  if (!(await hasRestartSentinelFast())) {
     return null;
   }
   return await (await loadGatewayRestartSentinelModule()).refreshLatestUpdateRestartSentinel();
@@ -933,7 +874,7 @@ export async function startGatewaySidecars(params: {
       if (!shouldCheckRestartSentinel()) {
         return;
       }
-      if (!(await hasRestartSentinelFileFast())) {
+      if (!(await hasRestartSentinelFast())) {
         return;
       }
       setTimeout(() => {
@@ -1460,7 +1401,7 @@ export async function startGatewayPostAttachRuntime(
 
 export const testing = {
   providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
-  hasRestartSentinelFileFast,
+  hasRestartSentinelFast,
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
   refreshLatestUpdateRestartSentinelIfPresent,

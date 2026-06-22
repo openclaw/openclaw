@@ -2490,7 +2490,7 @@ describe("qa mock openai server", () => {
           {
             type: "function_call_output",
             output:
-              "repo/qa/scenarios/index.md includes scenario: subagent-handoff and repo/extensions/qa-lab/src/suite.ts.",
+              "repo/qa/scenarios/index.yaml includes scenario: subagent-handoff and repo/extensions/qa-lab/src/suite.ts.",
           },
           makeUserInput("Continue."),
         ],
@@ -3144,6 +3144,47 @@ describe("qa mock openai server", () => {
     expect(toolPlanOutput.type).toBe("function_call");
     expect(toolPlanOutput.name).toBe("session_status");
     expect(String(toolPlanOutput.arguments)).toContain("current");
+  });
+
+  it("summarizes QA tool-search bridge outputs with the nested plugin result marker", async () => {
+    const server = await startMockServer();
+    const targetTool = "fake_plugin_tool_17";
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          `tool search qa check target=${targetTool}. Call exactly that tool once and then summarize.`,
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_tool_search_code_1",
+          output: JSON.stringify({
+            ok: true,
+            value: {
+              tool: {
+                id: `openclaw:tool-search-e2e-fixture:${targetTool}`,
+                source: "openclaw",
+                sourceName: "tool-search-e2e-fixture",
+                name: targetTool,
+                description: "x".repeat(260),
+              },
+              result: {
+                content: [
+                  {
+                    type: "text",
+                    text: `FAKE_PLUGIN_OK ${targetTool} {"marker":"code"}`,
+                  },
+                ],
+              },
+            },
+          }),
+        },
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    expect(outputText(await response.json())).toBe(`FAKE_PLUGIN_OK ${targetTool}`);
   });
 
   it("plans QA tool-search failure calls with denied-input args", async () => {
@@ -4240,7 +4281,7 @@ describe("qa mock openai server", () => {
     expect(body).not.toContain("HEARTBEAT_OK");
   });
 
-  it("rejects malformed Anthropic /v1/messages JSON with an invalid_request_error", async () => {
+  it("rejects malformed or non-object Anthropic /v1/messages JSON", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
       port: 0,
@@ -4249,20 +4290,55 @@ describe("qa mock openai server", () => {
       await server.stop();
     });
 
-    const response = await fetch(`${server.baseUrl}/v1/messages`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: '{"model":"claude-opus-4-8","messages":[',
+    for (const rawBody of ['{"model":"claude-opus-4-8","messages":[', "null", "[]", '"text"']) {
+      const response = await fetch(`${server.baseUrl}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: rawBody,
+      });
+
+      expect(response.status).toBe(400);
+      const body = (await response.json()) as {
+        type: string;
+        error: { type: string; message: string };
+      };
+      expect(body.type).toBe("error");
+      expect(body.error.type).toBe("invalid_request_error");
+      expect(body.error.message).toContain("Malformed JSON body");
+    }
+
+    const health = await fetch(`${server.baseUrl}/healthz`);
+    expect(health.status).toBe(200);
+  });
+
+  it("rejects malformed OpenAI-compatible JSON without crashing the mock server", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
     });
 
-    expect(response.status).toBe(400);
-    const body = (await response.json()) as {
-      type: string;
-      error: { type: string; message: string };
-    };
-    expect(body.type).toBe("error");
-    expect(body.error.type).toBe("invalid_request_error");
-    expect(body.error.message).toContain("Malformed JSON body");
+    for (const path of ["/v1/responses", "/v1/embeddings", "/v1/images/generations"]) {
+      for (const rawBody of ["{bad", "[]", '"text"']) {
+        const response = await fetch(`${server.baseUrl}${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: rawBody,
+        });
+
+        expect(response.status).toBe(400);
+        const body = (await response.json()) as {
+          error: { type: string; message: string };
+        };
+        expect(body.error.type).toBe("invalid_request_error");
+        expect(body.error.message).toContain("Malformed JSON body");
+      }
+    }
+
+    const health = await fetch(`${server.baseUrl}/healthz`);
+    expect(health.status).toBe(200);
   });
 
   it("defaults empty-string Anthropic /v1/messages model to claude-opus-4-8", async () => {
@@ -4593,7 +4669,7 @@ describe("qa mock openai server provider variant tagging", () => {
       stream: false,
       input: [makeUserInput(sourcePrompt)],
     });
-    expect(outputToolArgs(openaiSource)).toEqual({ path: "repo/qa/scenarios/index.md" });
+    expect(outputToolArgs(openaiSource)).toEqual({ path: "repo/qa/scenarios/index.yaml" });
 
     const anthropicSourceServer = await startMockServer();
     const anthropicSource = await expectResponsesJson(anthropicSourceServer, {

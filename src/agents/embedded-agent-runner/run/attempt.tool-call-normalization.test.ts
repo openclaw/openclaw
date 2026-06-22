@@ -168,6 +168,37 @@ describe("wrapStreamFnPromoteStandaloneTextToolCalls", () => {
     });
   });
 
+  it("promotes deferred directory tool names from the live callable set", async () => {
+    const rawToolText = [
+      "[tool:hidden_catalog_tool]",
+      "<parameter=value>",
+      "deferred",
+      "</parameter>",
+      "</function>",
+    ].join("\n");
+    const resultMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawToolText }],
+      stopReason: "stop",
+    };
+    const baseFn = vi.fn(() => createFakeStream({ events: [], resultMessage }));
+    const wrapped = wrapStreamFnPromoteStandaloneTextToolCalls(
+      baseFn as never,
+      new Set(["tool_search", "tool_describe", "tool_call", "hidden_catalog_tool"]),
+    );
+    const stream = (await Promise.resolve(
+      wrapped({} as never, {} as never, {} as never),
+    )) as FakeWrappedStream;
+
+    const result = requireRecord(await stream.result(), "result message");
+
+    expect(requireRecord((result.content as unknown[])[0], "tool call")).toMatchObject({
+      type: "toolCall",
+      name: "hidden_catalog_tool",
+      arguments: { value: "deferred" },
+    });
+  });
+
   it("preserves content indexes when promoting text before thinking", async () => {
     const rawToolText = [
       "[tool:exec]",

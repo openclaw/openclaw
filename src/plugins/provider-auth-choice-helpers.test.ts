@@ -118,6 +118,43 @@ describe("applyProviderAuthConfigPatch", () => {
     });
   });
 
+  it("deletes provider auth fields marked undefined by auth patches", () => {
+    const baseLocal = {
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            baseUrl: "https://example.services.ai.azure.com/openai/v1",
+            api: "anthropic-messages",
+            authHeader: false,
+            apiKey: "FOUNDRY_API_KEY",
+            headers: { "api-key": "FOUNDRY_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const patch = {
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            authHeader: true,
+            apiKey: undefined,
+            headers: undefined,
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch(baseLocal, patch);
+    const provider = next.models?.providers?.["microsoft-foundry"] as
+      | Record<string, unknown>
+      | undefined;
+
+    expect(provider).toMatchObject({ authHeader: true });
+    expect(provider).not.toHaveProperty("apiKey");
+    expect(provider).not.toHaveProperty("headers");
+  });
+
   it("normalizes retired Google Gemini model refs from provider config patches", () => {
     const patch = {
       agents: {

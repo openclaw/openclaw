@@ -224,6 +224,7 @@ function resolveToolErrorWarningPolicy(params: {
  */
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantMessageIndex?: number;
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
@@ -234,6 +235,8 @@ export function buildEmbeddedRunPayloads(params: {
   sessionKey: string;
   provider?: string;
   model?: string;
+  /** Credential auth mode for billing copy (#80877). */
+  authMode?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
@@ -241,6 +244,7 @@ export function buildEmbeddedRunPayloads(params: {
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   agentId?: string;
@@ -309,10 +313,15 @@ export function buildEmbeddedRunPayloads(params: {
     });
   });
   const hasSourceReplyPayload = replyItems.length > sourceReplyStartIndex;
+  const deliveredSourceReplyViaMessageTool =
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    params.didDeliverSourceReplyViaMessageTool === true;
 
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
-    params.didSendDeterministicApprovalPrompt === true || hasSourceReplyPayload;
+    params.didSendDeterministicApprovalPrompt === true ||
+    hasSourceReplyPayload ||
+    deliveredSourceReplyViaMessageTool;
   const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;
   const assistantForPayload =
@@ -335,12 +344,14 @@ export function buildEmbeddedRunPayloads(params: {
               sessionKey: params.sessionKey,
               provider: params.provider,
               model: params.model,
+              authMode: params.authMode,
             })
           : formatAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
               model: params.model,
+              authMode: params.authMode,
             })
       : undefined;
   const rawErrorFingerprint = rawErrorMessage
@@ -590,6 +601,11 @@ export function buildEmbeddedRunPayloads(params: {
       if (item.nonTerminalToolErrorWarning) {
         setReplyPayloadMetadata(payload, {
           nonTerminalToolErrorWarning: true,
+        });
+      }
+      if (!item.isError && !item.isReasoning && params.assistantMessageIndex !== undefined) {
+        setReplyPayloadMetadata(payload, {
+          assistantMessageIndex: params.assistantMessageIndex,
         });
       }
       if (item.replyToId) {

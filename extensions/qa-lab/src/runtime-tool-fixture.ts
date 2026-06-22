@@ -107,7 +107,7 @@ function isHardFailureToolOutputText(text: string) {
   return (
     /\b(?:ENOENT|EACCES|EPERM)\b/u.test(text) ||
     /(?:^|\n)\s*(?:Error|Exception|Failed):/u.test(text) ||
-    /\b(?:no such file|permission denied|forbidden)\b/iu.test(text)
+    /\b(?:disabled|forbidden|no provider|no such file|permission denied|unavailable)\b/iu.test(text)
   );
 }
 
@@ -239,6 +239,12 @@ function readBooleanTrue(value: unknown) {
   return value === true;
 }
 
+const FAILURE_LIKE_TOOL_RESULT_RE =
+  /\b(?:denied|enoent|error|exception|fail(?:ed|ure)?|forbidden|invalid|missing|not found|permission)\b/iu;
+
+const REQUIRED_FIELD_TOOL_RESULT_RE =
+  /(?:^|[\n:,({[]\s*)["']?[A-Z_][A-Z0-9_.[\]-]*["']?\s+(?:is\s+)?required\b/iu;
+
 function isFailureLikeToolResult(params: {
   type?: string;
   text: string;
@@ -247,9 +253,9 @@ function isFailureLikeToolResult(params: {
 }) {
   return (
     isStructuredFailureToolResult(params) ||
-    /\b(?:denied|enoent|error|exception|fail(?:ed|ure)?|forbidden|invalid|missing|not found|permission)\b/iu.test(
-      params.text,
-    )
+    isHardFailureToolOutputText(params.text) ||
+    FAILURE_LIKE_TOOL_RESULT_RE.test(params.text) ||
+    REQUIRED_FIELD_TOOL_RESULT_RE.test(params.text)
   );
 }
 

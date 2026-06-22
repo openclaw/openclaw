@@ -174,7 +174,22 @@ Notes:
   or `--element`.
 - `existing-session` / `user` profiles support page screenshots and `--ref`
   screenshots from snapshot output, but not CSS `--element` screenshots.
-- `--labels` overlays current snapshot refs on the screenshot.
+- `--labels` overlays current snapshot refs on the screenshot. On
+  Playwright-backed profiles, it works with `--full-page` (full-page label
+  overlay), `--ref` (element-clip label overlay by ARIA ref), and `--element`
+  (element-clip label overlay by CSS selector); in element-clip modes, labels
+  are projected relative to the element. The response also includes an
+  `annotations` array with each ref's bounding box. Each item has `ref`,
+  `number`, `role`, optional `name`, and `box: {x, y, width, height}`;
+  coordinates are in the captured image's space (viewport / fullpage /
+  element-relative). The field is omitted when empty.
+  `existing-session` profiles render a chrome-mcp overlay on page screenshots
+  but do not use the Playwright projection helper and do not include
+  `annotations`; CSS `--element` screenshots are unsupported there. Without
+  Playwright or chrome-mcp, labeled screenshots are not available. Prior
+  releases ignored `--full-page`, `--ref`, and `--element` on labeled
+  Playwright screenshots and always returned a viewport capture; labeled
+  screenshots now honor those scopes.
 - `snapshot --urls` appends discovered link destinations to AI snapshots so
   agents can choose direct navigation targets instead of guessing from link
   text alone.
@@ -280,10 +295,14 @@ Use the built-in `user` profile, or create your own `existing-session` profile:
 openclaw browser --browser-profile user tabs
 openclaw browser create-profile --name chrome-live --driver existing-session
 openclaw browser create-profile --name brave-live --driver existing-session --user-data-dir "~/Library/Application Support/BraveSoftware/Brave-Browser"
+openclaw browser create-profile --name chrome-port --driver existing-session --cdp-url http://127.0.0.1:9222
 openclaw browser --browser-profile chrome-live tabs
 ```
 
-This path is host-only. For Docker, headless servers, Browserless, or other remote setups, use a CDP profile instead.
+The default existing-session path is host-only Chrome MCP auto-connect. If the browser is already
+running with a DevTools endpoint, pass `--cdp-url` so Chrome MCP attaches to that endpoint instead.
+For Docker, Browserless, or other remote setups where Chrome MCP semantics are not needed, use a
+CDP profile.
 
 Current existing-session limits:
 
@@ -296,7 +315,7 @@ Current existing-session limits:
 - `hover`, `scrollintoview`, `drag`, `select`, `fill`, and `evaluate` reject
   per-call timeout overrides
 - `select` supports one value only
-- `wait --load networkidle` is not supported
+- `wait --load networkidle` is not supported on existing-session profiles (works on managed and raw/remote CDP)
 - file uploads require `--ref` / `--input-ref`, do not support CSS
   `--element`, and currently support one file at a time
 - dialog hooks do not support `--timeout`

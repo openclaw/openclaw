@@ -7,7 +7,7 @@ import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import type { PortConnections } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
 import type { GatewayRestartSnapshot } from "./restart-health.js";
 import { gatherDaemonStatus } from "./status.gather.js";
@@ -61,7 +61,9 @@ const readGatewayRestartHandoffSync = vi.fn<
 >(() => null);
 const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
 const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
-const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+const serviceReadRuntime = vi.fn<
+  (_env?: NodeJS.ProcessEnv) => Promise<{ status: string; detail?: string }>
+>(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
     runtime: { status: "running", pid: 1234 },
@@ -74,7 +76,7 @@ const serviceReadCommand = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<{
     programArguments: string[];
     environment?: Record<string, string>;
-  }>
+  } | null>
 >(async (_env?: NodeJS.ProcessEnv) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
   environment: {
@@ -250,12 +252,12 @@ describe("gatherDaemonStatus", () => {
       "DAEMON_GATEWAY_TOKEN",
       "DAEMON_GATEWAY_PASSWORD",
     ]);
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli";
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli/openclaw.json";
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.DAEMON_GATEWAY_TOKEN;
-    delete process.env.DAEMON_GATEWAY_PASSWORD;
+    setTestEnvValue("OPENCLAW_STATE_DIR", "/tmp/openclaw-cli");
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", "/tmp/openclaw-cli/openclaw.json");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
+    deleteTestEnvValue("DAEMON_GATEWAY_TOKEN");
+    deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
     callGatewayStatusProbe.mockClear();
     resolveGatewayProbeAuthSafeWithSecretInputsCalls.mockClear();
     createConfigIOCalls.mockClear();
@@ -488,6 +490,29 @@ describe("gatherDaemonStatus", () => {
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
   });
 
+  it("keeps gateway status read-only when service management is unsupported", async () => {
+    serviceReadCommand.mockResolvedValueOnce(null);
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceReadRuntime.mockResolvedValueOnce({
+      status: "unknown",
+      detail: "Gateway service install not supported on aix",
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(status.service.command).toBeNull();
+    expect(status.service.loaded).toBe(false);
+    expect(status.service.runtime).toEqual({
+      status: "unknown",
+      detail: "Gateway service install not supported on aix",
+    });
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
+  });
+
   it("surfaces recent service restart handoffs only during deep status", async () => {
     readGatewayRestartHandoffSync.mockReturnValueOnce({
       kind: "gateway-supervisor-restart-handoff",
@@ -640,8 +665,8 @@ describe("gatherDaemonStatus", () => {
         },
       }),
     );
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
       environment: {
@@ -682,8 +707,8 @@ describe("gatherDaemonStatus", () => {
         },
       }),
     );
-    process.env.OPENCLAW_STATE_DIR = tmp;
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
     cliLoadedConfig = {
       gateway: {
         bind: "loopback",
@@ -731,7 +756,7 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
-    process.env.DAEMON_GATEWAY_PASSWORD = "daemon-secretref-password"; // pragma: allowlist secret
+    setTestEnvValue("DAEMON_GATEWAY_PASSWORD", "daemon-secretref-password"); // pragma: allowlist secret
 
     await gatherDaemonStatus({
       rpc: {},
@@ -760,7 +785,7 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
-    process.env.DAEMON_GATEWAY_TOKEN = "daemon-secretref-token";
+    setTestEnvValue("DAEMON_GATEWAY_TOKEN", "daemon-secretref-token");
 
     await gatherDaemonStatus({
       rpc: {},
@@ -984,8 +1009,8 @@ describe("gatherDaemonStatus", () => {
         },
       },
     };
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-password"; // pragma: allowlist secret
+    setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "env-token");
+    setTestEnvValue("OPENCLAW_GATEWAY_PASSWORD", "env-password"); // pragma: allowlist secret
 
     await gatherDaemonStatus({
       rpc: {},

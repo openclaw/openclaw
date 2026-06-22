@@ -24,6 +24,7 @@ import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/strin
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
+  readRecentDreamDiaryEntries,
   type NarrativePhaseData,
   runDetachedDreamNarrative,
 } from "./dreaming-narrative.js";
@@ -33,6 +34,7 @@ import {
   DREAMING_SESSION_INGESTION_FILES_NAMESPACE,
   DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
   SESSION_SEEN_HASHES_PER_CHUNK,
+  normalizeMemoryCoreWorkspaceKey,
   readMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
@@ -112,6 +114,8 @@ const SESSION_INGESTION_MIN_MESSAGES_PER_FILE = 12;
 const SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION = 4096;
 const SESSION_INGESTION_MAX_TRACKED_SCOPES = 2048;
 const SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE = /\.checkpoint\..+\.jsonl$/i;
+const LIGHT_DIARY_HISTORY_LIMIT = 4;
+const LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD = 0.35;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
 const MANAGED_DAILY_DREAMING_BLOCKS = [
@@ -539,11 +543,6 @@ type SessionIngestionCollectionResult = {
   changed: boolean;
 };
 
-function normalizeWorkspaceKey(workspaceDir: string): string {
-  const resolved = path.resolve(workspaceDir).replace(/\\/g, "/");
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-}
-
 export function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
   const record = asRecord(raw);
   const filesRaw = asRecord(record?.files);
@@ -746,7 +745,7 @@ function resolveSessionAgentsForWorkspace(params: {
   if (!cfg) {
     return [];
   }
-  const target = normalizeWorkspaceKey(workspaceDir);
+  const target = normalizeMemoryCoreWorkspaceKey(workspaceDir);
   const workspaces = resolveMemoryDreamingWorkspaces(
     cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
     {
@@ -754,7 +753,9 @@ function resolveSessionAgentsForWorkspace(params: {
       primaryAgentId: "main",
     },
   );
-  const match = workspaces.find((entry) => normalizeWorkspaceKey(entry.workspaceDir) === target);
+  const match = workspaces.find(
+    (entry) => normalizeMemoryCoreWorkspaceKey(entry.workspaceDir) === target,
+  );
   if (!match) {
     return [];
   }
@@ -1476,6 +1477,46 @@ function dedupeEntries(entries: ShortTermRecallEntry[], threshold: number): Shor
   return deduped;
 }
 
+function normalizeDiaryCoverageText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function isEntryCoveredByRecentDiary(
+  entry: ShortTermRecallEntry,
+  recentDiaryEntries: readonly string[],
+): boolean {
+  const snippet = normalizeDiaryCoverageText(entry.snippet);
+  if (!snippet) {
+    return false;
+  }
+  return recentDiaryEntries.some((diaryEntry) => {
+    const diaryText = normalizeDiaryCoverageText(diaryEntry);
+    return (
+      diaryText.includes(snippet) ||
+      snippetSimilarity(entry.snippet, diaryEntry) >= LIGHT_DIARY_SNIPPET_SIMILARITY_THRESHOLD
+    );
+  });
+}
+
+function prioritizeLightEntriesByDiaryCoverage(
+  entries: ShortTermRecallEntry[],
+  recentDiaryEntries: readonly string[],
+): ShortTermRecallEntry[] {
+  if (recentDiaryEntries.length === 0) {
+    return entries;
+  }
+  const fresh: ShortTermRecallEntry[] = [];
+  const covered: ShortTermRecallEntry[] = [];
+  for (const entry of entries) {
+    if (isEntryCoveredByRecentDiary(entry, recentDiaryEntries)) {
+      covered.push(entry);
+    } else {
+      fresh.push(entry);
+    }
+  }
+  return [...fresh, ...covered];
+}
+
 function buildLightDreamingBody(entries: ShortTermRecallEntry[]): string[] {
   if (entries.length === 0) {
     return ["- No notable updates."];
@@ -1660,18 +1701,21 @@ async function runLightDreaming(params: {
       lookbackDays: params.config.lookbackDays,
     }),
   });
-  const entries = dedupeEntries(
-    recentEntries
-      .toSorted((a, b) => {
-        const byTime = Date.parse(b.lastRecalledAt) - Date.parse(a.lastRecalledAt);
-        if (byTime !== 0) {
-          return byTime;
-        }
-        return b.recallCount - a.recallCount;
-      })
-      .slice(0, params.config.limit),
+  const rankedEntries = dedupeEntries(
+    recentEntries.toSorted((a, b) => {
+      const byTime = Date.parse(b.lastRecalledAt) - Date.parse(a.lastRecalledAt);
+      if (byTime !== 0) {
+        return byTime;
+      }
+      return b.recallCount - a.recallCount;
+    }),
     params.config.dedupeSimilarity,
   );
+  const recentDiaryEntries = await readRecentDreamDiaryEntries({
+    workspaceDir: params.workspaceDir,
+    limit: LIGHT_DIARY_HISTORY_LIMIT,
+  });
+  const entries = prioritizeLightEntriesByDiaryCoverage(rankedEntries, recentDiaryEntries);
   const capped = entries.slice(0, params.config.limit);
   const bodyLines = buildLightDreamingBody(capped);
   await writeDailyDreamingPhaseBlock({
@@ -1699,7 +1743,9 @@ async function runLightDreaming(params: {
     const data: NarrativePhaseData = {
       phase: "light",
       snippets: capped.map((e) => e.snippet).filter(Boolean),
+      currentDate: formatMemoryDreamingDay(nowMs, params.config.timezone),
       ...(themes.length > 0 ? { themes } : {}),
+      ...(recentDiaryEntries.length > 0 ? { recentDiaryEntries } : {}),
     };
     if (params.detachNarratives) {
       runDetachedDreamNarrative({

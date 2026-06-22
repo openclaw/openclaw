@@ -1,5 +1,6 @@
 // Telegram plugin module implements bot message context.session behavior.
 import {
+  type BuildChannelInboundEventContextParams,
   type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
   classifyChannelInboundEvent,
@@ -32,6 +33,11 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
+
+type TelegramMentionFacts = NonNullable<
+  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
+>;
 import {
   buildGroupLabel,
   buildSenderLabel,
@@ -45,6 +51,11 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import {
+  type TelegramGroupHistoryContextMode,
+  includesRecentTelegramGroupHistoryContext,
+  resolveTelegramGroupHistoryContextModeForAccount,
+} from "./group-history-context.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
 export type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
@@ -136,6 +147,7 @@ function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReply
 
 function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): string {
   const forwardedAt = timestampMsToIsoString(entry.forwardedDate);
+  const mediaPath = entry.mediaPath ? resolveTelegramPromptMediaPath(entry.mediaPath) : undefined;
   const labels = [
     `${index + 1}. ${entry.sender ?? "unknown sender"}`,
     entry.messageId ? `id:${entry.messageId}` : undefined,
@@ -148,7 +160,7 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
       : undefined,
     entry.isQuote && entry.body ? `"${entry.body}"` : entry.body,
     entry.mediaType ? `<media:${entry.mediaType}>` : undefined,
-    entry.mediaPath ? `[media_path:${entry.mediaPath}]` : undefined,
+    mediaPath ? `[media_path:${mediaPath}]` : undefined,
     entry.mediaRef ? `[media_ref:${entry.mediaRef}]` : undefined,
   ].filter(Boolean);
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
@@ -176,11 +188,13 @@ export async function buildTelegramInboundContextPayload(params: {
   historyKey?: string;
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
+  groupHistoryContextMode?: TelegramGroupHistoryContextMode;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
-  stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
+  mentionFacts: TelegramMentionFacts;
   hasControlCommand: boolean;
+  stickerCacheHit?: boolean;
   audioTranscribedMediaIndex?: number;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
@@ -225,11 +239,13 @@ export async function buildTelegramInboundContextPayload(params: {
     historyKey,
     historyLimit,
     groupHistories,
+    groupHistoryContextMode,
     groupConfig,
     topicConfig,
-    stickerCacheHit,
     effectiveWasMentioned,
+    mentionFacts,
     hasControlCommand,
+    stickerCacheHit,
     audioTranscribedMediaIndex,
     commandAuthorized,
     locationData,
@@ -377,8 +393,17 @@ export async function buildTelegramInboundContextPayload(params: {
     envelope: envelopeOptions,
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
+  const includeRecentGroupHistoryContext =
+    isGroup &&
+    includesRecentTelegramGroupHistoryContext(
+      groupHistoryContextMode ??
+        resolveTelegramGroupHistoryContextModeForAccount({
+          cfg,
+          accountId: route.accountId,
+        }),
+    );
   let combinedBody = body;
-  if (isGroup && historyKey && historyLimit > 0) {
+  if (includeRecentGroupHistoryContext && historyKey && historyLimit > 0) {
     combinedBody = channelHistory.buildPendingContext({
       historyKey,
       limit: historyLimit,
@@ -404,13 +429,12 @@ export async function buildTelegramInboundContextPayload(params: {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
   });
   const inboundHistory =
-    isGroup && historyKey && historyLimit > 0
+    includeRecentGroupHistoryContext && historyKey && historyLimit > 0
       ? channelHistory.buildInboundHistory({
           historyKey,
           limit: historyLimit,
         })
       : undefined;
-  const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const replyHead = visibleReplyChain[0];
   const toInboundMedia = (media: TelegramMediaRef, index?: number) => ({
     path: media.path,
@@ -418,7 +442,7 @@ export async function buildTelegramInboundContextPayload(params: {
     contentType: media.contentType,
     transcribed: index !== undefined && audioTranscribedMediaIndex === index,
   });
-  const currentMediaFacts = currentMediaForContext.map(toInboundMedia);
+  const currentMediaFacts = allMedia.map(toInboundMedia);
   const replyMediaFacts =
     visibleReplyChain.length > 0
       ? visibleReplyChain.flatMap((entry) =>
@@ -489,11 +513,13 @@ export async function buildTelegramInboundContextPayload(params: {
       bodyForAgent: bodyText,
       commandBody,
       inboundHistory,
+      sourceModality: msg.voice ? "voice" : undefined,
     },
     access: {
       commands: {
         authorized: commandAuthorized,
       },
+      mentions: mentionFacts,
     },
     command:
       commandSource === "native"
@@ -561,7 +587,8 @@ export async function buildTelegramInboundContextPayload(params: {
       ForwardedFromMessageId: visibleForwardOrigin?.fromMessageId,
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       Sticker: allMedia[0]?.stickerMetadata,
-      StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
+      StickerMediaIncluded: allMedia[0]?.stickerMetadata ? currentMediaFacts.length > 0 : undefined,
+      SkipStickerMediaUnderstanding: stickerCacheHit ? true : undefined,
       ...locationContext,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,

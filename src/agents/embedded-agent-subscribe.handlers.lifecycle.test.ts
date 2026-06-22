@@ -2,7 +2,7 @@
 // lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import { handleAgentEnd } from "./embedded-agent-subscribe.handlers.lifecycle.js";
+import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
 const { emitAgentEventMock } = vi.hoisted(() => ({
@@ -20,6 +20,7 @@ function createContext(
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
     onBlockReply?: ((payload: unknown) => void) | undefined;
     onBlockReplyFlush?: () => void | Promise<void>;
+    resolveTerminalStopReason?: () => string | undefined;
   },
 ): EmbeddedAgentSubscribeContext {
   // Lifecycle tests only need terminal state and delivery callbacks; omitted
@@ -34,6 +35,7 @@ function createContext(
       sessionKey: "agent:main:main",
       onAgentEvent: overrides?.onAgentEvent,
       onBeforeLifecycleTerminal: overrides?.onBeforeLifecycleTerminal,
+      resolveTerminalStopReason: overrides?.resolveTerminalStopReason,
       ...(onBlockReply ? { onBlockReply } : {}),
       onBlockReplyFlush: overrides?.onBlockReplyFlush,
     },
@@ -42,6 +44,8 @@ function createContext(
       pendingCompactionRetry: 0,
       pendingToolMediaUrls: [],
       pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: false,
+      deferredBlockReplies: [],
       replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       blockState: {
         thinking: true,
@@ -96,6 +100,44 @@ function firstWarnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unkno
 }
 
 describe("handleAgentEnd", () => {
+  it("keeps explicit session and agent identity on lifecycle start events", () => {
+    emitAgentEventMock.mockClear();
+    const ctx = createContext(undefined);
+    ctx.params.sessionId = "session-1";
+    ctx.params.agentId = "main";
+
+    handleAgentStart(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      sessionId: "session-1",
+      agentId: "main",
+      stream: "lifecycle",
+      data: expect.objectContaining({ phase: "start" }),
+    });
+  });
+
+  it("keeps the execution lifecycle generation on terminal events", async () => {
+    emitAgentEventMock.mockClear();
+    const ctx = createContext(undefined);
+    ctx.params.lifecycleGeneration = "pre-restart-generation";
+    ctx.params.sessionId = "session-1";
+    ctx.params.agentId = "main";
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      sessionId: "session-1",
+      agentId: "main",
+      lifecycleGeneration: "pre-restart-generation",
+      stream: "lifecycle",
+      data: expect.objectContaining({ phase: "end" }),
+    });
+  });
+
   it("suppresses raw assistant error messages in user-facing lifecycle events", async () => {
     // Canary text proves provider error strings are sanitized before lifecycle
     // events reach channel integrations.
@@ -199,6 +241,7 @@ describe("handleAgentEnd", () => {
 
     expect(emitAgentEventMock).toHaveBeenCalledWith({
       runId: "run-1",
+      sessionKey: "agent:main:main",
       stream: "lifecycle",
       data: expect.objectContaining({
         phase: "end",
@@ -214,6 +257,38 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("overrides embedded abort terminals with the restart stop reason", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, {
+      onAgentEvent,
+      resolveTerminalStopReason: () => "restart",
+    });
+    ctx.state.terminalStopReason = "aborted";
+    ctx.state.terminalAborted = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      stream: "lifecycle",
+      data: expect.objectContaining({
+        phase: "end",
+        stopReason: "restart",
+        aborted: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "restart",
+        aborted: true,
+      },
+    });
+  });
+
   it("emits explicit aborted terminal metadata on lifecycle end events", async () => {
     emitAgentEventMock.mockClear();
     const onAgentEvent = vi.fn();
@@ -225,6 +300,7 @@ describe("handleAgentEnd", () => {
 
     expect(emitAgentEventMock).toHaveBeenCalledWith({
       runId: "run-1",
+      sessionKey: "agent:main:main",
       stream: "lifecycle",
       data: expect.objectContaining({
         phase: "end",
@@ -491,6 +567,135 @@ describe("handleAgentEnd", () => {
         stopReason: "toolUse",
         livenessState: "abandoned",
         replayInvalid: true,
+      },
+    });
+  });
+
+  it("keeps tool-use terminal incomplete when tool media is pending", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.pendingToolMediaUrls = ["/tmp/render.png"];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "toolUse",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      },
+    });
+  });
+
+  it("marks token-limited terminal text as abandoned before runner finalization", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [{ type: "text", text: "Partial answer" }],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = ["Partial answer"];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "abandoned",
+        replayInvalid: true,
+      },
+    });
+  });
+
+  it("preserves token-limited terminal tool media before runner finalization", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [{ type: "text", text: "Partial answer" }],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.assistantTexts = ["Partial answer"];
+    ctx.state.pendingToolMediaUrls = ["/tmp/render.png"];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("preserves token-limited deferred media before terminal delivery", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+    ctx.state.livenessState = "working";
+    ctx.state.deferredBlockReplies = [{ mediaUrls: ["/tmp/render.png"] }];
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
+      },
+    });
+  });
+
+  it("preserves token-limited message-tool-only delivery before runner finalization", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      {
+        role: "assistant",
+        stopReason: "length",
+        content: [],
+      },
+      { onAgentEvent },
+    );
+    ctx.params.sourceReplyDeliveryMode = "message_tool_only";
+    ctx.state.livenessState = "working";
+    ctx.state.messageToolOnlySourceReplyDelivered = true;
+
+    await handleAgentEnd(ctx);
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "length",
+        livenessState: "working",
       },
     });
   });

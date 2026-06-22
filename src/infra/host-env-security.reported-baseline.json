@@ -10,7 +10,9 @@
     "BZR_PLUGIN_PATH",
     "BZR_SSH",
     "CARGO_BUILD_RUSTC",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
     "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTDOC",
     "CATALINA_OPTS",
     "CC",
     "CMAKE_CXX_COMPILER",
@@ -53,6 +55,8 @@
     "GRADLE_OPTS",
     "GVIMINIT",
     "HELM_PLUGINS",
+    "HGEDITOR",
+    "HGMERGE",
     "HGRCPATH",
     "HOSTALIASES",
     "IFS",
@@ -66,6 +70,7 @@
     "LUA_INIT_5_2",
     "LUA_INIT_5_3",
     "LUA_INIT_5_4",
+    "MAKE",
     "MAKEFLAGS",
     "MAVEN_OPTS",
     "MFLAGS",
@@ -86,7 +91,10 @@
     "RUBYLIB",
     "RUBYOPT",
     "RUBYSHELL",
+    "RUSTC",
+    "RUSTC_WORKSPACE_WRAPPER",
     "RUSTC_WRAPPER",
+    "RUSTDOC",
     "R_ENVIRON",
     "R_ENVIRON_USER",
     "R_PROFILE",
@@ -259,5 +267,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 254
+  "expectedTotalReportedEntries": 262
 }

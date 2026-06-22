@@ -7,7 +7,6 @@ import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.j
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import * as configRuntime from "../config/config.js";
-import { resetSessionStateMigratedForTest } from "../infra/session-state-migration.js";
 import { captureEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
@@ -332,7 +331,6 @@ export async function createOpenClawTestState(
     },
     applyEnv: () => {
       resetConfigRuntimeStateForTest();
-      resetSessionStateMigratedForTest();
       for (const [key, value] of Object.entries(envVars)) {
         // Test fixtures apply a fixed OpenClaw env set, not plugin-provided host env.
         if (value === undefined) {
@@ -347,7 +345,6 @@ export async function createOpenClawTestState(
       if (envApplied) {
         snapshot.restore();
         resetConfigRuntimeStateForTest();
-        resetSessionStateMigratedForTest();
         envApplied = false;
       }
     },

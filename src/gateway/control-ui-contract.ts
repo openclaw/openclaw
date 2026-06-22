@@ -1,7 +1,7 @@
 // Control UI bootstrap contract served by the gateway and consumed by the
 // browser app before it knows runtime branding, media roots, or embed policy.
 /** HTTP path for the Control UI bootstrap config payload. */
-export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/__openclaw/control-ui-config.json";
+export const CONTROL_UI_BOOTSTRAP_CONFIG_PATH = "/control-ui-config.json";
 
 /** Sandbox policy for assistant-provided embed surfaces inside Control UI. */
 export type ControlUiEmbedSandboxMode = "strict" | "scripts" | "trusted";
@@ -20,4 +20,6 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   chatMessageMaxWidth?: string;
+  /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
+  timeFormat?: "auto" | "12" | "24";
 };

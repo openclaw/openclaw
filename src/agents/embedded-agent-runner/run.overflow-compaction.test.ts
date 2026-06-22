@@ -3,10 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../../config/sessions/test-helpers.js";
+  claimAgentRunContext,
+  getAgentEventLifecycleGeneration,
+  getAgentRunContext,
+  resetAgentRunContextForTest,
+  rotateAgentEventLifecycleGeneration,
+  withAgentRunLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -42,6 +47,7 @@ import {
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
+  mockedWaitForDeferredTurnMaintenanceForSession,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
@@ -56,6 +62,7 @@ type RuntimePlanOverrides = Partial<Omit<AgentRuntimePlan, "auth" | "resolvedRef
 function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
   // Forwarding cases prove request-scoped flags survive the overflow-compaction
   // route into the eventual embedded attempt.
+  const onAgentToolResult = vi.fn();
   return {
     runId: "forward-attempt-params",
     params: {
@@ -65,7 +72,9 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       disableMessageTool: true,
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
+      chatType: "channel",
       internalEvents,
+      onAgentToolResult,
     },
     expected: {
       toolsAllow: ["exec", "read"],
@@ -74,6 +83,8 @@ function makeForwardingCase(internalEvents: AgentInternalEvent[]) {
       disableMessageTool: true,
       forceMessageTool: true,
       requireExplicitMessageTarget: true,
+      chatType: "channel",
+      onAgentToolResult,
     },
   } satisfies {
     runId: string;
@@ -226,6 +237,16 @@ function expectRuntimePlanFields(
   }
 }
 
+async function waitForRunEvent(events: string[], expected: string): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (events.includes(expected)) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error(`Expected run event ${expected}; saw ${events.join(", ")}`);
+}
+
 describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
@@ -263,6 +284,33 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
   });
 
+  it("reports hook-selected models as normal selected models, not fallbacks", async () => {
+    mockedGlobalHookRunner.hasHooks.mockImplementation(
+      (hookName) => hookName === "before_model_resolve",
+    );
+    mockedGlobalHookRunner.runBeforeModelResolve.mockResolvedValueOnce({
+      providerOverride: "openai",
+      modelOverride: "hook-selected-model",
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "initial-model",
+      runId: "run-before-model-resolve-runtime-settings",
+    });
+
+    expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledTimes(1);
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      provider: "openai",
+      modelId: "hook-selected-model",
+      requestedModelId: "hook-selected-model",
+      fallbackActive: false,
+      fallbackReason: null,
+    });
+  });
+
   it("passes resolved auth profile into run attempts for context-engine afterTurn propagation", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
@@ -274,6 +322,73 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       authProfileId: "test-profile",
       authProfileIdSource: "auto",
     });
+  });
+
+  it("waits for same-session deferred maintenance before the attempt reads session state", async () => {
+    const events: string[] = [];
+    mockedWaitForDeferredTurnMaintenanceForSession.mockImplementationOnce(async (sessionKey) => {
+      events.push(`wait:${sessionKey}`);
+    });
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      events.push("attempt");
+      return makeAttemptResult({ promptError: null });
+    });
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-wait-deferred-maintenance",
+      sessionKey: "agent:main:session-wait-deferred-maintenance",
+    });
+
+    expect(events).toEqual(["wait:agent:main:session-wait-deferred-maintenance", "attempt"]);
+  });
+
+  it("does not hold the global run lane while waiting for another session's deferred maintenance", async () => {
+    const events: string[] = [];
+    let releaseSessionA: (() => void) | undefined;
+    mockedWaitForDeferredTurnMaintenanceForSession.mockImplementation(async (sessionKey) => {
+      events.push(`wait:${sessionKey}`);
+      if (sessionKey !== "agent:main:session-a") {
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        releaseSessionA = resolve;
+      });
+    });
+    mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
+      events.push(`attempt:${(params as { sessionKey?: string }).sessionKey}`);
+      return makeAttemptResult({ promptError: null });
+    });
+
+    const sessionARun = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-deferred-maintenance-session-a",
+      sessionKey: "agent:main:session-a",
+    });
+    await waitForRunEvent(events, "wait:agent:main:session-a");
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-deferred-maintenance-session-b",
+      sessionKey: "agent:main:session-b",
+    });
+
+    expect(events).toEqual([
+      "wait:agent:main:session-a",
+      "wait:agent:main:session-b",
+      "attempt:agent:main:session-b",
+    ]);
+    if (!releaseSessionA) {
+      throw new Error("Expected session A maintenance release callback to be initialized");
+    }
+    releaseSessionA();
+    await sessionARun;
+    expect(events).toEqual([
+      "wait:agent:main:session-a",
+      "wait:agent:main:session-b",
+      "attempt:agent:main:session-b",
+      "attempt:agent:main:session-a",
+    ]);
   });
 
   it("uses the lightweight auth profile store during reply startup", async () => {
@@ -809,6 +924,156 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     expect(attemptParams?.internalEvents).toBe(internalEvents);
   });
 
+  it("keeps an explicitly captured lifecycle generation across the embedded attempt", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "run-before-restart",
+      lifecycleGeneration,
+    });
+
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      lifecycleGeneration,
+    });
+  });
+
+  it("rebinds preserved queued work to the current lifecycle generation", async () => {
+    resetAgentRunContextForTest();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    let enqueueCount = 0;
+    let runQueuedTask: (() => void) | undefined;
+    const onExecutionStarted = vi.fn();
+    const runPromise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "queued-across-restart",
+      trigger: "user",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      onExecutionStarted,
+      enqueue: async (task) => {
+        enqueueCount += 1;
+        if (enqueueCount === 1) {
+          return await task();
+        }
+        return await new Promise((resolve, reject) => {
+          runQueuedTask = () => {
+            void Promise.resolve().then(task).then(resolve, reject);
+          };
+        });
+      },
+    });
+    await vi.waitFor(() => expect(runQueuedTask).toBeTypeOf("function"));
+
+    const currentLifecycleGeneration = rotateAgentEventLifecycleGeneration();
+    runQueuedTask?.();
+    await runPromise;
+
+    expectMockCallFields(mockedRunEmbeddedAttempt, {
+      lifecycleGeneration: currentLifecycleGeneration,
+    });
+    expect(getAgentRunContext("queued-across-restart")).toEqual(
+      expect.objectContaining({
+        lifecycleGeneration: currentLifecycleGeneration,
+      }),
+    );
+    expect(onExecutionStarted).toHaveBeenCalledWith({
+      lifecycleGeneration: currentLifecycleGeneration,
+    });
+    resetAgentRunContextForTest();
+  });
+
+  it("rejects background work queued across lifecycle rotation", async () => {
+    resetAgentRunContextForTest();
+    let enqueueCount = 0;
+    let runQueuedTask: (() => void) | undefined;
+    const runPromise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "background-queued-across-restart",
+      trigger: "cron",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      enqueue: async (task) => {
+        enqueueCount += 1;
+        if (enqueueCount === 1) {
+          return await task();
+        }
+        return await new Promise((resolve, reject) => {
+          runQueuedTask = () => {
+            void Promise.resolve().then(task).then(resolve, reject);
+          };
+        });
+      },
+    });
+    await vi.waitFor(() => expect(runQueuedTask).toBeTypeOf("function"));
+
+    rotateAgentEventLifecycleGeneration();
+    runQueuedTask?.();
+
+    await expect(runPromise).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Agent run belongs to a stale gateway lifecycle",
+    });
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(getAgentRunContext("background-queued-across-restart")).toBeUndefined();
+  });
+
+  it("does not claim a rebound generation after queued work was aborted", async () => {
+    resetAgentRunContextForTest();
+    let enqueueCount = 0;
+    let runQueuedTask: (() => void) | undefined;
+    const abortController = new AbortController();
+    const onExecutionStarted = vi.fn();
+    const runPromise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "aborted-queued-across-restart",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      abortSignal: abortController.signal,
+      onExecutionStarted,
+      enqueue: async (task) => {
+        enqueueCount += 1;
+        if (enqueueCount === 1) {
+          return await task();
+        }
+        return await new Promise((resolve, reject) => {
+          runQueuedTask = () => {
+            void Promise.resolve().then(task).then(resolve, reject);
+          };
+        });
+      },
+    });
+    await vi.waitFor(() => expect(runQueuedTask).toBeTypeOf("function"));
+
+    const runResult = runPromise.catch((error: unknown) => error);
+    rotateAgentEventLifecycleGeneration();
+    abortController.abort();
+    runQueuedTask?.();
+
+    await expect(runResult).resolves.toMatchObject({ name: "AbortError" });
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    expect(getAgentRunContext("aborted-queued-across-restart")).toBeUndefined();
+  });
+
+  it("rejects stale descendants admitted after lifecycle rotation", async () => {
+    resetAgentRunContextForTest();
+    const preRestartGeneration = getAgentEventLifecycleGeneration();
+    rotateAgentEventLifecycleGeneration();
+
+    const runPromise = withAgentRunLifecycleGeneration(preRestartGeneration, () =>
+      runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        runId: "stale-descendant",
+        enqueue: async (task) => await task(),
+      }),
+    );
+
+    await expect(runPromise).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Agent run belongs to a stale gateway lifecycle",
+    });
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(getAgentRunContext("stale-descendant")).toBeUndefined();
+  });
+
   it("marks user-triggered session queue work as foreground", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
     const observedPriorities: unknown[] = [];
@@ -870,6 +1135,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
     const codexAuthStore = {
       version: 1,
+      runtimePersistedProfileIds: ["anthropic:work", "openai:other", "openai:work", "xai:work"],
       profiles: {
         "openai:work": {
           type: "oauth" as const,
@@ -949,6 +1215,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const forwardedAuthStore = expectRecordFields(harnessParams.authProfileStore, {});
     const authProfiles = expectRecordFields(forwardedAuthStore.profiles, {});
     expect(Object.keys(authProfiles)).toEqual(["openai:work"]);
+    expect(forwardedAuthStore.runtimePersistedProfileIds).toEqual(["openai:work"]);
+    expect(forwardedAuthStore.runtimeExternalProfileIds).toBeUndefined();
+    expect(forwardedAuthStore.runtimeExternalProfileIdsAuthoritative).toBeUndefined();
     expectRecordFields(authProfiles["openai:work"], {
       provider: "openai",
     });
@@ -1056,6 +1325,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     const codexAuthStore = {
       version: 1 as const,
+      runtimePersistedProfileIds: ["openai:work"],
       profiles: {
         "openai:work": {
           type: "oauth" as const,
@@ -1151,6 +1421,8 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
     const codexAuthStore = {
       version: 1 as const,
+      runtimePersistedProfileIds: ["xai:work"],
+      runtimeExternalProfileIds: ["openai:default"],
       profiles: {
         "openai:default": {
           type: "oauth" as const,
@@ -1271,6 +1543,9 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     const forwardedAuthStore = expectRecordFields(harnessParams.authProfileStore, {});
     const authProfiles = expectRecordFields(forwardedAuthStore.profiles, {});
     expect(Object.keys(authProfiles)).toEqual(["openai:default"]);
+    expect(forwardedAuthStore.runtimePersistedProfileIds).toBeUndefined();
+    expect(forwardedAuthStore.runtimeExternalProfileIds).toEqual(["openai:default"]);
+    expect(forwardedAuthStore.runtimeExternalProfileIdsAuthoritative).toBeUndefined();
     expectRecordFields(authProfiles["openai:default"], {
       provider: "openai",
     });
@@ -1892,37 +2167,41 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
   it("recovers preflight compaction when stale tokens point at an empty transcript", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-empty-preflight-"));
     const storePath = path.join(dir, "sessions.json");
-    await writeSessionStoreForTestAsync(storePath, {
-      "test-key": {
-        sessionId: "test-session",
-        updatedAt: 1,
-        totalTokens: 1_500_000,
-        totalTokensFresh: true,
-        inputTokens: 20,
-        outputTokens: 10_855,
-        cacheRead: 1_761_324,
-        cacheWrite: 33_047,
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "test-key": {
+          sessionId: "test-session",
           updatedAt: 1,
-          provider: "claude-cli",
-          model: "claude-opus-4-7",
-          route: "compact_only",
-          shouldCompact: true,
-          estimatedPromptTokens: 1_794_391,
-          contextTokenBudget: 1_048_576,
-          promptBudgetBeforeReserve: 1_044_480,
-          reserveTokens: 4_096,
-          effectiveReserveTokens: 4_096,
-          remainingPromptBudgetTokens: 0,
-          overflowTokens: 749_911,
-          toolResultReducibleChars: 0,
-          messageCount: 0,
-          unwindowedMessageCount: 0,
+          totalTokens: 1_500_000,
+          totalTokensFresh: true,
+          inputTokens: 20,
+          outputTokens: 10_855,
+          cacheRead: 1_761_324,
+          cacheWrite: 33_047,
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 1,
+            provider: "claude-cli",
+            model: "claude-opus-4-7",
+            route: "compact_only",
+            shouldCompact: true,
+            estimatedPromptTokens: 1_794_391,
+            contextTokenBudget: 1_048_576,
+            promptBudgetBeforeReserve: 1_044_480,
+            reserveTokens: 4_096,
+            effectiveReserveTokens: 4_096,
+            remainingPromptBudgetTokens: 0,
+            overflowTokens: 749_911,
+            toolResultReducibleChars: 0,
+            messageCount: 0,
+            unwindowedMessageCount: 0,
+          },
         },
-      },
-    });
+      }),
+      "utf8",
+    );
 
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
@@ -1974,7 +2253,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       expect(result.meta.error).toBeUndefined();
       expect(result.meta.agentMeta?.compactionTokensAfter).toBeUndefined();
       expect(result.meta.agentMeta?.contextBudgetStatus).toBeUndefined();
-      const stored = readSessionStoreForTest(storePath)["test-key"];
+      const stored = JSON.parse(await fs.readFile(storePath, "utf8"))["test-key"];
       expect(stored.totalTokens).toBe(0);
       expect(stored.totalTokensFresh).toBe(true);
       expect(stored.inputTokens).toBeUndefined();
@@ -2205,20 +2484,80 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       }),
     );
 
-    await runEmbeddedAgent(overflowBaseRunParams);
+    const replyOperation = createReplyOperation({
+      sessionKey: "test-key",
+      sessionId: "test-session",
+      resetTriggered: false,
+    });
+    const onSessionIdChanged = vi.fn();
+    replyOperation.setPhase("running");
+    try {
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        replyOperation,
+        onSessionIdChanged,
+      });
 
-    expectMockCallFields(
-      mockedRunEmbeddedAttempt,
-      {
+      const compactParams = expectMockCallFields(mockedCompactDirect, {});
+      expectMockCallFields(
+        mockedRunEmbeddedAttempt,
+        {
+          sessionId: "rotated-session",
+          sessionFile: "/tmp/rotated-session.json",
+        },
+        1,
+      );
+      const maintenanceParams = expectMockCallFields(mockedRunContextEngineMaintenance, {
         sessionId: "rotated-session",
         sessionFile: "/tmp/rotated-session.json",
-      },
-      1,
-    );
-    expectMockCallFields(mockedRunContextEngineMaintenance, {
-      sessionId: "rotated-session",
-      sessionFile: "/tmp/rotated-session.json",
+      });
+      expect(maintenanceParams.runtimeSettings).toBe(compactParams.runtimeSettings);
+      const runtimeSettings = expectRecordFields(maintenanceParams.runtimeSettings, {});
+      expectRecordFields(runtimeSettings.runtime, {
+        mode: "degraded",
+      });
+      expectRecordFields(runtimeSettings.diagnostics, {
+        degradedReason: "context_overflow",
+      });
+      expect(replyOperation.sessionId).toBe("rotated-session");
+      expect(onSessionIdChanged).toHaveBeenCalledWith("rotated-session");
+    } finally {
+      replyOperation.complete();
+    }
+  });
+
+  it("does not let an old execution rotate a newer same-id run context", async () => {
+    resetAgentRunContextForTest();
+    const currentLifecycleGeneration = rotateAgentEventLifecycleGeneration();
+    claimAgentRunContext("shared-run", {
+      sessionKey: "new-session-key",
+      sessionId: "new-session",
+      lifecycleGeneration: currentLifecycleGeneration,
     });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: null,
+        sessionIdUsed: "old-rotated-session",
+      }),
+    );
+
+    await expect(
+      runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        runId: "shared-run",
+        lifecycleGeneration: "pre-restart",
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
+    expect(getAgentRunContext("shared-run")).toEqual(
+      expect.objectContaining({
+        sessionKey: "new-session-key",
+        sessionId: "new-session",
+        lifecycleGeneration: currentLifecycleGeneration,
+      }),
+    );
+    resetAgentRunContextForTest();
   });
 
   it("guards thrown engine-owned overflow compaction attempts", async () => {
@@ -2321,6 +2660,14 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     });
 
     mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError }));
+    mockedEnsureAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+      profiles: {
+        "test-profile": {
+          provider: "anthropic",
+          type: "oauth",
+        },
+      },
+    });
     mockedCoerceToFailoverError.mockReturnValue(normalized);
     mockedDescribeFailoverError.mockImplementation((err: unknown) => ({
       message: err instanceof Error ? err.message : String(err),
@@ -2350,6 +2697,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       provider: "anthropic",
       model: "test-model",
       profileId: "test-profile",
+      authMode: "oauth",
     });
     expect(mockedResolveFailoverStatus).toHaveBeenCalledWith("rate_limit");
   });

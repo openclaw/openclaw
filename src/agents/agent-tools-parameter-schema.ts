@@ -595,7 +595,7 @@ function inlineLocalSchemaRefsWithDefs(
 }
 
 /** Inline local $ref pointers so providers receive self-contained tool schemas. */
-export function inlineLocalToolSchemaRefs(schema: unknown): TSchema {
+function inlineLocalToolSchemaRefs(schema: unknown): TSchema {
   if (!schema || typeof schema !== "object") {
     return schema as TSchema;
   }

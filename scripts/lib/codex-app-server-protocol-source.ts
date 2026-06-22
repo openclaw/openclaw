@@ -42,18 +42,14 @@ type ResolvePnpmCommandOptions = {
   platform?: NodeJS.Platform;
 };
 
-function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key === undefined ? undefined : env[key];
-}
-
 export function resolveCodexProtocolPnpmCommand(
   args: string[],
   options: ResolvePnpmCommandOptions = {},
 ): PnpmCommand {
   const env = options.env ?? process.env;
   const command = resolvePnpmRunner({
-    comSpec: options.comSpec ?? resolveEnvValue(env, "ComSpec"),
+    comSpec: options.comSpec,
+    env,
     npmExecPath: options.npmExecPath ?? env.npm_execpath,
     nodeExecPath: options.execPath ?? process.execPath,
     platform: options.platform,
@@ -384,10 +380,19 @@ export function normalizeGeneratedTypeScript(text: string): string {
     .replaceAll("| null | null", "| null");
 }
 
-export function canonicalizeCodexAppServerProtocolJson(value: unknown): unknown {
+// Sort typed-object arrays for schema keywords whose item order does not affect
+// payload validity; preserve order everywhere else, especially prefixItems.
+const typeSortedSchemaArrayKeys = new Set(["anyOf", "enum", "oneOf", "required"]);
+
+export function canonicalizeCodexAppServerProtocolJson(
+  value: unknown,
+  parentKey?: string,
+): unknown {
   if (Array.isArray(value)) {
-    const items = value.map(canonicalizeCodexAppServerProtocolJson);
-    return sortCodexProtocolJsonArrayByType(items);
+    const items = value.map((item) => canonicalizeCodexAppServerProtocolJson(item));
+    return parentKey !== undefined && typeSortedSchemaArrayKeys.has(parentKey)
+      ? sortCodexProtocolJsonArrayByType(items)
+      : items;
   }
 
   if (!isPlainObject(value)) {
@@ -396,7 +401,7 @@ export function canonicalizeCodexAppServerProtocolJson(value: unknown): unknown 
 
   const sorted: Record<string, unknown> = {};
   const entries = Object.entries(value)
-    .map(([key, child]) => [key, canonicalizeCodexAppServerProtocolJson(child)] as const)
+    .map(([key, child]) => [key, canonicalizeCodexAppServerProtocolJson(child, key)] as const)
     .toSorted(([left], [right]) => {
       if (left < right) {
         return -1;

@@ -14,7 +14,6 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
-import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
@@ -59,34 +58,13 @@ const SUBAGENT_TOOL_DENY_ALWAYS = [
   "sessions_send",
 ];
 
-/**
- * Additional tools denied for leaf sub-agents (depth >= maxSpawnDepth).
- * These are tools that only make sense for orchestrator sub-agents that can spawn children.
- */
+/** Tools that only make sense for orchestrator sub-agents that can spawn children. */
 const SUBAGENT_TOOL_DENY_LEAF = [
   "subagents",
   "sessions_list",
   "sessions_history",
   "sessions_spawn",
 ];
-
-/**
- * Build the deny list for a sub-agent at a given depth.
- *
- * - Depth 1 with maxSpawnDepth >= 2 (orchestrator): allowed to use sessions_spawn,
- *   subagents, sessions_list, sessions_history so it can manage its children.
- * - Depth >= maxSpawnDepth (leaf): denied subagents, sessions_spawn, and
- *   session management tools.
- */
-function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[] {
-  const isLeaf = depth >= Math.max(1, Math.floor(maxSpawnDepth));
-  if (isLeaf) {
-    return [...SUBAGENT_TOOL_DENY_ALWAYS, ...SUBAGENT_TOOL_DENY_LEAF];
-  }
-  // Orchestrator sub-agent: only deny the always-denied tools.
-  // sessions_spawn, subagents, sessions_list, sessions_history are allowed.
-  return [...SUBAGENT_TOOL_DENY_ALWAYS];
-}
 
 function resolveSubagentDenyListForRole(role: SubagentSessionRole): string[] {
   if (role === "leaf") {
@@ -100,26 +78,6 @@ function mergeConfiguredSubagentAllow(
   alsoAllow: string[] | undefined,
 ): string[] | undefined {
   return allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
-}
-
-/** Resolve depth-based default deny rules plus configured sub-agent overrides. */
-export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
-  const configured = cfg?.tools?.subagents?.tools;
-  const maxSpawnDepth =
-    cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
-  const effectiveDepth = typeof depth === "number" && depth >= 0 ? depth : 1;
-  const baseDeny = resolveSubagentDenyList(effectiveDepth, maxSpawnDepth);
-  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
-  const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
-  const explicitAllow = new Set(
-    [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
-  );
-  const deny = [
-    ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
-    ...(Array.isArray(configured?.deny) ? configured.deny : []),
-  ];
-  const mergedAllow = mergeConfiguredSubagentAllow(allow, alsoAllow);
-  return { allow: mergedAllow, deny };
 }
 
 /** Resolve sub-agent tool policy from stored session capabilities. */
@@ -612,5 +570,3 @@ export function resolveGroupToolPolicy(params: {
   });
   return pickSandboxToolPolicy(configTools);
 }
-
-export { isToolAllowedByPolicies, isToolAllowedByPolicyName } from "./tool-policy-match.js";

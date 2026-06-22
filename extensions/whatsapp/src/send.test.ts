@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
+import { createAcceptedWhatsAppSendResult } from "./inbound/send-result.test-helper.js";
 import type { ActiveWebListener } from "./inbound/types.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -25,15 +25,6 @@ let setLoggerOverride: typeof import("openclaw/plugin-sdk/runtime-env").setLogge
 const WHATSAPP_TEST_CFG: OpenClawConfig = {
   channels: { whatsapp: {} },
 };
-
-function acceptedSendResult(kind: WhatsAppSendKind, id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
 
 vi.mock("./connection-controller-registry.js", async () => {
   const actual = await vi.importActual<typeof import("./connection-controller-registry.js")>(
@@ -82,9 +73,11 @@ vi.mock("./text-runtime.js", async () => {
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
-  const sendMessage = vi.fn(async () => acceptedSendResult("text", "msg123"));
-  const sendPoll = vi.fn(async () => acceptedSendResult("poll", "poll123"));
-  const sendReaction = vi.fn(async () => acceptedSendResult("reaction", "reaction123"));
+  const sendMessage = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg123"));
+  const sendPoll = vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll123"));
+  const sendReaction = vi.fn(async () =>
+    createAcceptedWhatsAppSendResult("reaction", "reaction123"),
+  );
 
   beforeAll(async () => {
     ({ sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } = await import("./send.js"));

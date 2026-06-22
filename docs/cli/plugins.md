@@ -159,7 +159,7 @@ is available, then fall back to `latest`.
   <Accordion title="--dangerously-force-unsafe-install">
     `--dangerously-force-unsafe-install` is deprecated and is now a no-op. OpenClaw no longer runs built-in install-time dangerous-code blocking for plugin installs.
 
-    Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks and `security.installPolicy` can still block installs.
+    Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks are plugin-runtime lifecycle hooks and are not the primary policy boundary for CLI installs.
 
     If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` does not ask ClawHub to rescan the plugin or make a blocked release public.
 
@@ -405,7 +405,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install on update">
-    `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` and plugin `before_install` hooks can still block updates.
+    `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` can still block updates; plugin `before_install` hooks only apply in processes where plugin hooks are loaded.
   </Accordion>
 </AccordionGroup>
 

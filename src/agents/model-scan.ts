@@ -188,73 +188,81 @@ async function fetchOpenRouterModels(
   fetchImpl: typeof fetch,
   timeoutMs: number,
 ): Promise<OpenRouterModelMeta[]> {
-  const res = await withTimeout(timeoutMs, (signal) =>
-    fetchImpl(OPENROUTER_MODELS_URL, {
-      headers: { Accept: "application/json" },
-      signal,
-    }),
-  );
-  if (!res.ok) {
-    throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
-  }
-  const payload = (await res.json()) as { data?: unknown };
-  const entries = Array.isArray(payload.data) ? payload.data : [];
+  let res: Response | undefined;
+  try {
+    res = await withTimeout(timeoutMs, (signal) =>
+      fetchImpl(OPENROUTER_MODELS_URL, {
+        headers: { Accept: "application/json" },
+        signal,
+      }),
+    );
+    if (!res.ok) {
+      throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
+    }
+    const payload = (await res.json()) as { data?: unknown };
+    const entries = Array.isArray(payload.data) ? payload.data : [];
 
-  return entries
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const obj = entry as Record<string, unknown>;
-      const id = normalizeOptionalString(obj.id) ?? "";
-      if (!id) {
-        return null;
-      }
-      const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+    return entries
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const obj = entry as Record<string, unknown>;
+        const id = normalizeOptionalString(obj.id) ?? "";
+        if (!id) {
+          return null;
+        }
+        const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
 
-      const contextLength =
-        typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
-          ? obj.context_length
-          : null;
-
-      const maxCompletionTokens =
-        typeof obj.max_completion_tokens === "number" && Number.isFinite(obj.max_completion_tokens)
-          ? obj.max_completion_tokens
-          : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
-            ? obj.max_output_tokens
+        const contextLength =
+          typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
+            ? obj.context_length
             : null;
 
-      const supportedParameters = Array.isArray(obj.supported_parameters)
-        ? normalizeStringEntries(
-            obj.supported_parameters.filter((value) => typeof value === "string"),
-          )
-        : [];
+        const maxCompletionTokens =
+          typeof obj.max_completion_tokens === "number" &&
+          Number.isFinite(obj.max_completion_tokens)
+            ? obj.max_completion_tokens
+            : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
+              ? obj.max_output_tokens
+              : null;
 
-      const supportedParametersCount = supportedParameters.length;
-      const supportsToolsMeta = supportedParameters.includes("tools");
+        const supportedParameters = Array.isArray(obj.supported_parameters)
+          ? normalizeStringEntries(
+              obj.supported_parameters.filter((value) => typeof value === "string"),
+            )
+          : [];
 
-      const modality =
-        typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
+        const supportedParametersCount = supportedParameters.length;
+        const supportsToolsMeta = supportedParameters.includes("tools");
 
-      const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
-      const createdAtMs = normalizeCreatedAtMs(obj.created_at);
-      const pricing = parseOpenRouterPricing(obj.pricing);
+        const modality =
+          typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
 
-      return {
-        id,
-        name,
-        contextLength,
-        maxCompletionTokens,
-        supportedParameters,
-        supportedParametersCount,
-        supportsToolsMeta,
-        modality,
-        inferredParamB,
-        createdAtMs,
-        pricing,
-      } satisfies OpenRouterModelMeta;
-    })
-    .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
+        const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
+        const createdAtMs = normalizeCreatedAtMs(obj.created_at);
+        const pricing = parseOpenRouterPricing(obj.pricing);
+
+        return {
+          id,
+          name,
+          contextLength,
+          maxCompletionTokens,
+          supportedParameters,
+          supportedParametersCount,
+          supportsToolsMeta,
+          modality,
+          inferredParamB,
+          createdAtMs,
+          pricing,
+        } satisfies OpenRouterModelMeta;
+      })
+      .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
+  } finally {
+    if (res && !res.bodyUsed) {
+      await res.body?.cancel().catch(() => undefined);
+    }
+  }
 }
 
 async function probeTool(

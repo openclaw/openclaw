@@ -7,12 +7,13 @@ import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sd
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import {
-  cleanToolSchemaForGemini,
-  normalizeToolParameterSchema,
-  normalizeToolParameters,
-} from "./agent-tools.schema.js";
+  isToolWrappedWithBeforeToolCallHook,
+  testing as beforeToolCallTesting,
+  wrapToolWithBeforeToolCallHook,
+} from "./agent-tools.before-tool-call.js";
+import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
 const TEST_USAGE = {
@@ -132,15 +133,18 @@ describe("normalizeToolParameterSchema", () => {
   });
 
   it("inlines local $ref before removing unsupported keywords", () => {
-    const cleaned = cleanToolSchemaForGemini({
-      type: "object",
-      properties: {
-        foo: { $ref: "#/$defs/Foo" },
+    const cleaned = normalizeToolParameterSchema(
+      {
+        type: "object",
+        properties: {
+          foo: { $ref: "#/$defs/Foo" },
+        },
+        $defs: {
+          Foo: { type: "string", enum: ["a", "b"] },
+        },
       },
-      $defs: {
-        Foo: { type: "string", enum: ["a", "b"] },
-      },
-    }) as {
+      { modelProvider: "gemini" },
+    ) as {
       $defs?: unknown;
       properties?: Record<string, unknown>;
     };
@@ -596,18 +600,21 @@ describe("normalizeToolParameterSchema", () => {
   });
 
   it("cleans tuple items schemas", () => {
-    const cleaned = cleanToolSchemaForGemini({
-      type: "object",
-      properties: {
-        tuples: {
-          type: "array",
-          items: [
-            { type: "string", format: "uuid" },
-            { type: "number", minimum: 1 },
-          ],
+    const cleaned = normalizeToolParameterSchema(
+      {
+        type: "object",
+        properties: {
+          tuples: {
+            type: "array",
+            items: [
+              { type: "string", format: "uuid" },
+              { type: "number", minimum: 1 },
+            ],
+          },
         },
       },
-    }) as {
+      { modelProvider: "gemini" },
+    ) as {
       properties?: Record<string, unknown>;
     };
 
@@ -621,13 +628,16 @@ describe("normalizeToolParameterSchema", () => {
   });
 
   it("drops null-only union variants without flattening other unions", () => {
-    const cleaned = cleanToolSchemaForGemini({
-      type: "object",
-      properties: {
-        parentId: { anyOf: [{ type: "string" }, { type: "null" }] },
-        count: { oneOf: [{ type: "string" }, { type: "number" }] },
+    const cleaned = normalizeToolParameterSchema(
+      {
+        type: "object",
+        properties: {
+          parentId: { anyOf: [{ type: "string" }, { type: "null" }] },
+          count: { oneOf: [{ type: "string" }, { type: "number" }] },
+        },
       },
-    }) as {
+      { modelProvider: "gemini" },
+    ) as {
       properties?: Record<string, unknown>;
     };
 
@@ -655,6 +665,19 @@ function makeTool(parameters: TSchema): AnyAgentTool {
 }
 
 describe("normalizeToolParameters", () => {
+  it("preserves before_tool_call wrapper metadata", () => {
+    const source = makeTool(Type.Object({ value: Type.String() }));
+    const hookContext = { agentId: "main", sessionId: "session-before-normalize" };
+    const wrapped = wrapToolWithBeforeToolCallHook(source, hookContext);
+
+    const normalized = normalizeToolParameters(wrapped);
+    const tagged = normalized as unknown as Record<symbol, unknown>;
+
+    expect(isToolWrappedWithBeforeToolCallHook(normalized)).toBe(true);
+    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_SOURCE_TOOL]).toBe(source);
+    expect(tagged[beforeToolCallTesting.BEFORE_TOOL_CALL_HOOK_CONTEXT]).toBe(hookContext);
+  });
+
   it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {
     const tool: AnyAgentTool = {
       name: "get_flux_instance",

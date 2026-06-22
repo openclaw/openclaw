@@ -9,12 +9,20 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
-import { writeJson } from "./json-files.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { scheduleGatewaySigusr1Restart } from "./restart.js";
 import { detectRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
@@ -73,7 +81,7 @@ export function resetUpdateAvailableStateForTest(): void {
   updateAvailableCache = null;
 }
 
-const UPDATE_CHECK_FILENAME = "update-check.json";
+const UPDATE_CHECK_STATE_KEY = "default";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
@@ -81,6 +89,8 @@ const AUTO_STABLE_DELAY_HOURS_DEFAULT = 6;
 const AUTO_STABLE_JITTER_HOURS_DEFAULT = 12;
 const AUTO_BETA_CHECK_INTERVAL_HOURS_DEFAULT = 1;
 const MANAGED_AUTO_UPDATE_SYSTEMD_RESTART_GRACE_MS = 2000;
+
+type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
 
 function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
@@ -130,18 +140,69 @@ function resolveCheckIntervalMs(cfg: OpenClawConfig): number {
   return UPDATE_CHECK_INTERVAL_MS;
 }
 
-async function readState(statePath: string): Promise<UpdateCheckState> {
-  try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = JSON.parse(raw) as UpdateCheckState;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
+function presentString(value: string | null): string | undefined {
+  return value ?? undefined;
 }
 
-async function writeState(statePath: string, state: UpdateCheckState): Promise<void> {
-  await writeJson(statePath, state);
+async function readState(): Promise<UpdateCheckState> {
+  const database = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    stateDb
+      .selectFrom("update_check_state")
+      .selectAll()
+      .where("state_key", "=", UPDATE_CHECK_STATE_KEY),
+  );
+  if (!row) {
+    return {};
+  }
+  return {
+    lastCheckedAt: presentString(row.last_checked_at),
+    lastNotifiedVersion: presentString(row.last_notified_version),
+    lastNotifiedTag: presentString(row.last_notified_tag),
+    lastAvailableVersion: presentString(row.last_available_version),
+    lastAvailableTag: presentString(row.last_available_tag),
+    autoInstallId: presentString(row.auto_install_id),
+    autoFirstSeenVersion: presentString(row.auto_first_seen_version),
+    autoFirstSeenTag: presentString(row.auto_first_seen_tag),
+    autoFirstSeenAt: presentString(row.auto_first_seen_at),
+    autoLastAttemptVersion: presentString(row.auto_last_attempt_version),
+    autoLastAttemptAt: presentString(row.auto_last_attempt_at),
+    autoLastSuccessVersion: presentString(row.auto_last_success_version),
+    autoLastSuccessAt: presentString(row.auto_last_success_at),
+  };
+}
+
+async function writeState(state: UpdateCheckState): Promise<void> {
+  const updatedAtMs = Date.now();
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
+    executeSqliteQuerySync(
+      db,
+      stateDb.deleteFrom("update_check_state").where("state_key", "=", UPDATE_CHECK_STATE_KEY),
+    );
+    executeSqliteQuerySync(
+      db,
+      stateDb.insertInto("update_check_state").values({
+        state_key: UPDATE_CHECK_STATE_KEY,
+        last_checked_at: state.lastCheckedAt ?? null,
+        last_notified_version: state.lastNotifiedVersion ?? null,
+        last_notified_tag: state.lastNotifiedTag ?? null,
+        last_available_version: state.lastAvailableVersion ?? null,
+        last_available_tag: state.lastAvailableTag ?? null,
+        auto_install_id: state.autoInstallId ?? null,
+        auto_first_seen_version: state.autoFirstSeenVersion ?? null,
+        auto_first_seen_tag: state.autoFirstSeenTag ?? null,
+        auto_first_seen_at: state.autoFirstSeenAt ?? null,
+        auto_last_attempt_version: state.autoLastAttemptVersion ?? null,
+        auto_last_attempt_at: state.autoLastAttemptAt ?? null,
+        auto_last_success_version: state.autoLastSuccessVersion ?? null,
+        auto_last_success_at: state.autoLastSuccessAt ?? null,
+        updated_at_ms: updatedAtMs,
+      }),
+    );
+  });
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {
@@ -315,7 +376,9 @@ async function runAutoUpdateCommand(params: {
   timeoutMs: number;
   root?: string;
 }): Promise<AutoUpdateRunResult> {
-  const supervisor = detectRespawnSupervisor(process.env, process.platform);
+  const supervisor = detectRespawnSupervisor(process.env, process.platform, {
+    includeLinuxOpenClawGatewayServiceMarker: true,
+  });
   if (supervisor) {
     return await startManagedServiceAutoUpdateHandoff({
       channel: params.channel,
@@ -415,8 +478,7 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
 
-  const statePath = path.join(resolveStateDir(), UPDATE_CHECK_FILENAME);
-  const state = await readState(statePath);
+  const state = await readState();
   const rawNow = Date.now();
   const now = resolveUpdateCheckNowMs(rawNow);
   const rawNowIsValid = asDateTimestampMs(rawNow) !== undefined;
@@ -468,7 +530,7 @@ export async function runGatewayUpdateCheck(params: {
       next: null,
       onUpdateAvailableChange: params.onUpdateAvailableChange,
     });
-    await writeState(statePath, nextState);
+    await writeState(nextState);
     return;
   }
 
@@ -476,7 +538,7 @@ export async function runGatewayUpdateCheck(params: {
   const resolved = await resolveNpmChannelTag({ channel, timeoutMs: 2500 });
   const tag = resolved.tag;
   if (!resolved.version) {
-    await writeState(statePath, nextState);
+    await writeState(nextState);
     return;
   }
 
@@ -596,7 +658,7 @@ export async function runGatewayUpdateCheck(params: {
     });
   }
 
-  await writeState(statePath, nextState);
+  await writeState(nextState);
   if (pendingAutoUpdateRestartDelayMs !== null) {
     scheduleGatewaySigusr1Restart({
       delayMs: pendingAutoUpdateRestartDelayMs,

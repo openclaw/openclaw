@@ -27,7 +27,10 @@ import { truncateUtf16Safe } from "../utils.js";
 /** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
+export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";
+export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -129,8 +132,13 @@ export {
 } from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+  extractToolErrorMessage,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  isToolResultError,
+  sanitizeToolResult,
 } from "../agents/embedded-agent-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
@@ -141,6 +149,8 @@ export {
 } from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
+export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
+export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,
@@ -262,6 +272,9 @@ export {
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
+  finalizeToolTerminalPresentation,
   getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
@@ -272,6 +285,7 @@ export {
   type BeforeToolCallPolicyDiagnosticState,
   type DeferredPluginToolApproval,
 } from "../agents/agent-tools.before-tool-call.js";
+export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessAfterCompactionHook,
@@ -315,6 +329,10 @@ export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
+export {
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
+} from "../agents/harness/agent-end-side-effects.js";
 export {
   awaitAgentHarnessAgentEndHook,
   getAgentHarnessHookRunner,

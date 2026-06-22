@@ -59,13 +59,14 @@ function buildAgentSessionLines(params: {
   targetChannel?: string;
 }): string[] {
   return [
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
+    // Session keys are high-cardinality (thread/run ids), so concrete values churn the
+    // system prompt and break provider prompt-cache reuse across A2A turns. Channels are
+    // low-cardinality and inform reply formatting, so they stay concrete.
+    params.requesterSessionKey ? "Agent 1 (requester) session: <REQUESTER_SESSION>." : undefined,
     params.requesterChannel
       ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
       : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
+    "Agent 2 (target) session: <TARGET_SESSION>.",
     params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
   ].filter((line): line is string => Boolean(line));
 }

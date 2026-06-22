@@ -38,8 +38,8 @@ on:
         type: string
 
 concurrency:
-  group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
-  cancel-in-progress: false
+  group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -57,7 +57,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
@@ -185,7 +185,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
 
@@ -224,7 +224,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -257,7 +257,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -288,6 +288,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
 
       - name: Verify published runtime

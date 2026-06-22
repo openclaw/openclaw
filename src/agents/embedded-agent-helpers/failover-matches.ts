@@ -107,6 +107,7 @@ const ERROR_PATTERNS = {
     // Chinese provider overloaded messages
     "服务过载",
     "当前负载过高",
+    "访问量过大",
   ],
   serverError: [
     "an error occurred while processing",
@@ -237,6 +238,11 @@ const ERROR_PATTERNS = {
     // (#79688).
     "does not support assistant message prefill",
     "conversation must end with a user message",
+    // Agent harness provider mismatch: the harness rejects the model because
+    // the provider id is not in its supported set. Retrying the same model
+    // will fail identically — classify so the fallback notice is informative
+    // instead of "unknown" (#91710).
+    /agent harness .* does not support .*provider is not one of/i,
   ],
 } as const;
 

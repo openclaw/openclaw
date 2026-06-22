@@ -20,7 +20,7 @@ import {
   resolveStorePath,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { updateDreamsFile } from "./dreaming-dreams-file.js";
+import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -54,6 +54,8 @@ export type NarrativePhaseData = {
   themes?: string[];
   /** Snippets that were promoted to durable memory (deep). */
   promotions?: string[];
+  currentDate?: string;
+  recentDiaryEntries?: string[];
 };
 
 type Logger = {
@@ -99,6 +101,10 @@ const NARRATIVE_SYSTEM_PROMPT = [
 // worst case at one minute, well below the multi-minute stall the original
 // comment warned against.
 const NARRATIVE_TIMEOUT_MS = 60_000;
+const NARRATIVE_MESSAGE_FETCH_LIMIT = 5;
+// A completed run can reach the session reader before the final assistant text
+// is visible, so retry briefly before falling back to synthetic diary text.
+const NARRATIVE_MESSAGE_SETTLE_DELAYS_MS = [50, 150, 300, 750] as const;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
@@ -106,6 +112,8 @@ const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
+const RECENT_DIARY_CONTEXT_LIMIT = 3;
+const RECENT_DIARY_CONTEXT_MAX_CHARS = 360;
 const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
   "openclaw.memoryCore.dreamingNarrative.sessionLocks",
 );
@@ -143,16 +151,10 @@ function formatFallbackWriteFailure(err: unknown): string {
   return "unknown error";
 }
 
-// Raw snippets and promotions are pre-processing memory staging fragments
-// (session metadata, conversation summaries, operational logs). They must never
-// be persisted to the human-readable dream diary. When narrative generation
-// fails, always fall back to a generic placeholder so no staging content leaks
-// into DREAMS.md.
-function buildRequestScopedFallbackNarrative(_data: NarrativePhaseData): string {
-  return "A memory trace surfaced, but details were unavailable in this run.";
-}
+const REQUEST_SCOPED_FALLBACK_NARRATIVE =
+  "A memory trace surfaced, but details were unavailable in this run.";
 
-async function appendFallbackNarrativeEntry(params: {
+export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
   data: NarrativePhaseData;
   nowMs: number;
@@ -163,7 +165,9 @@ async function appendFallbackNarrativeEntry(params: {
   try {
     await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
-      narrative: buildRequestScopedFallbackNarrative(params.data),
+      // Raw snippets and promotions are pre-processing memory staging fragments.
+      // Keep fallback diary text generic so DREAMS.md never leaks staging content.
+      narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -301,6 +305,27 @@ export function buildNarrativePrompt(data: NarrativePhaseData): string {
     }
   }
 
+  const currentDate = data.currentDate?.trim();
+  const recentDiaryEntries = (data.recentDiaryEntries ?? [])
+    .map(clampDiaryContextEntry)
+    .filter((entry) => entry.length > 0)
+    .slice(0, RECENT_DIARY_CONTEXT_LIMIT);
+  if (currentDate || recentDiaryEntries.length > 0) {
+    lines.push("\nDiary continuity context:");
+    if (currentDate) {
+      lines.push(`- Current sweep: ${currentDate}`);
+    }
+    if (recentDiaryEntries.length > 0) {
+      lines.push("- Recent diary entries already written:");
+      for (const entry of recentDiaryEntries) {
+        lines.push(`  - ${entry}`);
+      }
+    }
+    lines.push(
+      "- Prefer a fresh angle; do not replay the same first-day framing unless newer fragments change it.",
+    );
+  }
+
   return lines.join("\n");
 }
 
@@ -337,6 +362,42 @@ export function extractNarrativeText(messages: unknown[]): string | null {
       if (text.length > 0) {
         return text;
       }
+    }
+  }
+  return null;
+}
+
+function waitForNarrativeMessagesToSettle(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, delayMs);
+  });
+}
+
+async function readNarrativeText(params: {
+  subagent: SubagentSurface;
+  sessionKey: string;
+}): Promise<string | null> {
+  const { messages } = await params.subagent.getSessionMessages({
+    sessionKey: params.sessionKey,
+    limit: NARRATIVE_MESSAGE_FETCH_LIMIT,
+  });
+  return extractNarrativeText(messages);
+}
+
+async function readSettledNarrativeText(params: {
+  subagent: SubagentSurface;
+  sessionKey: string;
+}): Promise<string | null> {
+  const immediateNarrative = await readNarrativeText(params);
+  if (immediateNarrative) {
+    return immediateNarrative;
+  }
+
+  for (const delayMs of NARRATIVE_MESSAGE_SETTLE_DELAYS_MS) {
+    await waitForNarrativeMessagesToSettle(delayMs);
+    const narrative = await readNarrativeText(params);
+    if (narrative) {
+      return narrative;
     }
   }
   return null;
@@ -393,6 +454,78 @@ function splitDiaryBlocks(diaryContent: string): string[] {
     .split(/\n---\n/)
     .map((block) => block.trim())
     .filter((block) => block.length > 0);
+}
+
+function clampDiaryContextEntry(entry: string): string {
+  const normalized = entry.replace(/\s+/g, " ").trim();
+  if (normalized.length <= RECENT_DIARY_CONTEXT_MAX_CHARS) {
+    return normalized;
+  }
+  return `${normalized.slice(0, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
+}
+
+function normalizeDiaryBlockBody(block: string): string {
+  const bodyLines: string[] = [];
+  for (const line of block.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("<!--") || trimmed.startsWith("#")) {
+      continue;
+    }
+    if (trimmed.startsWith("*") && trimmed.endsWith("*") && trimmed.length > 2) {
+      continue;
+    }
+    bodyLines.push(trimmed);
+  }
+  return clampDiaryContextEntry(bodyLines.join(" "));
+}
+
+function isOptionalDiaryContextReadError(err: unknown): boolean {
+  const code = extractErrorCode(err);
+  if (
+    code === "EACCES" ||
+    code === "EPERM" ||
+    code === "ENOENT" ||
+    code === "ENOTDIR" ||
+    code === "not-found" ||
+    code === "not-file" ||
+    code === "path-alias" ||
+    code === "path-mismatch" ||
+    code === "symlink"
+  ) {
+    return true;
+  }
+  return err instanceof Error && err.message === "path must be a regular file";
+}
+
+export async function readRecentDreamDiaryEntries(params: {
+  workspaceDir: string;
+  limit?: number;
+}): Promise<string[]> {
+  const limit = Math.max(0, Math.floor(params.limit ?? RECENT_DIARY_CONTEXT_LIMIT));
+  if (limit === 0) {
+    return [];
+  }
+  let existing: string;
+  try {
+    const dreamsPath = await resolveDreamsPath(params.workspaceDir);
+    existing = await readDreamsFile(dreamsPath);
+  } catch (err) {
+    if (isOptionalDiaryContextReadError(err)) {
+      return [];
+    }
+    throw err;
+  }
+  const startIdx = existing.indexOf(DIARY_START_MARKER);
+  const endIdx = existing.indexOf(DIARY_END_MARKER);
+  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+    return [];
+  }
+  const inner = existing.slice(startIdx + DIARY_START_MARKER.length, endIdx);
+  return splitDiaryBlocks(inner)
+    .map(normalizeDiaryBlockBody)
+    .filter((entry) => entry.length > 0)
+    .slice(-limit)
+    .toReversed();
 }
 
 function normalizeDiaryBlockFingerprint(block: string): string {
@@ -966,12 +1099,10 @@ export async function generateAndAppendDreamNarrative(params: {
         return;
       }
 
-      const { messages } = await params.subagent.getSessionMessages({
+      const narrative = await readSettledNarrativeText({
+        subagent: params.subagent,
         sessionKey: successfulSessionKey,
-        limit: 5,
       });
-
-      const narrative = extractNarrativeText(messages);
       if (!narrative) {
         params.logger.warn(
           `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry.`,

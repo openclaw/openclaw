@@ -31,6 +31,45 @@
       }
     }
   },
+  "modelCatalog": {
+    "suppressions": [
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-0309",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-beta-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-experimental-beta-0304",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-experimental-beta-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-beta-0309",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      }
+    ]
+  },
   "syntheticAuthRefs": ["xai"],
   "setup": {
     "providers": [
@@ -181,6 +220,7 @@
       ]
     },
     "x_search": {
+      "replaySafe": true,
       "authSignals": [
         {
           "provider": "xai"

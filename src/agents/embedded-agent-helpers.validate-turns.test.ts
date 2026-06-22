@@ -323,7 +323,7 @@ describe("validateAnthropicTurns", () => {
     ]);
   });
 
-  it("should not merge consecutive assistant messages", () => {
+  it("merges consecutive assistant messages", () => {
     const msgs = asMessages([
       { role: "user", content: [{ type: "text", text: "Question" }] },
       {
@@ -338,7 +338,60 @@ describe("validateAnthropicTurns", () => {
 
     const result = validateAnthropicTurns(msgs);
 
-    expect(result).toEqual(msgs);
+    expect(result).toEqual([
+      { role: "user", content: [{ type: "text", text: "Question" }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Answer 1" },
+          { type: "text", text: "Answer 2" },
+        ],
+      },
+    ]);
+  });
+
+  it("merges an injected assistant turn before validating signed tool-result pairing", () => {
+    const msgs = asMessages([
+      { role: "user", content: [{ type: "text", text: "Use the gateway" }] },
+      {
+        role: "assistant",
+        content: makeSignedThinkingGatewayToolCall("tool-1"),
+        stopReason: "toolUse",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Subagent completion delivered." }],
+        stopReason: "stop",
+      },
+      {
+        role: "toolResult",
+        toolUseId: "tool-1",
+        toolName: "gateway",
+        content: [{ type: "text", text: "done" }],
+        isError: false,
+      },
+    ]);
+
+    const result = validateAnthropicTurns(msgs);
+
+    expect(result).toEqual([
+      { role: "user", content: [{ type: "text", text: "Use the gateway" }] },
+      {
+        role: "assistant",
+        content: [
+          ...makeSignedThinkingGatewayToolCall("tool-1"),
+          { type: "text", text: "Subagent completion delivered." },
+        ],
+        stopReason: "stop",
+      },
+      {
+        role: "toolResult",
+        toolUseId: "tool-1",
+        toolName: "gateway",
+        content: [{ type: "text", text: "done" }],
+        isError: false,
+      },
+    ]);
   });
 
   it("should handle mixed scenario with steering messages", () => {

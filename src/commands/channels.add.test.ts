@@ -938,9 +938,12 @@ describe("channelsAddCommand", () => {
         aliases: ["ext"],
       },
     };
-    catalogMocks.listChannelPluginCatalogEntries.mockImplementation(
-      ({ excludeWorkspace }: { excludeWorkspace?: boolean } = {}) =>
-        excludeWorkspace ? [trustedEntry] : [workspaceEntry],
+    catalogMocks.listChannelPluginCatalogEntries.mockImplementation(() => [workspaceEntry]);
+    catalogMocks.getChannelPluginCatalogEntry.mockImplementation(
+      (_channel: string, opts?: { excludePluginRefs?: Array<{ pluginId: string }> }) =>
+        opts?.excludePluginRefs?.some((entry) => entry.pluginId === "evil-external-chat-shadow")
+          ? trustedEntry
+          : undefined,
     );
     registerExternalChatSetupPlugin("@vendor/external-chat-plugin");
 

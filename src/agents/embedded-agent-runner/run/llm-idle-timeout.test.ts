@@ -1,14 +1,20 @@
 // LLM idle-timeout tests cover timeout selection and stream wrapping for
 // embedded provider calls, including local-provider and cron exceptions.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import type { AssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessageEventStream,
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { notifyLlmRequestActivity } from "../../../shared/llm-request-activity.js";
+import type { StreamFn } from "../../runtime/index.js";
 import {
-  DEFAULT_LLM_IDLE_TIMEOUT_MS,
   resolveLlmIdleTimeoutMs,
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
+
+const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 
 describe("resolveLlmIdleTimeoutMs", () => {
   it("returns default when config is undefined", () => {
@@ -339,12 +345,12 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith({ api: "openai", requestTimeoutMs: 1000 }, context, {
+    expect(baseFn).toHaveBeenCalledWith(model, context, {
       signal: expect.any(AbortSignal),
     });
   });
 
-  it("keeps model request timeouts that are shorter than the idle watchdog", () => {
+  it("preserves explicit model request timeouts", () => {
     const mockStream = createMockAsyncIterable([]);
     const baseFn = vi.fn().mockReturnValue(mockStream);
     const wrapped = streamWithIdleTimeout(baseFn, 1000);
@@ -355,7 +361,7 @@ describe("streamWithIdleTimeout", () => {
 
     void wrapped(model, context, options);
 
-    expect(baseFn).toHaveBeenCalledWith({ requestTimeoutMs: 250 }, context, {
+    expect(baseFn).toHaveBeenCalledWith(model, context, {
       signal: expect.any(AbortSignal),
     });
   });
@@ -506,6 +512,37 @@ describe("streamWithIdleTimeout", () => {
     await collect;
 
     expect(results).toHaveLength(3);
+  });
+
+  it("treats quarantined provider events as stream activity", async () => {
+    vi.useFakeTimers();
+    let requestSignal: AbortSignal | undefined;
+    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
+      requestSignal = options?.signal;
+      const stream = createAssistantMessageEventStream();
+      setTimeout(() => {
+        stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
+      }, 120);
+      return stream;
+    });
+    const wrapped = streamWithIdleTimeout(baseFn, 50);
+    const stream = wrapped(
+      {} as Parameters<typeof baseFn>[0],
+      {} as Parameters<typeof baseFn>[1],
+      {} as Parameters<typeof baseFn>[2],
+    ) as AssistantMessageEventStream;
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = iterator.next();
+
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
+    setTimeout(() => notifyLlmRequestActivity(requestSignal), 80);
+    await vi.advanceTimersByTimeAsync(120);
+
+    await expect(next).resolves.toEqual({
+      done: false,
+      value: { type: "text_delta", contentIndex: 0, delta: "done" },
+    });
+    await iterator.return?.();
   });
 
   it("calls timeout hook on idle timeout", async () => {

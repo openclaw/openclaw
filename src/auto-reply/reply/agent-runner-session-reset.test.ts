@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import {
   resetReplyRunSession,
   setAgentRunnerSessionResetTestDeps,
@@ -129,7 +128,9 @@ describe("resetReplyRunSession", () => {
     });
     expect(errorMock).toHaveBeenCalledWith("reset 00000000-0000-0000-0000-000000000123");
 
-    const persisted = readSessionStoreForTest(storePath);
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      main: SessionEntry;
+    };
     expect(persisted.main.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(persisted.main.contextBudgetStatus).toBeUndefined();
     expect(persisted.main.fallbackNoticeReason).toBeUndefined();

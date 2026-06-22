@@ -150,6 +150,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "secrets",
     "shared-core",
     "tasks",
+    "tooling-docker",
     "tooling-isolated",
     "tooling",
     "tui",

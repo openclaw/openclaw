@@ -3,7 +3,10 @@ import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
 import { describe, expect, it } from "vitest";
-import { createNodeTestShards } from "../../scripts/lib/ci-node-test-plan.mjs";
+import {
+  createNodeTestShardBundles,
+  createNodeTestShards,
+} from "../../scripts/lib/ci-node-test-plan.mjs";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { commandsLightTestFiles } from "../vitest/vitest.commands-light-paths.mjs";
@@ -107,6 +110,46 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(payload.includePatterns).toBeGreaterThan(0);
   });
 
+  it("bundles split shards deterministically without changing coverage", () => {
+    const base = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
+    const bundled = createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false });
+    const basePatterns = base
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+    const bundledPatterns = bundled
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+
+    expect(bundled.length).toBeLessThan(base.length);
+    expect(bundledPatterns).toEqual(basePatterns);
+    expect(
+      bundled
+        .filter((shard) => shard.shardName.startsWith("bundle-"))
+        .every((shard) => (shard.includePatterns?.length ?? 0) <= 64),
+    ).toBe(true);
+    expect(bundled.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
+    expect(bundled).toEqual(createNodeTestShardBundles({ includeReleaseOnlyPluginShards: false }));
+    expect(bundled.find((shard) => shard.shardName === "core-unit-fast")?.runner).toBe(
+      DEFAULT_NODE_TEST_RUNNER,
+    );
+    expect(bundled.find((shard) => shard.shardName === "bundle-infra-small-1")?.runner).toBe(
+      "blacksmith-4vcpu-ubuntu-2404",
+    );
+    expect(
+      new Set(
+        bundled
+          .filter((shard) => shard.shardName.startsWith("bundle-"))
+          .flatMap((shard) => shard.configs),
+      ),
+    ).toEqual(new Set(["test/vitest/vitest.infra.config.ts"]));
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-commands-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-cron-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-agents-core-"))).toBe(false);
+    expect(bundled.some((shard) => shard.shardName.startsWith("bundle-gateway-server-"))).toBe(
+      false,
+    );
+  });
+
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
     const coreUnitShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-unit-"))
@@ -175,6 +218,32 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       .map((shard) => shard.shardName);
 
     expect(requiresDistShardNames).toEqual(["core-support-boundary"]);
+  });
+
+  it("splits tooling checks independently from built artifacts", () => {
+    const toolingShards = createNodeTestShards().filter((shard) =>
+      shard.shardName.startsWith("core-tooling"),
+    );
+
+    expect(toolingShards).toEqual([
+      {
+        checkName: "checks-node-core-tooling",
+        configs: [
+          "test/vitest/vitest.tooling.config.ts",
+          "test/vitest/vitest.tooling-isolated.config.ts",
+        ],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "core-tooling",
+      },
+      {
+        checkName: "checks-node-core-tooling-docker",
+        configs: ["test/vitest/vitest.tooling-docker.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-8vcpu-ubuntu-2404",
+        shardName: "core-tooling-docker",
+      },
+    ]);
   });
 
   it("assigns Blacksmith runners to every core node shard", () => {
@@ -290,6 +359,12 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         requiresDist: false,
         runner: "blacksmith-4vcpu-ubuntu-2404",
         shardName: "core-runtime-infra-heartbeat-runner",
+      },
+      {
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: "core-runtime-infra-misc",
       },
       {
         configs: ["test/vitest/vitest.infra.config.ts"],
@@ -447,6 +522,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       "core-runtime-infra-gateway-watch",
       "core-runtime-infra-heartbeat-core",
       "core-runtime-infra-heartbeat-runner",
+      "core-runtime-infra-misc",
       "core-runtime-infra-misc-dedupe-disk",
       "core-runtime-infra-misc-os",
       "core-runtime-infra-misc-values",

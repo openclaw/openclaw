@@ -17,6 +17,8 @@ export type TelegramIngressWorkerMessage =
   | {
       type: "poll-error";
       message: string;
+      /** Telegram Bot API error_code (e.g. 409 for getUpdates conflicts). */
+      errorCode?: number;
       finishedAt: number;
     }
   | {

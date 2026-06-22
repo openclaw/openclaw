@@ -1,5 +1,5 @@
 ---
-summary: "Adds file-backed memory search tools."
+summary: "Adds agent-callable tools."
 read_when:
   - You are installing, configuring, or auditing the memory-core plugin
 title: "Memory Core plugin"
@@ -7,7 +7,7 @@ title: "Memory Core plugin"
 
 # Memory Core plugin
 
-Adds file-backed memory search tools.
+Adds agent-callable tools.
 
 ## Distribution
 

@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
-import { renderWikiMarkdown } from "./markdown.js";
+import { renderWikiMarkdown, WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
+import { writeMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
@@ -90,7 +91,6 @@ describe("compileMemoryWikiVault", () => {
       }),
       "utf8",
     );
-
     const result = await compileMemoryWikiVault(config);
 
     expect(result.pageCounts.source).toBe(1);
@@ -489,6 +489,29 @@ describe("compileMemoryWikiVault", () => {
       }),
       "utf8",
     );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "raw-alpha.md"),
+      `# Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes stay usable as source evidence.\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "tracked-raw-alpha.md"),
+      `# Tracked Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nImported source body was damaged.\n`,
+      "utf8",
+    );
+    await writeMemoryWikiSourceSyncState(config.vault.path, {
+      version: 1,
+      entries: {
+        tracked: {
+          group: "bridge",
+          pagePath: "sources/tracked-raw-alpha.md",
+          sourcePath: "/tmp/MEMORY.md",
+          sourceUpdatedAtMs: 1,
+          sourceSize: 2,
+          renderFingerprint: "tracked-fingerprint",
+        },
+      },
+    });
 
     const result = await compileMemoryWikiVault(config);
 
@@ -517,6 +540,12 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
     ).resolves.toContain("[Alpha](../entities/alpha.md): missing updatedAt");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
+    ).resolves.not.toContain("[Raw Alpha Source](../sources/raw-alpha.md)");
+    await expect(
+      fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8"),
+    ).resolves.toContain("Tracked Raw Alpha Source");
     const agentDigest = JSON.parse(
       await fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "agent-digest.json"), "utf8"),
     ) as {

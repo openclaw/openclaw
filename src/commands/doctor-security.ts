@@ -14,6 +14,7 @@ import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import {
   loadExecApprovals,
+  resolveExecApprovalsDisplayPath,
   type ExecAsk,
   type ExecMode,
   type ExecSecurity,
@@ -246,7 +247,7 @@ export async function collectSecurityWarnings(
   if (cfg.approvals?.exec?.enabled === false) {
     warnings.push(
       "- Note: approvals.exec.enabled=false disables approval forwarding only.",
-      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      `  Host exec gating still comes from ${resolveExecApprovalsDisplayPath()}.`,
       `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
     );
   }

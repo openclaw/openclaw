@@ -103,6 +103,19 @@ describe("Z.ai vendor error codes (#48988)", () => {
   });
 });
 
+describe("Chinese provider overload messages", () => {
+  const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
+
+  it("classifies the Zhipu GLM overload body as overloaded", () => {
+    expect(isOverloadedErrorMessage(ZHIPU_OVERLOAD)).toBe(true);
+  });
+
+  it("does not misclassify the GLM overload body as rate limit or auth", () => {
+    expect(isRateLimitErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+    expect(isAuthErrorMessage(ZHIPU_OVERLOAD)).toBe(false);
+  });
+});
+
 describe("Volcengine Coding Plan subscription errors", () => {
   it("classifies InvalidSubscription JSON body as billing", () => {
     const raw =
@@ -128,6 +141,24 @@ describe("Volcengine Coding Plan subscription errors", () => {
       '{"error":{"code":"InvalidSubscription","message":"Your account does not have a valid CodingPlan subscription, or your subscription has expired."}}';
     expect(isRateLimitErrorMessage(raw)).toBe(false);
     expect(classifyFailoverReason(raw)).toBe("billing");
+  });
+});
+
+describe("agent harness provider mismatch (#91710)", () => {
+  it("classifies harness provider rejection as format error", () => {
+    expect(
+      classifyFailoverReason(
+        'Requested agent harness "codex" does not support openai/gpt-5.3-codex (provider is not one of: codex).',
+      ),
+    ).toBe("format");
+  });
+
+  it("classifies harness provider rejection with multiple providers as format error", () => {
+    expect(
+      classifyFailoverReason(
+        'Requested agent harness "codex" does not support openrouter/gpt-5.4 (provider is not one of: codex, openai).',
+      ),
+    ).toBe("format");
   });
 });
 

@@ -1,12 +1,14 @@
 // Agent Core module implements compaction behavior.
-import type {
-  AssistantMessage,
-  Context,
-  Model,
-  SimpleStreamOptions,
-  StreamFn,
-  Usage,
+import {
+  resolveClaudeFable5ModelIdentity,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
+  type StreamFn,
+  type Usage,
 } from "../../../../llm-core/src/index.js";
+import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
   resolveAgentCoreCompleteFn,
@@ -242,6 +244,20 @@ export function shouldCompact(
   return contextTokens > contextWindow - settings.reserveTokens;
 }
 
+const IMAGE_BLOCK_CHARS = 4800;
+
+function countContentBlockChars(content: Array<{ type: string; text?: string }>): number {
+  let chars = 0;
+  for (const block of content) {
+    if (block.type === "text" && block.text) {
+      chars += block.text.length;
+    } else if (block.type === "image") {
+      chars += IMAGE_BLOCK_CHARS;
+    }
+  }
+  return chars;
+}
+
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
   let chars = 0;
@@ -255,11 +271,7 @@ export function estimateTokens(message: AgentMessage): number {
       if (typeof content === "string") {
         chars = content.length;
       } else if (Array.isArray(content)) {
-        for (const block of content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-        }
+        chars = countContentBlockChars(content);
       }
       return Math.ceil(chars / 4);
     }
@@ -281,14 +293,7 @@ export function estimateTokens(message: AgentMessage): number {
       if (typeof harnessMessage.content === "string") {
         chars = harnessMessage.content.length;
       } else {
-        for (const block of harnessMessage.content) {
-          if (block.type === "text" && block.text) {
-            chars += block.text.length;
-          }
-          if (block.type === "image") {
-            chars += 4800;
-          }
-        }
+        chars = countContentBlockChars(harnessMessage.content);
       }
       return Math.ceil(chars / 4);
     }
@@ -517,8 +522,11 @@ function createSummarizationOptions(
   thinkingLevel: ThinkingLevel | undefined,
 ): SimpleStreamOptions {
   const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
-  if (model.reasoning && thinkingLevel && thinkingLevel !== "off") {
-    options.reasoning = thinkingLevel;
+  const fableReasoning =
+    (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
+    resolveClaudeFable5ModelIdentity(model) !== undefined;
+  if ((model.reasoning || fableReasoning) && thinkingLevel) {
+    options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
   }
   return options;
 }

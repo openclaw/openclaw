@@ -11,6 +11,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChatChannelId } from "../channels/ids.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -1205,6 +1206,13 @@ function resolveExecReviewerDefaults(params: { defaults?: ExecToolDefaults; agen
   return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
 }
 
+function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
+  if (typeof defaults?.notifyOnExitEmptySuccess === "boolean") {
+    return defaults.notifyOnExitEmptySuccess;
+  }
+  return normalizeChatChannelId(defaults?.messageProvider) !== null;
+}
+
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
@@ -1248,7 +1256,7 @@ export function createExecTool(
     );
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
+  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
   const notifySessionKey = normalizeOptionalString(defaults?.sessionKey);
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
@@ -1559,7 +1567,7 @@ export function createExecTool(
         const rawWorkdir = explicitWorkdir ?? defaultWorkdir ?? process.cwd();
         workdir = resolveWorkdir(rawWorkdir, warnings);
       }
-      rejectUnsafeExecControlShellCommand(params.command);
+      await rejectUnsafeExecControlShellCommand(params.command);
 
       const inheritedBaseEnv = coerceEnv(process.env);
       const resolvedExecEnvState = getResolvedExecEnvPreparedState(params);
@@ -1649,6 +1657,7 @@ export function createExecTool(
           sessionId: defaults?.sessionId,
           sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,
@@ -1699,6 +1708,7 @@ export function createExecTool(
           sessionId: defaults?.sessionId,
           sessionStore: defaults?.sessionStore,
           bashElevated: elevatedDefaults,
+          approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
           turnSourceChannel: defaults?.messageProvider,
           turnSourceTo: defaults?.currentChannelId,
           turnSourceAccountId: defaults?.accountId,

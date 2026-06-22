@@ -22,6 +22,8 @@ const {
     sent: string[] = [];
     closed = false;
     terminated = false;
+    deferClose = false;
+    deferredClose: (() => void) | undefined;
     args: unknown[];
 
     constructor(...args: unknown[]) {
@@ -49,12 +51,23 @@ const {
     close(code?: number, reason?: string): void {
       this.closed = true;
       this.readyState = MockWebSocket.CLOSED;
-      this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
+      const emitClose = () => this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
+      if (this.deferClose) {
+        this.deferredClose = emitClose;
+        return;
+      }
+      emitClose();
     }
 
     terminate(): void {
       this.terminated = true;
       this.close(1006, "terminated");
+    }
+
+    emitDeferredClose(): void {
+      const emitClose = this.deferredClose;
+      this.deferredClose = undefined;
+      emitClose?.();
     }
   }
 
@@ -924,11 +937,13 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
   it("treats pre-ready auth errors as a single startup failure", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
+    const onClose = vi.fn();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
       onError,
+      onClose,
     });
     const connecting = bridge.connect();
     const socket = FakeWebSocket.instances[0];
@@ -959,8 +974,56 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     await expect(connecting).rejects.toThrow("Incorrect API key provided");
     expect(onError).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
     expect(socket.closed).toBe(true);
     expect(bridge.isConnected()).toBe(false);
+  });
+
+  it("keeps a retried connection ready after delayed startup failure close", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose,
+    });
+    const failedConnect = bridge.connect();
+    const failedSocket = FakeWebSocket.instances[0];
+    if (!failedSocket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+    failedSocket.deferClose = true;
+
+    failedSocket.readyState = FakeWebSocket.OPEN;
+    failedSocket.emit("open");
+    failedSocket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: { message: "Incorrect API key provided" },
+        }),
+      ),
+    );
+
+    await expect(failedConnect).rejects.toThrow("Incorrect API key provided");
+    expect(failedSocket.deferredClose).toBeDefined();
+
+    const retryConnect = bridge.connect();
+    const retrySocket = FakeWebSocket.instances[1];
+    if (!retrySocket) {
+      throw new Error("expected bridge retry to create a websocket");
+    }
+    retrySocket.readyState = FakeWebSocket.OPEN;
+    retrySocket.emit("open");
+    retrySocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await retryConnect;
+
+    expect(bridge.isConnected()).toBe(true);
+    failedSocket.emitDeferredClose();
+    expect(bridge.isConnected()).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("rejects connection when the socket closes before session readiness", async () => {
@@ -981,6 +1044,33 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     socket.close(1006, "session closed");
 
     await expect(connecting).rejects.toThrow("OpenAI realtime connection closed before ready");
+    expect(bridge.isConnected()).toBe(false);
+  });
+
+  it("does not report startup timeout shutdown as a clean close", async () => {
+    vi.useFakeTimers();
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onClose = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onClose,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    const timeoutAssertion = expect(connecting).rejects.toThrow(
+      "OpenAI realtime connection timeout",
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await timeoutAssertion;
+    expect(socket.terminated).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(1);
     expect(bridge.isConnected()).toBe(false);
   });
 

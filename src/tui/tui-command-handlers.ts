@@ -39,6 +39,10 @@ import type {
   TuiStateAccess,
 } from "./tui-types.js";
 
+function formatTuiFastMode(mode: unknown): "auto" | "on" | "off" {
+  return mode === "auto" ? "auto" : mode === true ? "on" : "off";
+}
+
 type CommandHandlerContext = {
   client: TuiBackend;
   chatLog: ChatLog;
@@ -469,7 +473,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
               ...currentSessionPatchTarget(),
               model: args,
             });
-            chatLog.addSystem(`model set to ${args}`);
+            const resolvedModel = result.resolved?.model;
+            const resolvedProvider = result.resolved?.modelProvider;
+            const resolvedModelRef = resolvedModel
+              ? resolvedProvider
+                ? modelKey(resolvedProvider, resolvedModel)
+                : resolvedModel
+              : args;
+            chatLog.addSystem(`model set to ${resolvedModelRef}`);
             applySessionInfoFromPatch(result);
             await refreshSessionInfo();
           } catch (err) {
@@ -541,19 +552,19 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "fast":
         if (!args || args === "status") {
-          chatLog.addSystem(`fast mode: ${state.sessionInfo.fastMode ? "on" : "off"}`);
+          chatLog.addSystem(`fast mode: ${formatTuiFastMode(state.sessionInfo.fastMode)}`);
           break;
         }
-        if (args !== "on" && args !== "off") {
-          chatLog.addSystem("usage: /fast <status|on|off>");
+        if (args !== "auto" && args !== "on" && args !== "off") {
+          chatLog.addSystem("usage: /fast <status|auto|on|off>");
           break;
         }
         try {
           const result = await client.patchSession({
             ...currentSessionPatchTarget(),
-            fastMode: args === "on",
+            fastMode: args === "auto" ? "auto" : args === "on",
           });
-          chatLog.addSystem(`fast mode ${args === "on" ? "enabled" : "disabled"}`);
+          chatLog.addSystem(`fast mode set to ${args}`);
           applySessionInfoFromPatch(result);
           await refreshSessionInfo();
         } catch (err) {

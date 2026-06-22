@@ -22,7 +22,6 @@ import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintena
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
-  runQuotaSuspensionMaintenance,
   saveSessionStore,
   updateSessionStore,
 } from "./store.js";
@@ -92,13 +91,6 @@ async function expectPathMissing(targetPath: string): Promise<void> {
     return;
   }
   throw new Error(`expected missing path: ${targetPath}`);
-}
-
-async function writeStoreFixture(
-  storePath: string,
-  store: Record<string, SessionEntry>,
-): Promise<void> {
-  await saveSessionStore(storePath, store, { skipMaintenance: true });
 }
 
 function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
@@ -285,7 +277,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       testDir,
       "orphan-session.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
     );
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
     await fs.writeFile(referencedTranscript, "referenced", "utf-8");
     await fs.writeFile(referencedCheckpointPath, "referenced checkpoint", "utf-8");
     await fs.writeFile(referencedPostCompactionPath, "referenced post-compaction", "utf-8");
@@ -349,38 +341,46 @@ describe("Integration: saveSessionStore with pruning", () => {
       testDir,
       "legacy-nested-role-present.jsonl",
     );
-    await writeStoreFixture(storePath, {
-      "invalid-no-file": { sessionId: "agent:main:main", updatedAt: now },
-      "invalid-bad-file": {
-        sessionId: "agent:main:main",
-        sessionFile: "../outside.jsonl",
-        updatedAt: now,
-      },
-      "invalid-missing-relative-file": {
-        sessionId: "agent:main:main",
-        sessionFile: "missing.jsonl",
-        updatedAt: now,
-      },
-      "agent:main:metadata": {
-        sessionId: "agent:main:metadata",
-        updatedAt: now,
-        groupActivation: "always",
-      },
-      "legacy-present-invalid-id": {
-        sessionId: "agent:main:main",
-        sessionFile: "legacy-present.jsonl",
-        updatedAt: now,
-      },
-      "valid-present": { sessionId: "valid-present", updatedAt: now },
-      "empty-present": { sessionId: "empty-present", updatedAt: now },
-      "header-only-present": { sessionId: "header-only-present", updatedAt: now },
-      "user-only-present": { sessionId: "user-only-present", updatedAt: now },
-      "legacy-role-present": { sessionId: "legacy-role-present", updatedAt: now },
-      "legacy-nested-role-present": {
-        sessionId: "legacy-nested-role-present",
-        updatedAt: now,
-      },
-    } satisfies Record<string, SessionEntry>);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "invalid-no-file": { sessionId: "agent:main:main", updatedAt: now },
+          "invalid-bad-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "../outside.jsonl",
+            updatedAt: now,
+          },
+          "invalid-missing-relative-file": {
+            sessionId: "agent:main:main",
+            sessionFile: "missing.jsonl",
+            updatedAt: now,
+          },
+          "agent:main:metadata": {
+            sessionId: "agent:main:metadata",
+            updatedAt: now,
+            groupActivation: "always",
+          },
+          "legacy-present-invalid-id": {
+            sessionId: "agent:main:main",
+            sessionFile: "legacy-present.jsonl",
+            updatedAt: now,
+          },
+          "valid-present": { sessionId: "valid-present", updatedAt: now },
+          "empty-present": { sessionId: "empty-present", updatedAt: now },
+          "header-only-present": { sessionId: "header-only-present", updatedAt: now },
+          "user-only-present": { sessionId: "user-only-present", updatedAt: now },
+          "legacy-role-present": { sessionId: "legacy-role-present", updatedAt: now },
+          "legacy-nested-role-present": {
+            sessionId: "legacy-nested-role-present",
+            updatedAt: now,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     await fs.writeFile(validTranscript, "valid", "utf-8");
     await fs.writeFile(legacyPresentTranscript, "legacy", "utf-8");
     await fs.writeFile(emptyPresentTranscript, "", "utf-8");
@@ -424,7 +424,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(preview?.missingKeys.has("user-only-present")).toBe(false);
     expect(preview?.missingKeys.has("legacy-role-present")).toBe(false);
     expect(preview?.missingKeys.has("legacy-nested-role-present")).toBe(false);
-    const rawAfterDryRun = loadSessionStore(storePath, { skipCache: true });
+    const rawAfterDryRun = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
     expect(rawAfterDryRun).toHaveProperty("invalid-no-file");
 
     const applied = await runSessionsCleanup({
@@ -438,11 +441,11 @@ describe("Integration: saveSessionStore with pruning", () => {
     const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(Object.keys(persisted)).toEqual([
       "agent:main:metadata",
-      "legacy-nested-role-present",
       "legacy-present-invalid-id",
-      "legacy-role-present",
-      "user-only-present",
       "valid-present",
+      "user-only-present",
+      "legacy-role-present",
+      "legacy-nested-role-present",
     ]);
     expect(persisted["agent:main:metadata"]).toMatchObject({ groupActivation: "always" });
     expect(persisted["agent:main:metadata"]?.sessionId).toBeUndefined();
@@ -459,18 +462,26 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const now = Date.now();
     const directTranscript = path.join(testDir, "direct-session.jsonl");
-    await writeStoreFixture(storePath, {
-      "agent:main:main": {
-        sessionId: "main-session",
-        updatedAt: now,
-      },
-      "agent:main:telegram:direct:6101296751": {
-        sessionId: "direct-session",
-        updatedAt: now,
-        lastChannel: "telegram",
-        lastTo: "6101296751",
-      },
-    } satisfies Record<string, SessionEntry>);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "main-session",
+            updatedAt: now,
+          },
+          "agent:main:telegram:direct:6101296751": {
+            sessionId: "direct-session",
+            updatedAt: now,
+            lastChannel: "telegram",
+            lastTo: "6101296751",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
     await fs.writeFile(directTranscript, "direct", "utf-8");
 
@@ -493,19 +504,27 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const now = Date.now();
     const directTranscript = path.join(testDir, "direct-session.jsonl");
-    await writeStoreFixture(storePath, {
-      "agent:main:main": {
-        sessionId: "main-session",
-        updatedAt: now,
-      },
-      "agent:main:telegram:direct:6101296751": {
-        sessionId: "direct-session",
-        updatedAt: now,
-        sessionFile: directTranscript,
-        lastChannel: "telegram",
-        lastTo: "6101296751",
-      },
-    } satisfies Record<string, SessionEntry>);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "main-session",
+            updatedAt: now,
+          },
+          "agent:main:telegram:direct:6101296751": {
+            sessionId: "direct-session",
+            updatedAt: now,
+            sessionFile: directTranscript,
+            lastChannel: "telegram",
+            lastTo: "6101296751",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf-8",
+    );
     await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
     await fs.writeFile(directTranscript, "direct", "utf-8");
 
@@ -544,7 +563,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       fresh: { sessionId: "fresh-session", updatedAt: Date.now() },
     };
     const oldOrphanTranscript = path.join(testDir, "orphan-session.jsonl");
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
     await fs.writeFile(oldOrphanTranscript, "x".repeat(2000), "utf-8");
     const oldDate = new Date(Date.now() - 10 * DAY_MS);
     await fs.utimes(oldOrphanTranscript, oldDate, oldDate);
@@ -584,7 +603,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const staleTranscript = path.join(testDir, "stale-session.jsonl");
     const cappedTranscript = path.join(testDir, "capped-session.jsonl");
     const freshTranscript = path.join(testDir, "fresh-session.jsonl");
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
     await fs.writeFile(staleTranscript, "stale", "utf-8");
     await fs.writeFile(cappedTranscript, "capped", "utf-8");
     await fs.writeFile(freshTranscript, "fresh", "utf-8");
@@ -703,7 +722,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       recent: makeEntry(now - DAY_MS),
       newest: makeEntry(now),
     };
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
@@ -727,7 +746,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       recent: makeEntry(now - DAY_MS),
       newest: makeEntry(now),
     };
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
@@ -751,7 +770,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       recent: makeEntry(now - DAY_MS),
       newest: makeEntry(now),
     };
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
@@ -773,7 +792,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const store = Object.fromEntries(
       Array.from({ length: 51 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
     );
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
@@ -793,7 +812,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const store = Object.fromEntries(
       Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
     );
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
@@ -821,7 +840,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     store[channelKey] = makeEntry(now - 99 * DAY_MS);
     store[threadKey] = makeEntry(now - 100 * DAY_MS);
     store[topicKey] = makeEntry(now - 101 * DAY_MS);
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
     const loaded = loadSessionStore(storePath, {
       skipCache: true,
@@ -850,7 +869,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       ...makeEntry(now - 100 * DAY_MS),
       spawnedBy: "agent:main:slack:direct:U1",
     };
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
     const unregister = registerSessionMaintenancePreserveKeysProvider(() => [childKey]);
 
     try {
@@ -872,60 +891,12 @@ describe("Integration: saveSessionStore with pruning", () => {
     }
   });
 
-  it("persists quota suspension TTL transitions through writer maintenance", async () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      suspended: {
-        ...makeEntry(now),
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now - 30_000,
-          expectedResumeBy: now - 1,
-          state: "suspended",
-          reason: "quota_exhausted",
-          failedProvider: "anthropic",
-          failedModel: "claude-opus-4-6",
-          laneId: "main",
-        },
-      },
-      active: {
-        ...makeEntry(now),
-        quotaSuspension: {
-          schemaVersion: 1,
-          suspendedAt: now - 61_000,
-          expectedResumeBy: now - 31_000,
-          state: "active",
-          reason: "circuit_open",
-          failedProvider: "anthropic",
-          failedModel: "claude-opus-4-6",
-          laneId: "main",
-        },
-      },
-    };
-    await writeStoreFixture(storePath, store);
-
-    const result = await runQuotaSuspensionMaintenance({
-      storePath,
-      now,
-      ttlMs: 30_000,
-      log: false,
-    });
-
-    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
-    const loaded = loadSessionStore(storePath, { skipCache: true });
-    expect(loaded.suspended?.quotaSuspension?.state).toBe("resuming");
-    expect(loaded.active?.quotaSuspension).toBeUndefined();
-    const persisted = loadSessionStore(storePath, { skipCache: true });
-    expect(persisted.suspended?.quotaSuspension?.state).toBe("resuming");
-    expect(persisted.active?.quotaSuspension).toBeUndefined();
-  });
-
   it("updateSessionStore batches cap-hit maintenance instead of pruning every new session", async () => {
     const now = Date.now();
     const store = Object.fromEntries(
       Array.from({ length: 50 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
     );
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -960,7 +931,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     const store = Object.fromEntries(
       Array.from({ length: 501 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
     );
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
     const loaded = loadSessionStore(storePath, { skipCache: true });
 
@@ -983,7 +954,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       oldest: makeEntry(now - DAY_MS),
       newest: makeEntry(now),
     };
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store), "utf-8");
 
     const loaded = loadSessionStore(storePath, { skipCache: true });
 
@@ -1081,7 +1052,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(path.join(testDir, `${newSessionId}.jsonl`));
   });
 
-  it("uses projected SQLite row size to avoid over-eviction", async () => {
+  it("uses projected sessions.json size to avoid over-eviction", async () => {
     mockLoadConfig.mockReturnValue({
       session: {
         maintenance: {
@@ -1094,15 +1065,8 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     });
 
-    // Simulate a stale oversized SQLite file from a previous write; eviction should
-    // budget the projected rows, not unreclaimable historical DB file size.
-    await writeStoreFixture(storePath, {
-      noisy: {
-        sessionId: "noisy",
-        updatedAt: Date.now(),
-        pluginExtensions: { test: { payload: "x".repeat(10_000) } },
-      },
-    });
+    // Simulate a stale oversized on-disk sessions.json from a previous write.
+    await fs.writeFile(storePath, JSON.stringify({ noisy: "x".repeat(10_000) }), "utf-8");
 
     const now = Date.now();
     const store: Record<string, SessionEntry> = {
@@ -1181,7 +1145,7 @@ describe("Integration: saveSessionStore with pruning", () => {
         pluginExtensions: { test: { payload: "y".repeat(1000) } },
       },
     };
-    await writeStoreFixture(storePath, store);
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
 
     await saveSessionStore(storePath, jsonRoundTrip(store));
 

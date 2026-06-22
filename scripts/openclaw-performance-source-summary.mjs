@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;
@@ -264,6 +264,40 @@ function validateExtensionMemoryArtifact(extensionMemory, filePath) {
   }
 }
 
+function validateSqlitePerfArtifact(sqlitePerf, filePath) {
+  if (sqlitePerf?.profile !== "smoke") {
+    throw new Error(`[source-performance] invalid SQLite perf profile: ${filePath}`);
+  }
+  if (sqlitePerf?.integrity?.state !== "ok") {
+    throw new Error(`[source-performance] SQLite integrity check did not pass: ${filePath}`);
+  }
+  if (
+    !Array.isArray(sqlitePerf?.integrity?.agent) ||
+    sqlitePerf.integrity.agent.length === 0 ||
+    sqlitePerf.integrity.agent.some((entry) => entry !== "ok")
+  ) {
+    throw new Error(`[source-performance] SQLite agent integrity check did not pass: ${filePath}`);
+  }
+  if (
+    !isNonNegativeInteger(sqlitePerf?.rows?.stateRows) ||
+    sqlitePerf.rows.stateRows <= 0 ||
+    !isNonNegativeInteger(sqlitePerf?.rows?.agentCacheEntries) ||
+    sqlitePerf.rows.agentCacheEntries <= 0 ||
+    !finiteNumber(sqlitePerf?.timingsMs?.total) ||
+    !finiteNumber(sqlitePerf?.walBytes?.stateBefore) ||
+    sqlitePerf?.walBytes?.stateAfter !== 0 ||
+    !Array.isArray(sqlitePerf?.queries) ||
+    sqlitePerf.queries.length === 0
+  ) {
+    throw new Error(`[source-performance] incomplete SQLite perf metrics: ${filePath}`);
+  }
+  for (const entry of sqlitePerf.queries) {
+    if (!finiteNumber(entry?.p50Ms) || !finiteNumber(entry?.p95Ms) || !finiteNumber(entry?.rows)) {
+      throw new Error(`[source-performance] incomplete SQLite query metrics: ${filePath}`);
+    }
+  }
+}
+
 function validateGatewaySummaryArtifact(gatewaySummary, filePath) {
   if (!Array.isArray(gatewaySummary?.observations)) {
     throw new Error(`[source-performance] missing gateway observation summary: ${filePath}`);
@@ -284,6 +318,7 @@ function loadSourceArtifacts(sourceDir, { required = false } = {}) {
   const startupPath = path.join(sourceDir, "gateway-cpu", "gateway-startup-bench.json");
   const cliPath = path.join(sourceDir, "cli-startup.json");
   const extensionMemoryPath = path.join(sourceDir, "extension-memory.json");
+  const sqlitePerfPath = path.join(sourceDir, "sqlite-perf-smoke.json");
   const artifacts = {
     startup: required
       ? readRequiredJson(startupPath, "gateway startup artifact")
@@ -292,12 +327,16 @@ function loadSourceArtifacts(sourceDir, { required = false } = {}) {
     extensionMemory: required
       ? readRequiredJson(extensionMemoryPath, "extension memory artifact")
       : readJsonIfExists(extensionMemoryPath),
+    sqlitePerf: readJsonIfExists(sqlitePerfPath),
     mockHelloSummaries: loadMockHelloSummaries(sourceDir, { required }),
   };
   if (required) {
     validateStartupArtifact(artifacts.startup, startupPath);
     validateCliArtifact(artifacts.cli, cliPath);
     validateExtensionMemoryArtifact(artifacts.extensionMemory, extensionMemoryPath);
+    if (artifacts.sqlitePerf) {
+      validateSqlitePerfArtifact(artifacts.sqlitePerf, sqlitePerfPath);
+    }
   }
   return artifacts;
 }
@@ -463,6 +502,25 @@ function buildExtensionMemoryRows(extensionMemory) {
     ]);
 }
 
+function buildSqlitePerfRows(sqlitePerf) {
+  if (!sqlitePerf) {
+    return [];
+  }
+  const maxQueryP95 = Math.max(...sqlitePerf.queries.map((entry) => entry.p95Ms));
+  return [
+    [
+      sqlitePerf.profile ?? "unknown",
+      String(sqlitePerf.rows?.stateRows ?? "n/a"),
+      String(sqlitePerf.rows?.agentCacheEntries ?? "n/a"),
+      sqlitePerf.integrity?.state ?? "n/a",
+      formatBytesAsMb(sqlitePerf.walBytes?.stateBefore),
+      formatBytesAsMb(sqlitePerf.walBytes?.stateAfter),
+      formatMs(maxQueryP95),
+      formatMs(sqlitePerf.timingsMs?.total),
+    ],
+  ];
+}
+
 function buildMemoryDeltaRows(current, baseline) {
   if (!baseline) {
     return [];
@@ -569,6 +627,21 @@ export function buildMarkdown(sourceDir, baselineSourceDir) {
       ["case", "command", "duration p50", "duration p95", "RSS p95", "exits"],
       buildCliRows(current.cli),
     ),
+    "## SQLite State Smoke",
+    "",
+    ...table(
+      [
+        "profile",
+        "state rows",
+        "agent rows",
+        "integrity",
+        "WAL before",
+        "WAL after",
+        "query p95 max",
+        "total",
+      ],
+      buildSqlitePerfRows(current.sqlitePerf),
+    ),
     "## Observations",
     "",
     ...table(["kind", "id", "CPU core", "wall"], buildObservationRows(gatewaySummary)),
@@ -596,7 +669,7 @@ function isCliEntry() {
 if (isCliEntry()) {
   main().catch(
     /** @param {unknown} error */ (error) => {
-      console.error(error instanceof Error ? error.stack : String(error));
+      console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },
   );

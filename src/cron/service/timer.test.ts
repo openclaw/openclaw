@@ -1,7 +1,7 @@
 // Cron service timer tests cover timer scheduling, cancellation, and wakeups.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeSessionStoreForTestAsync } from "../../config/sessions/test-helpers.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
 import { executeJobCore, onTimer } from "../../cron/service/timer.js";
@@ -81,13 +81,17 @@ describe("cron service timer seam coverage", () => {
     };
     const cronRunSessionKey = `agent:main-pr-router:cron:main-heartbeat-job:run:${now}`;
     const sessionStorePath = path.join(path.dirname(path.dirname(storePath)), "sessions.json");
-    await writeSessionStoreForTestAsync(sessionStorePath, {
-      "agent:main-pr-router:main": {
-        lastChannel: "discord",
-        lastTo: "channel-1",
-        lastAccountId: "default",
-      },
-    });
+    await fs.writeFile(
+      sessionStorePath,
+      JSON.stringify({
+        "agent:main-pr-router:main": {
+          lastChannel: "discord",
+          lastTo: "channel-1",
+          lastAccountId: "default",
+        },
+      }),
+      "utf8",
+    );
 
     const state = createCronServiceState({
       storePath,

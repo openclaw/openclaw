@@ -62,19 +62,26 @@ export async function prepareGatewayPluginBootstrap(params: {
   const shouldRunStartupMaintenance =
     !params.minimalTestGateway || startupMaintenanceConfig.channels !== undefined;
   if (shouldRunStartupMaintenance) {
-    if (!params.minimalTestGateway) {
-      const { ensureSessionStateMigrated } = await import("../infra/session-state-migration.js");
-      // Session metadata is SQLite-only at runtime; starting after a failed import
-      // would make legacy sessions disappear and allow divergent new rows.
-      await ensureSessionStateMigrated(params.cfgAtStart);
-    }
     const { runChannelPluginStartupMaintenance } =
       await import("../channels/plugins/lifecycle-startup.js");
-    await runChannelPluginStartupMaintenance({
-      cfg: startupMaintenanceConfig,
-      env: process.env,
-      log: params.log,
-    });
+    const startupTasks = [
+      runChannelPluginStartupMaintenance({
+        cfg: startupMaintenanceConfig,
+        env: process.env,
+        log: params.log,
+      }),
+    ];
+    if (!params.minimalTestGateway) {
+      const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
+      startupTasks.push(
+        runStartupSessionMigration({
+          cfg: params.cfgAtStart,
+          env: process.env,
+          log: params.log,
+        }),
+      );
+    }
+    await Promise.all(startupTasks);
   }
 
   initSubagentRegistry();

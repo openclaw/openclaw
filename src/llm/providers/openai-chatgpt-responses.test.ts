@@ -246,6 +246,75 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(functionCall).not.toHaveProperty("id");
   });
 
+  it("omits ChatGPT tool controls when every tool schema is unreadable", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICodexResponses(
+      model,
+      {
+        ...context,
+        tools: [
+          {
+            name: "broken",
+            description: "Broken tool.",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+        ],
+      },
+      {
+        apiKey: createJwt({
+          "https://api.openai.com/auth": {
+            chatgpt_account_id: "acct-1",
+          },
+        }),
+        transport: "sse",
+        onPayload: (payload) => {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop after payload");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).not.toHaveProperty("tools");
+    expect(capturedPayload).not.toHaveProperty("tool_choice");
+    expect(capturedPayload).not.toHaveProperty("parallel_tool_calls");
+  });
+
+  it("does not reread an unreadable ChatGPT tool inventory length", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const tools = new Proxy([], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const stream = streamOpenAICodexResponses(model, { ...context, tools } as never, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      transport: "sse",
+      onPayload: (payload) => {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop after payload");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).not.toHaveProperty("tools");
+    expect(capturedPayload).not.toHaveProperty("tool_choice");
+    expect(capturedPayload).not.toHaveProperty("parallel_tool_calls");
+  });
+
   it("caps oversized timeoutMs before creating request abort signals", async () => {
     stubHangingFetch(MAX_TIMER_TIMEOUT_MS);
 

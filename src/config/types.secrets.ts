@@ -179,10 +179,28 @@ function formatSecretRefLabel(ref: SecretRef): string {
   return `${ref.source}:${ref.provider}:${ref.id}`;
 }
 
+/** Error thrown when strict secret reads encounter a configured but unresolved SecretRef. */
+export class UnresolvedSecretInputError extends Error {
+  readonly path: string;
+  readonly ref: SecretRef;
+
+  constructor(params: { path: string; ref: SecretRef }) {
+    super(
+      `${params.path}: unresolved SecretRef "${formatSecretRefLabel(params.ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+    );
+    this.name = "UnresolvedSecretInputError";
+    this.path = params.path;
+    this.ref = params.ref;
+  }
+}
+
+/** Narrow errors from strict secret read sites without parsing user-facing messages. */
+export function isUnresolvedSecretInputError(value: unknown): value is UnresolvedSecretInputError {
+  return value instanceof UnresolvedSecretInputError;
+}
+
 function createUnresolvedSecretInputError(params: { path: string; ref: SecretRef }): Error {
-  return new Error(
-    `${params.path}: unresolved SecretRef "${formatSecretRefLabel(params.ref)}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-  );
+  return new UnresolvedSecretInputError(params);
 }
 
 /** Throw when a secret field still contains an unresolved SecretRef at a read site. */

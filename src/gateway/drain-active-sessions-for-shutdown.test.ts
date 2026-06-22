@@ -29,6 +29,7 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 }));
 
 vi.mock("./session-transcript-files.fs.js", () => ({
+  extractGeneratedTranscriptSessionId: vi.fn(() => undefined),
   resolveStableSessionEndTranscript: vi.fn(() => ({
     sessionFile: undefined,
     transcriptArchived: false,

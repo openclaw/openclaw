@@ -18,13 +18,12 @@ import { ackDelivery, enqueueDelivery, failDelivery } from "../infra/outbound/de
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import {
+  clearRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   readRestartSentinel,
-  removeRestartSentinelFile,
   type RestartSentinelContinuation,
   type RestartSentinelPayload,
-  resolveRestartSentinelPath,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
 import {
@@ -449,8 +448,10 @@ async function loadRestartSentinelStartupTask(params: {
   if (!sentinel) {
     return null;
   }
-  const sentinelPath = resolveRestartSentinelPath();
   const payload = sentinel.payload;
+  if (payload.kind === "update") {
+    recordLatestUpdateRestartSentinel(payload);
+  }
   const sessionKey = payload.sessionKey?.trim();
   const message = formatRestartSentinelMessage(payload);
   const summary = summarizeRestartSentinel(payload);
@@ -491,7 +492,7 @@ async function loadRestartSentinelStartupTask(params: {
           continuationKind: payload.continuation.kind,
         });
       }
-      await removeRestartSentinelFile(sentinelPath);
+      await clearRestartSentinel();
       return { status: "ran" as const };
     }
 
@@ -585,7 +586,7 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
-    await removeRestartSentinelFile(sentinelPath);
+    await clearRestartSentinel();
     const routedAgentTurnContinuation =
       payload.continuation?.kind === "agentTurn" && continuationRoute !== undefined;
     if (!routedAgentTurnContinuation) {
@@ -643,13 +644,17 @@ export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
   await scheduleRestartSentinelWakeAttempt({ ...params, attempt: 0 });
 }
 
-export function shouldWakeFromRestartSentinel() {
-  return !process.env.VITEST && process.env.NODE_ENV !== "test";
-}
-
 export async function refreshLatestUpdateRestartSentinel(): Promise<RestartSentinelPayload | null> {
+  const current = await readRestartSentinel();
+  if (
+    current?.payload.kind === "update" &&
+    isPendingControlPlaneUpdateRestartSentinel(current.payload)
+  ) {
+    latestUpdateRestartSentinel = cloneRestartSentinelPayload(current.payload);
+    return cloneRestartSentinelPayload(latestUpdateRestartSentinel);
+  }
   const finalized = await finalizeUpdateRestartSentinelRunningVersion();
-  const sentinel = finalized ?? (await readRestartSentinel());
+  const sentinel = finalized ?? current;
   if (sentinel?.payload.kind === "update") {
     latestUpdateRestartSentinel = cloneRestartSentinelPayload(sentinel.payload);
   }

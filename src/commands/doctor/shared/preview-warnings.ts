@@ -58,19 +58,6 @@ function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
   });
 }
 
-function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
-  if (cfg.plugins?.enabled === false) {
-    return true;
-  }
-  const entries = cfg.plugins?.entries;
-  if (!hasRecord(entries)) {
-    return false;
-  }
-  return Object.values(entries).some(
-    (entry) => hasRecord(entry) && "enabled" in entry && entry.enabled === false,
-  );
-}
-
 function hasToolsBySenderKey(value: unknown): boolean {
   if (Array.isArray(value)) {
     return value.some(hasToolsBySenderKey);
@@ -764,11 +751,38 @@ export type DoctorPreviewNotes = {
   warningNotes: string[];
 };
 
+async function resolveDoctorChannelPreviewConfig(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  allowExec?: boolean;
+}): Promise<{ cfg: OpenClawConfig; diagnostics: string[] }> {
+  const [{ resolveCommandSecretRefsViaGateway }, { getConfiguredChannelsCommandSecretTargetIds }] =
+    await Promise.all([
+      import("../../../cli/command-secret-gateway.js"),
+      import("../../../cli/command-secret-targets.js"),
+    ]);
+  const targetIds = getConfiguredChannelsCommandSecretTargetIds(params.cfg, params.env);
+  if (targetIds.size === 0) {
+    return { cfg: params.cfg, diagnostics: [] };
+  }
+  const resolved = await resolveCommandSecretRefsViaGateway({
+    config: params.cfg,
+    commandName: "doctor preview",
+    targetIds,
+    mode: "read_only_status",
+    allowLocalExecSecretRefs: params.allowExec === true,
+    scrubUnresolvedSecretRefs: false,
+  });
+  return { cfg: resolved.resolvedConfig, diagnostics: resolved.diagnostics };
+}
+
 /** Collect info and warning notes for doctor preview mode. */
 export async function collectDoctorPreviewNotes(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  allowExec?: boolean;
 }): Promise<DoctorPreviewNotes> {
   const infoNotes: string[] = [];
   const warnings: string[] = [];
@@ -787,13 +801,13 @@ export async function collectDoctorPreviewNotes(params: {
     await import("./active-tool-schema-warnings.js");
   warnings.push(...collectActiveToolSchemaProjectionWarnings({ cfg: params.cfg, env }));
 
-  const channelPluginRuntime =
-    hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)
-      ? await import("./channel-plugin-blockers.js")
-      : undefined;
-  const channelPluginBlockerHits =
-    channelPluginRuntime?.scanConfiguredChannelPluginBlockers(params.cfg, env) ?? [];
-  if (channelPluginRuntime && channelPluginBlockerHits.length > 0) {
+  const channelPluginRuntime = await import("./channel-plugin-blockers.js");
+  const channelPluginBlockerHits = channelPluginRuntime.scanConfiguredChannelPluginBlockers(
+    params.cfg,
+    env,
+    params.activationSourceConfig,
+  );
+  if (channelPluginBlockerHits.length > 0) {
     warnings.push(
       channelPluginRuntime
         .collectConfiguredChannelPluginBlockerWarnings(channelPluginBlockerHits)
@@ -802,9 +816,15 @@ export async function collectDoctorPreviewNotes(params: {
   }
 
   if (hasChannelConfig) {
+    const channelPreviewConfig = await resolveDoctorChannelPreviewConfig({
+      cfg: params.cfg,
+      env,
+      allowExec: params.allowExec,
+    });
+    warnings.push(...channelPreviewConfig.diagnostics);
     const { collectChannelDoctorPreviewWarnings } = await loadChannelDoctorModule();
     const channelDoctorWarnings = await collectChannelDoctorPreviewWarnings({
-      cfg: params.cfg,
+      cfg: channelPreviewConfig.cfg,
       doctorFixCommand: params.doctorFixCommand,
       env,
     });
@@ -901,12 +921,7 @@ export async function collectDoctorPreviewNotes(params: {
         emptyAllowlistHooks.shouldSkipDefaultEmptyGroupAllowlistWarning,
     }).filter(
       (warning) =>
-        !(
-          channelPluginRuntime?.isWarningBlockedByChannelPlugin(
-            warning,
-            channelPluginBlockerHits,
-          ) ?? false
-        ),
+        !channelPluginRuntime.isWarningBlockedByChannelPlugin(warning, channelPluginBlockerHits),
     );
     if (emptyAllowlistWarnings.length > 0) {
       const { sanitizeForLog } = await import("../../../../packages/terminal-core/src/ansi.js");
@@ -974,6 +989,7 @@ export async function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  allowExec?: boolean;
 }): Promise<string[]> {
   return (await collectDoctorPreviewNotes(params)).warningNotes;
 }

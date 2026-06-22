@@ -18,16 +18,9 @@ import {
   resolveStateDir,
 } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
-import { validateSessionId } from "../config/sessions/paths.js";
-import {
-  importLegacySessionStoreIntoSqlite,
-  loadSqliteSessionStore,
-} from "../config/sessions/store-sqlite.js";
-import {
-  listConfiguredSessionStoreAgentIds,
-  resolveAllAgentSessionStoreTargetsSync,
-} from "../config/sessions/targets.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -60,6 +53,7 @@ import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -68,14 +62,22 @@ import {
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { expandHomePrefix } from "./home-dir.js";
+import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
+import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import { normalizeConversationRef } from "./outbound/session-binding-normalization.js";
+import type { SessionBindingRecord } from "./outbound/session-binding.types.js";
 import { isWithinDir } from "./path-safety.js";
+import {
+  detectLegacyDebugProxyCaptureSidecar,
+  migrateLegacyDebugProxyCaptureSidecar,
+} from "./state-migrations.debug-proxy.js";
 import {
   ensureDir,
   existsDir,
@@ -85,6 +87,7 @@ import {
   type SessionEntryLike,
   safeReadDir,
 } from "./state-migrations.fs.js";
+import { normalizeVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 
 export type LegacyStateDetection = {
   targetAgentId: string;
@@ -99,10 +102,6 @@ export type LegacyStateDetection = {
     targetStorePath: string;
     hasLegacy: boolean;
     legacyKeys: string[];
-    additionalStoreTargets?: Array<{
-      storePath: string;
-      agentIds: string[];
-    }>;
   };
   agentDir: {
     legacyDir: string;
@@ -125,6 +124,11 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  debugProxyCaptureSidecar: {
+    sourcePath: string;
+    blobDir: string;
+    hasLegacy: boolean;
+  };
   stateSchema: {
     hasLegacy: boolean;
     preview: string[];
@@ -139,8 +143,36 @@ export type LegacyStateDetection = {
     sessionPath: string;
     hasLegacy: boolean;
   };
+  voiceWake: {
+    triggersPath: string;
+    routingPath: string;
+    hasLegacy: boolean;
+  };
+  updateCheck: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  configHealth: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  pluginBindingApprovals: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  currentConversationBindings: {
+    sourcePath: string;
+    hasLegacy: boolean;
+  };
+  execApprovals: {
+    sourcePath: string;
+    targetPath: string;
+    hasLegacy: boolean;
+  };
   preview: string[];
 };
+
+type LegacyExecApprovalsMigrationDetection = LegacyStateDetection["execApprovals"];
 
 type MigrationLogger = {
   info: (message: string) => void;
@@ -170,6 +202,20 @@ type LegacyPluginStateSidecarRow = {
 };
 
 type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
+type LegacyVoiceWakeImportDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "voicewake_routing_config" | "voicewake_routing_routes" | "voicewake_triggers"
+>;
+type LegacyUpdateCheckImportDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
+type LegacyConfigHealthImportDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+type LegacyPluginBindingApprovalsImportDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "plugin_binding_approvals"
+>;
+type LegacyCurrentConversationBindingsImportDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "current_conversation_bindings"
+>;
 type SqliteBindRow = Record<string, SQLInputValue>;
 
 type DetectedPluginDoctorStateMigrationPlan = {
@@ -178,13 +224,17 @@ type DetectedPluginDoctorStateMigrationPlan = {
   preview: string[];
 };
 
-const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
-const LEGACY_SESSION_FILE_MOVE_PLAN_NAME = ".openclaw-session-migration-plan.json";
+// Move the canonical database first so a partial archive never leaves a
+// readable database separated from committed WAL rows. Pending sidecars are
+// detected and archived without reopening the migrated database.
+const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
+const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 const LEGACY_DELIVERY_QUEUE_DIRS = [
   { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
   { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
 ] as const;
+const EXEC_APPROVALS_FILENAME = "exec-approvals.json";
+const EXEC_APPROVALS_SOCKET_FILENAME = "exec-approvals.sock";
 type LegacyDeliveryQueueFile = {
   sourcePath: string;
   status: "pending" | "failed";
@@ -244,6 +294,43 @@ function resolveLegacyFlowRunsSidecarPath(stateDir: string): string {
   return path.join(stateDir, "flows", "registry.sqlite");
 }
 
+function resolveDefaultExecApprovalsStateDir(
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string {
+  return path.join(resolveRequiredHomeDir(env, homedir), ".openclaw");
+}
+
+function resolveDefaultExecApprovalsPath(env: NodeJS.ProcessEnv, homedir: () => string): string {
+  return path.join(resolveDefaultExecApprovalsStateDir(env, homedir), EXEC_APPROVALS_FILENAME);
+}
+
+function resolveExecApprovalsPathForStateDir(stateDir: string): string {
+  return path.join(stateDir, EXEC_APPROVALS_FILENAME);
+}
+
+function resolveExecApprovalsSocketPathForStateDir(stateDir: string): string {
+  return path.join(stateDir, EXEC_APPROVALS_SOCKET_FILENAME);
+}
+
+function detectLegacyExecApprovalsMigration(params: {
+  env: NodeJS.ProcessEnv;
+  homedir: () => string;
+  stateDir: string;
+}): LegacyExecApprovalsMigrationDetection {
+  const sourcePath = resolveDefaultExecApprovalsPath(params.env, params.homedir);
+  const targetPath = resolveExecApprovalsPathForStateDir(params.stateDir);
+  return {
+    sourcePath,
+    targetPath,
+    hasLegacy:
+      Boolean(params.env.OPENCLAW_STATE_DIR?.trim()) &&
+      path.resolve(sourcePath) !== path.resolve(targetPath) &&
+      fileExists(sourcePath) &&
+      !fileExists(targetPath),
+  };
+}
+
 function readLegacyPluginStateSidecarRows(sourcePath: string): LegacyPluginStateSidecarRow[] {
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(sourcePath, { readOnly: true });
@@ -287,6 +374,14 @@ function isLegacyPluginStateRowExpired(row: LegacyPluginStateSidecarRow, now: nu
   return expiresAt !== null && expiresAt <= now;
 }
 
+function hasPendingSqliteSidecarArchive(sourcePath: string, suffixes: readonly string[]): boolean {
+  return (
+    !fileExists(sourcePath) &&
+    fileExists(`${sourcePath}.migrated`) &&
+    suffixes.some((suffix) => suffix !== "" && fileExists(`${sourcePath}${suffix}`))
+  );
+}
+
 function archiveLegacyPluginStateSidecar(params: {
   sourcePath: string;
   changes: string[];
@@ -295,6 +390,9 @@ function archiveLegacyPluginStateSidecar(params: {
   const existingSources = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES.map(
     (suffix) => `${params.sourcePath}${suffix}`,
   ).filter(fileExists);
+  if (existingSources.length === 0) {
+    return;
+  }
   const existingArchives = existingSources
     .map((sourcePath) => `${sourcePath}.migrated`)
     .filter(fileExists);
@@ -423,12 +521,53 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
 }
 
+function readAuthoritativeCurrentNpmIdentity(
+  record: InstalledPluginIndex["installRecords"][string],
+): { name: string; version: string } | null {
+  const resolvedName = readInstallRecordStringField(record, "resolvedName");
+  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion");
+  if (resolvedName && resolvedVersion) {
+    return { name: resolvedName, version: resolvedVersion };
+  }
+  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
+  const parsed = resolvedSpec ? parseRegistryNpmSpec(resolvedSpec) : null;
+  if (parsed?.selectorKind === "exact-version" && parsed.selector) {
+    return { name: parsed.name, version: parsed.selector };
+  }
+  return null;
+}
+
+function legacyNpmInstallRecordSupersededByCurrent(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
+    return false;
+  }
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  const legacyParsedSpec = legacySpec ? parseRegistryNpmSpec(legacySpec) : null;
+  if (legacyParsedSpec?.selectorKind !== "exact-version") {
+    return false;
+  }
+  const currentIdentity = readAuthoritativeCurrentNpmIdentity(currentRecord);
+  return Boolean(
+    currentIdentity &&
+    legacyParsedSpec.selector &&
+    currentIdentity.name === legacyParsedSpec.name &&
+    currentIdentity.version === legacyParsedSpec.selector,
+  );
+}
+
 function legacyInstallRecordCoveredByCurrent(
   currentRecord: InstalledPluginIndex["installRecords"][string],
   legacyRecord: InstalledPluginIndex["installRecords"][string],
 ): boolean {
   if (currentRecord.source !== legacyRecord.source) {
     return false;
+  }
+  if (legacyNpmInstallRecordSupersededByCurrent({ currentRecord, legacyRecord })) {
+    return true;
   }
   for (const key of Object.keys(legacyRecord).toSorted()) {
     const currentValue = readInstallRecordField(currentRecord, key);
@@ -508,6 +647,9 @@ function archiveLegacyTaskStateSidecar(params: {
   const existingSources = TASK_STATE_SQLITE_SIDECAR_SUFFIXES.map(
     (suffix) => `${params.sourcePath}${suffix}`,
   ).filter(fileExists);
+  if (existingSources.length === 0) {
+    return;
+  }
   const existingArchives = existingSources
     .map((sourcePath) => `${sourcePath}.migrated`)
     .filter(fileExists);
@@ -623,6 +765,19 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
   const ownerKey = ownerRaw || requesterRaw || `system:${runtime}:${sourceId || taskId}`;
   const scopeRaw = typeof row.scope_kind === "string" ? row.scope_kind : "";
   const scopeKind = scopeRaw === "system" || ownerKey.startsWith("system:") ? "system" : "session";
+  const childSessionKey =
+    typeof row.child_session_key === "string" ? row.child_session_key.trim() : "";
+  const persistedAgentId = typeof row.agent_id === "string" ? row.agent_id.trim() : "";
+  const isSpawnRuntime = runtime === "subagent" || runtime === "acp";
+  const childAgentId = isSpawnRuntime ? parseAgentSessionKey(childSessionKey)?.agentId : undefined;
+  const requesterAgentId =
+    (typeof row.requester_agent_id === "string" ? row.requester_agent_id.trim() : "") ||
+    (isSpawnRuntime
+      ? (parseAgentSessionKey(ownerKey)?.agentId ??
+        parseAgentSessionKey(requesterRaw)?.agentId ??
+        (childAgentId && persistedAgentId !== childAgentId ? persistedAgentId : ""))
+      : "");
+  const executorAgentId = requesterAgentId ? childAgentId || persistedAgentId : persistedAgentId;
   return {
     task_id: taskId,
     runtime,
@@ -631,10 +786,11 @@ function normalizeLegacyTaskRow(row: Record<string, unknown>): SqliteBindRow {
     requester_session_key: scopeKind === "system" ? "" : requesterRaw || ownerKey,
     owner_key: ownerKey,
     scope_kind: scopeKind,
-    child_session_key: legacyBindValue(row.child_session_key),
+    child_session_key: childSessionKey || null,
     parent_flow_id: legacyBindValue(row.parent_flow_id),
     parent_task_id: legacyBindValue(row.parent_task_id),
-    agent_id: legacyBindValue(row.agent_id),
+    agent_id: executorAgentId || null,
+    requester_agent_id: requesterAgentId || null,
     run_id: legacyBindValue(row.run_id),
     label: legacyBindValue(row.label),
     task: legacyBindValue(row.task ?? ""),
@@ -725,6 +881,7 @@ function readLegacyTaskRows(sourcePath: string): SqliteBindRow[] {
       pickLegacyColumn(columns, "parent_flow_id"),
       pickLegacyColumn(columns, "parent_task_id"),
       pickLegacyColumn(columns, "agent_id"),
+      pickLegacyColumn(columns, "requester_agent_id"),
       pickLegacyColumn(columns, "run_id"),
       pickLegacyColumn(columns, "label"),
       "task",
@@ -816,15 +973,15 @@ function insertTaskRunRowSql(db: DatabaseSync, row: SqliteBindRow): void {
     `
       INSERT INTO task_runs (
         task_id, runtime, task_kind, source_id, requester_session_key, owner_key, scope_kind,
-        child_session_key, parent_flow_id, parent_task_id, agent_id, run_id, label, task, status,
-        delivery_status, notify_policy, created_at, started_at, ended_at, last_event_at,
-        cleanup_after, error, progress_summary, terminal_summary, terminal_outcome
+        child_session_key, parent_flow_id, parent_task_id, agent_id, requester_agent_id, run_id,
+        label, task, status, delivery_status, notify_policy, created_at, started_at, ended_at,
+        last_event_at, cleanup_after, error, progress_summary, terminal_summary, terminal_outcome
       ) VALUES (
         @task_id, @runtime, @task_kind, @source_id, @requester_session_key, @owner_key,
-        @scope_kind, @child_session_key, @parent_flow_id, @parent_task_id, @agent_id, @run_id,
-        @label, @task, @status, @delivery_status, @notify_policy, @created_at, @started_at,
-        @ended_at, @last_event_at, @cleanup_after, @error, @progress_summary, @terminal_summary,
-        @terminal_outcome
+        @scope_kind, @child_session_key, @parent_flow_id, @parent_task_id, @agent_id,
+        @requester_agent_id, @run_id, @label, @task, @status, @delivery_status, @notify_policy,
+        @created_at, @started_at, @ended_at, @last_event_at, @cleanup_after, @error,
+        @progress_summary, @terminal_summary, @terminal_outcome
       )
     `,
   ).run(row);
@@ -864,7 +1021,12 @@ async function migrateLegacyTaskRunsSidecar(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyTaskRunsSidecarPath(params.stateDir);
   if (!fileExists(sourcePath)) {
-    return { changes: [], warnings: [] };
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
+      archiveLegacyTaskStateSidecar({ sourcePath, label: "task registry", changes, warnings });
+    }
+    return { changes, warnings };
   }
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -898,6 +1060,7 @@ async function migrateLegacyTaskRunsSidecar(params: {
           "parent_flow_id",
           "parent_task_id",
           "agent_id",
+          "requester_agent_id",
           "run_id",
           "label",
           "task",
@@ -995,7 +1158,12 @@ async function migrateLegacyFlowRunsSidecar(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyFlowRunsSidecarPath(params.stateDir);
   if (!fileExists(sourcePath)) {
-    return { changes: [], warnings: [] };
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    if (hasPendingSqliteSidecarArchive(sourcePath, TASK_STATE_SQLITE_SIDECAR_SUFFIXES)) {
+      archiveLegacyTaskStateSidecar({ sourcePath, label: "task flow", changes, warnings });
+    }
+    return { changes, warnings };
   }
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -1366,12 +1534,1081 @@ async function migrateLegacyDeliveryQueues(params: {
   return { changes, warnings };
 }
 
+const VOICEWAKE_CONFIG_KEY = "default";
+const DEFAULT_VOICEWAKE_TRIGGERS = ["openclaw", "claude", "computer"];
+
+function resolveLegacyVoiceWakeTriggersPath(stateDir: string): string {
+  return path.join(stateDir, "settings", "voicewake.json");
+}
+
+function resolveLegacyVoiceWakeRoutingPath(stateDir: string): string {
+  return path.join(stateDir, "settings", "voicewake-routing.json");
+}
+
+function readLegacyJsonObject(sourcePath: string): unknown {
+  return JSON.parse(fs.readFileSync(sourcePath, "utf8")) as unknown;
+}
+
+function normalizeLegacyVoiceWakeTriggers(input: unknown): string[] {
+  const rec = input && typeof input === "object" ? (input as { triggers?: unknown }) : {};
+  const triggers = Array.isArray(rec.triggers)
+    ? rec.triggers
+        .flatMap((entry) => (typeof entry === "string" ? [entry.trim()] : []))
+        .filter((entry) => entry.length > 0)
+    : [];
+  return triggers.length > 0 ? triggers : DEFAULT_VOICEWAKE_TRIGGERS;
+}
+
+function legacyVoiceWakeTriggersMatch(
+  rows: Array<{ trigger: string }>,
+  triggers: string[],
+): boolean {
+  return (
+    rows.length === triggers.length && rows.every((row, index) => row.trigger === triggers[index])
+  );
+}
+
+function legacyVoiceWakeTargetColumns(target: {
+  agentId?: string;
+  mode?: "current";
+  sessionKey?: string;
+}): {
+  targetAgentId: string | null;
+  targetMode: string;
+  targetSessionKey: string | null;
+} {
+  if (target.agentId) {
+    return { targetAgentId: target.agentId, targetMode: "agent", targetSessionKey: null };
+  }
+  if (target.sessionKey) {
+    return { targetAgentId: null, targetMode: "session", targetSessionKey: target.sessionKey };
+  }
+  return { targetAgentId: null, targetMode: "current", targetSessionKey: null };
+}
+
+function legacyVoiceWakeTargetColumnsMatch(
+  left: ReturnType<typeof legacyVoiceWakeTargetColumns>,
+  right: {
+    target_agent_id?: string | null;
+    target_mode?: string | null;
+    target_session_key?: string | null;
+  },
+): boolean {
+  return (
+    left.targetAgentId === (right.target_agent_id ?? null) &&
+    left.targetMode === right.target_mode &&
+    left.targetSessionKey === (right.target_session_key ?? null)
+  );
+}
+
+function legacyVoiceWakeRoutingMatches(
+  configRow: {
+    default_target_agent_id: string | null;
+    default_target_mode: string;
+    default_target_session_key: string | null;
+  },
+  routeRows: Array<{
+    target_agent_id: string | null;
+    target_mode: string;
+    target_session_key: string | null;
+    trigger: string;
+  }>,
+  routingConfig: ReturnType<typeof normalizeVoiceWakeRoutingConfig>,
+): boolean {
+  const defaultTarget = legacyVoiceWakeTargetColumns(routingConfig.defaultTarget);
+  if (
+    !legacyVoiceWakeTargetColumnsMatch(defaultTarget, {
+      target_agent_id: configRow.default_target_agent_id,
+      target_mode: configRow.default_target_mode,
+      target_session_key: configRow.default_target_session_key,
+    })
+  ) {
+    return false;
+  }
+  return (
+    routeRows.length === routingConfig.routes.length &&
+    routeRows.every((row, index) => {
+      const route = routingConfig.routes[index];
+      if (!route || row.trigger !== route.trigger) {
+        return false;
+      }
+      return legacyVoiceWakeTargetColumnsMatch(legacyVoiceWakeTargetColumns(route.target), row);
+    })
+  );
+}
+
+function migrateLegacyVoiceWakeSettings(params: {
+  detected: LegacyStateDetection["voiceWake"];
+  stateDir: string;
+}): { changes: string[]; warnings: string[] } {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  if (fileExists(params.detected.triggersPath)) {
+    let triggers: string[];
+    try {
+      triggers = normalizeLegacyVoiceWakeTriggers(
+        readLegacyJsonObject(params.detected.triggersPath),
+      );
+    } catch (err) {
+      warnings.push(
+        `Failed reading legacy voice wake triggers ${params.detected.triggersPath}: ${String(err)}`,
+      );
+      triggers = [];
+    }
+    if (triggers.length > 0) {
+      let imported = false;
+      let shouldArchive = false;
+      try {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            const stateDb = getNodeSqliteKysely<LegacyVoiceWakeImportDatabase>(db);
+            const existing = executeSqliteQuerySync(
+              db,
+              stateDb
+                .selectFrom("voicewake_triggers")
+                .select(["trigger"])
+                .where("config_key", "=", VOICEWAKE_CONFIG_KEY)
+                .orderBy("position", "asc"),
+            ).rows;
+            if (existing.length > 0) {
+              if (!legacyVoiceWakeTriggersMatch(existing, triggers)) {
+                warnings.push(
+                  `Left legacy voice wake triggers in place because shared SQLite state already has different triggers: ${params.detected.triggersPath}`,
+                );
+              } else {
+                shouldArchive = true;
+              }
+              return;
+            }
+            const updatedAtMs = Date.now();
+            executeSqliteQuerySync(
+              db,
+              stateDb.insertInto("voicewake_triggers").values(
+                triggers.map((trigger, position) => ({
+                  config_key: VOICEWAKE_CONFIG_KEY,
+                  position,
+                  trigger,
+                  updated_at_ms: updatedAtMs,
+                })),
+              ),
+            );
+            imported = true;
+            shouldArchive = true;
+          },
+          { env },
+        );
+      } catch (err) {
+        warnings.push(`Failed migrating legacy voice wake triggers: ${String(err)}`);
+      }
+      if (imported) {
+        changes.push(
+          `Migrated ${triggers.length} voice wake ${triggers.length === 1 ? "trigger" : "triggers"} → shared SQLite state`,
+        );
+      }
+      if (shouldArchive) {
+        archiveLegacyImportSource({
+          sourcePath: params.detected.triggersPath,
+          label: "voice wake triggers",
+          changes,
+          warnings,
+        });
+      }
+    }
+  }
+
+  if (fileExists(params.detected.routingPath)) {
+    let routingConfig: ReturnType<typeof normalizeVoiceWakeRoutingConfig> | null = null;
+    try {
+      routingConfig = normalizeVoiceWakeRoutingConfig(
+        readLegacyJsonObject(params.detected.routingPath),
+      );
+    } catch (err) {
+      warnings.push(
+        `Failed reading legacy voice wake routing ${params.detected.routingPath}: ${String(err)}`,
+      );
+    }
+    if (routingConfig) {
+      let imported = false;
+      let shouldArchive = false;
+      try {
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            const stateDb = getNodeSqliteKysely<LegacyVoiceWakeImportDatabase>(db);
+            const existing = executeSqliteQueryTakeFirstSync(
+              db,
+              stateDb
+                .selectFrom("voicewake_routing_config")
+                .select([
+                  "default_target_agent_id",
+                  "default_target_mode",
+                  "default_target_session_key",
+                ])
+                .where("config_key", "=", VOICEWAKE_CONFIG_KEY),
+            );
+            if (existing) {
+              const routeRows = executeSqliteQuerySync(
+                db,
+                stateDb
+                  .selectFrom("voicewake_routing_routes")
+                  .select(["target_agent_id", "target_mode", "target_session_key", "trigger"])
+                  .where("config_key", "=", VOICEWAKE_CONFIG_KEY)
+                  .orderBy("position", "asc"),
+              ).rows;
+              if (legacyVoiceWakeRoutingMatches(existing, routeRows, routingConfig)) {
+                shouldArchive = true;
+              } else {
+                warnings.push(
+                  `Left legacy voice wake routing in place because shared SQLite routing already exists with different routes: ${params.detected.routingPath}`,
+                );
+              }
+              return;
+            }
+            const updatedAtMs = Date.now();
+            const defaultTarget = legacyVoiceWakeTargetColumns(routingConfig.defaultTarget);
+            executeSqliteQuerySync(
+              db,
+              stateDb.insertInto("voicewake_routing_config").values({
+                config_key: VOICEWAKE_CONFIG_KEY,
+                version: 1,
+                default_target_mode: defaultTarget.targetMode,
+                default_target_agent_id: defaultTarget.targetAgentId,
+                default_target_session_key: defaultTarget.targetSessionKey,
+                updated_at_ms: updatedAtMs,
+              }),
+            );
+            if (routingConfig.routes.length > 0) {
+              executeSqliteQuerySync(
+                db,
+                stateDb.insertInto("voicewake_routing_routes").values(
+                  routingConfig.routes.map((route, position) => {
+                    const target = legacyVoiceWakeTargetColumns(route.target);
+                    return {
+                      config_key: VOICEWAKE_CONFIG_KEY,
+                      position,
+                      trigger: route.trigger,
+                      target_mode: target.targetMode,
+                      target_agent_id: target.targetAgentId,
+                      target_session_key: target.targetSessionKey,
+                      updated_at_ms: updatedAtMs,
+                    };
+                  }),
+                ),
+              );
+            }
+            imported = true;
+            shouldArchive = true;
+          },
+          { env },
+        );
+      } catch (err) {
+        warnings.push(`Failed migrating legacy voice wake routing: ${String(err)}`);
+      }
+      if (imported) {
+        changes.push(
+          `Migrated voice wake routing config with ${routingConfig.routes.length} ${routingConfig.routes.length === 1 ? "route" : "routes"} → shared SQLite state`,
+        );
+      }
+      if (shouldArchive) {
+        archiveLegacyImportSource({
+          sourcePath: params.detected.routingPath,
+          label: "voice wake routing",
+          changes,
+          warnings,
+        });
+      }
+    }
+  }
+
+  return { changes, warnings };
+}
+
+const UPDATE_CHECK_STATE_KEY = "default";
+
+type LegacyUpdateCheckState = {
+  lastCheckedAt?: string;
+  lastNotifiedVersion?: string;
+  lastNotifiedTag?: string;
+  lastAvailableVersion?: string;
+  lastAvailableTag?: string;
+  autoInstallId?: string;
+  autoFirstSeenVersion?: string;
+  autoFirstSeenTag?: string;
+  autoFirstSeenAt?: string;
+  autoLastAttemptVersion?: string;
+  autoLastAttemptAt?: string;
+  autoLastSuccessVersion?: string;
+  autoLastSuccessAt?: string;
+};
+
+function resolveLegacyUpdateCheckPath(stateDir: string): string {
+  return path.join(stateDir, "update-check.json");
+}
+
+function optionalLegacyString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function normalizeLegacyUpdateCheckState(input: unknown): LegacyUpdateCheckState {
+  const record = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+  return {
+    lastCheckedAt: optionalLegacyString(record, "lastCheckedAt"),
+    lastNotifiedVersion: optionalLegacyString(record, "lastNotifiedVersion"),
+    lastNotifiedTag: optionalLegacyString(record, "lastNotifiedTag"),
+    lastAvailableVersion: optionalLegacyString(record, "lastAvailableVersion"),
+    lastAvailableTag: optionalLegacyString(record, "lastAvailableTag"),
+    autoInstallId: optionalLegacyString(record, "autoInstallId"),
+    autoFirstSeenVersion: optionalLegacyString(record, "autoFirstSeenVersion"),
+    autoFirstSeenTag: optionalLegacyString(record, "autoFirstSeenTag"),
+    autoFirstSeenAt: optionalLegacyString(record, "autoFirstSeenAt"),
+    autoLastAttemptVersion: optionalLegacyString(record, "autoLastAttemptVersion"),
+    autoLastAttemptAt: optionalLegacyString(record, "autoLastAttemptAt"),
+    autoLastSuccessVersion: optionalLegacyString(record, "autoLastSuccessVersion"),
+    autoLastSuccessAt: optionalLegacyString(record, "autoLastSuccessAt"),
+  };
+}
+
+function legacyUpdateCheckStateMatches(
+  row: {
+    last_checked_at: string | null;
+    last_notified_version: string | null;
+    last_notified_tag: string | null;
+    last_available_version: string | null;
+    last_available_tag: string | null;
+    auto_install_id: string | null;
+    auto_first_seen_version: string | null;
+    auto_first_seen_tag: string | null;
+    auto_first_seen_at: string | null;
+    auto_last_attempt_version: string | null;
+    auto_last_attempt_at: string | null;
+    auto_last_success_version: string | null;
+    auto_last_success_at: string | null;
+  },
+  state: LegacyUpdateCheckState,
+): boolean {
+  return (
+    (state.lastCheckedAt ?? null) === row.last_checked_at &&
+    (state.lastNotifiedVersion ?? null) === row.last_notified_version &&
+    (state.lastNotifiedTag ?? null) === row.last_notified_tag &&
+    (state.lastAvailableVersion ?? null) === row.last_available_version &&
+    (state.lastAvailableTag ?? null) === row.last_available_tag &&
+    (state.autoInstallId ?? null) === row.auto_install_id &&
+    (state.autoFirstSeenVersion ?? null) === row.auto_first_seen_version &&
+    (state.autoFirstSeenTag ?? null) === row.auto_first_seen_tag &&
+    (state.autoFirstSeenAt ?? null) === row.auto_first_seen_at &&
+    (state.autoLastAttemptVersion ?? null) === row.auto_last_attempt_version &&
+    (state.autoLastAttemptAt ?? null) === row.auto_last_attempt_at &&
+    (state.autoLastSuccessVersion ?? null) === row.auto_last_success_version &&
+    (state.autoLastSuccessAt ?? null) === row.auto_last_success_at
+  );
+}
+
+function migrateLegacyUpdateCheckState(params: {
+  detected: LegacyStateDetection["updateCheck"];
+  stateDir: string;
+}): { changes: string[]; warnings: string[] } {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  if (!fileExists(params.detected.sourcePath)) {
+    return { changes, warnings };
+  }
+
+  let state: LegacyUpdateCheckState;
+  try {
+    state = normalizeLegacyUpdateCheckState(readLegacyJsonObject(params.detected.sourcePath));
+  } catch (err) {
+    warnings.push(
+      `Failed reading legacy update-check state ${params.detected.sourcePath}: ${String(err)}`,
+    );
+    return { changes, warnings };
+  }
+
+  let imported = false;
+  let shouldArchive = false;
+  try {
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const stateDb = getNodeSqliteKysely<LegacyUpdateCheckImportDatabase>(db);
+        const existing = executeSqliteQueryTakeFirstSync(
+          db,
+          stateDb
+            .selectFrom("update_check_state")
+            .selectAll()
+            .where("state_key", "=", UPDATE_CHECK_STATE_KEY),
+        );
+        if (existing) {
+          if (legacyUpdateCheckStateMatches(existing, state)) {
+            shouldArchive = true;
+          } else {
+            warnings.push(
+              `Left legacy update-check state in place because shared SQLite state already differs: ${params.detected.sourcePath}`,
+            );
+          }
+          return;
+        }
+        executeSqliteQuerySync(
+          db,
+          stateDb.insertInto("update_check_state").values({
+            state_key: UPDATE_CHECK_STATE_KEY,
+            last_checked_at: state.lastCheckedAt ?? null,
+            last_notified_version: state.lastNotifiedVersion ?? null,
+            last_notified_tag: state.lastNotifiedTag ?? null,
+            last_available_version: state.lastAvailableVersion ?? null,
+            last_available_tag: state.lastAvailableTag ?? null,
+            auto_install_id: state.autoInstallId ?? null,
+            auto_first_seen_version: state.autoFirstSeenVersion ?? null,
+            auto_first_seen_tag: state.autoFirstSeenTag ?? null,
+            auto_first_seen_at: state.autoFirstSeenAt ?? null,
+            auto_last_attempt_version: state.autoLastAttemptVersion ?? null,
+            auto_last_attempt_at: state.autoLastAttemptAt ?? null,
+            auto_last_success_version: state.autoLastSuccessVersion ?? null,
+            auto_last_success_at: state.autoLastSuccessAt ?? null,
+            updated_at_ms: Date.now(),
+          }),
+        );
+        imported = true;
+        shouldArchive = true;
+      },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+    );
+  } catch (err) {
+    warnings.push(`Failed migrating legacy update-check state: ${String(err)}`);
+  }
+  if (imported) {
+    changes.push("Migrated update-check state → shared SQLite state");
+  }
+  if (shouldArchive) {
+    archiveLegacyImportSource({
+      sourcePath: params.detected.sourcePath,
+      label: "update-check state",
+      changes,
+      warnings,
+    });
+  }
+  return { changes, warnings };
+}
+
+type LegacyConfigHealthFile = {
+  entries?: unknown;
+};
+
+type LegacyConfigHealthEntry = {
+  configPath: string;
+  lastKnownGoodJson: string | null;
+  lastPromotedGoodJson: string | null;
+  lastObservedSuspiciousSignature: string | null;
+};
+
+function resolveLegacyConfigHealthPath(stateDir: string): string {
+  return path.join(stateDir, "logs", "config-health.json");
+}
+
+function normalizeLegacyConfigHealthEntry(
+  configPath: string,
+  input: unknown,
+): LegacyConfigHealthEntry | null {
+  if (!configPath.trim() || !input || typeof input !== "object" || Array.isArray(input)) {
+    return null;
+  }
+  const entry = input as {
+    lastKnownGood?: unknown;
+    lastPromotedGood?: unknown;
+    lastObservedSuspiciousSignature?: unknown;
+  };
+  const lastKnownGoodJson =
+    entry.lastKnownGood && typeof entry.lastKnownGood === "object"
+      ? JSON.stringify(entry.lastKnownGood)
+      : null;
+  const lastPromotedGoodJson =
+    entry.lastPromotedGood && typeof entry.lastPromotedGood === "object"
+      ? JSON.stringify(entry.lastPromotedGood)
+      : null;
+  const lastObservedSuspiciousSignature =
+    typeof entry.lastObservedSuspiciousSignature === "string"
+      ? entry.lastObservedSuspiciousSignature
+      : null;
+  if (!lastKnownGoodJson && !lastPromotedGoodJson && !lastObservedSuspiciousSignature) {
+    return null;
+  }
+  return {
+    configPath,
+    lastKnownGoodJson,
+    lastPromotedGoodJson,
+    lastObservedSuspiciousSignature,
+  };
+}
+
+function normalizeLegacyConfigHealthFile(input: unknown): LegacyConfigHealthEntry[] {
+  const file = input && typeof input === "object" ? (input as LegacyConfigHealthFile) : {};
+  const entries = file.entries;
+  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
+    return [];
+  }
+  return Object.entries(entries)
+    .flatMap(([configPath, entry]) => {
+      const normalized = normalizeLegacyConfigHealthEntry(configPath, entry);
+      return normalized ? [normalized] : [];
+    })
+    .toSorted((a, b) => a.configPath.localeCompare(b.configPath));
+}
+
+function configHealthRow(entry: LegacyConfigHealthEntry): {
+  config_path: string;
+  last_known_good_json: string | null;
+  last_promoted_good_json: string | null;
+  last_observed_suspicious_signature: string | null;
+  updated_at_ms: number;
+} {
+  return {
+    config_path: entry.configPath,
+    last_known_good_json: entry.lastKnownGoodJson,
+    last_promoted_good_json: entry.lastPromotedGoodJson,
+    last_observed_suspicious_signature: entry.lastObservedSuspiciousSignature,
+    updated_at_ms: Date.now(),
+  };
+}
+
+function configHealthComparable(entry: LegacyConfigHealthEntry): string {
+  const row = configHealthRow(entry);
+  return JSON.stringify({
+    config_path: row.config_path,
+    last_known_good_json: row.last_known_good_json,
+    last_promoted_good_json: row.last_promoted_good_json,
+    last_observed_suspicious_signature: row.last_observed_suspicious_signature,
+  });
+}
+
+function migrateLegacyConfigHealth(params: {
+  detected: LegacyStateDetection["configHealth"];
+  stateDir: string;
+}): { changes: string[]; warnings: string[] } {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  if (!fileExists(params.detected.sourcePath)) {
+    return { changes, warnings };
+  }
+  let entries: LegacyConfigHealthEntry[];
+  try {
+    entries = normalizeLegacyConfigHealthFile(readLegacyJsonObject(params.detected.sourcePath));
+  } catch (err) {
+    warnings.push(
+      `Failed reading legacy config health state ${params.detected.sourcePath}: ${String(err)}`,
+    );
+    return { changes, warnings };
+  }
+
+  let importedCount = 0;
+  let shouldArchive = entries.length === 0;
+  try {
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const stateDb = getNodeSqliteKysely<LegacyConfigHealthImportDatabase>(db);
+        const existing = executeSqliteQuerySync(
+          db,
+          stateDb
+            .selectFrom("config_health_entries")
+            .select([
+              "config_path",
+              "last_known_good_json",
+              "last_promoted_good_json",
+              "last_observed_suspicious_signature",
+            ]),
+        ).rows;
+        const existingByPath = new Map(
+          existing.map(
+            (row) =>
+              [
+                row.config_path,
+                JSON.stringify({
+                  config_path: row.config_path,
+                  last_known_good_json: row.last_known_good_json,
+                  last_promoted_good_json: row.last_promoted_good_json,
+                  last_observed_suspicious_signature: row.last_observed_suspicious_signature,
+                }),
+              ] as const,
+          ),
+        );
+        const entriesToInsert: LegacyConfigHealthEntry[] = [];
+        let conflictCount = 0;
+        for (const entry of entries) {
+          const existingEntryJson = existingByPath.get(entry.configPath);
+          if (existingEntryJson === undefined) {
+            entriesToInsert.push(entry);
+          } else if (existingEntryJson !== configHealthComparable(entry)) {
+            conflictCount += 1;
+          }
+        }
+        if (entriesToInsert.length > 0) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .insertInto("config_health_entries")
+              .values(entriesToInsert.map(configHealthRow)),
+          );
+          importedCount = entriesToInsert.length;
+        }
+        shouldArchive = conflictCount === 0;
+        if (conflictCount > 0) {
+          warnings.push(
+            `Left legacy config health state in place because ${conflictCount} ${conflictCount === 1 ? "entry conflicts" : "entries conflict"} with shared SQLite state: ${params.detected.sourcePath}`,
+          );
+        }
+      },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+    );
+  } catch (err) {
+    warnings.push(`Failed migrating legacy config health state: ${String(err)}`);
+  }
+  if (importedCount > 0) {
+    changes.push(
+      `Migrated ${importedCount} config health ${importedCount === 1 ? "entry" : "entries"} → shared SQLite state`,
+    );
+  }
+  if (shouldArchive) {
+    archiveLegacyImportSource({
+      sourcePath: params.detected.sourcePath,
+      label: "config health state",
+      changes,
+      warnings,
+    });
+  }
+  return { changes, warnings };
+}
+
+type LegacyPluginBindingApprovalsFile = {
+  version?: unknown;
+  approvals?: unknown;
+};
+
+type LegacyPluginBindingApprovalEntry = {
+  pluginRoot: string;
+  pluginId: string;
+  pluginName?: string;
+  channel: string;
+  accountId: string;
+  approvedAt: number;
+};
+
+function resolveLegacyPluginBindingApprovalsPath(
+  env: NodeJS.ProcessEnv,
+  homedir: () => string,
+): string {
+  return path.join(
+    resolveRequiredHomeDir(env, homedir),
+    ".openclaw",
+    "plugin-binding-approvals.json",
+  );
+}
+
+function pluginBindingApprovalScopeKey(entry: {
+  pluginRoot: string;
+  channel: string;
+  accountId: string;
+}): string {
+  return [entry.pluginRoot, normalizeLowercaseStringOrEmpty(entry.channel), entry.accountId].join(
+    "::",
+  );
+}
+
+function normalizeLegacyPluginBindingApprovalEntry(
+  input: unknown,
+): LegacyPluginBindingApprovalEntry | null {
+  const entry =
+    input && typeof input === "object" ? (input as Partial<LegacyPluginBindingApprovalEntry>) : {};
+  const pluginRoot = typeof entry.pluginRoot === "string" ? entry.pluginRoot.trim() : "";
+  const pluginId = typeof entry.pluginId === "string" ? entry.pluginId.trim() : "";
+  const channel =
+    typeof entry.channel === "string" ? normalizeLowercaseStringOrEmpty(entry.channel) : "";
+  const accountId =
+    typeof entry.accountId === "string" && entry.accountId.trim()
+      ? entry.accountId.trim()
+      : "default";
+  if (!pluginRoot || !pluginId || !channel) {
+    return null;
+  }
+  return {
+    pluginRoot,
+    pluginId,
+    pluginName: typeof entry.pluginName === "string" ? entry.pluginName : undefined,
+    channel,
+    accountId,
+    approvedAt:
+      typeof entry.approvedAt === "number" && Number.isFinite(entry.approvedAt)
+        ? Math.floor(entry.approvedAt)
+        : Date.now(),
+  };
+}
+
+function normalizeLegacyPluginBindingApprovalsFile(
+  input: unknown,
+): LegacyPluginBindingApprovalEntry[] {
+  const file =
+    input && typeof input === "object" ? (input as LegacyPluginBindingApprovalsFile) : {};
+  if (file.version !== 1 || !Array.isArray(file.approvals)) {
+    return [];
+  }
+  const approvals = new Map<string, LegacyPluginBindingApprovalEntry>();
+  for (const item of file.approvals) {
+    const entry = normalizeLegacyPluginBindingApprovalEntry(item);
+    if (!entry) {
+      continue;
+    }
+    approvals.set(pluginBindingApprovalScopeKey(entry), entry);
+  }
+  return [...approvals.values()].toSorted((a, b) =>
+    pluginBindingApprovalScopeKey(a).localeCompare(pluginBindingApprovalScopeKey(b)),
+  );
+}
+
+function pluginBindingApprovalRow(entry: LegacyPluginBindingApprovalEntry): {
+  plugin_root: string;
+  channel: string;
+  account_id: string;
+  plugin_id: string;
+  plugin_name: string | null;
+  approved_at: number;
+} {
+  return {
+    plugin_root: entry.pluginRoot,
+    channel: entry.channel,
+    account_id: entry.accountId,
+    plugin_id: entry.pluginId,
+    plugin_name: entry.pluginName ?? null,
+    approved_at: entry.approvedAt,
+  };
+}
+
+function pluginBindingApprovalComparable(entry: LegacyPluginBindingApprovalEntry): string {
+  return JSON.stringify(pluginBindingApprovalRow(entry));
+}
+
+function migrateLegacyPluginBindingApprovals(params: {
+  detected: LegacyStateDetection["pluginBindingApprovals"];
+  stateDir: string;
+}): { changes: string[]; warnings: string[] } {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  if (!fileExists(params.detected.sourcePath)) {
+    return { changes, warnings };
+  }
+  let approvals: LegacyPluginBindingApprovalEntry[];
+  try {
+    approvals = normalizeLegacyPluginBindingApprovalsFile(
+      readLegacyJsonObject(params.detected.sourcePath),
+    );
+  } catch (err) {
+    warnings.push(
+      `Failed reading legacy plugin binding approvals ${params.detected.sourcePath}: ${String(err)}`,
+    );
+    return { changes, warnings };
+  }
+
+  let importedCount = 0;
+  let shouldArchive = approvals.length === 0;
+  try {
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const stateDb = getNodeSqliteKysely<LegacyPluginBindingApprovalsImportDatabase>(db);
+        const existing = executeSqliteQuerySync(
+          db,
+          stateDb
+            .selectFrom("plugin_binding_approvals")
+            .select([
+              "plugin_root",
+              "channel",
+              "account_id",
+              "plugin_id",
+              "plugin_name",
+              "approved_at",
+            ]),
+        ).rows;
+        const existingByKey = new Map(
+          existing.map(
+            (row) =>
+              [
+                pluginBindingApprovalScopeKey({
+                  pluginRoot: row.plugin_root,
+                  channel: row.channel,
+                  accountId: row.account_id,
+                }),
+                JSON.stringify({
+                  plugin_root: row.plugin_root,
+                  channel: row.channel,
+                  account_id: row.account_id,
+                  plugin_id: row.plugin_id,
+                  plugin_name: row.plugin_name,
+                  approved_at: row.approved_at,
+                }),
+              ] as const,
+          ),
+        );
+        const approvalsToInsert: LegacyPluginBindingApprovalEntry[] = [];
+        let conflictCount = 0;
+        for (const approval of approvals) {
+          const key = pluginBindingApprovalScopeKey(approval);
+          const existingApprovalJson = existingByKey.get(key);
+          if (existingApprovalJson === undefined) {
+            approvalsToInsert.push(approval);
+          } else if (existingApprovalJson !== pluginBindingApprovalComparable(approval)) {
+            conflictCount += 1;
+          }
+        }
+        if (approvalsToInsert.length > 0) {
+          executeSqliteQuerySync(
+            db,
+            stateDb
+              .insertInto("plugin_binding_approvals")
+              .values(approvalsToInsert.map(pluginBindingApprovalRow)),
+          );
+          importedCount = approvalsToInsert.length;
+        }
+        shouldArchive = conflictCount === 0;
+        if (conflictCount > 0) {
+          warnings.push(
+            `Left legacy plugin binding approvals in place because ${conflictCount} ${conflictCount === 1 ? "approval conflicts" : "approvals conflict"} with shared SQLite state: ${params.detected.sourcePath}`,
+          );
+        }
+      },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+    );
+  } catch (err) {
+    warnings.push(`Failed migrating legacy plugin binding approvals: ${String(err)}`);
+  }
+  if (importedCount > 0) {
+    changes.push(
+      `Migrated ${importedCount} plugin binding ${importedCount === 1 ? "approval" : "approvals"} → shared SQLite state`,
+    );
+  }
+  if (shouldArchive) {
+    archiveLegacyImportSource({
+      sourcePath: params.detected.sourcePath,
+      label: "plugin binding approvals",
+      changes,
+      warnings,
+    });
+  }
+  return { changes, warnings };
+}
+
+const CURRENT_BINDING_CONVERSATION_KIND = "current";
+
+type LegacyCurrentConversationBindingsFile = {
+  version?: unknown;
+  bindings?: unknown;
+};
+
+function resolveLegacyCurrentConversationBindingsPath(stateDir: string): string {
+  return path.join(stateDir, "bindings", "current-conversations.json");
+}
+
+function currentConversationBindingKey(ref: SessionBindingRecord["conversation"]): string {
+  const normalized = normalizeConversationRef(ref);
+  return [
+    normalized.channel,
+    normalized.accountId,
+    normalized.parentConversationId ?? "",
+    normalized.conversationId,
+  ].join("\u241f");
+}
+
+function normalizeLegacyCurrentConversationBindingRecord(
+  input: unknown,
+): SessionBindingRecord | null {
+  const record = input && typeof input === "object" ? (input as Partial<SessionBindingRecord>) : {};
+  if (!record.conversation?.conversationId) {
+    return null;
+  }
+  const conversation = normalizeConversationRef(record.conversation);
+  const targetSessionKey =
+    typeof record.targetSessionKey === "string" ? record.targetSessionKey.trim() : "";
+  if (!targetSessionKey) {
+    return null;
+  }
+  const targetKind = record.targetKind === "subagent" ? "subagent" : "session";
+  const status = record.status === "ending" || record.status === "ended" ? record.status : "active";
+  const boundAt =
+    typeof record.boundAt === "number" && Number.isFinite(record.boundAt)
+      ? Math.floor(record.boundAt)
+      : Date.now();
+  const expiresAt =
+    typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt)
+      ? Math.floor(record.expiresAt)
+      : undefined;
+  return {
+    bindingId: `generic:${currentConversationBindingKey(conversation)}`,
+    targetSessionKey,
+    targetKind,
+    conversation,
+    status,
+    boundAt,
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
+    ...(record.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata)
+      ? { metadata: record.metadata }
+      : {}),
+  };
+}
+
+function normalizeLegacyCurrentConversationBindingFile(input: unknown): SessionBindingRecord[] {
+  const file =
+    input && typeof input === "object" ? (input as LegacyCurrentConversationBindingsFile) : {};
+  if (file.version !== 1 || !Array.isArray(file.bindings)) {
+    return [];
+  }
+  const records = new Map<string, SessionBindingRecord>();
+  for (const item of file.bindings) {
+    const record = normalizeLegacyCurrentConversationBindingRecord(item);
+    if (!record) {
+      continue;
+    }
+    records.set(currentConversationBindingKey(record.conversation), record);
+  }
+  return [...records.values()].toSorted((a, b) => a.bindingId.localeCompare(b.bindingId));
+}
+
+function currentConversationBindingRow(record: SessionBindingRecord): {
+  binding_key: string;
+  binding_id: string;
+  target_agent_id: string;
+  target_session_id: string | null;
+  target_session_key: string;
+  channel: string;
+  account_id: string;
+  conversation_kind: string;
+  parent_conversation_id: string | null;
+  conversation_id: string;
+  target_kind: string;
+  status: string;
+  bound_at: number;
+  expires_at: number | null;
+  metadata_json: string | null;
+  record_json: string;
+  updated_at: number;
+} {
+  const conversation = normalizeConversationRef(record.conversation);
+  return {
+    binding_key: currentConversationBindingKey(conversation),
+    binding_id: record.bindingId,
+    target_agent_id: resolveAgentIdFromSessionKey(record.targetSessionKey),
+    target_session_id: null,
+    target_session_key: record.targetSessionKey,
+    channel: conversation.channel,
+    account_id: conversation.accountId,
+    conversation_kind: CURRENT_BINDING_CONVERSATION_KIND,
+    parent_conversation_id: conversation.parentConversationId ?? null,
+    conversation_id: conversation.conversationId,
+    target_kind: record.targetKind,
+    status: record.status,
+    bound_at: record.boundAt,
+    expires_at: record.expiresAt ?? null,
+    metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
+    record_json: JSON.stringify(record),
+    updated_at: Date.now(),
+  };
+}
+
+function migrateLegacyCurrentConversationBindings(params: {
+  detected: LegacyStateDetection["currentConversationBindings"];
+  stateDir: string;
+}): { changes: string[]; warnings: string[] } {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  if (!fileExists(params.detected.sourcePath)) {
+    return { changes, warnings };
+  }
+  let records: SessionBindingRecord[];
+  try {
+    records = normalizeLegacyCurrentConversationBindingFile(
+      readLegacyJsonObject(params.detected.sourcePath),
+    );
+  } catch (err) {
+    warnings.push(
+      `Failed reading legacy current-conversation bindings ${params.detected.sourcePath}: ${String(err)}`,
+    );
+    return { changes, warnings };
+  }
+
+  let importedCount = 0;
+  let shouldArchive = records.length === 0;
+  try {
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const stateDb = getNodeSqliteKysely<LegacyCurrentConversationBindingsImportDatabase>(db);
+        const existing = executeSqliteQuerySync(
+          db,
+          stateDb
+            .selectFrom("current_conversation_bindings")
+            .select(["binding_key", "record_json"]),
+        ).rows;
+        const existingByKey = new Map(
+          existing.map((row) => [row.binding_key, row.record_json] as const),
+        );
+        const recordsToInsert: SessionBindingRecord[] = [];
+        let conflictCount = 0;
+        for (const record of records) {
+          const key = currentConversationBindingKey(record.conversation);
+          const existingRecordJson = existingByKey.get(key);
+          if (existingRecordJson === undefined) {
+            recordsToInsert.push(record);
+          } else if (existingRecordJson !== JSON.stringify(record)) {
+            conflictCount += 1;
+          }
+        }
+        if (recordsToInsert.length === 0) {
+          shouldArchive = conflictCount === 0;
+          if (conflictCount > 0) {
+            warnings.push(
+              `Left legacy current-conversation bindings in place because ${conflictCount} ${conflictCount === 1 ? "binding conflicts" : "bindings conflict"} with shared SQLite state: ${params.detected.sourcePath}`,
+            );
+          }
+          return;
+        }
+        executeSqliteQuerySync(
+          db,
+          stateDb
+            .insertInto("current_conversation_bindings")
+            .values(recordsToInsert.map(currentConversationBindingRow)),
+        );
+        importedCount = recordsToInsert.length;
+        shouldArchive = conflictCount === 0;
+        if (conflictCount > 0) {
+          warnings.push(
+            `Left legacy current-conversation bindings in place because ${conflictCount} ${conflictCount === 1 ? "binding conflicts" : "bindings conflict"} with shared SQLite state: ${params.detected.sourcePath}`,
+          );
+        }
+      },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
+    );
+  } catch (err) {
+    warnings.push(`Failed migrating legacy current-conversation bindings: ${String(err)}`);
+  }
+  if (importedCount > 0) {
+    changes.push(
+      `Migrated ${importedCount} current-conversation ${importedCount === 1 ? "binding" : "bindings"} → shared SQLite state`,
+    );
+  }
+  if (shouldArchive) {
+    archiveLegacyImportSource({
+      sourcePath: params.detected.sourcePath,
+      label: "current-conversation bindings",
+      changes,
+      warnings,
+    });
+  }
+  return { changes, warnings };
+}
+
 async function migrateLegacyPluginStateSidecar(params: {
   stateDir: string;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const sourcePath = resolveLegacyPluginStateSidecarPath(params.stateDir);
   if (!fileExists(sourcePath)) {
-    return { changes: [], warnings: [] };
+    const changes: string[] = [];
+    const warnings: string[] = [];
+    if (hasPendingSqliteSidecarArchive(sourcePath, PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES)) {
+      archiveLegacyPluginStateSidecar({ sourcePath, changes, warnings });
+    }
+    return { changes, warnings };
   }
 
   const changes: string[] = [];
@@ -1593,6 +2830,7 @@ async function runLegacyMigrationPlans(
         const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
           namespace: plan.namespace,
           maxEntries: plan.maxEntries,
+          ...(plan.defaultTtlMs != null ? { defaultTtlMs: plan.defaultTtlMs } : {}),
         });
         try {
           storeEntries = await store.entries();
@@ -1722,6 +2960,14 @@ async function runLegacyMigrationPlans(
             changes,
             warnings,
           });
+        }
+        if (allEntriesCovered && plan.removeSource) {
+          try {
+            await plan.removeSource();
+            changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
+          } catch (err) {
+            warnings.push(`Failed removing ${plan.label} legacy source: ${String(err)}`);
+          }
         }
       });
       continue;
@@ -1878,33 +3124,21 @@ function pickLatestLegacyDirectEntry(
 }
 
 function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
-  if (!entry || typeof entry !== "object") {
+  const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : null;
+  if (!sessionId) {
     return null;
-  }
-  const rec = { ...(entry as unknown as Record<string, unknown>) };
-  const rawSessionId = rec.sessionId;
-  if (rawSessionId === undefined) {
-    delete rec.sessionId;
-  } else if (typeof rawSessionId === "string") {
-    try {
-      rec.sessionId = validateSessionId(rawSessionId);
-    } catch {
-      delete rec.sessionId;
-    }
-  } else {
-    delete rec.sessionId;
   }
   const updatedAt =
     typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
       ? entry.updatedAt
       : Date.now();
-  rec.updatedAt = updatedAt;
+  const normalized = { ...(entry as unknown as SessionEntry), sessionId, updatedAt };
+  const rec = normalized as unknown as Record<string, unknown>;
   if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
     rec.groupChannel = rec.room;
   }
   delete rec.room;
-  const meaningfulKeys = Object.keys(rec).filter((key) => key !== "updatedAt");
-  return meaningfulKeys.length > 0 ? (rec as unknown as SessionEntry) : null;
+  return normalized;
 }
 
 function resolveUpdatedAt(entry: SessionEntryLike): number {
@@ -1930,342 +3164,6 @@ function mergeSessionEntry(params: {
     return params.existing;
   }
   return params.preferIncomingOnTie ? params.incoming : params.existing;
-}
-
-function rewriteLegacySessionFilePaths(params: {
-  store: Record<string, SessionEntryLike>;
-  legacyDir: string;
-  movedFiles: MovedSessionFiles;
-}): Record<string, SessionEntryLike> {
-  const rewritten: Record<string, SessionEntryLike> = {};
-  const legacyDir = path.resolve(params.legacyDir);
-  for (const [key, entry] of Object.entries(params.store)) {
-    const rawSessionFile = (entry as { sessionFile?: unknown }).sessionFile;
-    const movedSessionFile =
-      typeof rawSessionFile === "string"
-        ? lookupMovedSessionFile(
-            params.movedFiles,
-            path.isAbsolute(rawSessionFile)
-              ? path.resolve(rawSessionFile)
-              : path.resolve(legacyDir, rawSessionFile),
-          )
-        : resolveMovedSessionFileFromSessionId({
-            entry,
-            legacyDir,
-            movedFiles: params.movedFiles,
-          });
-    if (!movedSessionFile) {
-      rewritten[key] = entry;
-      continue;
-    }
-    rewritten[key] = {
-      ...entry,
-      sessionFile: movedSessionFile,
-    };
-  }
-  return rewritten;
-}
-
-function resolveMovedSessionFileFromSessionId(params: {
-  entry: SessionEntryLike;
-  legacyDir: string;
-  movedFiles: MovedSessionFiles;
-}): string | undefined {
-  const rawSessionId = (params.entry as { sessionId?: unknown }).sessionId;
-  if (typeof rawSessionId !== "string") {
-    return undefined;
-  }
-  try {
-    const sessionId = validateSessionId(rawSessionId);
-    return lookupMovedSessionFile(
-      params.movedFiles,
-      path.join(params.legacyDir, `${sessionId}.jsonl`),
-    );
-  } catch {
-    return undefined;
-  }
-}
-
-type LegacySessionFileMove = {
-  from: string;
-  to: string;
-  name: string;
-};
-
-type MovedSessionFiles = {
-  exact: Map<string, string>;
-  folded: Map<string, string>;
-  ambiguousFolded: Set<string>;
-};
-
-// Case-insensitive filesystems can report a source file with casing that differs
-// from stored sessionFile metadata. Folded aliases are safe only when exactly
-// one moved source owns that spelling; otherwise keep lookup exact.
-function buildMovedSessionFiles(moves: LegacySessionFileMove[]): MovedSessionFiles {
-  const foldedCounts = new Map<string, number>();
-  for (const move of moves) {
-    const folded = sessionMovePathKey(move.from);
-    foldedCounts.set(folded, (foldedCounts.get(folded) ?? 0) + 1);
-  }
-
-  const movedFiles: MovedSessionFiles = {
-    exact: new Map(),
-    folded: new Map(),
-    ambiguousFolded: new Set(),
-  };
-  for (const [folded, count] of foldedCounts) {
-    if (count > 1) {
-      movedFiles.ambiguousFolded.add(folded);
-    }
-  }
-  return movedFiles;
-}
-
-function recordMovedSessionFile(params: {
-  movedFiles: MovedSessionFiles;
-  move: LegacySessionFileMove;
-}): void {
-  const exact = path.resolve(params.move.from);
-  const folded = sessionMovePathKey(params.move.from);
-  params.movedFiles.exact.set(exact, params.move.to);
-  if (!params.movedFiles.ambiguousFolded.has(folded)) {
-    params.movedFiles.folded.set(folded, params.move.to);
-  }
-}
-
-function lookupMovedSessionFile(
-  movedFiles: MovedSessionFiles,
-  filePath: string,
-): string | undefined {
-  const exact = movedFiles.exact.get(path.resolve(filePath));
-  if (exact) {
-    return exact;
-  }
-  const folded = sessionMovePathKey(filePath);
-  if (movedFiles.ambiguousFolded.has(folded)) {
-    return undefined;
-  }
-  return movedFiles.folded.get(folded);
-}
-
-function resolveLegacySessionFileMovePlanPath(legacyDir: string): string {
-  return path.join(legacyDir, LEGACY_SESSION_FILE_MOVE_PLAN_NAME);
-}
-
-function isLegacySessionFileMovePlanName(name: string): boolean {
-  return (
-    name === LEGACY_SESSION_FILE_MOVE_PLAN_NAME ||
-    name === `${LEGACY_SESSION_FILE_MOVE_PLAN_NAME}.tmp`
-  );
-}
-
-// Transcript moves happen before SQLite import so metadata can point at final
-// paths. Persist the plan first so a crash in that window can retry without
-// guessing conflict-renamed transcript names.
-function parseLegacySessionFileMovePlan(raw: string): LegacySessionFileMove[] | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return null;
-  }
-  const moves = (parsed as { moves?: unknown }).moves;
-  if (!Array.isArray(moves)) {
-    return null;
-  }
-  const plan: LegacySessionFileMove[] = [];
-  for (const move of moves) {
-    if (!move || typeof move !== "object") {
-      return null;
-    }
-    const rec = move as { from?: unknown; to?: unknown; name?: unknown };
-    if (
-      typeof rec.from !== "string" ||
-      typeof rec.to !== "string" ||
-      typeof rec.name !== "string"
-    ) {
-      return null;
-    }
-    plan.push({
-      from: rec.from,
-      to: rec.to,
-      name: rec.name,
-    });
-  }
-  return plan;
-}
-
-function readLegacySessionFileMovePlan(params: {
-  legacyDir: string;
-  targetDir: string;
-}): LegacySessionFileMove[] | null {
-  const legacyDir = path.resolve(params.legacyDir);
-  const targetDir = path.resolve(params.targetDir);
-  const planPath = resolveLegacySessionFileMovePlanPath(legacyDir);
-  if (!fileExists(planPath)) {
-    return null;
-  }
-  try {
-    const moves = parseLegacySessionFileMovePlan(fs.readFileSync(planPath, "utf-8"));
-    if (!moves) {
-      return null;
-    }
-    for (const move of moves) {
-      if (
-        !isWithinDir(legacyDir, move.from) ||
-        !isWithinDir(targetDir, move.to) ||
-        path.basename(move.from) !== move.name
-      ) {
-        return null;
-      }
-    }
-    return moves;
-  } catch {
-    return null;
-  }
-}
-
-function writeLegacySessionFileMovePlan(params: {
-  legacyDir: string;
-  moves: LegacySessionFileMove[];
-}): void {
-  if (params.moves.length === 0) {
-    return;
-  }
-  const planPath = resolveLegacySessionFileMovePlanPath(params.legacyDir);
-  const tempPath = `${planPath}.tmp`;
-  fs.writeFileSync(
-    tempPath,
-    JSON.stringify(
-      {
-        version: 1,
-        moves: params.moves,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.renameSync(tempPath, planPath);
-}
-
-function revalidateLegacySessionFileMovePlan(params: {
-  moves: LegacySessionFileMove[];
-  targetDir: string;
-  now: () => number;
-}): { moves: LegacySessionFileMove[]; changed: boolean } {
-  let changed = false;
-  const reservedPaths = new Set(
-    safeReadDir(params.targetDir)
-      .filter((entry) => entry.isFile())
-      .map((entry) => sessionMovePathKey(path.join(params.targetDir, entry.name))),
-  );
-  const moves: LegacySessionFileMove[] = [];
-  for (const move of params.moves) {
-    let to = move.to;
-    const sourceExists = fileExists(move.from);
-    const targetKey = sessionMovePathKey(to);
-    if (sourceExists && reservedPaths.has(targetKey)) {
-      to = nextLegacySessionConflictPath({
-        targetDir: params.targetDir,
-        name: move.name,
-        now: params.now,
-        reservedPaths,
-      });
-      changed = true;
-    }
-    reservedPaths.add(sessionMovePathKey(to));
-    moves.push(to === move.to ? move : { ...move, to });
-  }
-  return { moves, changed };
-}
-
-function nextLegacySessionConflictPath(params: {
-  targetDir: string;
-  name: string;
-  now: () => number;
-  reservedPaths: Set<string>;
-}): string {
-  const parsed = path.parse(params.name);
-  const baseName = parsed.name || "session";
-  const ext = parsed.ext || ".jsonl";
-  const suffix = `.legacy-${params.now()}`;
-  let index = 0;
-  while (true) {
-    const numbered = index === 0 ? "" : `-${index}`;
-    const candidate = path.join(params.targetDir, `${baseName}${suffix}${numbered}${ext}`);
-    if (!fileExists(candidate) && !params.reservedPaths.has(sessionMovePathKey(candidate))) {
-      return candidate;
-    }
-    index++;
-  }
-}
-
-function sessionMovePathKey(filePath: string): string {
-  return normalizeLowercaseStringOrEmpty(path.resolve(filePath));
-}
-
-function buildLegacySessionFileMovePlan(params: {
-  legacyDir: string;
-  targetDir: string;
-  now: () => number;
-}): LegacySessionFileMove[] {
-  const moves: LegacySessionFileMove[] = [];
-  const entries = safeReadDir(params.legacyDir)
-    .filter(
-      (entry) =>
-        entry.isFile() &&
-        entry.name !== "sessions.json" &&
-        !isLegacySessionFileMovePlanName(entry.name),
-    )
-    .toSorted((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
-  const existingTargetPaths = new Set(
-    safeReadDir(params.targetDir)
-      .filter((entry) => entry.isFile())
-      .map((entry) => sessionMovePathKey(path.join(params.targetDir, entry.name))),
-  );
-  const defaultTargetPaths = new Set(
-    entries.map((entry) => sessionMovePathKey(path.join(params.targetDir, entry.name))),
-  );
-  const plannedTargetPaths = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.isFile() || entry.name === "sessions.json") {
-      continue;
-    }
-    const from = path.join(params.legacyDir, entry.name);
-    const defaultTo = path.join(params.targetDir, entry.name);
-    const resolvedDefaultTo = sessionMovePathKey(defaultTo);
-    const mustUseConflictName =
-      fileExists(defaultTo) ||
-      existingTargetPaths.has(resolvedDefaultTo) ||
-      plannedTargetPaths.has(resolvedDefaultTo);
-    const reservedPaths = new Set([
-      ...existingTargetPaths,
-      ...defaultTargetPaths,
-      ...plannedTargetPaths,
-    ]);
-    if (!mustUseConflictName) {
-      reservedPaths.delete(resolvedDefaultTo);
-    }
-    const to = mustUseConflictName
-      ? nextLegacySessionConflictPath({
-          targetDir: params.targetDir,
-          name: entry.name,
-          now: params.now,
-          reservedPaths,
-        })
-      : defaultTo;
-    plannedTargetPaths.add(sessionMovePathKey(to));
-    moves.push({
-      from,
-      to,
-      name: entry.name,
-    });
-  }
-  return moves;
 }
 
 function canonicalizeSessionStore(params: {
@@ -2325,48 +3223,81 @@ function canonicalizeSessionStore(params: {
   return { store: canonical, legacyKeys };
 }
 
-function importNormalizedSessionsIntoSqlite(params: {
-  storePath: string;
-  store: Record<string, SessionEntryLike>;
-  stateDir: string;
-  now: () => number;
-}): { imported: number; acpMigrated: number } {
-  const normalized: Record<string, SessionEntry> = { ...loadSqliteSessionStore(params.storePath) };
-  let acpMigrated = 0;
-  const migrationEnv = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
-  for (const [key, entry] of Object.entries(params.store)) {
-    const normalizedEntry = normalizeSessionEntry(entry);
-    if (!normalizedEntry) {
-      continue;
-    }
-    const snapshot = normalizedEntry.skillsSnapshot as { resolvedSkills?: unknown } | undefined;
-    if (snapshot?.resolvedSkills !== undefined) {
-      delete snapshot.resolvedSkills;
-    }
-    if (normalizedEntry.acp && typeof normalizedEntry.sessionId === "string") {
-      writeAcpSessionMetaForMigration({
-        sessionKey: key,
-        sessionId: normalizedEntry.sessionId,
-        meta: normalizedEntry.acp,
-        env: migrationEnv,
-        now: params.now,
-      });
-      delete normalizedEntry.acp;
-      acpMigrated++;
-    }
-    normalized[key] = mergeSessionEntry({
-      existing: normalized[key],
-      incoming: normalizedEntry,
-      preferIncomingOnTie: false,
-    }) as SessionEntry;
+function resolveStaleLegacySessionFile(params: {
+  entry: unknown;
+  legacyDir: string;
+  targetDir: string;
+}): string | undefined {
+  if (!params.entry || typeof params.entry !== "object" || Array.isArray(params.entry)) {
+    return undefined;
   }
-  return {
-    imported: importLegacySessionStoreIntoSqlite({
-      storePath: params.storePath,
-      store: normalized,
-    }),
-    acpMigrated,
+  const entry = params.entry as SessionEntryLike;
+  const rawSessionFile = entry.sessionFile;
+  if (typeof rawSessionFile !== "string") {
+    return undefined;
+  }
+  const legacySessionFile = path.isAbsolute(rawSessionFile)
+    ? path.resolve(rawSessionFile)
+    : path.resolve(params.legacyDir, rawSessionFile);
+  const relative = path.relative(path.resolve(params.legacyDir), legacySessionFile);
+  if (relative.startsWith("..") || path.isAbsolute(relative) || fileExists(legacySessionFile)) {
+    return undefined;
+  }
+  const legacyBackupHasTranscript = safeReadDir(path.dirname(params.legacyDir)).some(
+    (dirent) =>
+      dirent.isDirectory() &&
+      dirent.name.startsWith(`${path.basename(params.legacyDir)}.legacy-`) &&
+      fileExists(
+        path.join(path.dirname(params.legacyDir), dirent.name, path.basename(legacySessionFile)),
+      ),
+  );
+  if (legacyBackupHasTranscript) {
+    return undefined;
+  }
+  const parsed = path.parse(path.basename(legacySessionFile));
+  const hasCollisionRename = safeReadDir(params.targetDir).some(
+    (dirent) =>
+      dirent.isFile() &&
+      dirent.name.startsWith(`${parsed.name}.legacy-`) &&
+      dirent.name.endsWith(parsed.ext),
+  );
+  if (hasCollisionRename) {
+    return undefined;
+  }
+  const targetSessionFile = path.join(params.targetDir, path.basename(legacySessionFile));
+  if (!fileExists(targetSessionFile) || typeof entry.sessionId !== "string") {
+    return undefined;
+  }
+  const readFirstLine = () => {
+    const fd = fs.openSync(targetSessionFile, "r");
+    try {
+      const buffer = Buffer.alloc(8192);
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+      if (bytesRead <= 0) {
+        return undefined;
+      }
+      const chunk = buffer.subarray(0, bytesRead).toString("utf8");
+      const newline = chunk.indexOf("\n");
+      return newline >= 0 ? chunk.slice(0, newline) : chunk;
+    } finally {
+      fs.closeSync(fd);
+    }
   };
+  try {
+    const firstLine = readFirstLine();
+    const header = firstLine ? (JSON.parse(firstLine) as unknown) : undefined;
+    if (!header || typeof header !== "object" || Array.isArray(header)) {
+      return undefined;
+    }
+    if ((header as { type?: unknown }).type === "session") {
+      return (header as { id?: unknown }).id === entry.sessionId ? targetSessionFile : undefined;
+    }
+    const canonicalFileName =
+      path.basename(entry.sessionId) === entry.sessionId ? `${entry.sessionId}.jsonl` : undefined;
+    return canonicalFileName === path.basename(targetSessionFile) ? targetSessionFile : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function skipJson5Trivia(raw: string, index: number): number {
@@ -2618,22 +3549,10 @@ function removeDirIfEmpty(dir: string) {
   }
 }
 
-function sessionStorePathKey(storePath: string): string {
-  try {
-    return fs.realpathSync.native(storePath);
-  } catch {
-    return path.resolve(storePath);
-  }
-}
-
 export function resetAutoMigrateLegacyStateForTest() {
   autoMigrateChecked = false;
   autoMigrateTaskStateSidecarsChecked = false;
   cachedLegacySessionSurfaces = null;
-}
-
-export function resetAutoMigrateLegacyAgentDirForTest() {
-  resetAutoMigrateLegacyStateForTest();
 }
 
 export function resetAutoMigrateLegacyStateDirForTest() {
@@ -2909,22 +3828,29 @@ export async function autoMigrateLegacyTaskStateSidecars(params: {
 
   const stateDir = resolveStateDir(params.env ?? process.env, params.homedir);
   const result = await migrateLegacyTaskStateSidecars({ stateDir });
+  const execApprovals = migrateLegacyExecApprovals(
+    detectLegacyExecApprovalsMigration({
+      env: params.env ?? process.env,
+      homedir: params.homedir ?? os.homedir,
+      stateDir,
+    }),
+  );
+  const changes = [...result.changes, ...execApprovals.changes];
+  const warnings = [...result.warnings, ...execApprovals.warnings];
   const logger = params.log ?? createSubsystemLogger("state-migrations");
-  if (result.changes.length > 0) {
-    logger.info(
-      `Auto-migrated legacy task state:\n${result.changes.map((entry) => `- ${entry}`).join("\n")}`,
-    );
+  if (changes.length > 0) {
+    logger.info(`Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`);
   }
-  if (result.warnings.length > 0) {
+  if (warnings.length > 0) {
     logger.warn(
-      `Legacy task state migration warnings:\n${result.warnings.map((entry) => `- ${entry}`).join("\n")}`,
+      `Legacy state migration warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
     );
   }
   return {
-    migrated: result.changes.length > 0,
+    migrated: changes.length > 0,
     skipped: false,
-    changes: result.changes,
-    warnings: result.warnings,
+    changes,
+    warnings,
   };
 }
 
@@ -3010,6 +3936,7 @@ export async function detectLegacyStateMigrations(params: {
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
+  const execApprovals = detectLegacyExecApprovalsMigration({ env, homedir, stateDir });
 
   const targetAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
   const rawMainKey = params.cfg.session?.mainKey;
@@ -3024,47 +3951,13 @@ export async function detectLegacyStateMigrations(params: {
   const sessionsTargetDir = path.join(stateDir, "agents", targetAgentId, "sessions");
   const sessionsTargetStorePath = path.join(sessionsTargetDir, "sessions.json");
   const legacySessionEntries = safeReadDir(sessionsLegacyDir);
-  const legacySessionMovePlanPath = resolveLegacySessionFileMovePlanPath(sessionsLegacyDir);
   const hasLegacySessions =
     fileExists(sessionsLegacyStorePath) ||
-    fileExists(legacySessionMovePlanPath) ||
     legacySessionEntries.some((e) => e.isFile() && e.name.endsWith(".jsonl"));
 
   const targetSessionParsed = fileExists(sessionsTargetStorePath)
     ? readSessionStoreJson5(sessionsTargetStorePath)
     : { store: {}, ok: true };
-  const hasTargetSessionsStore = fileExists(sessionsTargetStorePath);
-  const additionalSessionStoreTargetsByKey = new Map<
-    string,
-    { storePath: string; agentIds: Set<string> }
-  >();
-  const targetStoreKey = sessionStorePathKey(sessionsTargetStorePath);
-  for (const target of collectSessionStoreMigrationTargets(params.cfg, {
-    env,
-    stateDir,
-  }).values()) {
-    const storeKey = sessionStorePathKey(target.storePath);
-    if (storeKey === targetStoreKey || !fileExists(target.storePath)) {
-      continue;
-    }
-    const existing = additionalSessionStoreTargetsByKey.get(storeKey);
-    if (existing) {
-      for (const agentId of target.agentIds) {
-        existing.agentIds.add(normalizeAgentId(agentId));
-      }
-      continue;
-    }
-    additionalSessionStoreTargetsByKey.set(storeKey, {
-      storePath: target.storePath,
-      agentIds: new Set([...target.agentIds].map((agentId) => normalizeAgentId(agentId))),
-    });
-  }
-  const additionalSessionStoreTargets = [...additionalSessionStoreTargetsByKey.values()].map(
-    (target) => ({
-      storePath: target.storePath,
-      agentIds: [...target.agentIds].toSorted(),
-    }),
-  );
   const legacyKeys = targetSessionParsed.ok
     ? listLegacySessionKeys({
         store: targetSessionParsed.store,
@@ -3073,20 +3966,48 @@ export async function detectLegacyStateMigrations(params: {
         scope: targetScope,
       })
     : [];
+  const hasStaleSessionFiles =
+    targetSessionParsed.ok &&
+    Object.values(targetSessionParsed.store).some((entry) =>
+      Boolean(
+        resolveStaleLegacySessionFile({
+          entry,
+          legacyDir: sessionsLegacyDir,
+          targetDir: sessionsTargetDir,
+        }),
+      ),
+    );
 
   const legacyAgentDir = path.join(stateDir, "agent");
   const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
   const hasLegacyAgentDir = existsDir(legacyAgentDir);
   const pluginStateSidecarPath = resolveLegacyPluginStateSidecarPath(stateDir);
   const hasPluginStateSidecar = fileExists(pluginStateSidecarPath);
+  const hasPendingPluginStateSidecarArchive = hasPendingSqliteSidecarArchive(
+    pluginStateSidecarPath,
+    PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES,
+  );
   const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
   const hasPluginInstallIndex = fileExists(pluginInstallIndexPath);
+  const debugProxyCaptureSidecar = detectLegacyDebugProxyCaptureSidecar(stateDir, env);
   const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
   const taskRunsSidecarPath = resolveLegacyTaskRunsSidecarPath(stateDir);
   const flowRunsSidecarPath = resolveLegacyFlowRunsSidecarPath(stateDir);
-  const hasTaskStateSidecars = fileExists(taskRunsSidecarPath) || fileExists(flowRunsSidecarPath);
+  const hasPendingTaskRunsSidecarArchive = hasPendingSqliteSidecarArchive(
+    taskRunsSidecarPath,
+    TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
+  );
+  const hasPendingFlowRunsSidecarArchive = hasPendingSqliteSidecarArchive(
+    flowRunsSidecarPath,
+    TASK_STATE_SQLITE_SIDECAR_SUFFIXES,
+  );
+  const hasTaskStateSidecars =
+    fileExists(taskRunsSidecarPath) ||
+    fileExists(flowRunsSidecarPath) ||
+    hasPendingTaskRunsSidecarArchive ||
+    hasPendingFlowRunsSidecarArchive;
   const deliveryQueuePaths = {
     outboundPath: resolveLegacyDeliveryQueuePath(stateDir, "delivery-queue"),
     sessionPath: resolveLegacyDeliveryQueuePath(stateDir, "session-delivery-queue"),
@@ -3096,6 +4017,27 @@ export async function detectLegacyStateMigrations(params: {
     listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.outboundPath).length > 0 ||
     listLegacyDeliveryQueueFiles(deliveryQueuePaths.sessionPath).length > 0 ||
     listLegacyDeliveryQueueDeliveredMarkers(deliveryQueuePaths.sessionPath).length > 0;
+  const voiceWake = {
+    triggersPath: resolveLegacyVoiceWakeTriggersPath(stateDir),
+    routingPath: resolveLegacyVoiceWakeRoutingPath(stateDir),
+  };
+  const hasVoiceWake = fileExists(voiceWake.triggersPath) || fileExists(voiceWake.routingPath);
+  const updateCheck = {
+    sourcePath: resolveLegacyUpdateCheckPath(stateDir),
+  };
+  const hasUpdateCheck = fileExists(updateCheck.sourcePath);
+  const configHealth = {
+    sourcePath: resolveLegacyConfigHealthPath(stateDir),
+  };
+  const hasConfigHealth = fileExists(configHealth.sourcePath);
+  const pluginBindingApprovals = {
+    sourcePath: resolveLegacyPluginBindingApprovalsPath(env, homedir),
+  };
+  const hasPluginBindingApprovals = fileExists(pluginBindingApprovals.sourcePath);
+  const currentConversationBindings = {
+    sourcePath: resolveLegacyCurrentConversationBindingsPath(stateDir),
+  };
+  const hasCurrentConversationBindings = fileExists(currentConversationBindings.sourcePath);
   const channelPlans = await collectChannelLegacyStateMigrationPlans({
     cfg: params.cfg,
     env,
@@ -3119,20 +4061,24 @@ export async function detectLegacyStateMigrations(params: {
   if (legacyKeys.length > 0) {
     preview.push(`- Sessions: canonicalize legacy keys in ${sessionsTargetStorePath}`);
   }
-  if (hasTargetSessionsStore) {
-    preview.push(`- Sessions: ${sessionsTargetStorePath} → agent SQLite state`);
-  }
-  for (const target of additionalSessionStoreTargets) {
-    preview.push(`- Sessions: ${target.storePath} → agent SQLite state`);
+  if (hasStaleSessionFiles) {
+    preview.push(`- Sessions: repair migrated transcript paths in ${sessionsTargetStorePath}`);
   }
   if (hasLegacyAgentDir) {
     preview.push(`- Agent dir: ${legacyAgentDir} → ${targetAgentDir}`);
   }
   if (hasPluginStateSidecar) {
     preview.push(`- Plugin state sidecar: ${pluginStateSidecarPath} → shared SQLite state`);
+  } else if (hasPendingPluginStateSidecarArchive) {
+    preview.push(`- Plugin state sidecar: finish archive cleanup for ${pluginStateSidecarPath}`);
   }
   if (hasPluginInstallIndex) {
     preview.push(`- Plugin install index: ${pluginInstallIndexPath} → shared SQLite state`);
+  }
+  if (debugProxyCaptureSidecar.hasLegacy) {
+    preview.push(
+      `- Debug proxy capture sidecar: ${debugProxyCaptureSidecar.sourcePath} → shared SQLite state`,
+    );
   }
   if (stateSchemaMigrations.length > 0) {
     preview.push("- Shared SQLite schema: agent database registry primary key → agent_id,path");
@@ -3142,12 +4088,34 @@ export async function detectLegacyStateMigrations(params: {
   }
   if (fileExists(taskRunsSidecarPath)) {
     preview.push(`- Task registry sidecar: ${taskRunsSidecarPath} → shared SQLite state`);
+  } else if (hasPendingTaskRunsSidecarArchive) {
+    preview.push(`- Task registry sidecar: finish archive cleanup for ${taskRunsSidecarPath}`);
   }
   if (fileExists(flowRunsSidecarPath)) {
     preview.push(`- Task flow sidecar: ${flowRunsSidecarPath} → shared SQLite state`);
+  } else if (hasPendingFlowRunsSidecarArchive) {
+    preview.push(`- Task flow sidecar: finish archive cleanup for ${flowRunsSidecarPath}`);
   }
   if (hasDeliveryQueues) {
     preview.push("- Delivery queues: legacy JSON queue files → shared SQLite state");
+  }
+  if (hasVoiceWake) {
+    preview.push("- Voice Wake settings: legacy JSON files → shared SQLite state");
+  }
+  if (hasUpdateCheck) {
+    preview.push("- Update-check state: legacy JSON file → shared SQLite state");
+  }
+  if (hasConfigHealth) {
+    preview.push("- Config health state: legacy JSON file → shared SQLite state");
+  }
+  if (hasPluginBindingApprovals) {
+    preview.push("- Plugin binding approvals: legacy JSON file → shared SQLite state");
+  }
+  if (hasCurrentConversationBindings) {
+    preview.push("- Current-conversation bindings: legacy JSON file → shared SQLite state");
+  }
+  if (execApprovals.hasLegacy) {
+    preview.push(`- Exec approvals: ${execApprovals.sourcePath} → ${execApprovals.targetPath}`);
   }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
@@ -3167,13 +4135,8 @@ export async function detectLegacyStateMigrations(params: {
       legacyStorePath: sessionsLegacyStorePath,
       targetDir: sessionsTargetDir,
       targetStorePath: sessionsTargetStorePath,
-      hasLegacy:
-        hasLegacySessions ||
-        legacyKeys.length > 0 ||
-        hasTargetSessionsStore ||
-        additionalSessionStoreTargets.length > 0,
+      hasLegacy: hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles,
       legacyKeys,
-      additionalStoreTargets: additionalSessionStoreTargets,
     },
     agentDir: {
       legacyDir: legacyAgentDir,
@@ -3190,12 +4153,13 @@ export async function detectLegacyStateMigrations(params: {
     },
     pluginStateSidecar: {
       sourcePath: pluginStateSidecarPath,
-      hasLegacy: hasPluginStateSidecar,
+      hasLegacy: hasPluginStateSidecar || hasPendingPluginStateSidecarArchive,
     },
     pluginInstallIndex: {
       sourcePath: pluginInstallIndexPath,
       hasLegacy: hasPluginInstallIndex,
     },
+    debugProxyCaptureSidecar,
     stateSchema: {
       hasLegacy: stateSchemaMigrations.length > 0,
       preview: stateSchemaMigrations.map((migration) => migration.path),
@@ -3209,6 +4173,27 @@ export async function detectLegacyStateMigrations(params: {
       ...deliveryQueuePaths,
       hasLegacy: hasDeliveryQueues,
     },
+    voiceWake: {
+      ...voiceWake,
+      hasLegacy: hasVoiceWake,
+    },
+    updateCheck: {
+      ...updateCheck,
+      hasLegacy: hasUpdateCheck,
+    },
+    configHealth: {
+      ...configHealth,
+      hasLegacy: hasConfigHealth,
+    },
+    pluginBindingApprovals: {
+      ...pluginBindingApprovals,
+      hasLegacy: hasPluginBindingApprovals,
+    },
+    currentConversationBindings: {
+      ...currentConversationBindings,
+      hasLegacy: hasCurrentConversationBindings,
+    },
+    execApprovals,
     preview,
   };
 }
@@ -3248,6 +4233,41 @@ async function migrateLegacySessions(
     scope: detected.targetScope,
   });
 
+  let repairedStaleSessionFiles = false;
+  for (const entry of Object.values(canonicalizedTarget.store)) {
+    const targetSessionFile = resolveStaleLegacySessionFile({
+      entry,
+      legacyDir: detected.sessions.legacyDir,
+      targetDir: detected.sessions.targetDir,
+    });
+    if (targetSessionFile) {
+      entry.sessionFile = targetSessionFile;
+      repairedStaleSessionFiles = true;
+    }
+  }
+
+  const merged: Record<string, SessionEntryLike> = { ...canonicalizedTarget.store };
+  for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
+    merged[key] = mergeSessionEntry({
+      existing: merged[key],
+      incoming: entry,
+      preferIncomingOnTie: false,
+    });
+  }
+
+  const mainKey = buildAgentMainSessionKey({
+    agentId: detected.targetAgentId,
+    mainKey: detected.targetMainKey,
+  });
+  let migratedDirectChatKey: string | undefined;
+  if (!merged[mainKey]) {
+    const latest = pickLatestLegacyDirectEntry(legacyStore);
+    if (latest?.sessionId) {
+      merged[mainKey] = latest;
+      migratedDirectChatKey = mainKey;
+    }
+  }
+
   if (!legacyParsed.ok) {
     warnings.push(
       `Legacy sessions store unreadable; left in place at ${detected.sessions.legacyStorePath}`,
@@ -3275,151 +4295,94 @@ async function migrateLegacySessions(
     }
   }
 
+  if (
+    targetReadable &&
+    (legacyParsed.ok || targetParsed.ok) &&
+    (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
+  ) {
+    const normalized: Record<string, SessionEntry> = {};
+    for (const [key, entry] of Object.entries(merged)) {
+      const normalizedEntry = normalizeSessionEntry(entry);
+      if (!normalizedEntry) {
+        continue;
+      }
+      normalized[key] = normalizedEntry;
+    }
+    await saveSessionStore(detected.sessions.targetStorePath, normalized, {
+      skipMaintenance: true,
+    });
+    if (migratedDirectChatKey) {
+      changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
+    }
+    changes.push(`Merged sessions store → ${detected.sessions.targetStorePath}`);
+    if (canonicalizedTarget.legacyKeys.length > 0) {
+      changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
+    }
+    if (repairedStaleSessionFiles) {
+      changes.push("Repaired migrated session transcript paths");
+    }
+  }
+
   if (!targetReadable) {
     return { changes, warnings };
   }
 
-  const persistedSessionFileMovePlans = readLegacySessionFileMovePlan({
-    legacyDir: detected.sessions.legacyDir,
-    targetDir: detected.sessions.targetDir,
-  });
-  const revalidatedSessionFileMovePlans = persistedSessionFileMovePlans
-    ? revalidateLegacySessionFileMovePlan({
-        moves: persistedSessionFileMovePlans,
-        targetDir: detected.sessions.targetDir,
-        now,
-      })
-    : null;
-  const movedSessionFilePlans =
-    revalidatedSessionFileMovePlans?.moves ??
-    buildLegacySessionFileMovePlan({
-      legacyDir: detected.sessions.legacyDir,
-      targetDir: detected.sessions.targetDir,
-      now,
-    });
-  if (!persistedSessionFileMovePlans || revalidatedSessionFileMovePlans?.changed) {
-    writeLegacySessionFileMovePlan({
-      legacyDir: detected.sessions.legacyDir,
-      moves: movedSessionFilePlans,
-    });
-  }
-  const movedSessionFiles = buildMovedSessionFiles(movedSessionFilePlans);
-  const completedMovedSessionFilePlans: LegacySessionFileMove[] = [];
-  for (const move of movedSessionFilePlans) {
+  const movedSessionFiles = new Map<string, string>();
+  const entries = safeReadDir(detected.sessions.legacyDir);
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (entry.name === "sessions.json") {
+      continue;
+    }
+    const from = path.join(detected.sessions.legacyDir, entry.name);
+    let to = path.join(detected.sessions.targetDir, entry.name);
+    if (fileExists(to)) {
+      const parsed = path.parse(entry.name);
+      to = path.join(detected.sessions.targetDir, `${parsed.name}.legacy-${now()}${parsed.ext}`);
+    }
     try {
-      if (fileExists(move.from)) {
-        fs.renameSync(move.from, move.to);
-      } else if (!fileExists(move.to)) {
-        warnings.push(`Skipped missing legacy transcript ${move.from}`);
+      fs.renameSync(from, to);
+      movedSessionFiles.set(path.resolve(from), to);
+      changes.push(`Moved ${entry.name} → agents/${detected.targetAgentId}/sessions`);
+    } catch (err) {
+      warnings.push(`Failed moving ${from}: ${String(err)}`);
+    }
+  }
+
+  if (movedSessionFiles.size > 0) {
+    let rewroteSessionFiles = false;
+    for (const entry of Object.values(merged)) {
+      const rawSessionFile = entry.sessionFile;
+      const legacySessionFile =
+        typeof rawSessionFile === "string"
+          ? path.resolve(detected.sessions.legacyDir, rawSessionFile)
+          : typeof entry.sessionId === "string"
+            ? path.join(detected.sessions.legacyDir, `${entry.sessionId}.jsonl`)
+            : undefined;
+      const movedSessionFile = legacySessionFile
+        ? movedSessionFiles.get(path.resolve(legacySessionFile))
+        : undefined;
+      if (!movedSessionFile) {
         continue;
       }
-      recordMovedSessionFile({
-        movedFiles: movedSessionFiles,
-        move,
-      });
-      completedMovedSessionFilePlans.push(move);
-    } catch (err) {
-      warnings.push(`Failed moving ${move.from}: ${String(err)}`);
+      entry.sessionFile = movedSessionFile;
+      rewroteSessionFiles = true;
     }
-  }
-
-  const rewrittenLegacyStore = rewriteLegacySessionFilePaths({
-    store: canonicalizedLegacy.store,
-    legacyDir: detected.sessions.legacyDir,
-    movedFiles: movedSessionFiles,
-  });
-  const merged: Record<string, SessionEntryLike> = { ...canonicalizedTarget.store };
-  for (const [key, entry] of Object.entries(rewrittenLegacyStore)) {
-    merged[key] = mergeSessionEntry({
-      existing: merged[key],
-      incoming: entry,
-      preferIncomingOnTie: false,
-    });
-  }
-
-  const mainKey = buildAgentMainSessionKey({
-    agentId: detected.targetAgentId,
-    mainKey: detected.targetMainKey,
-  });
-  let migratedDirectChatKey: string | undefined;
-  if (!merged[mainKey]) {
-    const latest = pickLatestLegacyDirectEntry(legacyStore);
-    if (latest?.sessionId) {
-      const latestStore = rewriteLegacySessionFilePaths({
-        store: { latest },
-        legacyDir: detected.sessions.legacyDir,
-        movedFiles: movedSessionFiles,
-      });
-      merged[mainKey] = latestStore.latest ?? latest;
-      migratedDirectChatKey = mainKey;
-    }
-  }
-
-  if (
-    (legacyParsed.ok || targetParsed.ok) &&
-    (targetExists ||
-      fileExists(detected.sessions.legacyStorePath) ||
-      Object.keys(legacyStore).length > 0 ||
-      Object.keys(targetStore).length > 0)
-  ) {
-    let imported: number;
-    let acpMigrated: number;
-    try {
-      const result = importNormalizedSessionsIntoSqlite({
-        storePath: detected.sessions.targetStorePath,
-        store: merged,
-        stateDir: detected.stateDir,
-        now,
-      });
-      imported = result.imported;
-      acpMigrated = result.acpMigrated;
-    } catch (err) {
-      const rollbackFailures: string[] = [];
-      for (const move of completedMovedSessionFilePlans.toReversed()) {
-        try {
-          fs.renameSync(move.to, move.from);
-        } catch (rollbackErr) {
-          rollbackFailures.push(`${move.to}: ${String(rollbackErr)}`);
+    if (rewroteSessionFiles) {
+      const normalized: Record<string, SessionEntry> = {};
+      for (const [key, entry] of Object.entries(merged)) {
+        const normalizedEntry = normalizeSessionEntry(entry);
+        if (normalizedEntry) {
+          normalized[key] = normalizedEntry;
         }
       }
-      if (rollbackFailures.length > 0) {
-        throw new Error(
-          `Failed importing session metadata: ${String(err)}; additionally failed rolling back moved transcript(s): ${rollbackFailures.join("; ")}`,
-          { cause: err },
-        );
-      }
-      throw err;
+      await saveSessionStore(detected.sessions.targetStorePath, normalized, {
+        skipMaintenance: true,
+      });
+      changes.push("Rewrote migrated session transcript paths");
     }
-    if (migratedDirectChatKey) {
-      changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
-    }
-    changes.push(`Imported ${imported} session metadata row(s) → agent SQLite state`);
-    if (acpMigrated > 0) {
-      changes.push(
-        `Migrated ${acpMigrated} ACP session metadata ${acpMigrated === 1 ? "row" : "rows"} → shared SQLite state`,
-      );
-    }
-    if (canonicalizedTarget.legacyKeys.length > 0) {
-      changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
-    }
-    try {
-      if (fileExists(detected.sessions.targetStorePath)) {
-        fs.rmSync(detected.sessions.targetStorePath, { force: true });
-      }
-    } catch (err) {
-      warnings.push(
-        `Imported sessions into SQLite, but failed removing ${detected.sessions.targetStorePath}: ${String(err)}`,
-      );
-    }
-  }
-
-  for (const move of completedMovedSessionFilePlans) {
-    const movedName = path.basename(move.to);
-    changes.push(
-      movedName === move.name
-        ? `Moved ${move.name} → agents/${detected.targetAgentId}/sessions`
-        : `Moved ${move.name} → agents/${detected.targetAgentId}/sessions/${movedName}`,
-    );
   }
 
   if (legacyParsed.ok && targetReadable) {
@@ -3430,17 +4393,6 @@ async function migrateLegacySessions(
     } catch {
       // ignore
     }
-  }
-
-  try {
-    const movePlanPath = resolveLegacySessionFileMovePlanPath(detected.sessions.legacyDir);
-    if (fileExists(movePlanPath)) {
-      fs.rmSync(movePlanPath, { force: true });
-    }
-  } catch (err) {
-    warnings.push(
-      `Migrated legacy sessions, but failed removing ${LEGACY_SESSION_FILE_MOVE_PLAN_NAME}: ${String(err)}`,
-    );
   }
 
   removeDirIfEmpty(detected.sessions.legacyDir);
@@ -3455,137 +4407,6 @@ async function migrateLegacySessions(
     }
   }
 
-  return { changes, warnings };
-}
-
-type SessionStoreMigrationTarget = {
-  storePath: string;
-  agentIds: Set<string>;
-};
-
-function addSessionStoreMigrationTarget(
-  targets: Map<string, SessionStoreMigrationTarget>,
-  target: { agentId: string; storePath: string },
-): void {
-  const storeKey = sessionStorePathKey(target.storePath);
-  const existing = targets.get(storeKey);
-  if (existing) {
-    existing.agentIds.add(normalizeAgentId(target.agentId));
-    return;
-  }
-  targets.set(storeKey, {
-    storePath: target.storePath,
-    agentIds: new Set([normalizeAgentId(target.agentId)]),
-  });
-}
-
-function collectSessionStoreMigrationTargets(
-  config: OpenClawConfig,
-  params: { env: NodeJS.ProcessEnv; stateDir: string },
-): Map<string, SessionStoreMigrationTarget> {
-  const targets = new Map<string, SessionStoreMigrationTarget>();
-  for (const agentId of listConfiguredSessionStoreAgentIds(config)) {
-    const storePath = config.session?.store
-      ? resolveStorePathFromTemplate(config.session.store, agentId, params.env)
-      : path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json");
-    addSessionStoreMigrationTarget(targets, { agentId, storePath });
-  }
-  for (const target of resolveAllAgentSessionStoreTargetsSync(config, { env: params.env })) {
-    addSessionStoreMigrationTarget(targets, target);
-  }
-  return targets;
-}
-
-async function migrateAdditionalSessionStoreTargets(params: {
-  detected: LegacyStateDetection;
-  config?: OpenClawConfig;
-  now: () => number;
-}): Promise<{ changes: string[]; warnings: string[] }> {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const env = { ...process.env, OPENCLAW_STATE_DIR: params.detected.stateDir };
-  const targets = new Map<string, SessionStoreMigrationTarget>();
-  for (const target of params.detected.sessions.additionalStoreTargets ?? []) {
-    for (const agentId of target.agentIds) {
-      addSessionStoreMigrationTarget(targets, { agentId, storePath: target.storePath });
-    }
-  }
-  if (params.config) {
-    for (const target of collectSessionStoreMigrationTargets(params.config, {
-      env,
-      stateDir: params.detected.stateDir,
-    }).values()) {
-      for (const agentId of target.agentIds) {
-        addSessionStoreMigrationTarget(targets, { agentId, storePath: target.storePath });
-      }
-    }
-  }
-  const seenStorePaths = new Set<string>([
-    sessionStorePathKey(params.detected.sessions.targetStorePath),
-  ]);
-  const mainKey = params.detected.targetMainKey;
-  const scope = params.detected.targetScope;
-
-  for (const target of targets.values()) {
-    const { storePath, agentIds } = target;
-    const storeKey = sessionStorePathKey(storePath);
-    if (seenStorePaths.has(storeKey)) {
-      continue;
-    }
-    seenStorePaths.add(storeKey);
-    if (!fileExists(storePath)) {
-      continue;
-    }
-    let parsed: ReturnType<typeof readSessionStoreJson5>;
-    try {
-      parsed = readSessionStoreJson5(storePath);
-    } catch (err) {
-      warnings.push(`Could not read ${storePath}: ${String(err)}`);
-      continue;
-    }
-    if (!parsed.ok) {
-      warnings.push(`Session store unreadable; left in place at ${storePath}`);
-      continue;
-    }
-    let canonicalizedStore = parsed.store;
-    let legacyKeyCount = 0;
-    const skipCrossAgentRemap = agentIds.size > 1 && agentIds.has(DEFAULT_AGENT_ID);
-    for (const agentId of agentIds) {
-      const canonicalized = canonicalizeSessionStore({
-        store: canonicalizedStore,
-        agentId,
-        mainKey,
-        scope,
-        skipCrossAgentRemap,
-      });
-      canonicalizedStore = canonicalized.store;
-      legacyKeyCount += canonicalized.legacyKeys.length;
-    }
-    const { imported, acpMigrated } = importNormalizedSessionsIntoSqlite({
-      storePath,
-      store: canonicalizedStore,
-      stateDir: params.detected.stateDir,
-      now: params.now,
-    });
-    changes.push(
-      `Imported ${imported} session metadata row(s) from ${storePath} → agent SQLite state`,
-    );
-    if (legacyKeyCount > 0) {
-      changes.push(`Canonicalized ${legacyKeyCount} legacy session key(s) in ${storePath}`);
-    }
-    if (acpMigrated > 0) {
-      changes.push(
-        `Migrated ${acpMigrated} ACP session metadata ${acpMigrated === 1 ? "row" : "rows"} from ${storePath} → shared SQLite state`,
-      );
-    }
-    try {
-      fs.rmSync(storePath, { force: true });
-    } catch (err) {
-      warnings.push(
-        `Imported sessions into SQLite, but failed removing ${storePath}: ${String(err)}`,
-      );
-    }
-  }
   return { changes, warnings };
 }
 
@@ -3667,6 +4488,192 @@ async function runPluginDoctorStateMigrationPlans(params: {
   return { changes, warnings };
 }
 
+function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isDefaultLegacyExecApprovalsSocketPath(params: {
+  socketPath: string;
+  sourcePath: string;
+}): boolean {
+  const expanded = expandHomePrefix(params.socketPath);
+  return (
+    path.resolve(expanded) ===
+    path.join(path.dirname(params.sourcePath), EXEC_APPROVALS_SOCKET_FILENAME)
+  );
+}
+
+function prepareMigratedExecApprovalsFile(params: {
+  raw: string;
+  sourcePath: string;
+  targetPath: string;
+}): { raw: string; warning?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(params.raw) as unknown;
+  } catch {
+    return {
+      raw: "",
+      warning: `Legacy exec approvals file unreadable; left in place at ${params.sourcePath}`,
+    };
+  }
+  if (!isPlainJsonObject(parsed) || parsed.version !== 1) {
+    return {
+      raw: "",
+      warning: `Legacy exec approvals file has unsupported shape; left in place at ${params.sourcePath}`,
+    };
+  }
+
+  const next: Record<string, unknown> = { ...parsed };
+  const socket = isPlainJsonObject(next.socket) ? { ...next.socket } : {};
+  const rawSocketPath = typeof socket.path === "string" ? socket.path.trim() : "";
+  if (
+    !rawSocketPath ||
+    isDefaultLegacyExecApprovalsSocketPath({
+      socketPath: rawSocketPath,
+      sourcePath: params.sourcePath,
+    })
+  ) {
+    socket.path = resolveExecApprovalsSocketPathForStateDir(path.dirname(params.targetPath));
+  }
+  next.socket = socket;
+  return { raw: `${JSON.stringify(next, null, 2)}\n` };
+}
+
+function assertSafeExecApprovalsMigrationTarget(targetPath: string): void {
+  const targetDir = path.dirname(targetPath);
+  assertNoSymlinkParentsSync({
+    rootDir: resolveRequiredHomeDir(),
+    targetPath: targetDir,
+    allowOutsideRoot: true,
+    messagePrefix: "Refusing to traverse symlink in exec approvals migration path",
+  });
+  try {
+    const targetStat = fs.lstatSync(targetPath);
+    if (targetStat.isSymbolicLink()) {
+      throw new Error(`Refusing to migrate exec approvals via symlink: ${targetPath}`);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+}
+
+function writeMigratedExecApprovalsFile(targetPath: string, raw: string): boolean {
+  const targetDir = path.dirname(targetPath);
+  assertSafeExecApprovalsMigrationTarget(targetPath);
+  fs.mkdirSync(targetDir, { recursive: true, mode: 0o700 });
+  assertSafeExecApprovalsMigrationTarget(targetPath);
+  const dirStat = fs.lstatSync(targetDir);
+  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+    throw new Error(`Refusing to migrate exec approvals into unsafe directory: ${targetDir}`);
+  }
+  try {
+    fs.chmodSync(targetDir, 0o700);
+  } catch {
+    // best-effort on platforms without chmod
+  }
+  const tempPath = path.join(targetDir, `.exec-approvals.migration.${process.pid}.tmp`);
+  fs.writeFileSync(tempPath, raw, { encoding: "utf8", mode: 0o600, flag: "wx" });
+  try {
+    try {
+      fs.copyFileSync(tempPath, targetPath, fs.constants.COPYFILE_EXCL);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        return false;
+      }
+      try {
+        fs.rmSync(targetPath, { force: true });
+      } catch {
+        // best-effort cleanup for an incomplete exclusive copy target
+      }
+      throw err;
+    }
+    try {
+      fs.chmodSync(targetPath, 0o600);
+    } catch {
+      // best-effort on platforms without chmod
+    }
+    return true;
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
+}
+
+function archiveMigratedExecApprovalsSource(sourcePath: string): string {
+  let archivePath = `${sourcePath}.migrated`;
+  if (fileExists(archivePath)) {
+    archivePath = `${archivePath}-${Date.now()}`;
+  }
+  fs.renameSync(sourcePath, archivePath);
+  return archivePath;
+}
+
+function migrateLegacyExecApprovals(detected: LegacyExecApprovalsMigrationDetection): {
+  changes: string[];
+  warnings: string[];
+} {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  if (!detected.hasLegacy) {
+    return { changes, warnings };
+  }
+  if (fileExists(detected.targetPath)) {
+    return { changes, warnings };
+  }
+  try {
+    const sourceStat = fs.lstatSync(detected.sourcePath);
+    if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+      warnings.push(
+        `Legacy exec approvals file is not a regular file; left in place at ${detected.sourcePath}`,
+      );
+      return { changes, warnings };
+    }
+    try {
+      const targetStat = fs.lstatSync(detected.targetPath);
+      if (targetStat.isSymbolicLink()) {
+        warnings.push(
+          `Target exec approvals path is a symlink; skipped migration at ${detected.targetPath}`,
+        );
+        return { changes, warnings };
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+    const prepared = prepareMigratedExecApprovalsFile({
+      raw: fs.readFileSync(detected.sourcePath, "utf8"),
+      sourcePath: detected.sourcePath,
+      targetPath: detected.targetPath,
+    });
+    if (prepared.warning) {
+      warnings.push(prepared.warning);
+      return { changes, warnings };
+    }
+    if (!writeMigratedExecApprovalsFile(detected.targetPath, prepared.raw)) {
+      return { changes, warnings };
+    }
+    changes.push(`Migrated exec approvals → ${detected.targetPath}`);
+    try {
+      const archivePath = archiveMigratedExecApprovalsSource(detected.sourcePath);
+      changes.push(`Archived legacy exec approvals → ${archivePath}`);
+    } catch (err) {
+      warnings.push(
+        `Failed archiving legacy exec approvals at ${detected.sourcePath}: ${String(err)}`,
+      );
+    }
+  } catch (err) {
+    warnings.push(
+      `Failed migrating exec approvals (${detected.sourcePath} → ${detected.targetPath}): ${String(
+        err,
+      )}`,
+    );
+  }
+  return { changes, warnings };
+}
+
 function migrateLegacyStateSchema(detected: LegacyStateDetection): {
   changes: string[];
   warnings: string[];
@@ -3694,34 +4701,54 @@ export async function runLegacyStateMigrations(params: {
   const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
     stateDir: detected.stateDir,
   });
+  const debugProxyCaptureSidecar = migrateLegacyDebugProxyCaptureSidecar({
+    stateDir: detected.stateDir,
+    detected: detected.debugProxyCaptureSidecar,
+  });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
     stateDir: detected.stateDir,
   });
   const deliveryQueues = await migrateLegacyDeliveryQueues({
     stateDir: detected.stateDir,
   });
+  const voiceWake = migrateLegacyVoiceWakeSettings({
+    detected: detected.voiceWake,
+    stateDir: detected.stateDir,
+  });
+  const updateCheck = migrateLegacyUpdateCheckState({
+    detected: detected.updateCheck,
+    stateDir: detected.stateDir,
+  });
+  const configHealth = migrateLegacyConfigHealth({
+    detected: detected.configHealth,
+    stateDir: detected.stateDir,
+  });
+  const pluginBindingApprovals = migrateLegacyPluginBindingApprovals({
+    detected: detected.pluginBindingApprovals,
+    stateDir: detected.stateDir,
+  });
+  const currentConversationBindings = migrateLegacyCurrentConversationBindings({
+    detected: detected.currentConversationBindings,
+    stateDir: detected.stateDir,
+  });
+  const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
-  const sessions = await migrateLegacySessions(detected, now, {
-    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
-  });
-  const additionalSessionStores = await migrateAdditionalSessionStoreTargets({
-    detected,
-    config: params.config,
-    now,
-  });
-  const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
-    cfg: params.config ?? ({} as OpenClawConfig),
-    env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
-    now,
-  });
   const pluginPlans = detected.stateSchema.hasLegacy
     ? { changes: [], warnings: [] }
     : await runPluginDoctorStateMigrationPlans({
         detected,
         config: params.config ?? ({} as OpenClawConfig),
       });
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
+  });
+  const acpSessionMetadata = await migrateLegacyAcpSessionMetadata({
+    cfg: params.config ?? ({} as OpenClawConfig),
+    env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
+    now,
+  });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
@@ -3731,13 +4758,19 @@ export async function runLegacyStateMigrations(params: {
       ...stateSchema.changes,
       ...pluginStateSidecar.changes,
       ...pluginInstallIndex.changes,
+      ...debugProxyCaptureSidecar.changes,
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
+      ...voiceWake.changes,
+      ...updateCheck.changes,
+      ...configHealth.changes,
+      ...pluginBindingApprovals.changes,
+      ...currentConversationBindings.changes,
+      ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
-      ...sessions.changes,
-      ...additionalSessionStores.changes,
-      ...acpSessionMetadata.changes,
       ...pluginPlans.changes,
+      ...sessions.changes,
+      ...acpSessionMetadata.changes,
       ...agentDir.changes,
       ...channelPlans.changes,
     ],
@@ -3745,36 +4778,27 @@ export async function runLegacyStateMigrations(params: {
       ...stateSchema.warnings,
       ...pluginStateSidecar.warnings,
       ...pluginInstallIndex.warnings,
+      ...debugProxyCaptureSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
+      ...voiceWake.warnings,
+      ...updateCheck.warnings,
+      ...configHealth.warnings,
+      ...pluginBindingApprovals.warnings,
+      ...currentConversationBindings.warnings,
+      ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
-      ...sessions.warnings,
-      ...additionalSessionStores.warnings,
-      ...acpSessionMetadata.warnings,
       ...pluginPlans.warnings,
+      ...sessions.warnings,
+      ...acpSessionMetadata.warnings,
       ...agentDir.warnings,
       ...channelPlans.warnings,
     ],
   };
 }
 
-export async function autoMigrateLegacyAgentDir(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-  now?: () => number;
-}): Promise<{
-  migrated: boolean;
-  skipped: boolean;
-  changes: string[];
-  warnings: string[];
-}> {
-  return await autoMigrateLegacyState(params);
-}
-
 /**
- * Import legacy JSON session stores and canonicalize orphaned raw session keys.
+ * Canonicalize orphaned raw session keys in all known agent session stores.
  *
  * Keys written by resolveSessionKey() used DEFAULT_AGENT_ID="main" regardless
  * of the configured default agent; reads always use resolveSessionStoreKey()
@@ -3797,7 +4821,6 @@ export async function migrateOrphanedSessionKeys(params: {
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
 
-  const now = () => Date.now();
   // Collect all known agent store paths with their owning agentIds.
   // A single path may be shared by multiple agents when session.store
   // does not contain {agentId}.
@@ -3853,6 +4876,16 @@ export async function migrateOrphanedSessionKeys(params: {
       warnings.push(`Could not read ${storePath}: ${String(err)}`);
       continue;
     }
+    if (
+      !sessionStoreTextMayNeedCanonicalization({
+        raw,
+        storeAgentIds,
+        mainKey,
+        scope,
+      })
+    ) {
+      continue;
+    }
     let parsed: ReturnType<typeof readSessionStoreJson5>;
     try {
       parsed = parseSessionStoreJson5(raw);
@@ -3864,12 +4897,6 @@ export async function migrateOrphanedSessionKeys(params: {
       continue;
     }
 
-    const shouldCanonicalize = sessionStoreTextMayNeedCanonicalization({
-      raw,
-      storeAgentIds,
-      mainKey,
-      scope,
-    });
     // When multiple agents share a single store file (session.store without
     // {agentId}), run canonicalization once per agent so each agent's keys are
     // handled correctly. Skip cross-agent "agent:main:*" remapping when "main"
@@ -3877,44 +4904,37 @@ export async function migrateOrphanedSessionKeys(params: {
     // agent's namespace.
     let working = parsed.store;
     let totalLegacy = 0;
-    if (shouldCanonicalize) {
-      for (const storeAgentId of storeAgentIds) {
-        const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
-          store: working,
-          agentId: storeAgentId,
-          mainKey,
-          scope,
-          // When multiple agents share the store and "main" is one of them,
-          // agent:main:* keys are legitimate — don't cross-agent remap them.
-          skipCrossAgentRemap: storeAgentIds.size > 1 && storeAgentIds.has(DEFAULT_AGENT_ID),
-        });
-        working = canonicalized;
-        // Each pass only counts keys it changed from the current working store, so
-        // once a key is canonicalized it is not counted again by later agent passes.
-        totalLegacy += legacyKeys.length;
+    for (const storeAgentId of storeAgentIds) {
+      const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
+        store: working,
+        agentId: storeAgentId,
+        mainKey,
+        scope,
+        // When multiple agents share the store and "main" is one of them,
+        // agent:main:* keys are legitimate — don't cross-agent remap them.
+        skipCrossAgentRemap: storeAgentIds.size > 1 && storeAgentIds.has(DEFAULT_AGENT_ID),
+      });
+      working = canonicalized;
+      // Each pass only counts keys it changed from the current working store, so
+      // once a key is canonicalized it is not counted again by later agent passes.
+      totalLegacy += legacyKeys.length;
+    }
+    if (totalLegacy === 0) {
+      continue;
+    }
+
+    const normalized: Record<string, SessionEntry> = {};
+    for (const [key, entry] of Object.entries(working)) {
+      const ne = normalizeSessionEntry(entry);
+      if (ne) {
+        normalized[key] = ne;
       }
     }
     try {
-      const { imported, acpMigrated } = importNormalizedSessionsIntoSqlite({
-        storePath,
-        store: working,
-        stateDir,
-        now,
-      });
-      changes.push(
-        `Imported ${imported} session metadata row(s) from ${storePath} → agent SQLite state`,
-      );
-      if (totalLegacy > 0) {
-        changes.push(`Canonicalized ${totalLegacy} orphaned session key(s) in ${storePath}`);
-      }
-      if (acpMigrated > 0) {
-        changes.push(
-          `Migrated ${acpMigrated} ACP session metadata ${acpMigrated === 1 ? "row" : "rows"} from ${storePath} → shared SQLite state`,
-        );
-      }
-      fs.rmSync(storePath, { force: true });
+      await saveSessionStore(storePath, normalized, { skipMaintenance: true });
+      changes.push(`Canonicalized ${totalLegacy} orphaned session key(s) in ${storePath}`);
     } catch (err) {
-      warnings.push(`Failed to import legacy session store ${storePath}: ${String(err)}`);
+      warnings.push(`Failed to write canonicalized store ${storePath}: ${String(err)}`);
     }
   }
 
@@ -3959,7 +4979,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
       if (!normalizedEntry) {
         continue;
       }
-      if (normalizedEntry.acp && typeof normalizedEntry.sessionId === "string") {
+      if (normalizedEntry.acp) {
         const canonicalSessionKey = canonicalizeSessionKeyForAgent({
           key: sessionKey,
           agentId: target.agentId,
@@ -3983,13 +5003,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
       continue;
     }
     try {
-      importNormalizedSessionsIntoSqlite({
-        storePath,
-        store: normalized,
-        stateDir: resolveStateDir(env),
-        now,
-      });
-      fs.rmSync(storePath, { force: true });
+      await saveSessionStore(storePath, normalized, { skipMaintenance: true });
       changes.push(
         `Migrated ${migrated} ACP session metadata ${migrated === 1 ? "row" : "rows"} → shared SQLite state`,
       );
@@ -4083,24 +5097,40 @@ export async function autoMigrateLegacyState(params: {
     const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
       stateDir: detected.stateDir,
     });
+    const debugProxyCaptureSidecar = migrateLegacyDebugProxyCaptureSidecar({
+      stateDir: detected.stateDir,
+      detected: detected.debugProxyCaptureSidecar,
+    });
     const taskStateSidecars = await migrateLegacyTaskStateSidecars({
       stateDir: detected.stateDir,
     });
     const deliveryQueues = await migrateLegacyDeliveryQueues({
       stateDir: detected.stateDir,
     });
+    const voiceWake = migrateLegacyVoiceWakeSettings({
+      detected: detected.voiceWake,
+      stateDir: detected.stateDir,
+    });
+    const updateCheck = migrateLegacyUpdateCheckState({
+      detected: detected.updateCheck,
+      stateDir: detected.stateDir,
+    });
+    const configHealth = migrateLegacyConfigHealth({
+      detected: detected.configHealth,
+      stateDir: detected.stateDir,
+    });
+    const pluginBindingApprovals = migrateLegacyPluginBindingApprovals({
+      detected: detected.pluginBindingApprovals,
+      stateDir: detected.stateDir,
+    });
+    const currentConversationBindings = migrateLegacyCurrentConversationBindings({
+      detected: detected.currentConversationBindings,
+      stateDir: detected.stateDir,
+    });
+    const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
     const preSessionChannelPlans = await runLegacyMigrationPlans(
       detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
     );
-    const now = params.now ?? (() => Date.now());
-    const sessions = await migrateLegacySessions(detected, now, {
-      recoverCorruptTargetStore: params.recoverCorruptTargetStore,
-    });
-    const additionalSessionStores = await migrateAdditionalSessionStoreTargets({
-      detected,
-      config: params.cfg,
-      now,
-    });
     const pluginPlans = await runPluginDoctorStateMigrationPlans({
       detected,
       config: params.cfg,
@@ -4112,11 +5142,16 @@ export async function autoMigrateLegacyState(params: {
       ...acpSessionMetadata.changes,
       ...pluginStateSidecar.changes,
       ...pluginInstallIndex.changes,
+      ...debugProxyCaptureSidecar.changes,
       ...taskStateSidecars.changes,
       ...deliveryQueues.changes,
+      ...voiceWake.changes,
+      ...updateCheck.changes,
+      ...configHealth.changes,
+      ...pluginBindingApprovals.changes,
+      ...currentConversationBindings.changes,
+      ...execApprovals.changes,
       ...preSessionChannelPlans.changes,
-      ...sessions.changes,
-      ...additionalSessionStores.changes,
       ...pluginPlans.changes,
     ];
     const warnings = [
@@ -4126,11 +5161,16 @@ export async function autoMigrateLegacyState(params: {
       ...acpSessionMetadata.warnings,
       ...pluginStateSidecar.warnings,
       ...pluginInstallIndex.warnings,
+      ...debugProxyCaptureSidecar.warnings,
       ...taskStateSidecars.warnings,
       ...deliveryQueues.warnings,
+      ...voiceWake.warnings,
+      ...updateCheck.warnings,
+      ...configHealth.warnings,
+      ...pluginBindingApprovals.warnings,
+      ...currentConversationBindings.warnings,
+      ...execApprovals.warnings,
       ...preSessionChannelPlans.warnings,
-      ...sessions.warnings,
-      ...additionalSessionStores.warnings,
       ...pluginPlans.warnings,
     ];
     logMigrationResults(changes, warnings);
@@ -4142,11 +5182,16 @@ export async function autoMigrateLegacyState(params: {
         acpSessionMetadata.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
         pluginInstallIndex.changes.length > 0 ||
+        debugProxyCaptureSidecar.changes.length > 0 ||
         taskStateSidecars.changes.length > 0 ||
         deliveryQueues.changes.length > 0 ||
+        voiceWake.changes.length > 0 ||
+        updateCheck.changes.length > 0 ||
+        configHealth.changes.length > 0 ||
+        pluginBindingApprovals.changes.length > 0 ||
+        currentConversationBindings.changes.length > 0 ||
+        execApprovals.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
-        sessions.changes.length > 0 ||
-        additionalSessionStores.changes.length > 0 ||
         pluginPlans.changes.length > 0,
       skipped: true,
       changes,
@@ -4160,9 +5205,16 @@ export async function autoMigrateLegacyState(params: {
     !detected.pluginPlans?.hasLegacy &&
     !detected.pluginStateSidecar.hasLegacy &&
     !detected.pluginInstallIndex.hasLegacy &&
+    !detected.debugProxyCaptureSidecar.hasLegacy &&
     !detected.stateSchema.hasLegacy &&
     !detected.taskStateSidecars.hasLegacy &&
-    !detected.deliveryQueues.hasLegacy
+    !detected.deliveryQueues.hasLegacy &&
+    !detected.voiceWake.hasLegacy &&
+    !detected.updateCheck.hasLegacy &&
+    !detected.configHealth.hasLegacy &&
+    !detected.pluginBindingApprovals.hasLegacy &&
+    !detected.currentConversationBindings.hasLegacy &&
+    !detected.execApprovals.hasLegacy
   ) {
     const changes = [
       ...stateDirResult.changes,
@@ -4196,26 +5248,46 @@ export async function autoMigrateLegacyState(params: {
   const pluginInstallIndex = await migrateLegacyInstalledPluginIndex({
     stateDir: detected.stateDir,
   });
+  const debugProxyCaptureSidecar = migrateLegacyDebugProxyCaptureSidecar({
+    stateDir: detected.stateDir,
+    detected: detected.debugProxyCaptureSidecar,
+  });
   const taskStateSidecars = await migrateLegacyTaskStateSidecars({
     stateDir: detected.stateDir,
   });
   const deliveryQueues = await migrateLegacyDeliveryQueues({
     stateDir: detected.stateDir,
   });
+  const voiceWake = migrateLegacyVoiceWakeSettings({
+    detected: detected.voiceWake,
+    stateDir: detected.stateDir,
+  });
+  const updateCheck = migrateLegacyUpdateCheckState({
+    detected: detected.updateCheck,
+    stateDir: detected.stateDir,
+  });
+  const configHealth = migrateLegacyConfigHealth({
+    detected: detected.configHealth,
+    stateDir: detected.stateDir,
+  });
+  const pluginBindingApprovals = migrateLegacyPluginBindingApprovals({
+    detected: detected.pluginBindingApprovals,
+    stateDir: detected.stateDir,
+  });
+  const currentConversationBindings = migrateLegacyCurrentConversationBindings({
+    detected: detected.currentConversationBindings,
+    stateDir: detected.stateDir,
+  });
+  const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
-  const sessions = await migrateLegacySessions(detected, now, {
-    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
-  });
-  const additionalSessionStores = await migrateAdditionalSessionStoreTargets({
-    detected,
-    config: params.cfg,
-    now,
-  });
   const pluginPlans = await runPluginDoctorStateMigrationPlans({
     detected,
     config: params.cfg,
+  });
+  const sessions = await migrateLegacySessions(detected, now, {
+    recoverCorruptTargetStore: params.recoverCorruptTargetStore,
   });
   const postSessionAcpMetadata = await migrateLegacyAcpSessionMetadata({
     cfg: params.cfg,
@@ -4233,12 +5305,18 @@ export async function autoMigrateLegacyState(params: {
     ...acpSessionMetadata.changes,
     ...pluginStateSidecar.changes,
     ...pluginInstallIndex.changes,
+    ...debugProxyCaptureSidecar.changes,
     ...taskStateSidecars.changes,
     ...deliveryQueues.changes,
+    ...voiceWake.changes,
+    ...updateCheck.changes,
+    ...configHealth.changes,
+    ...pluginBindingApprovals.changes,
+    ...currentConversationBindings.changes,
+    ...execApprovals.changes,
     ...preSessionChannelPlans.changes,
-    ...sessions.changes,
-    ...additionalSessionStores.changes,
     ...pluginPlans.changes,
+    ...sessions.changes,
     ...postSessionAcpMetadata.changes,
     ...agentDir.changes,
     ...channelPlans.changes,
@@ -4250,12 +5328,18 @@ export async function autoMigrateLegacyState(params: {
     ...acpSessionMetadata.warnings,
     ...pluginStateSidecar.warnings,
     ...pluginInstallIndex.warnings,
+    ...debugProxyCaptureSidecar.warnings,
     ...taskStateSidecars.warnings,
     ...deliveryQueues.warnings,
+    ...voiceWake.warnings,
+    ...updateCheck.warnings,
+    ...configHealth.warnings,
+    ...pluginBindingApprovals.warnings,
+    ...currentConversationBindings.warnings,
+    ...execApprovals.warnings,
     ...preSessionChannelPlans.warnings,
-    ...sessions.warnings,
-    ...additionalSessionStores.warnings,
     ...pluginPlans.warnings,
+    ...sessions.warnings,
     ...postSessionAcpMetadata.warnings,
     ...agentDir.warnings,
     ...channelPlans.warnings,

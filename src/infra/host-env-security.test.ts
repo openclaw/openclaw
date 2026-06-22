@@ -184,6 +184,10 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("cargo_build_rustc")).toBe(true);
     expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_build_rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER")).toBe(true);
+    expect(isDangerousHostEnvVarName("cargo_build_rustc_workspace_wrapper")).toBe(true);
+    expect(isDangerousHostEnvVarName("CARGO_BUILD_RUSTDOC")).toBe(true);
+    expect(isDangerousHostEnvVarName("cargo_build_rustdoc")).toBe(true);
     expect(isDangerousHostEnvVarName("cargo_home")).toBe(false);
     expect(isDangerousHostEnvVarName("RUSTUP_DIST_SERVER")).toBe(false);
     expect(isDangerousHostEnvVarName("RUSTUP_HOME")).toBe(false);
@@ -193,8 +197,14 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("cmake_c_compiler")).toBe(true);
     expect(isDangerousHostEnvVarName("CMAKE_CXX_COMPILER")).toBe(true);
     expect(isDangerousHostEnvVarName("cmake_cxx_compiler")).toBe(true);
+    expect(isDangerousHostEnvVarName("RUSTC")).toBe(true);
+    expect(isDangerousHostEnvVarName("rustc")).toBe(true);
     expect(isDangerousHostEnvVarName("RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvVarName("rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvVarName("RUSTC_WORKSPACE_WRAPPER")).toBe(true);
+    expect(isDangerousHostEnvVarName("rustc_workspace_wrapper")).toBe(true);
+    expect(isDangerousHostEnvVarName("RUSTDOC")).toBe(true);
+    expect(isDangerousHostEnvVarName("rustdoc")).toBe(true);
     expect(isDangerousHostEnvVarName("HELM_HOME")).toBe(false);
     expect(isDangerousHostEnvVarName("SHELLOPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ps4")).toBe(true);
@@ -219,6 +229,8 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("glibc_tunables")).toBe(true);
     expect(isDangerousHostEnvVarName("MAVEN_OPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("maven_opts")).toBe(true);
+    expect(isDangerousHostEnvVarName("MAKE")).toBe(true);
+    expect(isDangerousHostEnvVarName("make")).toBe(true);
     expect(isDangerousHostEnvVarName("MAKEFLAGS")).toBe(true);
     expect(isDangerousHostEnvVarName("makeflags")).toBe(true);
     expect(isDangerousHostEnvVarName("NODE_REDIRECT_WARNINGS")).toBe(true);
@@ -239,6 +251,10 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("ant_opts")).toBe(true);
     expect(isDangerousHostEnvVarName("HGRCPATH")).toBe(true);
     expect(isDangerousHostEnvVarName("hgrcpath")).toBe(true);
+    expect(isDangerousHostEnvVarName("HGEDITOR")).toBe(true);
+    expect(isDangerousHostEnvVarName("hgeditor")).toBe(true);
+    expect(isDangerousHostEnvVarName("HGMERGE")).toBe(true);
+    expect(isDangerousHostEnvVarName("hgmerge")).toBe(true);
     expect(isDangerousHostEnvVarName("HTTPS_PROXY")).toBe(false);
     expect(isDangerousHostEnvVarName("https_proxy")).toBe(false);
     expect(isDangerousHostEnvVarName("HTTP_PROXY")).toBe(false);
@@ -838,6 +854,52 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.SAFE).toBe("ok");
   });
 
+  it("blocks reported build-tool executable override values", () => {
+    const result = sanitizeHostExecEnvWithDiagnostics({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
+        CARGO_BUILD_RUSTDOC: "/tmp/evil-rustdoc",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER: "/tmp/evil-linker",
+        CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: "/tmp/evil-runner",
+        CARGO_TARGET_DIR: "/tmp/target",
+        HGEDITOR: "/tmp/evil-hg-editor",
+        HGMERGE: "/tmp/evil-hg-merge",
+        MAKE: "/tmp/evil-make",
+        RUSTC: "/tmp/evil-rustc",
+        RUSTC_WORKSPACE_WRAPPER: "/tmp/evil-rustc-workspace-wrapper",
+        RUSTDOC: "/tmp/evil-rustdoc",
+      },
+    });
+
+    expect(result.rejectedOverrideBlockedKeys).toEqual([
+      "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+      "CARGO_BUILD_RUSTDOC",
+      "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER",
+      "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
+      "HGEDITOR",
+      "HGMERGE",
+      "MAKE",
+      "RUSTC",
+      "RUSTC_WORKSPACE_WRAPPER",
+      "RUSTDOC",
+    ]);
+    expect(result.rejectedOverrideInvalidKeys).toStrictEqual([]);
+    expect(result.env.CARGO_TARGET_DIR).toBe("/tmp/target");
+    expect(result.env.CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
+    expect(result.env.CARGO_BUILD_RUSTDOC).toBeUndefined();
+    expect(result.env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER).toBeUndefined();
+    expect(result.env.CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER).toBeUndefined();
+    expect(result.env.HGEDITOR).toBeUndefined();
+    expect(result.env.HGMERGE).toBeUndefined();
+    expect(result.env.MAKE).toBeUndefined();
+    expect(result.env.RUSTC).toBeUndefined();
+    expect(result.env.RUSTC_WORKSPACE_WRAPPER).toBeUndefined();
+    expect(result.env.RUSTDOC).toBeUndefined();
+  });
+
   it("keeps trusted inherited proxy and TLS env while blocking overrides", () => {
     const env = sanitizeHostExecEnv({
       baseEnv: {
@@ -1020,6 +1082,7 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("hgrcpath")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("RUSTC_WORKSPACE_WRAPPER")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("RUSTFLAGS")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("rustflags")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("RUSTUP_DIST_ROOT")).toBe(true);
@@ -1029,6 +1092,13 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("RUSTUP_UPDATE_ROOT")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CARGO_BUILD_RUSTC_WRAPPER")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("cargo_build_rustc_wrapper")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER")).toBe(
+      true,
+    );
+    expect(isDangerousHostEnvOverrideVarName("cargo_target_x86_64_unknown_linux_gnu_runner")).toBe(
+      true,
+    );
+    expect(isDangerousHostEnvOverrideVarName("CARGO_TARGET_DIR")).toBe(false);
     expect(isDangerousHostEnvOverrideVarName("CARGO_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("cargo_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("TF_VAR_admin_cidr")).toBe(true);

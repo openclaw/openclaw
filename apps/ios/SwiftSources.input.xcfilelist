@@ -16,7 +16,6 @@ Sources/Design/ChatProTab.swift
 Sources/Design/CommandCenterTab.swift
 Sources/Design/TalkProTab.swift
 Sources/Design/OpenClawProComponents.swift
-Sources/Design/OpenClawProScreens.swift
 Sources/Design/SettingsProTab.swift
 Sources/Design/SettingsProTabSupport.swift
 Sources/Design/SettingsProTabSections.swift
@@ -51,6 +50,7 @@ Sources/Gateway/GatewayDiscoveryModel.swift
 Sources/Gateway/GatewayHealthMonitor.swift
 Sources/Gateway/GatewayProblemView.swift
 Sources/Gateway/GatewayQuickSetupSheet.swift
+Sources/Gateway/NotificationPermissionGuidanceDialog.swift
 Sources/Gateway/GatewayServiceResolver.swift
 Sources/Gateway/GatewaySettingsStore.swift
 Sources/Gateway/GatewayTrustPromptAlert.swift
@@ -67,7 +67,6 @@ Sources/Model/NodeAppModel.swift
 Sources/Model/WatchReplyCoordinator.swift
 Sources/Motion/MotionService.swift
 Sources/Onboarding/GatewayOnboardingReset.swift
-Sources/Onboarding/GatewayOnboardingView.swift
 Sources/Onboarding/OnboardingStateStore.swift
 Sources/Onboarding/OnboardingWizardSteps.swift
 Sources/Onboarding/OnboardingWizardView.swift
@@ -83,7 +82,6 @@ Sources/Push/PushRelayKeychainStore.swift
 Sources/Reminders/RemindersService.swift
 Sources/RootTabs.swift
 Sources/RootTabsNavigation.swift
-Sources/RootView.swift
 Sources/Screen/ScreenController.swift
 Sources/Screen/ScreenRecordService.swift
 Sources/Screen/ScreenWebView.swift
@@ -94,7 +92,6 @@ Sources/Services/WatchMessagingPayloadCodec.swift
 Sources/Services/WatchMessagingService.swift
 Sources/SessionKey.swift
 Sources/Settings/PrivacyAccessSectionView.swift
-Sources/Settings/SettingsNetworkingHelpers.swift
 Sources/Settings/VoiceWakeWordsSettingsView.swift
 Sources/Status/GatewayStatusBuilder.swift
 Sources/Status/VoiceWakeToast.swift
@@ -113,10 +110,10 @@ Sources/Voice/VoiceWakePreferences.swift
 ShareExtension/ShareViewController.swift
 ActivityWidget/OpenClawActivityWidgetBundle.swift
 ActivityWidget/OpenClawLiveActivity.swift
-WatchExtension/Sources/OpenClawWatchApp.swift
-WatchExtension/Sources/WatchConnectivityReceiver.swift
-WatchExtension/Sources/WatchInboxStore.swift
-WatchExtension/Sources/WatchInboxView.swift
+WatchApp/Sources/OpenClawWatchApp.swift
+WatchApp/Sources/WatchConnectivityReceiver.swift
+WatchApp/Sources/WatchInboxStore.swift
+WatchApp/Sources/WatchInboxView.swift
 ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift
 ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift
 ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownPreprocessor.swift

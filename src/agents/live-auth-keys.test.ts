@@ -7,12 +7,14 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 vi.unmock("../secrets/provider-env-vars.js");
 
 let collectProviderApiKeys: typeof import("./live-auth-keys.js").collectProviderApiKeys;
+let collectAnthropicApiKeys: typeof import("./live-auth-keys.js").collectAnthropicApiKeys;
 let isAnthropicBillingError: typeof import("./live-auth-keys.js").isAnthropicBillingError;
 
 async function loadModulesForTest(): Promise<void> {
   vi.resetModules();
   vi.doUnmock("../secrets/provider-env-vars.js");
-  ({ collectProviderApiKeys, isAnthropicBillingError } = await import("./live-auth-keys.js"));
+  ({ collectAnthropicApiKeys, collectProviderApiKeys, isAnthropicBillingError } =
+    await import("./live-auth-keys.js"));
 }
 
 beforeAll(async () => {
@@ -40,6 +42,31 @@ describe("collectProviderApiKeys", () => {
         providerEnvVars: ["XAI_API_KEY"],
       }),
     ).toEqual(["xai-live-key"]);
+  });
+});
+
+describe("collectAnthropicApiKeys", () => {
+  it("does not rotate API keys over Anthropic OAuth", () => {
+    expect(
+      collectAnthropicApiKeys({
+        env: {
+          ANTHROPIC_API_KEY: "primary-key",
+          ANTHROPIC_API_KEY_OLD: "old-key",
+          ANTHROPIC_OAUTH_TOKEN: "oauth-token",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps API-key rotation when Anthropic OAuth is unavailable", () => {
+    expect(
+      collectAnthropicApiKeys({
+        env: {
+          ANTHROPIC_API_KEY: "primary-key",
+          ANTHROPIC_API_KEY_OLD: "old-key",
+        },
+      }),
+    ).toEqual(["primary-key", "old-key"]);
   });
 });
 

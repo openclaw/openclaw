@@ -8,15 +8,11 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatLookupMiss } from "../cli/error-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  loadSessionStore,
-  pruneStaleEntries,
   resolveAllAgentSessionStoreTargetsSync,
-  updateSessionStore,
-  type SessionEntry,
+  runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
@@ -44,10 +40,6 @@ import {
 } from "../tasks/task-registry.reconcile.js";
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
-import {
-  ensureExplicitSessionStoreMigratedForCommand,
-  loadExplicitSessionStorePreviewForCommand,
-} from "./session-state-migration.js";
 import {
   buildTaskSystemAuditFindings,
   type TaskSystemAuditCode,
@@ -136,14 +128,6 @@ type SessionRegistryMaintenanceSummary = {
   stores: SessionRegistryMaintenanceStoreSummary[];
 };
 
-function parseCronRunSessionJobId(sessionKey: string): string | undefined {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return undefined;
-  }
-  return /^cron:([^:]+):run:[^:]+$/u.exec(parsed.rest)?.[1];
-}
-
 function readRunningCronJobIds(): Set<string> {
   try {
     const cronStorePath = resolveCronJobsStorePath(getRuntimeConfig().cron?.store);
@@ -158,27 +142,6 @@ function readRunningCronJobIds(): Set<string> {
   }
 }
 
-function buildSessionRegistryPreserveKeys(params: {
-  store: Record<string, SessionEntry>;
-  runningCronJobIds: ReadonlySet<string>;
-}): { preserveKeys: Set<string>; preservedRunning: number } {
-  const preserveKeys = new Set<string>();
-  let preservedRunning = 0;
-  for (const key of Object.keys(params.store)) {
-    const jobId = parseCronRunSessionJobId(key);
-    if (!jobId) {
-      // Non-cron session rows are outside this maintenance pass; preserve them.
-      preserveKeys.add(key);
-      continue;
-    }
-    if (params.runningCronJobIds.has(jobId)) {
-      preserveKeys.add(key);
-      preservedRunning += 1;
-    }
-  }
-  return { preserveKeys, preservedRunning };
-}
-
 async function runSessionRegistryMaintenance(params: {
   apply: boolean;
 }): Promise<SessionRegistryMaintenanceSummary> {
@@ -186,61 +149,19 @@ async function runSessionRegistryMaintenance(params: {
   const runningCronJobIds = readRunningCronJobIds();
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    if (params.apply) {
-      await ensureExplicitSessionStoreMigratedForCommand(target.storePath);
-    }
-    const beforeStore = params.apply
-      ? loadSessionStore(target.storePath, { skipCache: true })
-      : loadExplicitSessionStorePreviewForCommand(target.storePath);
-    const beforeCount = Object.keys(beforeStore).length;
-    if (params.apply) {
-      // Apply mode mutates each store atomically through updateSessionStore.
-      const applied = await updateSessionStore(
-        target.storePath,
-        (store) => {
-          const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
-            store,
-            runningCronJobIds,
-          });
-          const pruned = pruneStaleEntries(store, SESSION_REGISTRY_RETENTION_MS, {
-            log: false,
-            preserveKeys,
-          });
-          return {
-            pruned,
-            afterCount: Object.keys(store).length,
-            preservedRunning,
-          };
-        },
-        { skipMaintenance: true },
-      );
-      stores.push({
-        agentId: target.agentId,
-        storePath: target.storePath,
-        beforeCount,
-        afterCount: applied.afterCount,
-        pruned: applied.pruned,
-        preservedRunning: applied.preservedRunning,
-      });
-      continue;
-    }
-    const previewStore = structuredClone(beforeStore);
-    // Preview mode runs pruning against a clone so dry-run output cannot change stores.
-    const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
-      store: previewStore,
+    const result = await runSessionRegistryMaintenanceForStore({
+      apply: params.apply,
+      retentionMs: SESSION_REGISTRY_RETENTION_MS,
       runningCronJobIds,
-    });
-    const pruned = pruneStaleEntries(previewStore, SESSION_REGISTRY_RETENTION_MS, {
-      log: false,
-      preserveKeys,
+      storePath: target.storePath,
     });
     stores.push({
       agentId: target.agentId,
       storePath: target.storePath,
-      beforeCount,
-      afterCount: Object.keys(previewStore).length,
-      pruned,
-      preservedRunning,
+      beforeCount: result.beforeCount,
+      afterCount: result.afterCount,
+      pruned: result.pruned,
+      preservedRunning: result.preservedRunning,
     });
   }
   return {

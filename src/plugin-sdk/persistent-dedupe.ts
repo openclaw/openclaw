@@ -13,7 +13,7 @@ import type { FileLockOptions } from "./file-lock.js";
 const LEGACY_PATH_OWNER_ID = "core:persistent-dedupe";
 const DEFAULT_NAMESPACE_PREFIX = "persistent-dedupe";
 
-type PersistentDedupeEntry = {
+export type PersistentDedupeEntry = {
   key: string;
   seenAt: number;
 };
@@ -76,6 +76,18 @@ export type PersistentDedupeLegacyJsonMigrationOptions = PersistentDedupePluginS
   removeFile?: boolean;
 };
 
+export type PersistentDedupeLegacyJsonImportEntry = {
+  key: string;
+  value: PersistentDedupeEntry;
+  ttlMs?: number;
+};
+
+type PersistentDedupeLegacyJsonEntriesResult = {
+  entries: PersistentDedupeLegacyJsonImportEntry[];
+  skippedExpired: number;
+  skippedInvalid: number;
+};
+
 /** Per-call options used when checking or recording a dedupe key. */
 export type PersistentDedupeCheckOptions = {
   /** Logical bucket for the key; omitted/blank values use `global`. */
@@ -92,6 +104,8 @@ export type PersistentDedupe = {
   checkAndRecord: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
   /** Checks memory/disk recency without recording a new timestamp. */
   hasRecent: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Removes a recorded key from process memory and persisted storage. */
+  forget: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
   /** Loads recent disk entries into memory for one namespace and returns the loaded count. */
   warmup: (namespace?: string, onError?: (error: unknown) => void) => Promise<number>;
   /** Clears only process-local memory; persisted namespace files are left intact. */
@@ -142,6 +156,8 @@ export type ClaimableDedupe = {
   ) => void;
   /** Checks whether the key is recent without claiming or committing it. */
   hasRecent: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Removes an active or committed key from memory and persisted storage when supported. */
+  forget?: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
   /** Warms persistent storage into memory when configured; memory-only guards return zero. */
   warmup: (namespace?: string, onError?: (error: unknown) => void) => Promise<number>;
   /** Clears process-local caches and in-memory persistent state. */
@@ -168,12 +184,33 @@ function resolveEntrySeenAt(entry: PersistentDedupeEntry | undefined): number | 
     : undefined;
 }
 
+function resolveUnknownEntrySeenAt(value: unknown): number | undefined {
+  if (!value || typeof value !== "object" || !("seenAt" in value)) {
+    return undefined;
+  }
+  return typeof value.seenAt === "number" && Number.isFinite(value.seenAt)
+    ? value.seenAt
+    : undefined;
+}
+
 function shortHash(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, 32);
 }
 
 function resolveEntryKey(key: string): string {
   return `k.${shortHash(key)}`;
+}
+
+export function createPersistentDedupeImportEntry(params: {
+  key: string;
+  seenAt: number;
+  ttlMs?: number;
+}): PersistentDedupeLegacyJsonImportEntry {
+  return {
+    key: resolveEntryKey(params.key),
+    value: { key: params.key, seenAt: params.seenAt },
+    ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+  };
 }
 
 function resolveRemainingTtlMs(
@@ -200,6 +237,16 @@ function normalizeNamespacePrefix(value: string | undefined): string {
 
 function resolveStateNamespace(prefix: string, namespace: string): string {
   return `${prefix}.${shortHash(namespace)}`;
+}
+
+export function resolvePersistentDedupePluginStateNamespace(options: {
+  namespace: string;
+  namespacePrefix?: string;
+}): string {
+  return resolveStateNamespace(
+    normalizeNamespacePrefix(options.namespacePrefix),
+    resolveNamespace(options.namespace),
+  );
 }
 
 function hasPluginStateOptions(
@@ -295,39 +342,74 @@ function parseLegacyDedupeData(raw: string): {
   return { data, invalidCount };
 }
 
-/** Import one retired JSON dedupe cache file into plugin-state SQLite during doctor repair. */
-export async function migratePersistentDedupeLegacyJsonFile(
-  options: PersistentDedupeLegacyJsonMigrationOptions,
-): Promise<PersistentDedupeLegacyJsonMigrationResult> {
+async function readPersistentDedupeLegacyJsonFileEntries(options: {
+  filePath: string;
+  ttlMs: number;
+  now?: number;
+}): Promise<PersistentDedupeLegacyJsonEntriesResult> {
   const raw = await fs.readFile(options.filePath, "utf8");
   const { data, invalidCount } = parseLegacyDedupeData(raw);
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const now = options.now ?? Date.now();
-  const store = createPersistentStoreResolver(options)(resolveNamespace(options.namespace));
-  const result: PersistentDedupeLegacyJsonMigrationResult = {
-    imported: 0,
-    skippedExpired: 0,
-    skippedInvalid: 0,
-    skippedExisting: 0,
-    removed: false,
-  };
+  const entries: PersistentDedupeLegacyJsonImportEntry[] = [];
+  let skippedExpired = 0;
 
   for (const [key, seenAt] of Object.entries(data)) {
     const ttlOption = resolveRemainingTtlMs(seenAt, ttlMs, now);
     if (ttlOption === null) {
-      result.skippedExpired++;
+      skippedExpired++;
       continue;
     }
+    entries.push(createPersistentDedupeImportEntry({ key, seenAt, ...ttlOption }));
+  }
+
+  return { entries, skippedExpired, skippedInvalid: invalidCount };
+}
+
+export async function listPersistentDedupeLegacyJsonFileEntries(options: {
+  filePath: string;
+  ttlMs: number;
+  now?: number;
+}): Promise<PersistentDedupeLegacyJsonImportEntry[]> {
+  return (await readPersistentDedupeLegacyJsonFileEntries(options)).entries;
+}
+
+export function shouldReplacePersistentDedupeEntry(params: {
+  existingValue: unknown;
+  incomingValue: unknown;
+}): boolean {
+  const incomingSeenAt = resolveUnknownEntrySeenAt(params.incomingValue);
+  return (
+    incomingSeenAt != null &&
+    incomingSeenAt > (resolveUnknownEntrySeenAt(params.existingValue) ?? 0)
+  );
+}
+
+/** Import one retired JSON dedupe cache file into plugin-state SQLite during doctor repair. */
+export async function migratePersistentDedupeLegacyJsonFile(
+  options: PersistentDedupeLegacyJsonMigrationOptions,
+): Promise<PersistentDedupeLegacyJsonMigrationResult> {
+  const legacy = await readPersistentDedupeLegacyJsonFileEntries(options);
+  const store = createPersistentStoreResolver(options)(resolveNamespace(options.namespace));
+  const result: PersistentDedupeLegacyJsonMigrationResult = {
+    imported: 0,
+    skippedExpired: legacy.skippedExpired,
+    skippedInvalid: legacy.skippedInvalid,
+    skippedExisting: 0,
+    removed: false,
+  };
+
+  for (const entry of legacy.entries) {
     const changed = store.update?.(
-      resolveEntryKey(key),
+      entry.key,
       (current) => {
         const currentSeenAt = resolveEntrySeenAt(current);
-        if (currentSeenAt != null && currentSeenAt >= seenAt) {
+        if (currentSeenAt != null && currentSeenAt >= entry.value.seenAt) {
           return undefined;
         }
-        return { key, seenAt };
+        return entry.value;
       },
-      ttlOption,
+      entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
     );
     if (changed) {
       result.imported++;
@@ -336,7 +418,6 @@ export async function migratePersistentDedupeLegacyJsonFile(
     }
   }
 
-  result.skippedInvalid = invalidCount;
   if (options.removeFile !== false) {
     await fs.rm(options.filePath, { force: true });
     result.removed = true;
@@ -479,9 +560,30 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     return hasRecentInner(trimmed, namespace, scopedKey, now, onDiskError);
   }
 
+  async function forget(
+    key: string,
+    dedupeOptions?: PersistentDedupeCheckOptions,
+  ): Promise<boolean> {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      return false;
+    }
+    const namespace = resolveNamespace(dedupeOptions?.namespace);
+    const scopedKey = resolveScopedKey(namespace, trimmed);
+    memory.delete(scopedKey);
+
+    try {
+      return getStore(namespace).delete(resolveEntryKey(trimmed));
+    } catch (error) {
+      (dedupeOptions?.onDiskError ?? options.onDiskError)?.(error);
+      return false;
+    }
+  }
+
   return {
     checkAndRecord,
     hasRecent,
+    forget,
     warmup,
     clearMemory: () => memory.clear(),
     memorySize: () => memory.size(),
@@ -493,7 +595,9 @@ function createReleasedClaimError(scopedKey: string): Error {
 }
 
 /** Create a claim/commit/release dedupe guard backed by memory and optional persistent storage. */
-export function createClaimableDedupe(options: ClaimableDedupeOptions): ClaimableDedupe {
+export function createClaimableDedupe(
+  options: ClaimableDedupeOptions,
+): ClaimableDedupe & Required<Pick<ClaimableDedupe, "forget">> {
   const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
   const memoryMaxSize = resolveNonNegativeIntegerOption(options.memoryMaxSize, 0);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
@@ -543,6 +647,26 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
       return persistent.hasRecent(trimmed, dedupeOptions);
     }
     return memory.peek(scopedKey, dedupeOptions?.now);
+  }
+
+  async function forget(
+    key: string,
+    dedupeOptions?: PersistentDedupeCheckOptions,
+  ): Promise<boolean> {
+    const trimmed = key.trim();
+    if (!trimmed) {
+      return false;
+    }
+    const namespace = resolveNamespace(dedupeOptions?.namespace);
+    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const claimValue = inflight.get(scopedKey);
+    claimValue?.reject(createReleasedClaimError(scopedKey));
+    inflight.delete(scopedKey);
+    if (persistent) {
+      return persistent.forget(trimmed, dedupeOptions);
+    }
+    memory.delete(scopedKey);
+    return true;
   }
 
   async function claim(
@@ -633,6 +757,7 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
     commit,
     release,
     hasRecent,
+    forget,
     warmup: persistent?.warmup ?? (async () => 0),
     clearMemory: () => {
       persistent?.clearMemory();

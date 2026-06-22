@@ -6,6 +6,7 @@ const ANSI_OSC_PATTERN = "\\x1b\\][^\\x07\\x1b]*(?:\\x1b\\\\|\\x07)";
 
 const ANSI_CSI_REGEX = new RegExp(ANSI_CSI_PATTERN, "g");
 const ANSI_OSC_REGEX = new RegExp(ANSI_OSC_PATTERN, "g");
+const ANSI_SEQUENCE_REGEX = new RegExp(`${ANSI_OSC_PATTERN}|${ANSI_CSI_PATTERN}`, "g");
 const graphemeSegmenter =
   typeof Intl !== "undefined" && "Segmenter" in Intl
     ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
@@ -134,7 +135,7 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
   if (visibleWidth(input) <= maxWidth) {
     return input;
   }
-  const ansi = new RegExp(`${ANSI_OSC_PATTERN}|${ANSI_CSI_PATTERN}`, "g");
+  ANSI_SEQUENCE_REGEX.lastIndex = 0;
   let out = "";
   let used = 0;
   let pos = 0;
@@ -157,7 +158,7 @@ export function truncateToVisibleWidth(input: string, maxWidth: number): string 
     }
   };
   let match: RegExpExecArray | null;
-  while ((match = ansi.exec(input)) !== null) {
+  while ((match = ANSI_SEQUENCE_REGEX.exec(input)) !== null) {
     appendVisible(input.slice(pos, match.index));
     out += match[0];
     pos = match.index + match[0].length;

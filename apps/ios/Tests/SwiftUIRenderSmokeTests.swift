@@ -103,7 +103,6 @@ import UIKit
             AnyView(CommandCenterTab(openChat: {}, openSettings: {})),
             AnyView(IPadActivityScreen(openChat: {}, openSettings: {})),
             AnyView(OpenClawDocsScreen()),
-            AnyView(SettingsChannelsScreen()),
             AnyView(IPadWorkboardScreen(openChat: {}, openSettings: {})),
             AnyView(IPadSkillWorkshopScreen(openSettings: {})),
             AnyView(AgentProTab(directRoute: .agents)),

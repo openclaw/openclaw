@@ -126,11 +126,9 @@ function applySelectionToSession(params: {
   }
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
-    void import("../../config/sessions.js")
-      .then(({ updateSessionStore }) =>
-        updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        }),
+    void import("../../config/sessions/session-accessor.js")
+      .then(({ replaceSessionEntry }) =>
+        replaceSessionEntry({ storePath, sessionKey }, sessionEntry),
       )
       .catch(() => {
         // Ignore persistence errors; session still proceeds.

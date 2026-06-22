@@ -114,6 +114,28 @@ describe("runtime parity", () => {
     expect(isRuntimeParityResultPass(result)).toBe(true);
   });
 
+  it("does not mask runtime cell scenario failures behind drift", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "failed-cell-with-drift",
+      runCell: async (runtime) => ({
+        scenarioStatus: runtime === "codex" ? "fail" : "pass",
+        cell: makeRuntimeParityCell(runtime, [
+          {
+            tool: "web_search",
+            argsHash: "same-args",
+            resultHash: runtime === "codex" ? "failed-result" : "ok-result",
+          },
+        ]),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      drift: "failure-mode",
+      driftDetails: "scenario status differs (pass vs fail)",
+    });
+    expect(isRuntimeParityResultPass(result)).toBe(false);
+  });
+
   it("prefers transcript tool results when mock debug rows are incomplete", () => {
     const resolved = __testing.resolveRuntimeParityToolCalls({
       mockToolCalls: [
@@ -139,6 +161,32 @@ describe("runtime parity", () => {
         argsHash: "same-args",
         resultHash: "async-started",
       },
+    ]);
+  });
+
+  it("scopes process-global mock requests to the parent session prompt", () => {
+    const scoped = __testing.filterMockRequestsForParentPrompt(
+      [
+        {
+          allInputText: "Delegate one bounded QA task to a subagent.",
+          plannedToolName: "sessions_spawn",
+        },
+        {
+          allInputText: "Inspect the QA workspace and return one concise protocol note.",
+          plannedToolName: "read",
+        },
+        {
+          allInputText: "Delegate one bounded QA task to a subagent. Tool result: child accepted.",
+          toolOutput: "child accepted",
+        },
+      ],
+      "Delegate one bounded QA task to a subagent.",
+    );
+
+    expect(scoped).toHaveLength(2);
+    expect(scoped.map((request) => request.plannedToolName ?? "result")).toEqual([
+      "sessions_spawn",
+      "result",
     ]);
   });
 });

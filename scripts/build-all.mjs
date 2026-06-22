@@ -337,10 +337,11 @@ export function resolveBuildAllStep(step, params = {}) {
       };
     }
     const runner = resolvePnpmRunner({
+      env,
       pnpmArgs: step.pnpmArgs,
       nodeExecPath: params.nodeExecPath ?? nodeBin,
       npmExecPath: params.npmExecPath ?? env.npm_execpath,
-      comSpec: params.comSpec ?? env.ComSpec,
+      comSpec: params.comSpec,
       platform,
     });
     return {

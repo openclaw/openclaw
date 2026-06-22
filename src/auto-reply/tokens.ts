@@ -86,9 +86,9 @@ function isSilentReplyEnvelopeText(
 }
 
 const taggedReasoningPrefixRe =
-  /^\s*<\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>\s*/i;
+  /^\s*<\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>[\s\S]*?<\s*\/\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\s*>\s*/i;
 const openReasoningPrefixRe =
-  /^\s*<\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
+  /^\s*<\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/i;
 const plainReasoningPrefixRe = /^\s*(?:think(?:ing)?|thought|analysis|reasoning)\s*:?\s*\r?\n/i;
 
 function stripLeadingReasoningBlocks(text: string): string {

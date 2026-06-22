@@ -244,7 +244,9 @@ main model can read the screenshot directly.
 <Accordion title="Ports and reachability">
 
 - Control service binds to loopback on a port derived from `gateway.port` (default `18791` = gateway + 2). Overriding `gateway.port` or `OPENCLAW_GATEWAY_PORT` shifts the derived ports in the same family.
-- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for remote CDP. `cdpUrl` defaults to the managed local CDP port when unset.
+- Local `openclaw` profiles auto-assign `cdpPort`/`cdpUrl`; set those only for
+  remote CDP profiles or existing-session endpoint attach. `cdpUrl` defaults to
+  the managed local CDP port when unset.
 - `remoteCdpTimeoutMs` applies to remote and `attachOnly` CDP HTTP reachability
   checks and tab-opening HTTP requests; `remoteCdpHandshakeTimeoutMs` applies to
   their CDP WebSocket handshakes.
@@ -298,7 +300,7 @@ main model can read the screenshot directly.
 - `color` (top-level and per-profile) tints the browser UI so you can see which profile is active.
 - Default profile is `openclaw` (managed standalone). Use `defaultProfile: "user"` to opt into the signed-in user browser.
 - Auto-detect order: system default browser if Chromium-based; otherwise Chrome → Brave → Edge → Chromium → Chrome Canary.
-- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. Do not set `cdpUrl` for that driver.
+- `driver: "existing-session"` uses Chrome DevTools MCP instead of raw CDP. It can attach through Chrome MCP auto-connect, or through `cdpUrl` when you already have a DevTools endpoint for the running browser.
 - Set `browser.profiles.<name>.userDataDir` when an existing-session profile should attach to a non-default Chromium user profile (Brave, Edge, etc.). This path also accepts `~` for your OS home directory.
 
 </Accordion>
@@ -687,6 +689,9 @@ What to check if attach does not work:
 - the target Chromium-based browser is version `144+`
 - remote debugging is enabled in that browser's inspect page
 - the browser showed and you accepted the attach consent prompt
+- if Chrome was started with an explicit `--remote-debugging-port`, set
+  `browser.profiles.<name>.cdpUrl` to that DevTools endpoint instead of relying
+  on Chrome MCP auto-connect
 - `openclaw doctor` migrates old extension-based browser config and checks that
   Chrome is installed locally for default auto-connect profiles, but it cannot
   enable browser-side remote debugging for you
@@ -738,7 +743,7 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 
 - **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. `--full-page` cannot combine with `--ref` or `--element`. Playwright is not required for page or ref-based element screenshots.
 - **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only. `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call timeouts. `select` accepts a single value.
-- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported. Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
+- **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns; `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - **Managed-only features** - batch actions, PDF export, download interception, and `responsebody` still require the managed browser path.
 

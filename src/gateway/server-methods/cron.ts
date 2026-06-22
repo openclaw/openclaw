@@ -33,6 +33,7 @@ import {
 } from "../../infra/outbound/channel-target-prefix.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -50,6 +51,17 @@ type CronRunsRequestParams = CronJobIdParams & {
   query?: string;
   sortDir?: "asc" | "desc";
 };
+
+function compactCronListJob(job: CronJob) {
+  return {
+    id: job.id,
+    name: job.name,
+    enabled: job.enabled,
+    nextRunAtMs: job.state.nextRunAtMs ?? null,
+    scheduleKind: job.schedule.kind,
+    lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
+  };
+}
 
 function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
   return listConfiguredAnnounceChannelIdsForConfig({
@@ -184,9 +196,17 @@ function assertValidCronUpdatePatch(params: {
     defaultAgentId: params.defaultAgentId,
   });
   if ("delivery" in params.patch) {
+    const delivery =
+      params.patch.delivery?.channel === null &&
+      nextJob.delivery &&
+      (nextJob.delivery.mode ?? "announce") === "announce" &&
+      nextJob.delivery.channel === undefined &&
+      resolveTargetPrefixedChannel(nextJob.delivery.to) === undefined
+        ? { ...nextJob.delivery, channel: "last" as const }
+        : nextJob.delivery;
     assertValidCronAnnounceDelivery({
       cfg: params.cfg,
-      delivery: nextJob.delivery,
+      delivery,
     });
   }
 }
@@ -229,6 +249,7 @@ function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("invalid cron sessionTarget session id") ||
     message.includes('main cron jobs require payload.kind="systemEvent"') ||
     message.includes('isolated/current/session cron jobs require payload.kind="agentTurn"') ||
+    message.includes("has no upcoming run time and would never fire") ||
     message.includes('sessionTarget "main" is only valid for the default agent') ||
     message.includes('cron.update payload.kind="systemEvent" requires text') ||
     message.includes('cron.update payload.kind="agentTurn" requires message') ||
@@ -254,12 +275,19 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Caller-supplied sessionKey / agentId thread through to `cron.wake` so
+    // multi-session deployments wake the originating conversation lane
+    // instead of the heartbeat / main default. Empty strings are dropped
+    // (schema permits omission; presence with empty payload should not
+    // override the default).
     const p = params as {
       mode: "now" | "next-heartbeat";
       text: string;
       sessionKey?: string;
+      agentId?: string;
     };
     const sessionKey = p.sessionKey?.trim() || undefined;
+    const agentId = p.agentId?.trim() || undefined;
     if (sessionKey && isSubagentSessionKey(sessionKey)) {
       // Wake requests resume user-visible sessions only; subagent sessions are
       // internal task execution targets and should not receive operator wakes.
@@ -270,10 +298,30 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Mirror the cron tool's contradictory-pair guard for direct RPC callers
+    // and generated clients: the cron target resolver treats agentId as
+    // authoritative, so an agentId that disagrees with the agent owning an
+    // agent-prefixed sessionKey would silently wake a lane the caller never
+    // named. Reject instead of guessing a canonical owner.
+    const sessionKeyAgentId = sessionKey
+      ? parseAgentSessionKey(sessionKey)?.agentId?.trim().toLowerCase()
+      : undefined;
+    if (agentId && sessionKeyAgentId && agentId.toLowerCase() !== sessionKeyAgentId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "wake agentId contradicts the agent that owns sessionKey; pass a single canonical wake target",
+        ),
+      );
+      return;
+    }
     const result = context.cron.wake({
       mode: p.mode,
       text: p.text,
       ...(sessionKey ? { sessionKey } : {}),
+      ...(agentId ? { agentId } : {}),
     });
     respond(true, result, undefined);
   },
@@ -300,6 +348,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
       agentId?: string;
+      compact?: boolean;
     };
     const page = await context.cron.listPage({
       includeDisabled: p.includeDisabled,
@@ -313,6 +362,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir: p.sortDir,
       agentId: p.agentId,
     });
+    if (p.compact === true) {
+      respond(true, { ...page, jobs: page.jobs.map(compactCronListJob) }, undefined);
+      return;
+    }
     const deliveryPreviews = await resolveCronDeliveryPreviews({
       cfg: context.getRuntimeConfig(),
       defaultAgentId: context.cron.getDefaultAgentId(),

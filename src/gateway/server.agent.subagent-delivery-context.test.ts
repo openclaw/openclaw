@@ -1,5 +1,6 @@
 // Subagent delivery-context tests protect route metadata inheritance for child
 // agent sessions and outbound delivery through channel plugins.
+import fs from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import {
@@ -9,13 +10,7 @@ import {
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
-import {
-  installGatewayTestHooks,
-  readSessionStore,
-  rpcReq,
-  testState,
-  writeSessionStore,
-} from "./test-helpers.js";
+import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -87,7 +82,10 @@ function readDeliveryContext(entry: StoredEntry): NonNullable<StoredEntry["deliv
 }
 
 async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
-  const stored = readSessionStore(gatewaySuite.sessionStorePath) as Record<string, StoredEntry>;
+  const stored = JSON.parse(await fs.readFile(gatewaySuite.sessionStorePath, "utf-8")) as Record<
+    string,
+    StoredEntry
+  >;
   return readStoredEntry(stored, key);
 }
 

@@ -80,6 +80,7 @@ describe("resolveInstallableChannelPlugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getChannelPlugin.mockReturnValue(undefined);
+    mocks.getChannelPluginCatalogEntry.mockReturnValue(undefined);
     mocks.ensureChannelSetupPluginInstalled.mockResolvedValue({
       cfg: {},
       installed: false,
@@ -99,9 +100,12 @@ describe("resolveInstallableChannelPlugin", () => {
     });
     const bundledPlugin = createPlugin("telegram");
 
-    mocks.listChannelPluginCatalogEntries.mockImplementation(
-      ({ excludeWorkspace }: { excludeWorkspace?: boolean }) =>
-        excludeWorkspace ? [bundledEntry] : [workspaceEntry],
+    mocks.listChannelPluginCatalogEntries.mockImplementation(() => [workspaceEntry]);
+    mocks.getChannelPluginCatalogEntry.mockImplementation(
+      (_channel: string, opts?: { excludePluginRefs?: Array<{ pluginId: string }> }) =>
+        opts?.excludePluginRefs?.some((entry) => entry.pluginId === "evil-telegram-shadow")
+          ? bundledEntry
+          : undefined,
     );
     mocks.loadChannelSetupPluginRegistrySnapshotForChannel.mockImplementation(
       ({ pluginId }: { pluginId?: string }) => ({

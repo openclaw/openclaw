@@ -7,6 +7,7 @@ import {
   createOpenAIAttributionHeadersWrapper,
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
+  createOpenAIFastModeWrapper,
   createOpenAIThinkingLevelWrapper,
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
@@ -35,7 +36,23 @@ const openaiModel = {
   api: "openai-responses",
   provider: "openai",
   id: "gpt-5.2",
+  baseUrl: "https://api.openai.com/v1",
 } as Model<"openai-responses">;
+
+describe("createOpenAIFastModeWrapper", () => {
+  it("resolves dynamic fast mode for each stream call", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    let enabled = true;
+    const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
+
+    void wrapped(openaiModel, { messages: [] }, {});
+    enabled = false;
+    void wrapped(openaiModel, { messages: [] }, {});
+
+    expect(payloads[0]?.service_tier).toBe("priority");
+    expect(payloads[1]).not.toHaveProperty("service_tier");
+  });
+});
 
 describe("createOpenAICompletionsToolsCompatWrapper", () => {
   it("strips tools fields when OpenAI-compatible models disable tool support", () => {
@@ -147,6 +164,12 @@ describe("createCodexNativeWebSearchWrapper", () => {
           const payloadObj = payload as { tools?: unknown } | undefined;
           if (payloadObj && Array.isArray(payloadObj.tools)) {
             payloadObj.tools.push({ type: "function", name: "web_search" });
+            payloadObj.tools.push({
+              type: "function",
+              get function(): { name: string } {
+                throw new Error("code mode payload function getter exploded");
+              },
+            });
           }
         },
       },
@@ -156,6 +179,56 @@ describe("createCodexNativeWebSearchWrapper", () => {
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
     ]);
+  });
+
+  it("filters async replacement payloads when code mode owns the tool surface", async () => {
+    let observedOptions: Parameters<StreamFn>[2];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      observedOptions = options;
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
+    const model = {
+      api: "openai-responses",
+      provider: "openai",
+      id: "gpt-5.5",
+    } as Model<"openai-responses">;
+
+    void wrapped(
+      model,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {
+        onPayload: async () => ({
+          tools: [
+            { type: "function", name: "exec" },
+            {
+              type: "function",
+              get function(): { name: string } {
+                throw new Error("async code mode payload function getter exploded");
+              },
+            },
+            { type: "function", name: "wait" },
+            { type: "web_search" },
+          ],
+        }),
+      },
+    );
+
+    const nextPayload = await observedOptions?.onPayload?.({ tools: [] }, model);
+    expect(nextPayload).toEqual({
+      tools: [
+        { type: "function", name: "exec" },
+        { type: "function", name: "wait" },
+      ],
+    });
   });
 
   it("does not enable code-mode transport enforcement when config is on but controls are inactive", () => {

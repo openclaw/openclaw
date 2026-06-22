@@ -133,12 +133,10 @@ const mocks = vi.hoisted(() => ({
       embedBatch: async (texts: string[]) => texts.map(() => [0.1, 0.2]),
     },
   })),
-  registerMemoryEmbeddingProvider: vi.fn(),
   listMemoryEmbeddingProviders: vi.fn(() => [
     { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
   ]),
   listEmbeddingProviders: vi.fn(() => []),
-  registerBuiltInMemoryEmbeddingProviders: vi.fn(),
   buildMediaUnderstandingRegistry: vi.fn(() => new Map()),
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
@@ -315,8 +313,6 @@ vi.mock("../media/media-services.js", async (importOriginal) => {
 vi.mock("../plugins/memory-embedding-providers.js", () => ({
   listMemoryEmbeddingProviders:
     mocks.listMemoryEmbeddingProviders as unknown as typeof import("../plugins/memory-embedding-providers.js").listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider:
-    mocks.registerMemoryEmbeddingProvider as unknown as typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider,
 }));
 
 vi.mock("../plugins/embedding-provider-runtime.js", () => ({
@@ -327,8 +323,6 @@ vi.mock("../plugins/embedding-provider-runtime.js", () => ({
 vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   createEmbeddingProvider:
     mocks.createEmbeddingProvider as unknown as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").createEmbeddingProvider,
-  registerBuiltInMemoryEmbeddingProviders:
-    mocks.registerBuiltInMemoryEmbeddingProviders as typeof import("../plugin-sdk/memory-core-bundled-runtime.js").registerBuiltInMemoryEmbeddingProviders,
 }));
 
 vi.mock("../image-generation/runtime.js", () => ({
@@ -515,14 +509,12 @@ describe("capability cli", () => {
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
-    mocks.registerMemoryEmbeddingProvider.mockClear();
     mocks.listMemoryEmbeddingProviders
       .mockReset()
       .mockReturnValue([
         { id: "openai", defaultModel: "text-embedding-3-small", transport: "remote" },
       ]);
     mocks.listEmbeddingProviders.mockReset().mockReturnValue([]);
-    mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.getModelsCommandSecretTargetIds.mockClear();
@@ -629,13 +621,6 @@ describe("capability cli", () => {
   function firstCommandConfigResolutionCall() {
     const calls = mocks.resolveCommandConfigWithSecrets.mock.calls as unknown as Array<
       [Record<string, unknown>]
-    >;
-    return calls[0]?.[0];
-  }
-
-  function firstRegisteredEmbeddingBootstrapArg() {
-    const calls = mocks.registerBuiltInMemoryEmbeddingProviders.mock.calls as unknown as Array<
-      [{ registerMemoryEmbeddingProvider?: unknown }]
     >;
     return calls[0]?.[0];
   }
@@ -1603,7 +1588,47 @@ describe("capability cli", () => {
     expect(generationCall?.providerOptions).toBeUndefined();
   });
 
-  it("passes image output format and OpenAI background hints through to edit runtime", async () => {
+  it("passes image quality and OpenAI moderation hints through to generation runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      images: [
+        {
+          buffer: Buffer.from("png-bytes"),
+          mimeType: "image/png",
+          fileName: "draft.png",
+        },
+      ],
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "generate",
+        "--prompt",
+        "low-cost draft",
+        "--quality",
+        "low",
+        "--openai-moderation",
+        "low",
+        "--json",
+      ],
+    });
+
+    const generationCall = firstImageGenerationCall();
+    expect(generationCall?.prompt).toBe("low-cost draft");
+    expect(generationCall?.quality).toBe("low");
+    expect(generationCall?.providerOptions).toEqual({
+      openai: {
+        moderation: "low",
+      },
+    });
+  });
+
+  it("passes image output format, quality, and OpenAI hints through to edit runtime", async () => {
     mocks.generateImage.mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1.5",
@@ -1635,6 +1660,10 @@ describe("capability cli", () => {
         "png",
         "--openai-background",
         "transparent",
+        "--openai-moderation",
+        "auto",
+        "--quality",
+        "high",
         "--json",
       ],
     });
@@ -1644,10 +1673,12 @@ describe("capability cli", () => {
     expect(generationCall?.prompt).toBe("make background transparent");
     expect(generationCall?.modelOverride).toBe("openai/gpt-image-1.5");
     expect(generationCall?.outputFormat).toBe("png");
+    expect(generationCall?.quality).toBe("high");
     expect(generationCall?.background).toBeUndefined();
     expect(generationCall?.providerOptions).toEqual({
       openai: {
         background: "transparent",
+        moderation: "auto",
       },
     });
     expect(inputImages).toHaveLength(1);
@@ -1712,6 +1743,46 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       "Error: --background must be one of transparent, opaque, or auto",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--quality",
+          "expensive",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --quality must be one of low, medium, high, or auto",
+    );
+
+    mocks.runtime.error.mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "generate",
+          "--prompt",
+          "transparent sticker",
+          "--openai-moderation",
+          "none",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Error: --openai-moderation must be one of low or auto",
     );
   });
 
@@ -1789,6 +1860,33 @@ describe("capability cli", () => {
       "--output-format",
       "--background",
       "--openai-background",
+      "--openai-moderation",
+      "--quality",
+      "--timeout-ms",
+      "--output",
+      "--json",
+    ]);
+  });
+
+  it("reports the expanded image.generate flags in capability inspect", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "inspect", "--name", "image.generate", "--json"],
+    });
+
+    expect(firstJsonOutput()?.id).toBe("image.generate");
+    expect(firstJsonOutput()?.flags).toEqual([
+      "--prompt",
+      "--model",
+      "--count",
+      "--size",
+      "--aspect-ratio",
+      "--resolution",
+      "--output-format",
+      "--background",
+      "--openai-background",
+      "--openai-moderation",
+      "--quality",
       "--timeout-ms",
       "--output",
       "--json",
@@ -2698,16 +2796,20 @@ describe("capability cli", () => {
     expect(vi.mocked(mediaRuntime.describeVideoFile)).not.toHaveBeenCalled();
   });
 
-  it("bootstraps built-in embedding providers when the registry is empty", async () => {
+  it("lists generic embedding providers when the memory registry is empty", async () => {
     mocks.listMemoryEmbeddingProviders.mockReturnValueOnce([]);
+    mocks.listEmbeddingProviders.mockReturnValueOnce([
+      { id: "generic", defaultModel: "generic-embed", transport: "remote" },
+    ] as never);
 
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "embedding", "providers", "--json"],
     });
 
-    const bootstrapArg = firstRegisteredEmbeddingBootstrapArg();
-    expect(typeof bootstrapArg?.registerMemoryEmbeddingProvider).toBe("function");
+    expect(firstJsonOutput()).toMatchObject([
+      { id: "generic", defaultModel: "generic-embed", transport: "remote" },
+    ]);
   });
 
   it("marks env-backed audio providers as configured", async () => {

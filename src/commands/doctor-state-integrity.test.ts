@@ -9,11 +9,8 @@ import {
   resolveStorePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions/paths.js";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTest,
-} from "../config/sessions/test-helpers.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   clearTuiLastSessionPointers,
   moveHeartbeatMainSessionEntry,
@@ -32,35 +29,6 @@ vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
 }));
 
 const noteMock = vi.fn();
-
-type EnvSnapshot = {
-  HOME?: string;
-  OPENCLAW_HOME?: string;
-  OPENCLAW_STATE_DIR?: string;
-  OPENCLAW_OAUTH_DIR?: string;
-  OPENCLAW_AGENT_DIR?: string;
-};
-
-function captureEnv(): EnvSnapshot {
-  return {
-    HOME: process.env.HOME,
-    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_OAUTH_DIR: process.env.OPENCLAW_OAUTH_DIR,
-    OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
-  };
-}
-
-function restoreEnv(snapshot: EnvSnapshot) {
-  for (const key of Object.keys(snapshot) as Array<keyof EnvSnapshot>) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
 
 function setupSessionState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, homeDir: string) {
   const agentId = "main";
@@ -127,7 +95,7 @@ function writeSessionStore(
 ) {
   setupSessionState(cfg, process.env, process.env.HOME ?? "");
   const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-  writeSessionStoreForTest(storePath, sessions);
+  fs.writeFileSync(storePath, JSON.stringify(sessions, null, 2));
 }
 
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
@@ -153,23 +121,30 @@ async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir
 }
 
 describe("doctor state integrity oauth dir checks", () => {
-  let envSnapshot: EnvSnapshot;
+  let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome = "";
 
   beforeEach(() => {
-    envSnapshot = captureEnv();
+    envSnapshot = captureEnv([
+      "HOME",
+      "OPENCLAW_HOME",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_OAUTH_DIR",
+      "OPENCLAW_AGENT_DIR",
+    ]);
     tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-integrity-"));
-    process.env.HOME = tempHome;
-    process.env.OPENCLAW_HOME = tempHome;
-    process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-    delete process.env.OPENCLAW_OAUTH_DIR;
-    delete process.env.OPENCLAW_AGENT_DIR;
-    fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
+    const stateDir = path.join(tempHome, ".openclaw");
+    setTestEnvValue("HOME", tempHome);
+    setTestEnvValue("OPENCLAW_HOME", tempHome);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    deleteTestEnvValue("OPENCLAW_OAUTH_DIR");
+    deleteTestEnvValue("OPENCLAW_AGENT_DIR");
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     noteMock.mockClear();
   });
 
   afterEach(() => {
-    restoreEnv(envSnapshot);
+    envSnapshot.restore();
     fs.rmSync(tempHome, { recursive: true, force: true });
   });
 
@@ -278,7 +253,7 @@ describe("doctor state integrity oauth dir checks", () => {
       "legacy",
       "agent",
     );
-    process.env.OPENCLAW_AGENT_DIR = legacyAgentDir;
+    setTestEnvValue("OPENCLAW_AGENT_DIR", legacyAgentDir);
 
     const text = await runStateIntegrityText({
       agents: {
@@ -343,9 +318,10 @@ describe("doctor state integrity oauth dir checks", () => {
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const persisted = readSessionStoreForTest<{ abortedLastRun?: boolean; updatedAt?: number }>(
-      storePath,
-    );
+    const persisted = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<
+      string,
+      { abortedLastRun?: boolean; updatedAt?: number }
+    >;
     expect(persisted[sessionKey]?.abortedLastRun).toBe(false);
     expect(persisted[sessionKey]?.updatedAt).toBeGreaterThan(0);
     expect(doctorChangesText()).toContain("Cleared aborted restart-recovery flags");
@@ -470,9 +446,10 @@ describe("doctor state integrity oauth dir checks", () => {
       );
       fs.symlinkSync(originalHome, symlinkHome, "dir");
       try {
-        process.env.HOME = symlinkHome;
-        process.env.OPENCLAW_HOME = symlinkHome;
-        process.env.OPENCLAW_STATE_DIR = path.join(symlinkHome, ".openclaw");
+        const symlinkStateDir = path.join(symlinkHome, ".openclaw");
+        setTestEnvValue("HOME", symlinkHome);
+        setTestEnvValue("OPENCLAW_HOME", symlinkHome);
+        setTestEnvValue("OPENCLAW_STATE_DIR", symlinkStateDir);
 
         setupSessionState(cfg, process.env, symlinkHome);
         const sessionsDir = resolveSessionTranscriptsDirForAgent(
@@ -584,7 +561,7 @@ describe("doctor state integrity oauth dir checks", () => {
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const store = readSessionStoreForTest(storePath);
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
     const recoveredKey = Object.keys(store).find((key) =>
       key.startsWith("agent:main:heartbeat-recovered-"),
     );
@@ -628,7 +605,7 @@ describe("doctor state integrity oauth dir checks", () => {
     await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
     const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
-    const store = readSessionStoreForTest(storePath);
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
     expect(store["agent:main:main"]?.sessionId).toBe("mixed-session");
     expect(Object.keys(store).filter((key) => key.includes("heartbeat-recovered"))).toEqual([]);
     expect(hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session")).toBe(

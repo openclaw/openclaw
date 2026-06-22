@@ -929,6 +929,9 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_updated
   ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
 
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_order
+  ON cron_jobs(store_key, sort_order ASC, updated_at ASC, job_id);
+
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled_next_run
   ON cron_jobs(store_key, enabled, next_run_at_ms, job_id)
   WHERE next_run_at_ms IS NOT NULL;
@@ -1000,6 +1003,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   parent_flow_id TEXT,
   parent_task_id TEXT,
   agent_id TEXT,
+  requester_agent_id TEXT,
   run_id TEXT,
   label TEXT,
   task TEXT NOT NULL,

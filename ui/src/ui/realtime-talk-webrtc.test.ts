@@ -430,6 +430,78 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  // Audio output sends the final string in `transcript`; text output sends it in
+  // `text`. Both must surface the same assistant transcript + talk events.
+  it.each([
+    {
+      label: "audio output",
+      deltaType: "response.output_audio_transcript.delta",
+      doneType: "response.output_audio_transcript.done",
+      doneField: { transcript: "hi there" },
+    },
+    {
+      label: "text output",
+      deltaType: "response.output_text.delta",
+      doneType: "response.output_text.done",
+      doneField: { text: "hi there" },
+    },
+  ])(
+    "emits assistant transcripts from OpenAI Realtime $label events",
+    async ({ deltaType, doneType, doneField }) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+      );
+      const onTranscript = vi.fn();
+      const onTalkEvent = vi.fn();
+      const transport = new WebRtcSdpRealtimeTalkTransport(
+        {
+          provider: "openai",
+          transport: "webrtc",
+          clientSecret: "client-secret-123",
+        },
+        {
+          client: {} as never,
+          sessionKey: "main",
+          callbacks: { onTranscript, onTalkEvent },
+        },
+      );
+
+      await transport.start();
+      const peer = FakePeerConnection.instances[0];
+      peer?.channel.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: deltaType, item_id: "response-1", delta: "hi" }),
+        }),
+      );
+      peer?.channel.dispatchEvent(
+        new MessageEvent("message", {
+          data: JSON.stringify({ type: doneType, item_id: "response-1", ...doneField }),
+        }),
+      );
+
+      expect(onTranscript).toHaveBeenCalledWith({
+        role: "assistant",
+        text: "hi",
+        final: false,
+      });
+      expect(onTranscript).toHaveBeenCalledWith({
+        role: "assistant",
+        text: "hi there",
+        final: true,
+      });
+      expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
+        "output.text.delta",
+        "output.text.done",
+      ]);
+      expect(onTalkEvent.mock.calls.map(([event]) => event.payload)).toEqual([
+        { text: "hi" },
+        { text: "hi there" },
+      ]);
+      transport.stop();
+    },
+  );
+
   it("aborts an in-flight OpenAI tool consult when the transport stops", async () => {
     vi.stubGlobal(
       "fetch",

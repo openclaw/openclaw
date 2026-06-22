@@ -86,6 +86,10 @@ describe("buildChannelInboundEventContext", () => {
         mentions: {
           canDetectMention: true,
           wasMentioned: true,
+          explicitlyMentionedBot: true,
+          mentionSource: "explicit_bot",
+          mentionedUserIds: ["bot-1"],
+          implicitMentionKinds: ["reply_to_bot"],
         },
       },
       commandTurn: {
@@ -161,6 +165,10 @@ describe("buildChannelInboundEventContext", () => {
       Provider: "test-provider",
       Surface: "test-surface",
       WasMentioned: true,
+      ExplicitlyMentionedBot: true,
+      MentionedUserIds: ["bot-1"],
+      ImplicitMentionKinds: ["reply_to_bot"],
+      MentionSource: "explicit_bot",
       CommandAuthorized: true,
       CommandSource: "text",
       CommandTurn: {

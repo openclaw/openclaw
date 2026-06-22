@@ -20,6 +20,7 @@ const livePackageBackedLanes = new Set([
   "live-codex-npm-plugin",
   "live-mcp-code-mode-gateway",
   "live-plugin-tool",
+  "npm-telegram-live",
   "openai-chat-tools",
   "openwebui",
 ]);

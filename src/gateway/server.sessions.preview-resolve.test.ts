@@ -4,11 +4,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../config/sessions/test-helpers.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -16,6 +11,7 @@ import {
   sessionStoreEntry,
   getMainPreviewEntry,
   directSessionReq,
+  createLinearSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
@@ -46,7 +42,7 @@ async function previewMainAliasFromStore(params: {
   for (const [sessionId, content] of Object.entries(params.transcripts)) {
     await writeTranscriptMessage(dir, sessionId, content);
   }
-  await writeSessionStoreForTestAsync(storePath, params.store);
+  await fs.writeFile(storePath, JSON.stringify(params.store, null, 2), "utf-8");
 
   const { ws } = await openClient();
   try {
@@ -129,16 +125,18 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await fs.writeFile(
     transcriptPath,
-    `${Array.from({ length: 8 })
-      .map((_, idx) => JSON.stringify({ role: "assistant", content: `line ${idx}` }))
-      .join("\n")}\n`,
+    createLinearSessionTranscript(
+      sessionId,
+      Array.from({ length: 8 }, (_, index) => `line ${index}`),
+    ),
     "utf-8",
   );
 
-  const writeRawStore = async (store: Record<string, SessionEntry>) => {
-    await writeSessionStoreForTestAsync(storePath, store);
+  const writeRawStore = async (store: Record<string, unknown>) => {
+    await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
   };
-  const readStore = async () => readSessionStoreForTest(storePath);
+  const readStore = async () =>
+    JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, Record<string, unknown>>;
 
   await writeRawStore({
     "agent:ops:MAIN": { sessionId, updatedAt: Date.now() - 2_000 },
@@ -220,6 +218,19 @@ test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns
 
   expect(resolved.ok).toBe(true);
   expect(resolved.payload?.key).toBe("agent:main:subagent:target");
+});
+
+test("sessions.resolve can probe a missing selector without returning an RPC error", async () => {
+  await createSessionStoreDir();
+  const { ws } = await openClient();
+
+  const resolved = await rpcReq<{ ok: false }>(ws, "sessions.resolve", {
+    key: "agent:main:missing",
+    allowMissing: true,
+  });
+
+  expect(resolved.ok).toBe(true);
+  expect(resolved.payload).toEqual({ ok: false });
 });
 
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {

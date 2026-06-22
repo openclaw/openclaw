@@ -56,15 +56,6 @@ type ProgressExpectation = {
   progressSummary: string;
 };
 
-type DirectSendExpectation = {
-  sendMessageMock: unknown;
-  channel: string;
-  to: string;
-  threadId: string;
-  content: string;
-  mediaUrls: string[];
-};
-
 type FallbackAnnouncementExpectation = {
   deliverAnnouncementMock: unknown;
   requesterSessionKey: string;
@@ -178,22 +169,6 @@ export function expectRecordedTaskProgress({
   );
   expect(params.runId).toBe(runId);
   expect(params.progressSummary).toBe(progressSummary);
-}
-
-export function expectDirectMediaSend({
-  sendMessageMock,
-  channel,
-  to,
-  threadId,
-  content,
-  mediaUrls,
-}: DirectSendExpectation): void {
-  const params = requireMockFirstParam(sendMessageMock, "sendMessage params");
-  expect(params.channel).toBe(channel);
-  expect(params.to).toBe(to);
-  expect(params.threadId).toBe(threadId);
-  expect(params.content).toBe(content);
-  expect(params.mediaUrls).toEqual(mediaUrls);
 }
 
 export function expectFallbackMediaAnnouncement({

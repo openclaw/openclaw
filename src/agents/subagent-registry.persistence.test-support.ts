@@ -3,12 +3,9 @@
  * minimal session-store files and runtime dependency mocks without loading
  * the production embedded-agent stack.
  */
+import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../config/sessions/test-helpers.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
 
@@ -19,10 +16,15 @@ function resolveSubagentSessionStorePath(stateDir: string, agentId: string): str
 /** Reads a test session-store JSON file, returning an empty store on missing/invalid input. */
 export async function readSubagentSessionStore(storePath: string): Promise<SessionStore> {
   try {
-    return readSessionStoreForTest<Record<string, unknown>>(storePath);
+    const raw = await fs.readFile(storePath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as SessionStore;
+    }
   } catch {
-    return {};
+    // ignore
   }
+  return {};
 }
 
 /** Writes or updates one subagent session-store entry for persistence tests. */
@@ -45,7 +47,8 @@ export async function writeSubagentSessionEntry(params: {
       ? { abortedLastRun: params.abortedLastRun }
       : {}),
   };
-  await writeSessionStoreForTestAsync(storePath, store);
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
   return storePath;
 }
 
@@ -58,7 +61,8 @@ export async function removeSubagentSessionEntry(params: {
   const storePath = resolveSubagentSessionStorePath(params.stateDir, params.agentId);
   const store = await readSubagentSessionStore(storePath);
   delete store[params.sessionKey];
-  await writeSessionStoreForTestAsync(storePath, store);
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
   return storePath;
 }
 

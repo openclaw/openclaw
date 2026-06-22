@@ -15,10 +15,6 @@ import {
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
 } from "../config/sessions.js";
-import {
-  readSessionStoreForTest,
-  writeSessionStoreForTestAsync,
-} from "../config/sessions/test-helpers.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -170,7 +166,7 @@ async function persistTestSessionConfig(): Promise<void> {
   }
   const nextStoreValue =
     typeof testState.sessionStorePath === "string"
-      ? preservedTemplateStore || testState.sessionStorePath
+      ? testState.sessionStorePath
       : preservedTemplateStore;
   for (const configPath of configPaths) {
     const config = { ...parsedConfigs.get(configPath) };
@@ -223,20 +219,14 @@ export async function writeSessionStore(params: {
           });
     store[storeKey] = entry;
   }
-  // Gateway suites often reuse the same store path across tests; clear the
-  // in-process cache so handlers reload the seeded SQLite state.
+  // Gateway suites often reuse the same store path across tests while writing the
+  // file directly; clear the in-process cache so handlers reload the seeded state.
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
-  await writeSessionStoreForTestAsync(storePath, store);
+  const serializedStore = JSON.stringify(store, null, 2);
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, serializedStore, "utf-8");
   clearSessionStoreCacheForTest();
-}
-
-export function readSessionStore(storePath?: string): Record<string, SessionEntry> {
-  const resolvedStorePath = storePath ?? testState.sessionStorePath;
-  if (!resolvedStorePath) {
-    throw new Error("readSessionStore requires testState.sessionStorePath");
-  }
-  return readSessionStoreForTest(resolvedStorePath);
 }
 
 async function setupGatewayTestHome() {

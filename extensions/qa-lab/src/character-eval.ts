@@ -426,8 +426,8 @@ async function defaultRunJudge(params: {
 }
 
 async function defaultRunSuite(params: Parameters<RunSuiteFn>[0]) {
-  const { runQaSuiteFromRuntime } = await import("./suite-launch.runtime.js");
-  return await runQaSuiteFromRuntime(params);
+  const { runQaFlowSuiteFromRuntime } = await import("./suite-launch.runtime.js");
+  return await runQaFlowSuiteFromRuntime(params);
 }
 
 function renderCharacterEvalReport(params: {

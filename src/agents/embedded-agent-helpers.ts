@@ -1,4 +1,6 @@
 /** Embedded-agent helper barrel for bootstrap, provider error, media, and turn sanitizers. */
+export { isModelNotFoundErrorMessage } from "./live-model-errors.js";
+
 export {
   buildBootstrapContextFiles,
   DEFAULT_BOOTSTRAP_MAX_CHARS,
@@ -12,6 +14,7 @@ export {
 } from "./embedded-agent-helpers/bootstrap.js";
 export {
   BILLING_ERROR_USER_MESSAGE,
+  classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
   formatBillingErrorMessage,
   formatRateLimitOrOverloadedErrorCopy,
@@ -25,7 +28,6 @@ export {
   isAuthAssistantError,
   isAuthErrorMessage,
   isAuthPermanentErrorMessage,
-  isModelNotFoundErrorMessage,
   isBillingAssistantError,
   extractObservedOverflowTokenCount,
   parseApiErrorInfo,
@@ -37,6 +39,7 @@ export {
   isLikelyContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
+  isGenericUnknownStreamErrorMessage,
   isImageDimensionErrorMessage,
   isImageSizeError,
   isOverloadedErrorMessage,

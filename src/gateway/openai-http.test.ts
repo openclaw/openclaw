@@ -13,6 +13,7 @@ import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscrib
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
+import { resetConfigRuntimeState } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
@@ -187,6 +188,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     };
 
     try {
+      testState.agentsConfig = { list: [{ id: "main" }, { id: "beta" }] };
+      resetConfigRuntimeState();
+
       {
         const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
           method: "GET",
@@ -234,6 +238,33 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
 
       {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { "x-openclaw-agent-id": "missing-agent" },
+        );
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(port, {
+          model: "openclaw/missing-agent",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe("Unknown agent 'missing-agent'.");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
           port,
@@ -247,6 +278,22 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
         expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:beta:openai:custom");
         await res.text();
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { "x-openclaw-session-key": "agent:main:subagent:spoofed" },
+        );
+        expect(res.status).toBe(400);
+        const json = (await res.json()) as { error?: { type?: string; message?: string } };
+        expect(json.error?.type).toBe("invalid_request_error");
+        expect(json.error?.message).toBe(
+          "`x-openclaw-session-key` cannot use reserved internal session namespaces.",
+        );
+        expect(agentCommand).toHaveBeenCalledTimes(0);
       }
 
       {
@@ -287,6 +334,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
           {
             "x-openclaw-model": "openai/gpt-5.4",
+            "x-openclaw-scopes": "operator.admin, operator.write",
           },
         );
         expect(res.status).toBe(200);
@@ -314,6 +362,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           },
           {
             "x-openclaw-model": "gpt-5.4",
+            "x-openclaw-scopes": "operator.admin, operator.write",
           },
         );
         expect(res.status).toBe(200);
@@ -345,7 +394,27 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             model: "openclaw",
             messages: [{ role: "user", content: "hi" }],
           },
-          { "x-openclaw-model": "openai/" },
+          { "x-openclaw-model": "openai/gpt-5.4" },
+        );
+        expect(res.status).toBe(403);
+        const json = (await res.json()) as { error?: { message?: string; type?: string } };
+        expect(json.error?.type).toBe("forbidden");
+        expect(json.error?.message).toBe("missing scope: operator.admin");
+        expect(agentCommand).toHaveBeenCalledTimes(0);
+      }
+
+      {
+        agentCommand.mockClear();
+        const res = await postChatCompletions(
+          port,
+          {
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          {
+            "x-openclaw-model": "openai/",
+            "x-openclaw-scopes": "operator.admin, operator.write",
+          },
         );
         expect(res.status).toBe(400);
         const json = (await res.json()) as { error?: { type?: string; message?: string } };
@@ -1397,7 +1466,8 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         );
       }
     } finally {
-      // shared server
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
     }
   });
 

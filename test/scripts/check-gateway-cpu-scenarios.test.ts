@@ -1,4 +1,5 @@
 // Check Gateway Cpu Scenarios tests cover check gateway cpu scenarios script behavior.
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -12,6 +13,18 @@ function makeTempRoot(): string {
   const root = mkdtempSync(path.join(artifactRoot, "gateway-cpu-test-"));
   tempRoots.push(root);
   return root;
+}
+
+function runCli(...args: string[]) {
+  return spawnSync(process.execPath, ["scripts/check-gateway-cpu-scenarios.mjs", ...args], {
+    cwd: path.resolve("."),
+    encoding: "utf8",
+  });
+}
+
+function expectNoNodeStack(stderr: string) {
+  expect(stderr).not.toContain("Node.js");
+  expect(stderr).not.toContain("\n    at ");
 }
 
 function writeQaSuiteSummary(
@@ -92,8 +105,19 @@ describe("gateway CPU scenario guard", () => {
       "--cpu-core-warn",
       "--hot-wall-warn-ms",
     ]) {
-      expect(() => testing.parseArgs([flag, "--skip-qa"])).toThrow(`Missing value for ${flag}`);
+      for (const value of ["--skip-qa", "-h"]) {
+        expect(() => testing.parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
     }
+  });
+
+  it("reports CLI argument errors without a Node stack trace", () => {
+    const result = runCli("--wat");
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expectNoNodeStack(result.stderr);
   });
 
   it("prepares CLI startup artifacts before running the startup bench", async () => {

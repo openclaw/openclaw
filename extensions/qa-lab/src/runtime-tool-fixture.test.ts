@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { loadSessionStore, saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -40,9 +39,16 @@ async function writeQaSessionTranscript(
   await fs.mkdir(sessionsDir, { recursive: true });
   const sessionId = sessionKey.replace(/[^a-z0-9]+/giu, "-");
   const storePath = path.join(sessionsDir, "sessions.json");
-  const store = loadSessionStore(storePath, { skipCache: true });
-  store[sessionKey] = { sessionId, sessionFile: `${sessionId}.jsonl`, updatedAt: Date.now() };
-  await saveSessionStore(storePath, store, { skipMaintenance: true });
+  let store: Record<string, unknown> = {};
+  try {
+    store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  store[sessionKey] = { sessionId, sessionFile: `${sessionId}.jsonl` };
+  await fs.writeFile(storePath, JSON.stringify(store), "utf8");
   await fs.writeFile(
     path.join(sessionsDir, `${sessionId}.jsonl`),
     messages.map((message) => JSON.stringify({ message })).join("\n"),
@@ -90,6 +96,69 @@ async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "
       content: "outside allowed scope",
     },
   ]);
+}
+
+async function runMockRuntimeToolFixtureWithOutputs(params: {
+  toolName: string;
+  happyArgs: Record<string, unknown>;
+  failureArgs: Record<string, unknown>;
+  happyOutput: string;
+  failureOutput: string;
+}) {
+  const env = await makeEnv({
+    mock: { baseUrl: "http://127.0.0.1:9999" },
+  });
+  const promptSnippet = `target=${params.toolName}`;
+  const failurePromptSnippet = `failure target=${params.toolName}`;
+  const happyCallId = `call-${params.toolName}-happy`;
+  const failureCallId = `call-${params.toolName}-failure`;
+  const fetchJson = vi
+    .fn()
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([
+      {
+        allInputText: promptSnippet,
+        plannedToolCallId: happyCallId,
+        plannedToolName: params.toolName,
+        plannedToolArgs: params.happyArgs,
+      },
+      {
+        allInputText: promptSnippet,
+        toolOutputCallId: happyCallId,
+        toolOutput: params.happyOutput,
+      },
+      {
+        allInputText: failurePromptSnippet,
+        plannedToolCallId: failureCallId,
+        plannedToolName: params.toolName,
+        plannedToolArgs: params.failureArgs,
+      },
+      {
+        allInputText: failurePromptSnippet,
+        toolOutputCallId: failureCallId,
+        toolOutput: params.failureOutput,
+      },
+    ]);
+
+  return runRuntimeToolFixture(
+    env,
+    {
+      toolName: params.toolName,
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+      },
+      promptSnippet,
+      failurePromptSnippet,
+    },
+    {
+      createSession: vi.fn(async (_env, _label, key) => key!),
+      readEffectiveTools: vi.fn(async () => new Set([params.toolName])),
+      runAgentPrompt: vi.fn(async () => ({})),
+      fetchJson,
+      ensureImageGenerationConfigured: vi.fn(),
+    },
+  );
 }
 
 afterEach(async () => {
@@ -587,6 +656,59 @@ describe("runtime tool fixture", () => {
         },
       ),
     ).rejects.toThrow("expected mock failure-path tool failure output for read");
+  });
+
+  it.each([
+    {
+      name: "required-field",
+      toolName: "sessions_spawn",
+      happyArgs: { task: "reply ok" },
+      happyOutput: "accepted",
+      failureOutput: "task required",
+    },
+    {
+      name: "unavailable-provider",
+      toolName: "web_search",
+      happyArgs: { query: "OpenClaw runtime parity fixed query" },
+      happyOutput: "result",
+      failureOutput: "web_search is disabled or no provider is available.",
+    },
+  ])("accepts $name messages as mock failure fixture output", async (fixture) => {
+    const details = await runMockRuntimeToolFixtureWithOutputs({
+      ...fixture,
+      failureArgs: { __qaFailureMode: "denied-input" },
+    });
+
+    expect(details).toContain(`${fixture.toolName} mock provider failure planned args`);
+  });
+
+  it.each([
+    {
+      name: "neutral required-text",
+      toolName: "sessions_spawn",
+      happyArgs: { task: "reply ok" },
+      happyOutput: "accepted",
+      failureOutput: "no action required",
+      expectedError: "expected mock failure-path tool failure output for sessions_spawn",
+    },
+    {
+      name: "unavailable-provider happy output",
+      toolName: "web_search",
+      happyArgs: { query: "OpenClaw runtime parity fixed query" },
+      happyOutput: "web_search is disabled or no provider is available.",
+      failureOutput: "web_search is disabled or no provider is available.",
+      expectedError: "expected mock happy-path successful tool output for web_search",
+    },
+  ])("rejects $name as mock fixture output", async (fixture) => {
+    await expect(
+      runMockRuntimeToolFixtureWithOutputs({
+        toolName: fixture.toolName,
+        happyArgs: fixture.happyArgs,
+        failureArgs: { __qaFailureMode: "denied-input" },
+        happyOutput: fixture.happyOutput,
+        failureOutput: fixture.failureOutput,
+      }),
+    ).rejects.toThrow(fixture.expectedError);
   });
 
   it("allows successful happy-path tool output to mention errors", async () => {

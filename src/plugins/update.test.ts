@@ -3613,6 +3613,41 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.["voice-call"]).toBeUndefined();
   });
 
+  it("keeps authored plugin config shape when only the install key migrates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "@openclaw/voice-call",
+      targetDir: "/tmp/openclaw-voice-call",
+      version: "0.0.2",
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call",
+              installPath: "/tmp/voice-call",
+            },
+          },
+        },
+      },
+      pluginIds: ["voice-call"],
+    });
+
+    expect(result.config.plugins).toEqual({
+      installs: {
+        "@openclaw/voice-call": expect.objectContaining({
+          source: "npm",
+          spec: "@openclaw/voice-call",
+          installPath: "/tmp/openclaw-voice-call",
+        }),
+      },
+    });
+  });
+
   it("migrates context engine slot when a plugin id changes during update", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,

@@ -500,6 +500,79 @@ describe("createMediaGenerationTaskLifecycle", () => {
     );
   });
 
+  it("includes MEDIA directives in music completion wake prompts for session-only delivery", async () => {
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: true,
+    });
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "music_generate",
+      taskKind: "music_generation",
+      label: "Music generation",
+      queuedProgressSummary: "Queued music generation",
+      generatedLabel: "track",
+      failureProgressSummary: "Music generation failed",
+      eventSource: "music_generation",
+      announceType: "music generation task",
+      completionLabel: "music",
+    });
+
+    await expect(
+      lifecycle.wakeTaskCompletion({
+        handle: {
+          taskId: "task-music-webchat",
+          runId: "tool:music_generate:webchat",
+          requesterSessionKey: "agent:main:dashboard:music-session",
+          taskLabel: "night-drive synthwave",
+          requesterOrigin: {
+            channel: "webchat",
+            to: "session:dashboard",
+          },
+        },
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: 'Generated 1 track.\n- path="/tmp/generated-night-drive.mp3"',
+        attachments: [
+          {
+            type: "audio",
+            path: "/tmp/generated-night-drive.mp3",
+            mimeType: "audio/mpeg",
+            name: "generated-night-drive.mp3",
+          },
+        ],
+      }),
+    ).resolves.toBe(true);
+
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterSessionKey: "agent:main:dashboard:music-session",
+        requesterSessionOrigin: {
+          channel: "webchat",
+          to: "session:dashboard",
+        },
+        completionDirectOrigin: {
+          channel: "webchat",
+          to: "session:dashboard",
+        },
+        sourceTool: "music_generate",
+        bestEffortDeliver: true,
+      }),
+    );
+    const announceParams = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock
+      .calls[0]?.[0] as { triggerMessage?: string; internalEvents?: unknown[] } | undefined;
+    expect(announceParams?.triggerMessage).toContain("MEDIA:/tmp/generated-night-drive.mp3");
+    expect(announceParams?.internalEvents).toEqual([
+      expect.objectContaining({
+        mediaUrls: ["/tmp/generated-night-drive.mp3"],
+        attachments: [
+          expect.objectContaining({
+            path: "/tmp/generated-night-drive.mp3",
+          }),
+        ],
+      }),
+    ]);
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("does not direct-deliver generated media after requester abandonment", async () => {
     // Abandoned requester sessions are terminal; direct delivery would re-open a
     // conversation the task lifecycle already decided to stop.
