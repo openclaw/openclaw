@@ -301,3 +301,62 @@ describe("createMinimaxFastModeWrapper", () => {
     expect(capturedIds).toEqual(["MiniMax-M2.7-highspeed", "MiniMax-M2.7"]);
   });
 });
+
+describe("createMinimaxThinkingDisabledWrapper service_tier", () => {
+  function capturePayload(params: {
+    modelId: string;
+    serviceTierPriority?: boolean;
+    initialPayload?: Record<string, unknown>;
+  }): Record<string, unknown> {
+    let captured: Record<string, unknown> = {};
+    const baseStreamFn: StreamFn = (model, context, options) => {
+      const payload: Record<string, unknown> = { ...params.initialPayload };
+      options?.onPayload?.(payload, model);
+      captured = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createMinimaxThinkingDisabledWrapper(
+      baseStreamFn,
+      "adaptive",
+      params.serviceTierPriority,
+    );
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: params.modelId,
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+    return captured;
+  }
+
+  it("injects service_tier priority for MiniMax-M3 when enabled", () => {
+    expect(capturePayload({ modelId: "MiniMax-M3", serviceTierPriority: true }).service_tier).toBe(
+      "priority",
+    );
+  });
+
+  it("does not inject service_tier for MiniMax-M3 when disabled", () => {
+    expect(
+      capturePayload({ modelId: "MiniMax-M3", serviceTierPriority: false }).service_tier,
+    ).toBeUndefined();
+  });
+
+  it("does not inject service_tier for M2.x even when enabled (no priority benefit)", () => {
+    expect(
+      capturePayload({ modelId: "MiniMax-M2.7", serviceTierPriority: true }).service_tier,
+    ).toBeUndefined();
+  });
+
+  it("preserves an already-set service_tier", () => {
+    expect(
+      capturePayload({
+        modelId: "MiniMax-M3",
+        serviceTierPriority: true,
+        initialPayload: { service_tier: "standard_only" },
+      }).service_tier,
+    ).toBe("standard_only");
+  });
+});
