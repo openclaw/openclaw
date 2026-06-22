@@ -171,22 +171,49 @@ const qaMaturityFeatureSchema = z.object({
 const qaMaturityCategorySchema = z.object({
   id: qaScorecardIdSchema,
   name: z.string().trim().min(1),
+  category_note: z.string().trim().min(1),
   features: z.array(qaMaturityFeatureSchema).default([]),
+  docs: z.array(z.string().trim().min(1)).default([]),
+  search_anchors: z.array(z.string().trim().min(1)).default([]),
+  human_lts_override: z.boolean().optional(),
 });
 
 const qaMaturitySurfaceSchema = z.object({
   id: qaScorecardIdSchema,
   name: z.string().trim().min(1),
-  level: z.string().trim().min(1).optional(),
+  family: z.string().trim().min(1),
+  level: z.string().trim().min(1),
   level_code: z.string().trim().min(1).optional(),
+  archived: z.boolean().optional(),
+  rationale: z.string().trim().min(1).optional(),
+  completeness_instructions: z.string().trim().min(1).optional(),
+  last_score_run: qaMaturityScoreLastRunSchema.optional(),
   categories: z.array(qaMaturityCategorySchema).default([]),
 });
 
-const qaMaturityTaxonomySchema = z
+const qaMaturityLevelSchema = z.object({
+  id: z.string().trim().min(1),
+  code: z.string().trim().min(1).optional(),
+  label: z.string().trim().min(1).optional(),
+  meaning: z.string().trim().min(1).optional(),
+  promotion_bar: z.string().trim().min(1).optional(),
+});
+
+export const qaMaturityTaxonomySchema = z
   .object({
-    version: z.number(),
+    version: z.literal(1),
+    process_version: z.number().int().positive().optional(),
     title: z.string().trim().min(1),
+    summary: z.string().trim().min(1).optional(),
+    snapshot: z
+      .object({
+        date: z.string().trim().min(1).optional(),
+        source_ref: z.string().trim().min(1).optional(),
+      })
+      .strict()
+      .optional(),
     profiles: z.array(qaScorecardProfileSchema).default([]),
+    levels: z.array(qaMaturityLevelSchema).default([]),
     surfaces: z.array(qaMaturitySurfaceSchema).default([]),
   })
   .superRefine((taxonomy, ctx) => {
@@ -221,6 +248,44 @@ const qaMaturityTaxonomySchema = z
         seenProfileCategoryIds.add(categoryId);
       }
     }
+
+    const categoryIds = new Set<string>();
+    const surfaceIds = new Set<string>();
+    for (const [surfaceIndex, surface] of taxonomy.surfaces.entries()) {
+      if (surfaceIds.has(surface.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["surfaces", surfaceIndex, "id"],
+          message: `duplicate surface id: ${surface.id}`,
+        });
+      }
+      surfaceIds.add(surface.id);
+
+      const localCategoryIds = new Set<string>();
+      for (const [categoryIndex, category] of surface.categories.entries()) {
+        if (localCategoryIds.has(category.id)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["surfaces", surfaceIndex, "categories", categoryIndex, "id"],
+            message: `duplicate category id in surface ${surface.id}: ${category.id}`,
+          });
+        }
+        localCategoryIds.add(category.id);
+        categoryIds.add(`${surface.id}.${category.id}`);
+      }
+    }
+
+    for (const [profileIndex, profile] of taxonomy.profiles.entries()) {
+      for (const [categoryIndex, categoryId] of profile.categoryIds.entries()) {
+        if (!categoryIds.has(categoryId)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["profiles", profileIndex, "categoryIds", categoryIndex],
+            message: `profile ${profile.id} references missing category ${categoryId}`,
+          });
+        }
+      }
+    }
   });
 
 export type QaNativeCoverageEvidenceKind = "script" | "vitest" | "playwright";
@@ -234,8 +299,13 @@ export type QaMaturityScoreSurfaceLts = z.infer<typeof qaMaturityScoreSurfaceLts
 export type QaMaturityScoreCategory = z.infer<typeof qaMaturityScoreCategorySchema>;
 export type QaMaturityScoreSurface = z.infer<typeof qaMaturityScoreSurfaceSchema>;
 export type QaMaturityScores = z.infer<typeof qaMaturityScoresSchema>;
+export type QaMaturityTaxonomyLevel = z.infer<typeof qaMaturityLevelSchema>;
+export type QaMaturityTaxonomyFeature = z.infer<typeof qaMaturityFeatureSchema>;
+export type QaMaturityTaxonomyCategory = z.infer<typeof qaMaturityCategorySchema>;
+export type QaMaturityTaxonomySurface = z.infer<typeof qaMaturitySurfaceSchema>;
+export type QaMaturityTaxonomyProfile = z.infer<typeof qaScorecardProfileSchema>;
+export type QaMaturityTaxonomy = z.infer<typeof qaMaturityTaxonomySchema>;
 type QaCoverageEvidenceRole = z.infer<typeof qaCoverageEvidenceRoleSchema>;
-type QaMaturityTaxonomy = z.infer<typeof qaMaturityTaxonomySchema>;
 
 export type QaScorecardValidationIssueCode =
   | "coverage-id-missing-primary-evidence"
@@ -306,6 +376,14 @@ export type QaScorecardTaxonomyReport = {
   categories: QaScorecardCategoryCoverageReport[];
 };
 
+export type QaMaturityTaxonomyCategoryIndex = {
+  active: QaMaturityTaxonomySurface[];
+  surfaces: Map<
+    string,
+    { surface: QaMaturityTaxonomySurface; categories: Map<string, QaMaturityTaxonomyCategory> }
+  >;
+};
+
 type MaturityCategoryRef = {
   id: string;
   surfaceId: string;
@@ -360,7 +438,7 @@ function formatZodIssuePath(pathLocal: PropertyKey[]) {
   return pathLocal.length ? pathLocal.map(String).join(".") : "<root>";
 }
 
-function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
+export function parseQaMaturityTaxonomy(value: unknown, label = QA_MATURITY_TAXONOMY_PATH) {
   const parsed = qaMaturityTaxonomySchema.safeParse(value);
   if (parsed.success) {
     return parsed.data;
@@ -449,6 +527,221 @@ function uniqueSorted(values: Iterable<string>) {
 
 function percent(part: number, total: number) {
   return total === 0 ? 0 : Number(((part / total) * 100).toFixed(1));
+}
+
+export function activeQaMaturityTaxonomySurfaces(taxonomy: QaMaturityTaxonomy) {
+  return taxonomy.surfaces.filter((surface) => !surface.archived);
+}
+
+export function buildQaMaturityTaxonomyCategoryIndex(
+  taxonomy: QaMaturityTaxonomy,
+): QaMaturityTaxonomyCategoryIndex {
+  const active = activeQaMaturityTaxonomySurfaces(taxonomy);
+  const surfaces = new Map<
+    string,
+    { surface: QaMaturityTaxonomySurface; categories: Map<string, QaMaturityTaxonomyCategory> }
+  >();
+  for (const surface of active) {
+    const categories = new Map<string, QaMaturityTaxonomyCategory>();
+    for (const category of surface.categories) {
+      if (categories.has(category.name)) {
+        throw new Error(`taxonomy.yaml: ${surface.id}: duplicate category name ${category.name}`);
+      }
+      categories.set(category.name, category);
+    }
+    surfaces.set(surface.id, { surface, categories });
+  }
+  return { active, surfaces };
+}
+
+export function qaMaturityTaxonomyLevelMap(taxonomy: QaMaturityTaxonomy) {
+  return new Map(taxonomy.levels.map((level) => [level.id, level]));
+}
+
+export function qaMaturityCategoryProfiles(taxonomy: QaMaturityTaxonomy): Map<string, string[]> {
+  const profilesByCategory = new Map<string, string[]>();
+  for (const profile of taxonomy.profiles) {
+    const categoryIds = profile.includeAllCategories
+      ? activeQaMaturityTaxonomySurfaces(taxonomy).flatMap((surface) =>
+          surface.categories.map((category) => `${surface.id}.${category.id}`),
+        )
+      : profile.categoryIds;
+    for (const categoryId of categoryIds) {
+      const profiles = profilesByCategory.get(categoryId) ?? [];
+      profiles.push(profile.id);
+      profilesByCategory.set(categoryId, profiles);
+    }
+  }
+  return profilesByCategory;
+}
+
+export function qaMaturityFamilyOrder(surfaces: readonly QaMaturityTaxonomySurface[]): string[] {
+  const seen: string[] = [];
+  for (const surface of surfaces) {
+    if (!seen.includes(surface.family)) {
+      seen.push(surface.family);
+    }
+  }
+  return seen;
+}
+
+function averageSurfaceScore(rows: readonly QaMaturityScoreSurface[], key: QaMaturityScoreKey) {
+  return Math.round(rows.reduce((sum, row) => sum + row.scores[key].score, 0) / rows.length);
+}
+
+function averageCategoryScore(rows: readonly QaMaturityScoreCategory[], key: QaMaturityScoreKey) {
+  return Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
+}
+
+function expectedMaturityLtsSupported(params: {
+  scoreCategory: QaMaturityScoreCategory;
+  taxonomyCategory: QaMaturityTaxonomyCategory;
+}) {
+  return (
+    (params.scoreCategory.quality.score > 80 && params.scoreCategory.coverage.score > 90) ||
+    params.taxonomyCategory.human_lts_override === true
+  );
+}
+
+function expectedMaturitySurfaceLtsStatus(supportedCategories: number, totalCategories: number) {
+  if (supportedCategories === 0) {
+    return "none";
+  }
+  return supportedCategories === totalCategories ? "full" : "partial";
+}
+
+export function validateQaMaturityScoresAgainstTaxonomy(params: {
+  scores: QaMaturityScores;
+  taxonomy: QaMaturityTaxonomy;
+  scoresPath?: string;
+}) {
+  const scoresPath = params.scoresPath ?? QA_MATURITY_SCORES_PATH;
+  const warnings: string[] = [];
+  const scoreSurfaces = params.scores.surfaces;
+  const taxonomyIndex = buildQaMaturityTaxonomyCategoryIndex(params.taxonomy);
+  if (params.scores.counts.active_surfaces !== scoreSurfaces.length) {
+    throw new Error(
+      `${scoresPath}.counts.active_surfaces must match score surface count (${scoreSurfaces.length})`,
+    );
+  }
+  if (params.scores.counts.active_surfaces !== taxonomyIndex.active.length) {
+    throw new Error(
+      `${scoresPath}.counts.active_surfaces must match active taxonomy surfaces (${taxonomyIndex.active.length})`,
+    );
+  }
+
+  const taxonomyCategoryCount = taxonomyIndex.active.reduce(
+    (count, surface) => count + surface.categories.length,
+    0,
+  );
+  if (params.scores.counts.category_scores !== taxonomyCategoryCount) {
+    throw new Error(
+      `${scoresPath}.counts.category_scores must match active taxonomy categories (${taxonomyCategoryCount})`,
+    );
+  }
+
+  const seenSurfaceIds = new Set<string>();
+  const allScoreCategories: QaMaturityScoreCategory[] = [];
+  for (const scoreSurface of scoreSurfaces) {
+    const surfaceId = scoreSurface.id;
+    if (seenSurfaceIds.has(surfaceId)) {
+      throw new Error(`${scoresPath}: duplicate surface id ${surfaceId}`);
+    }
+    seenSurfaceIds.add(surfaceId);
+
+    const taxonomySurface = taxonomyIndex.surfaces.get(surfaceId);
+    if (!taxonomySurface) {
+      warnings.push(`${scoresPath}: surface ${surfaceId} is not an active taxonomy surface`);
+    }
+    const categories = scoreSurface.categories;
+    if (taxonomySurface && categories.length !== taxonomySurface.categories.size) {
+      throw new Error(
+        `${scoresPath}.${surfaceId}.categories must match taxonomy category count (${taxonomySurface.categories.size})`,
+      );
+    }
+
+    const seenCategoryNames = new Set<string>();
+    let supportedCategories = 0;
+    for (const scoreCategory of categories) {
+      const categoryName = scoreCategory.name;
+      if (seenCategoryNames.has(categoryName)) {
+        throw new Error(`${scoresPath}.${surfaceId}: duplicate category name ${categoryName}`);
+      }
+      seenCategoryNames.add(categoryName);
+      const lts = scoreCategory.lts;
+
+      const taxonomyCategory = taxonomySurface?.categories.get(categoryName);
+      if (taxonomySurface && !taxonomyCategory) {
+        warnings.push(
+          `${scoresPath}.${surfaceId}: score category ${categoryName} is not in taxonomy`,
+        );
+      }
+      if (taxonomyCategory) {
+        if (lts.human_override !== Boolean(taxonomyCategory.human_lts_override)) {
+          throw new Error(
+            `${scoresPath}.${surfaceId}.${categoryName}.lts.human_override must match taxonomy human_lts_override`,
+          );
+        }
+        const expectedSupported = expectedMaturityLtsSupported({
+          scoreCategory,
+          taxonomyCategory,
+        });
+        if (lts.supported !== expectedSupported) {
+          throw new Error(
+            `${scoresPath}.${surfaceId}.${categoryName}.lts.supported must match score threshold or taxonomy human_lts_override`,
+          );
+        }
+      }
+      if (lts.supported) {
+        supportedCategories += 1;
+      }
+      allScoreCategories.push(scoreCategory);
+    }
+
+    const surfaceLts = scoreSurface.lts;
+    if (surfaceLts.supported_categories !== supportedCategories) {
+      throw new Error(
+        `${scoresPath}.${surfaceId}.lts.supported_categories must equal supported category count (${supportedCategories})`,
+      );
+    }
+    if (surfaceLts.total_categories !== categories.length) {
+      throw new Error(
+        `${scoresPath}.${surfaceId}.lts.total_categories must equal score category count (${categories.length})`,
+      );
+    }
+    const expectedStatus = expectedMaturitySurfaceLtsStatus(supportedCategories, categories.length);
+    if (surfaceLts.status !== expectedStatus) {
+      throw new Error(`${scoresPath}.${surfaceId}.lts.status must be ${expectedStatus}`);
+    }
+  }
+
+  for (const surfaceId of taxonomyIndex.surfaces.keys()) {
+    if (!seenSurfaceIds.has(surfaceId)) {
+      warnings.push(`${scoresPath}: missing active taxonomy surface ${surfaceId}`);
+    }
+  }
+  if (params.scores.counts.category_scores !== allScoreCategories.length) {
+    throw new Error(
+      `${scoresPath}.counts.category_scores must match score category count (${allScoreCategories.length})`,
+    );
+  }
+
+  const rollups = params.scores.rollups;
+  for (const key of QA_MATURITY_SCORE_KEYS) {
+    const expectedSurfaceAverage = averageSurfaceScore(scoreSurfaces, key);
+    if (rollups.surface_average[key].score !== expectedSurfaceAverage) {
+      throw new Error(
+        `${scoresPath}.rollups.surface_average.${key}.score must be ${expectedSurfaceAverage}`,
+      );
+    }
+    const expectedCategoryAverage = averageCategoryScore(allScoreCategories, key);
+    if (rollups.category_average[key].score !== expectedCategoryAverage) {
+      throw new Error(
+        `${scoresPath}.rollups.category_average.${key}.score must be ${expectedCategoryAverage}`,
+      );
+    }
+  }
+  return warnings;
 }
 
 function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {

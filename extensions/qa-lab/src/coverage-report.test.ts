@@ -28,8 +28,9 @@ function testMaturityTaxonomy(params?: {
   const surfaceId = firstDot === -1 ? categoryId : categoryId.slice(0, firstDot);
   const categoryLocalId = firstDot === -1 ? categoryId : categoryId.slice(firstDot + 1);
   return {
-    version: 1,
+    version: 1 as const,
     title: "Test taxonomy",
+    levels: [],
     profiles: [
       {
         id: "smoke-ci",
@@ -50,10 +51,13 @@ function testMaturityTaxonomy(params?: {
       {
         id: surfaceId,
         name: "Test surface",
+        family: "test",
+        level: "experimental",
         categories: [
           {
             id: categoryLocalId,
             name: "Test category",
+            category_note: "test-category.md",
             features: (
               params?.featureCoverageIds ??
               (params?.coverageIds ?? [TEST_EXECUTABLE_COVERAGE_ID]).map((coverageId) => [

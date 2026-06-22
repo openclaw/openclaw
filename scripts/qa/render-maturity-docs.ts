@@ -10,15 +10,21 @@ import {
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
 import {
-  QA_MATURITY_SCORE_KEYS,
+  activeQaMaturityTaxonomySurfaces,
+  qaMaturityCategoryProfiles,
+  qaMaturityFamilyOrder,
+  qaMaturityTaxonomyLevelMap,
+  parseQaMaturityTaxonomy,
   parseQaMaturityScores,
-  type QaMaturityScoreCategory,
-  type QaMaturityScoreKey,
+  validateQaMaturityScoresAgainstTaxonomy,
   type QaMaturityScoreLastRun,
   type QaMaturityScoreObject,
   type QaMaturityScoreSurface,
   type QaMaturityScoreSurfaceLts,
   type QaMaturityScores,
+  type QaMaturityTaxonomy,
+  type QaMaturityTaxonomyLevel,
+  type QaMaturityTaxonomySurface,
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
@@ -35,59 +41,6 @@ type Args = {
   strictInputs: boolean;
 };
 
-type TaxonomyLevel = {
-  id: string;
-  code?: string;
-  label?: string;
-  meaning?: string;
-  promotion_bar?: string;
-};
-
-type TaxonomyFeature = {
-  name: string;
-  coverageIds?: string[];
-};
-
-type TaxonomyCategory = {
-  id: string;
-  name: string;
-  category_note: string;
-  features: TaxonomyFeature[];
-  docs?: string[];
-  human_lts_override?: boolean;
-};
-
-type TaxonomySurface = {
-  id: string;
-  name: string;
-  family: string;
-  level: string;
-  archived?: boolean;
-  categories: TaxonomyCategory[];
-  rationale?: string;
-  completeness_instructions?: string;
-  last_score_run?: QaMaturityScoreLastRun;
-};
-
-type TaxonomyProfile = {
-  id: string;
-  includeAllCategories?: boolean;
-  categoryIds?: string[];
-  evidenceMode?: string;
-  description?: string;
-};
-
-type Taxonomy = {
-  version: number;
-  title: string;
-  levels: TaxonomyLevel[];
-  surfaces: TaxonomySurface[];
-  profiles?: TaxonomyProfile[];
-};
-
-type CountSummary = QaEvidenceScorecardJson["categories"];
-type EvidenceScorecard = QaEvidenceScorecardJson;
-
 type EvidenceSummary = {
   sourcePath: string;
   path: string;
@@ -95,7 +48,7 @@ type EvidenceSummary = {
   profile: string;
   entryCount: number;
   statuses: StatusCounts;
-  scorecard?: EvidenceScorecard;
+  scorecard?: QaEvidenceScorecardJson;
 };
 
 type StatusCounts = Record<QaEvidenceStatus, number>;
@@ -108,7 +61,7 @@ const EMPTY_STATUS_COUNTS: StatusCounts = {
 };
 
 type RenderInputs = {
-  taxonomy: Taxonomy;
+  taxonomy: QaMaturityTaxonomy;
   scores: QaMaturityScores;
   taxonomyPath: string;
   scoresPath: string;
@@ -188,315 +141,6 @@ function readYaml(filePath: string): unknown {
   return YAML.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-function assertObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function assertArray<T = unknown>(value: unknown, label: string): T[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`${label} must be an array`);
-  }
-  return value as T[];
-}
-
-function assertString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`${label} must be a non-empty string`);
-  }
-  return value;
-}
-
-function validateTaxonomy(taxonomy: Taxonomy, taxonomyPath: string): void {
-  assertObject(taxonomy, taxonomyPath);
-  if (taxonomy.version !== 1) {
-    throw new Error(`${taxonomyPath} must declare version: 1`);
-  }
-  assertString(taxonomy.title, `${taxonomyPath}.title`);
-  assertArray(taxonomy.levels, `${taxonomyPath}.levels`);
-  assertArray(taxonomy.surfaces, `${taxonomyPath}.surfaces`);
-  const profileIds = new Set<string>();
-  for (const [profileIndex, profile] of assertArray<TaxonomyProfile>(
-    taxonomy.profiles ?? [],
-    `${taxonomyPath}.profiles`,
-  ).entries()) {
-    assertObject(profile, `${taxonomyPath}.profiles[${profileIndex}]`);
-    const id = assertString(profile.id, `${taxonomyPath}.profiles[${profileIndex}].id`);
-    if (profileIds.has(id)) {
-      throw new Error(`${taxonomyPath}: duplicate profile id ${id}`);
-    }
-    profileIds.add(id);
-    if (profile.includeAllCategories && profile.categoryIds?.length) {
-      throw new Error(
-        `${taxonomyPath}: profile ${id} cannot combine includeAllCategories and categoryIds`,
-      );
-    }
-  }
-
-  const categoryIds = new Set<string>();
-  for (const [surfaceIndex, surface] of taxonomy.surfaces.entries()) {
-    assertObject(surface, `${taxonomyPath}.surfaces[${surfaceIndex}]`);
-    const surfaceId = assertString(surface.id, `${taxonomyPath}.surfaces[${surfaceIndex}].id`);
-    assertString(surface.name, `${taxonomyPath}.${surfaceId}.name`);
-    assertString(surface.family, `${taxonomyPath}.${surfaceId}.family`);
-    assertString(surface.level, `${taxonomyPath}.${surfaceId}.level`);
-    for (const [categoryIndex, category] of assertArray<TaxonomyCategory>(
-      surface.categories,
-      `${taxonomyPath}.${surfaceId}.categories`,
-    ).entries()) {
-      assertObject(category, `${taxonomyPath}.${surfaceId}.categories[${categoryIndex}]`);
-      const localCategoryId = assertString(
-        category.id,
-        `${taxonomyPath}.${surfaceId}.categories[${categoryIndex}].id`,
-      );
-      const categoryId = `${surfaceId}.${localCategoryId}`;
-      if (categoryIds.has(categoryId)) {
-        throw new Error(`${taxonomyPath}: duplicate category id ${categoryId}`);
-      }
-      categoryIds.add(categoryId);
-      assertString(category.name, `${taxonomyPath}.${surfaceId}.${categoryId}.name`);
-      assertString(
-        category.category_note,
-        `${taxonomyPath}.${surfaceId}.${categoryId}.category_note`,
-      );
-      for (const [featureIndex, feature] of assertArray<TaxonomyFeature>(
-        category.features,
-        `${taxonomyPath}.${surfaceId}.${categoryId}.features`,
-      ).entries()) {
-        assertObject(
-          feature,
-          `${taxonomyPath}.${surfaceId}.${categoryId}.features[${featureIndex}]`,
-        );
-        assertString(
-          feature.name,
-          `${taxonomyPath}.${surfaceId}.${categoryId}.features[${featureIndex}].name`,
-        );
-        assertArray<string>(
-          feature.coverageIds ?? [],
-          `${taxonomyPath}.${surfaceId}.${categoryId}.features[${featureIndex}].coverageIds`,
-        );
-      }
-    }
-  }
-  for (const profile of taxonomy.profiles ?? []) {
-    for (const categoryId of profile.categoryIds ?? []) {
-      if (!categoryIds.has(categoryId)) {
-        throw new Error(
-          `${taxonomyPath}: profile ${profile.id} references missing category ${categoryId}`,
-        );
-      }
-    }
-  }
-}
-
-function taxonomyCategoryIndex(taxonomy: Taxonomy): {
-  active: TaxonomySurface[];
-  surfaces: Map<string, { surface: TaxonomySurface; categories: Map<string, TaxonomyCategory> }>;
-} {
-  const active = activeSurfaces(taxonomy);
-  const surfaces = new Map<
-    string,
-    { surface: TaxonomySurface; categories: Map<string, TaxonomyCategory> }
-  >();
-  for (const surface of active) {
-    const categories = new Map<string, TaxonomyCategory>();
-    for (const category of surface.categories) {
-      if (categories.has(category.name)) {
-        throw new Error(`taxonomy.yaml: ${surface.id}: duplicate category name ${category.name}`);
-      }
-      categories.set(category.name, category);
-    }
-    surfaces.set(surface.id, { surface, categories });
-  }
-  return { active, surfaces };
-}
-
-function averageScore(rows: QaMaturityScoreSurface[], key: QaMaturityScoreKey): number {
-  return Math.round(rows.reduce((sum, row) => sum + row.scores[key].score, 0) / rows.length);
-}
-
-function averageCategoryScore(rows: QaMaturityScoreCategory[], key: QaMaturityScoreKey): number {
-  return Math.round(rows.reduce((sum, row) => sum + row[key].score, 0) / rows.length);
-}
-
-function expectedLtsSupported(
-  scoreCategory: QaMaturityScoreCategory,
-  taxonomyCategory: TaxonomyCategory,
-): boolean {
-  return (
-    (scoreCategory.quality.score > 80 && scoreCategory.coverage.score > 90) ||
-    taxonomyCategory.human_lts_override === true
-  );
-}
-
-function expectedSurfaceLtsStatus(supportedCategories: number, totalCategories: number): string {
-  if (supportedCategories === 0) {
-    return "none";
-  }
-  return supportedCategories === totalCategories ? "full" : "partial";
-}
-
-function validateScores(
-  scores: QaMaturityScores,
-  scoresPath: string,
-  taxonomy: Taxonomy,
-): string[] {
-  const warnings: string[] = [];
-  assertObject(scores, scoresPath);
-  if (scores.version !== 1) {
-    throw new Error(`${scoresPath} must declare version: 1`);
-  }
-  assertObject(scores.counts, `${scoresPath}.counts`);
-  assertObject(scores.rollups, `${scoresPath}.rollups`);
-  const scoreSurfaces = assertArray<QaMaturityScoreSurface>(
-    scores.surfaces,
-    `${scoresPath}.surfaces`,
-  );
-  const taxonomyIndex = taxonomyCategoryIndex(taxonomy);
-  if (scores.counts.active_surfaces !== scoreSurfaces.length) {
-    throw new Error(
-      `${scoresPath}.counts.active_surfaces must match score surface count (${scoreSurfaces.length})`,
-    );
-  }
-  if (scores.counts.active_surfaces !== taxonomyIndex.active.length) {
-    throw new Error(
-      `${scoresPath}.counts.active_surfaces must match active taxonomy surfaces (${taxonomyIndex.active.length})`,
-    );
-  }
-
-  const taxonomyCategoryCount = taxonomyIndex.active.reduce(
-    (count, surface) => count + surface.categories.length,
-    0,
-  );
-  if (scores.counts.category_scores !== taxonomyCategoryCount) {
-    throw new Error(
-      `${scoresPath}.counts.category_scores must match active taxonomy categories (${taxonomyCategoryCount})`,
-    );
-  }
-
-  const seenSurfaceIds = new Set<string>();
-  const allScoreCategories: QaMaturityScoreCategory[] = [];
-  for (const [surfaceIndex, scoreSurface] of scoreSurfaces.entries()) {
-    assertObject(scoreSurface, `${scoresPath}.surfaces[${surfaceIndex}]`);
-    const surfaceId = assertString(scoreSurface.id, `${scoresPath}.surfaces[${surfaceIndex}].id`);
-    if (seenSurfaceIds.has(surfaceId)) {
-      throw new Error(`${scoresPath}: duplicate surface id ${surfaceId}`);
-    }
-    seenSurfaceIds.add(surfaceId);
-
-    const taxonomySurface = taxonomyIndex.surfaces.get(surfaceId);
-    if (!taxonomySurface) {
-      warnings.push(`${scoresPath}: surface ${surfaceId} is not an active taxonomy surface`);
-    }
-    assertString(scoreSurface.name, `${scoresPath}.${surfaceId}.name`);
-
-    const categories = assertArray<QaMaturityScoreCategory>(
-      scoreSurface.categories,
-      `${scoresPath}.${surfaceId}.categories`,
-    );
-    if (taxonomySurface && categories.length !== taxonomySurface.categories.size) {
-      throw new Error(
-        `${scoresPath}.${surfaceId}.categories must match taxonomy category count (${taxonomySurface.categories.size})`,
-      );
-    }
-
-    const seenCategoryNames = new Set<string>();
-    let supportedCategories = 0;
-    for (const [categoryIndex, scoreCategory] of categories.entries()) {
-      assertObject(scoreCategory, `${scoresPath}.${surfaceId}.categories[${categoryIndex}]`);
-      const categoryName = assertString(
-        scoreCategory.name,
-        `${scoresPath}.${surfaceId}.categories[${categoryIndex}].name`,
-      );
-      if (seenCategoryNames.has(categoryName)) {
-        throw new Error(`${scoresPath}.${surfaceId}: duplicate category name ${categoryName}`);
-      }
-      seenCategoryNames.add(categoryName);
-      const lts = scoreCategory.lts;
-      assertObject(lts, `${scoresPath}.${surfaceId}.${categoryName}.lts`);
-      if (typeof lts.supported !== "boolean") {
-        throw new Error(`${scoresPath}.${surfaceId}.${categoryName}.lts.supported must be boolean`);
-      }
-      if (typeof lts.human_override !== "boolean") {
-        throw new Error(
-          `${scoresPath}.${surfaceId}.${categoryName}.lts.human_override must be boolean`,
-        );
-      }
-
-      const taxonomyCategory = taxonomySurface?.categories.get(categoryName);
-      if (taxonomySurface && !taxonomyCategory) {
-        warnings.push(
-          `${scoresPath}.${surfaceId}: score category ${categoryName} is not in taxonomy`,
-        );
-      }
-      if (taxonomyCategory) {
-        if (lts.human_override !== Boolean(taxonomyCategory.human_lts_override)) {
-          throw new Error(
-            `${scoresPath}.${surfaceId}.${categoryName}.lts.human_override must match taxonomy human_lts_override`,
-          );
-        }
-        const expectedSupported = expectedLtsSupported(scoreCategory, taxonomyCategory);
-        if (lts.supported !== expectedSupported) {
-          throw new Error(
-            `${scoresPath}.${surfaceId}.${categoryName}.lts.supported must match score threshold or taxonomy human_lts_override`,
-          );
-        }
-      }
-      if (lts.supported) {
-        supportedCategories += 1;
-      }
-      allScoreCategories.push(scoreCategory);
-    }
-
-    const surfaceLts = scoreSurface.lts;
-    assertObject(surfaceLts, `${scoresPath}.${surfaceId}.lts`);
-    if (surfaceLts.supported_categories !== supportedCategories) {
-      throw new Error(
-        `${scoresPath}.${surfaceId}.lts.supported_categories must equal supported category count (${supportedCategories})`,
-      );
-    }
-    if (surfaceLts.total_categories !== categories.length) {
-      throw new Error(
-        `${scoresPath}.${surfaceId}.lts.total_categories must equal score category count (${categories.length})`,
-      );
-    }
-    const expectedStatus = expectedSurfaceLtsStatus(supportedCategories, categories.length);
-    if (surfaceLts.status !== expectedStatus) {
-      throw new Error(`${scoresPath}.${surfaceId}.lts.status must be ${expectedStatus}`);
-    }
-  }
-
-  for (const surfaceId of taxonomyIndex.surfaces.keys()) {
-    if (!seenSurfaceIds.has(surfaceId)) {
-      warnings.push(`${scoresPath}: missing active taxonomy surface ${surfaceId}`);
-    }
-  }
-  if (scores.counts.category_scores !== allScoreCategories.length) {
-    throw new Error(
-      `${scoresPath}.counts.category_scores must match score category count (${allScoreCategories.length})`,
-    );
-  }
-
-  const rollups = scores.rollups;
-  for (const key of QA_MATURITY_SCORE_KEYS) {
-    const expectedSurfaceAverage = averageScore(scoreSurfaces, key);
-    if (rollups.surface_average[key].score !== expectedSurfaceAverage) {
-      throw new Error(
-        `${scoresPath}.rollups.surface_average.${key}.score must be ${expectedSurfaceAverage}`,
-      );
-    }
-    const expectedCategoryAverage = averageCategoryScore(allScoreCategories, key);
-    if (rollups.category_average[key].score !== expectedCategoryAverage) {
-      throw new Error(
-        `${scoresPath}.rollups.category_average.${key}.score must be ${expectedCategoryAverage}`,
-      );
-    }
-  }
-  return warnings;
-}
-
 function familyTitle(value: string): string {
   const titles: Record<string, string> = {
     "platform-app": "Platform",
@@ -537,8 +181,8 @@ function scoreText(value?: QaMaturityScoreObject): string {
 }
 
 function levelText(
-  surface: QaMaturityScoreSurface | TaxonomySurface,
-  taxonomyLevels: Map<string, TaxonomyLevel>,
+  surface: QaMaturityScoreSurface | QaMaturityTaxonomySurface,
+  taxonomyLevels: Map<string, QaMaturityTaxonomyLevel>,
 ): string {
   const scoreLevel = surface.level;
   if (scoreLevel && typeof scoreLevel === "object") {
@@ -595,49 +239,14 @@ function renderMetadataComment({
   ];
 }
 
-function activeSurfaces(taxonomy: Taxonomy): TaxonomySurface[] {
-  return taxonomy.surfaces.filter((surface) => !surface.archived);
-}
-
 function surfaceScoreMap(scores: QaMaturityScores): Map<string, QaMaturityScoreSurface> {
   return new Map(scores.surfaces.map((surface) => [surface.id, surface]));
 }
 
-function taxonomyLevelMap(taxonomy: Taxonomy): Map<string, TaxonomyLevel> {
-  return new Map(taxonomy.levels.map((level) => [level.id, level]));
-}
-
 function categoryScoreMap(
   scoreSurface?: QaMaturityScoreSurface,
-): Map<string, QaMaturityScoreCategory> {
+): Map<string, QaMaturityScoreSurface["categories"][number]> {
   return new Map((scoreSurface?.categories ?? []).map((category) => [category.name, category]));
-}
-
-function familyOrder(surfaces: TaxonomySurface[]): string[] {
-  const seen: string[] = [];
-  for (const surface of surfaces) {
-    if (!seen.includes(surface.family)) {
-      seen.push(surface.family);
-    }
-  }
-  return seen;
-}
-
-function categoryProfiles(taxonomy: Taxonomy): Map<string, string[]> {
-  const profilesByCategory = new Map<string, string[]>();
-  for (const profile of taxonomy.profiles ?? []) {
-    const categoryIds = profile.includeAllCategories
-      ? activeSurfaces(taxonomy).flatMap((surface) =>
-          surface.categories.map((category) => `${surface.id}.${category.id}`),
-        )
-      : (profile.categoryIds ?? []);
-    for (const categoryId of categoryIds) {
-      const profiles = profilesByCategory.get(categoryId) ?? [];
-      profiles.push(profile.id);
-      profilesByCategory.set(categoryId, profiles);
-    }
-  }
-  return profilesByCategory;
 }
 
 function collectQaEvidenceFiles(root?: string): string[] {
@@ -671,7 +280,7 @@ function numberText(value: unknown): string {
   return Number.isFinite(value) ? String(value) : "";
 }
 
-function countText(counts?: CountSummary): string {
+function countText(counts?: QaEvidenceScorecardJson["categories"]): string {
   if (!counts || typeof counts !== "object") {
     return "";
   }
@@ -849,9 +458,9 @@ function renderMaturityScorecard({
   evidenceWarnings,
   staticAssetsPath,
 }: RenderMaturityScorecardInputs): string {
-  const levels = taxonomyLevelMap(taxonomy);
+  const levels = qaMaturityTaxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
-  const surfaces = activeSurfaces(taxonomy);
+  const surfaces = activeQaMaturityTaxonomySurfaces(taxonomy);
   const lines = [
     ...frontmatter(
       "Maturity scorecard",
@@ -902,10 +511,10 @@ function renderMaturityScorecard({
 }
 
 function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "scores">): string {
-  const levels = taxonomyLevelMap(taxonomy);
+  const levels = qaMaturityTaxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
-  const profilesByCategory = categoryProfiles(taxonomy);
-  const surfaces = activeSurfaces(taxonomy);
+  const profilesByCategory = qaMaturityCategoryProfiles(taxonomy);
+  const surfaces = activeQaMaturityTaxonomySurfaces(taxonomy);
   const lines = [
     ...frontmatter(
       "Maturity taxonomy",
@@ -940,7 +549,7 @@ function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "s
   }
 
   lines.push("", "## Surface taxonomy", "");
-  for (const family of familyOrder(surfaces)) {
+  for (const family of qaMaturityFamilyOrder(surfaces)) {
     lines.push(`### ${familyTitle(family)}`, "");
     for (const surface of surfaces.filter((candidate) => candidate.family === family)) {
       const scoreSurface = scoreSurfaces.get(surface.id);
@@ -979,7 +588,7 @@ function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "s
 }
 
 function renderTaxonomyOutline({ taxonomy }: Pick<RenderInputs, "taxonomy">): string {
-  const surfaces = activeSurfaces(taxonomy);
+  const surfaces = activeQaMaturityTaxonomySurfaces(taxonomy);
   const lines = [
     ...frontmatter(
       "Maturity taxonomy outline",
@@ -989,7 +598,7 @@ function renderTaxonomyOutline({ taxonomy }: Pick<RenderInputs, "taxonomy">): st
     "",
     ...generatedNotice(),
   ];
-  for (const family of familyOrder(surfaces)) {
+  for (const family of qaMaturityFamilyOrder(surfaces)) {
     lines.push(`## ${familyTitle(family)}`, "");
     for (const surface of surfaces.filter((candidate) => candidate.family === family)) {
       lines.push(`### ${surface.name}`, "", `- Surface id: ${yamlCode(surface.id)}`, "");
@@ -1035,10 +644,13 @@ function main(): void {
   const taxonomyPath = path.normalize(args.taxonomy);
   const scoresPath = path.normalize(args.scores);
   const outputDir = path.normalize(args.outputDir);
-  const taxonomy = readYaml(taxonomyPath) as Taxonomy;
+  const taxonomy = parseQaMaturityTaxonomy(readYaml(taxonomyPath), taxonomyPath);
   const scores = parseQaMaturityScores(readYaml(scoresPath), scoresPath);
-  validateTaxonomy(taxonomy, taxonomyPath);
-  const scoreWarnings = validateScores(scores, scoresPath, taxonomy);
+  const scoreWarnings = validateQaMaturityScoresAgainstTaxonomy({
+    scores,
+    taxonomy,
+    scoresPath,
+  });
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
   const evidenceWarnings = evidenceScorecardWarnings(evidenceSummaries);
   const inputWarnings = [...scoreWarnings, ...evidenceWarnings];
