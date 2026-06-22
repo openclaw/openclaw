@@ -76,6 +76,7 @@ import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
+import { loadTelegramSendModule } from "./send-runtime.js";
 import {
   resolveTelegramSessionConversation,
   resolveTelegramSessionTarget,
@@ -91,8 +92,7 @@ import {
 import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { detectTelegramLegacyStateMigrations } from "./state-migrations.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
-import { parseTelegramTarget } from "./targets.js";
-import { loadTelegramSendModule } from "./send-runtime.js";
+import { parseTelegramTarget, telegramContextTargetsMatch } from "./targets.js";
 import {
   createTelegramThreadBindingManager,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
@@ -1184,6 +1184,8 @@ export const telegramPlugin = createChatChannelPlugin({
     topLevelReplyToMode: "telegram",
     buildToolContext: (params) => buildTelegramThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext }) => resolveTelegramAutoThreadId({ to, toolContext }),
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      telegramContextTargetsMatch(target, toolContext),
     resolveCurrentChannelId: ({ to, threadId }) => {
       if (threadId == null) {
         return to;
