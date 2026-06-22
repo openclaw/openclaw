@@ -461,6 +461,7 @@ describe("MatrixCryptoBootstrapper", () => {
       crypto,
       expect.objectContaining({
         allowSecretStorageRecreateWithoutRecoveryKey: true,
+        forceNewSecretStorage: true,
       }),
     );
     // SSSS is bootstrapped again after cross-signing to pick up the newly published keys.
@@ -488,6 +489,7 @@ describe("MatrixCryptoBootstrapper", () => {
       crypto,
       expect.objectContaining({
         allowSecretStorageRecreateWithoutRecoveryKey: true,
+        forceNewSecretStorage: true,
       }),
     );
     expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).toHaveBeenNthCalledWith(

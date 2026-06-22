@@ -67,6 +67,7 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         allowSecretStorageRecreateWithoutRecoveryKey: forceReset
           ? true
           : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+        forceNewSecretStorage: forceReset,
       });
     }
 
@@ -346,13 +347,19 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     options: {
       strict: boolean;
       allowSecretStorageRecreateWithoutRecoveryKey: boolean;
+      forceNewSecretStorage?: boolean;
     },
   ): Promise<void> {
     try {
-      await this.deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(crypto, {
+      const secretStorageOptions = {
         allowSecretStorageRecreateWithoutRecoveryKey:
           options.allowSecretStorageRecreateWithoutRecoveryKey,
-      });
+        ...(options.forceNewSecretStorage ? { forceNewSecretStorage: true } : {}),
+      };
+      await this.deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey(
+        crypto,
+        secretStorageOptions,
+      );
       LogService.info("MatrixClientLite", "Secret storage bootstrap complete");
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to bootstrap secret storage:", err);
