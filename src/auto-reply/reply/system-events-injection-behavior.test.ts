@@ -115,6 +115,7 @@ describeLive("injected system-event severity (live)", () => {
       name: "OpenAI severity probe",
       api: "openai-responses",
       provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
