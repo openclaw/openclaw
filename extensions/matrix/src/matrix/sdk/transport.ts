@@ -364,6 +364,8 @@ export async function performMatrixRequest(params: {
           `Matrix JSON response exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
         ),
       chunkTimeoutMs: params.readIdleTimeoutMs,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Matrix JSON response stalled: no data received for ${chunkTimeoutMs}ms`),
     });
     return {
       response,

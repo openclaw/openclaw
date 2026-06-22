@@ -261,7 +261,7 @@ describe("performMatrixRequest", () => {
     );
   });
 
-  it("uses the configured idle-timeout error for stalled JSON downloads", async () => {
+  it("uses the JSON-specific idle-timeout error for stalled JSON downloads", async () => {
     vi.useFakeTimers();
     try {
       const stream = new ReadableStream<Uint8Array>({
@@ -291,7 +291,7 @@ describe("performMatrixRequest", () => {
       });
 
       const rejection = expect(requestPromise).rejects.toThrow(
-        "Matrix media download stalled: no data received for 50ms",
+        "Matrix JSON response stalled: no data received for 50ms",
       );
       await vi.advanceTimersByTimeAsync(60);
       await rejection;
