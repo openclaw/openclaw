@@ -1252,11 +1252,21 @@ function convertMessages(
             omittedThinking = true;
             continue;
           }
-          // Redacted thinking: pass the opaque payload back as redacted_thinking
+          // Redacted thinking: pass the opaque payload back as redacted_thinking.
+          // The encrypted payload lives in thinkingSignature; if it is missing or
+          // blank (aborted stream or corrupted persistence) Anthropic rejects the
+          // replay with an invalid-signature error and the session bricks on every
+          // retry. Drop the unreplayable block instead, mirroring the empty-signature
+          // guard for non-redacted thinking below.
           if (block.redacted) {
+            const redactedData = block.thinkingSignature?.trim();
+            if (!redactedData) {
+              omittedThinking = true;
+              continue;
+            }
             blocks.push({
               type: "redacted_thinking",
-              data: block.thinkingSignature!,
+              data: redactedData,
             });
             continue;
           }

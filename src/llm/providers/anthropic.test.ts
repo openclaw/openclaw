@@ -385,6 +385,150 @@ describe("Anthropic provider", () => {
   });
 
   it.each([
+    {
+      label: "alongside visible text",
+      content: [
+        {
+          type: "thinking" as const,
+          thinking: "[Reasoning redacted]",
+          thinkingSignature: "",
+          redacted: true,
+        },
+        { type: "text" as const, text: "Visible answer." },
+      ],
+      // Redacted block dropped; the visible text keeps the turn intact.
+      expectedContent: [{ type: "text", text: "Visible answer." }],
+    },
+    {
+      label: "as the only block",
+      content: [
+        {
+          type: "thinking" as const,
+          thinking: "[Reasoning redacted]",
+          thinkingSignature: "   ",
+          redacted: true,
+        },
+      ],
+      // Redacted block dropped; the turn falls back to neutral placeholder text
+      // so the assistant turn survives provider converters that drop blank turns.
+      expectedContent: [{ type: "text", text: "[assistant reasoning omitted]" }],
+    },
+  ])(
+    "drops a redacted thinking block with a blank signature ($label) instead of replaying invalid data",
+    async ({ content, expectedContent }) => {
+      let capturedPayload: unknown;
+      const stream = streamAnthropic(
+        makeAnthropicModel(),
+        {
+          messages: [
+            { role: "user", content: "hello", timestamp: 0 },
+            {
+              role: "assistant",
+              provider: "anthropic",
+              api: "anthropic-messages",
+              model: "claude-sonnet-4-6",
+              stopReason: "stop",
+              timestamp: 0,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              content,
+            },
+            { role: "user", content: "again", timestamp: 0 },
+          ],
+        },
+        {
+          apiKey: "sk-ant-provider",
+          thinkingEnabled: true,
+          onPayload: (payload) => {
+            capturedPayload = payload;
+            throw new Error("stop before network");
+          },
+        },
+      );
+
+      await stream.result();
+
+      const payload = capturedPayload as {
+        messages: Array<{ role: string; content: unknown[] }>;
+      };
+      const assistantContent = payload.messages.find(
+        (message) => message.role === "assistant",
+      )?.content;
+      expect(assistantContent).toEqual(expectedContent);
+      // No redacted_thinking block is replayed with an empty/blank `data` payload.
+      expect(
+        (assistantContent ?? []).some(
+          (block) =>
+            (block as { type?: unknown }).type === "redacted_thinking" &&
+            !((block as { data?: unknown }).data as string)?.trim(),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("replays a redacted thinking block that still carries its opaque signature", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel(),
+      {
+        messages: [
+          { role: "user", content: "hello", timestamp: 0 },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "stop",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [
+              {
+                type: "thinking",
+                thinking: "[Reasoning redacted]",
+                thinkingSignature: "opaque_keep",
+                redacted: true,
+              },
+              { type: "text", text: "Visible answer." },
+            ],
+          },
+          { role: "user", content: "again", timestamp: 0 },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        thinkingEnabled: true,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: unknown[] }>;
+    };
+    expect(payload.messages.find((message) => message.role === "assistant")?.content).toEqual([
+      { type: "redacted_thinking", data: "opaque_keep" },
+      { type: "text", text: "Visible answer." },
+    ]);
+  });
+
+  it.each([
     ["anthropic", "sk-ant-provider"],
     ["anthropic-vertex", "vertex-token"],
   ])("surfaces structured Anthropic streaming refusals for %s", async (provider, apiKey) => {
