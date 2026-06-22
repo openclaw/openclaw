@@ -524,6 +524,7 @@ describe("buildChatItems", () => {
         text: "Visible reply",
         startedAt: 1,
         isStreaming: true,
+        source: "final",
       },
     ]);
   });

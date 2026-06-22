@@ -246,6 +246,26 @@ img.chat-avatar {
   padding-right: 70px;
 }
 
+.chat-message-source-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  margin: 0 0 6px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--secondary) 54%, transparent);
+  color: color-mix(in srgb, var(--text) 62%, var(--muted) 38%);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+.chat-bubble--tool-shell > .chat-message-source-label {
+  margin: 0 0 6px 1px;
+}
+
 .chat-duplicate-count {
   display: inline-flex;
   align-items: center;
@@ -283,7 +303,9 @@ img.chat-avatar {
   pointer-events: auto;
 }
 
-@media (hover: none), (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+@media (hover: none),
+  (max-width: 768px),
+  (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-bubble-actions {
     opacity: 1;
     pointer-events: auto;
