@@ -1,4 +1,21 @@
 /** Base persisted install record shared by plugin and skill install tracking. */
+export type InstallIntentProvenance =
+  | "explicit_user_pin"
+  | "prior_default_intent_system_pin"
+  | "unknown";
+
+export type InstallIntentProvenanceMigration = {
+  id: "stable-plugin-install-intent-v1";
+  source: "doctor:stable-plugin-install-intent";
+  migratedAt: string;
+  decision: InstallIntentProvenance;
+  evidence?: {
+    spec?: string;
+    resolvedSpec?: string;
+    trustedSourceLinkedOfficialInstall?: boolean;
+  };
+};
+
 export type InstallRecordBase = {
   source: "npm" | "archive" | "path" | "clawhub" | "git";
   spec?: string;
@@ -21,6 +38,8 @@ export type InstallRecordBase = {
   npmIntegrity?: string;
   npmShasum?: string;
   npmTarballName?: string;
+  installIntentProvenance?: InstallIntentProvenance;
+  installIntentProvenanceMigration?: InstallIntentProvenanceMigration;
   clawpackSha256?: string;
   clawpackSpecVersion?: number;
   clawpackManifestSha256?: string;

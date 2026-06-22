@@ -4,6 +4,7 @@
 import { pathToFileURL } from "node:url";
 import {
   collectChangedExtensionIdsFromGitRange,
+  collectPluginReleasePlan,
   collectPublishablePluginPackages,
   assertPluginReleaseVersionFloors,
   parsePluginReleaseArgs,
@@ -12,13 +13,40 @@ import {
 } from "./lib/plugin-npm-release.ts";
 
 export function runPluginNpmReleaseCheck(argv: string[]) {
-  const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
+  const {
+    selection,
+    selectionMode,
+    baseRef,
+    headRef,
+    releaseClass,
+    releaseSelector,
+    stableLine,
+    stablePluginManifestPath,
+    stablePluginManifestSha256,
+    packageAcceptanceRunId,
+  } = parsePluginReleaseArgs(argv);
   const changedExtensionIds =
     baseRef && headRef
       ? collectChangedExtensionIdsFromGitRange({
           gitRange: { baseRef, headRef },
         })
       : [];
+  if (selectionMode === "stable-manifest") {
+    const plan = collectPluginReleasePlan({
+      selection,
+      selectionMode,
+      releaseClass,
+      releaseSelector,
+      stableLine,
+      stablePluginManifestPath,
+      stablePluginManifestSha256,
+      packageAcceptanceRunId,
+    });
+    console.log(
+      `plugin-npm-release-check: stable manifest ${plan.stablePluginSupportSha256} selects ${plan.packages.join(", ")}.`,
+    );
+    return;
+  }
   const publishable = collectPublishablePluginPackages(".", {
     extensionIds:
       selectionMode === "all-publishable" || !(baseRef && headRef)

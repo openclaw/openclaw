@@ -54,8 +54,8 @@ export type ParsedReleaseTag = {
 
 export type NpmPublishPlan = {
   channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta";
-  mirrorDistTags: ("latest" | "alpha" | "beta")[];
+  publishTag: "latest" | "stable" | "alpha" | "beta";
+  mirrorDistTags: ("latest" | "stable" | "alpha" | "beta")[];
 };
 
 export type NpmDistTagMirrorAuth = {
@@ -207,21 +207,17 @@ export function compareReleaseVersions(left: string, right: string): number | nu
 export function resolveNpmPublishPlan(
   version: string,
   _currentBetaVersion?: string | null,
-  requestedPublishTag?: "latest" | "alpha" | "beta" | null,
+  requestedPublishTag?: "latest" | "stable" | "alpha" | "beta" | null,
 ): NpmPublishPlan {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
 
-  const publishTag =
-    requestedPublishTag?.trim() === "latest"
-      ? "latest"
-      : requestedPublishTag?.trim() === "alpha"
-        ? "alpha"
-        : "beta";
+  const requestedTag = requestedPublishTag?.trim();
 
   if (parsedVersion.channel === "alpha") {
+    const publishTag = requestedTag ?? "alpha";
     if (publishTag !== "alpha") {
       throw new Error("Alpha prereleases must publish to the alpha dist-tag.");
     }
@@ -233,6 +229,7 @@ export function resolveNpmPublishPlan(
   }
 
   if (parsedVersion.channel === "beta") {
+    const publishTag = requestedTag ?? "beta";
     if (publishTag !== "beta") {
       throw new Error("Beta prereleases must publish to the beta dist-tag.");
     }
@@ -241,6 +238,11 @@ export function resolveNpmPublishPlan(
       publishTag: "beta",
       mirrorDistTags: [],
     };
+  }
+
+  const publishTag = requestedTag ?? "stable";
+  if (publishTag !== "stable") {
+    throw new Error("Stable releases must publish to the stable dist-tag.");
   }
 
   return {

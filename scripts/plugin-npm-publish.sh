@@ -40,6 +40,14 @@ fi
 package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_dir}")"
 package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
 current_beta_version="$(npm view "${package_name}" dist-tags.beta 2>/dev/null || true)"
+release_selector="${OPENCLAW_PLUGIN_NPM_RELEASE_SELECTOR:-daily}"
+release_class="${OPENCLAW_PLUGIN_NPM_RELEASE_CLASS:-daily}"
+expected_package_name="${OPENCLAW_PLUGIN_NPM_EXPECTED_PACKAGE_NAME:-}"
+expected_package_version="${OPENCLAW_PLUGIN_NPM_EXPECTED_PACKAGE_VERSION:-}"
+expected_npm_tag="${OPENCLAW_PLUGIN_NPM_EXPECTED_NPM_TAG:-}"
+stable_manifest_sha256="${OPENCLAW_PLUGIN_NPM_STABLE_MANIFEST_SHA256:-}"
+stable_line="${OPENCLAW_PLUGIN_NPM_STABLE_LINE:-}"
+package_acceptance_run_id="${OPENCLAW_PLUGIN_NPM_PACKAGE_ACCEPTANCE_RUN_ID:-}"
 log() {
   if [[ "${mode}" == "--pack-dry-run" ]]; then
     printf '%s\n' "$*" >&2
@@ -82,6 +90,51 @@ mirror_auth_source="$(printf '%s\n' "${publish_plan_output}" | sed -n '4p')"
 mirror_auth_requirement="$(printf '%s\n' "${publish_plan_output}" | sed -n '5p')"
 mirror_auth_source="${mirror_auth_source:-none}"
 mirror_auth_requirement="${mirror_auth_requirement:-optional}"
+
+if [[ "${release_selector}" == "stable" ]]; then
+  if [[ "${release_class}" != "stable-base" && "${release_class}" != "stable-patch" ]]; then
+    echo "Stable plugin npm publish requires OPENCLAW_PLUGIN_NPM_RELEASE_CLASS=stable-base or stable-patch." >&2
+    exit 1
+  fi
+  if [[ -z "${stable_line// }" ]]; then
+    echo "Stable plugin npm publish requires OPENCLAW_PLUGIN_NPM_STABLE_LINE." >&2
+    exit 1
+  fi
+  if [[ ! "${stable_manifest_sha256}" =~ ^[a-f0-9]{64}$ ]]; then
+    echo "Stable plugin npm publish requires OPENCLAW_PLUGIN_NPM_STABLE_MANIFEST_SHA256 as a lowercase SHA-256 digest." >&2
+    exit 1
+  fi
+  if [[ -z "${package_acceptance_run_id// }" ]]; then
+    echo "Stable plugin npm publish requires OPENCLAW_PLUGIN_NPM_PACKAGE_ACCEPTANCE_RUN_ID." >&2
+    exit 1
+  fi
+  if [[ "${expected_package_name}" != "${package_name}" ]]; then
+    echo "Stable plugin npm publish package mismatch: expected ${expected_package_name:-<missing>}, got ${package_name}." >&2
+    exit 1
+  fi
+  if [[ "${expected_package_version}" != "${package_version}" ]]; then
+    echo "Stable plugin npm publish version mismatch for ${package_name}: expected ${expected_package_version:-<missing>}, got ${package_version}." >&2
+    exit 1
+  fi
+  if [[ "${expected_npm_tag}" != "stable" ]]; then
+    echo "Stable plugin npm publish requires OPENCLAW_PLUGIN_NPM_EXPECTED_NPM_TAG=stable; refusing ${expected_npm_tag:-<missing>}." >&2
+    exit 1
+  fi
+  if [[ "${publish_tag}" == "latest" || "${publish_tag}" == "daily" ]]; then
+    log "Generic final-version npm plan resolved ${publish_tag}; stable manifest mode overrides it with ${expected_npm_tag}."
+  fi
+  publish_tag="${expected_npm_tag}"
+  mirror_dist_tags_csv=""
+elif [[ "${release_selector}" == "daily" ]]; then
+  if [[ -n "${expected_package_name}${expected_package_version}${expected_npm_tag}${stable_manifest_sha256}${stable_line}${package_acceptance_run_id}" ]]; then
+    echo "Stable plugin npm expectation inputs require OPENCLAW_PLUGIN_NPM_RELEASE_SELECTOR=stable." >&2
+    exit 1
+  fi
+else
+  echo "Unknown OPENCLAW_PLUGIN_NPM_RELEASE_SELECTOR: ${release_selector}. Expected daily or stable." >&2
+  exit 1
+fi
+
 publish_cmd=(npm publish --access public --tag "${publish_tag}")
 if [[ "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "0" && "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "false" ]]; then
   publish_cmd+=(--provenance)

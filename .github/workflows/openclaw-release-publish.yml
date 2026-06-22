@@ -35,6 +35,7 @@ on:
         options:
           - alpha
           - beta
+          - stable
           - latest
       plugin_publish_scope:
         description: Plugin publish scope to run before OpenClaw publish
@@ -44,8 +45,35 @@ on:
         options:
           - selected
           - all-publishable
+          - stable-manifest
       plugins:
         description: Comma-separated plugin package names when plugin_publish_scope=selected
+        required: false
+        type: string
+      release_class:
+        description: Release class for selector-aware plugin publishes
+        required: true
+        default: daily
+        type: choice
+        options:
+          - daily
+          - stable-base
+          - stable-patch
+      stable_line:
+        description: Stable line month for stable-manifest plugin publish, for example 2026.6
+        required: false
+        type: string
+      stable_plugin_manifest_sha256:
+        description: SHA-256 digest for release/stable-plugin-support.json
+        required: false
+        type: string
+      stable_plugin_manifest_artifact:
+        description: Artifact name to upload and pass to Plugin NPM Release for stable manifest mode
+        required: false
+        default: stable-plugin-support
+        type: string
+      package_acceptance_run_id:
+        description: Successful Package Acceptance stable-plugin run id matching stable_plugin_manifest_sha256
         required: false
         type: string
       publish_openclaw_npm:
@@ -101,6 +129,10 @@ jobs:
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
+          RELEASE_CLASS: ${{ inputs.release_class }}
+          STABLE_LINE: ${{ inputs.stable_line }}
+          STABLE_PLUGIN_MANIFEST_SHA256: ${{ inputs.stable_plugin_manifest_sha256 }}
+          PACKAGE_ACCEPTANCE_RUN_ID: ${{ inputs.package_acceptance_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           WORKFLOW_REF: ${{ github.ref }}
@@ -126,9 +158,9 @@ jobs:
             echo "publish_openclaw_npm=true requires full_release_validation_run_id." >&2
             exit 1
           fi
-          stable_release=true
-          if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-            stable_release=false
+          stable_release=false
+          if [[ "${RELEASE_CLASS}" == "stable-base" || "${RELEASE_CLASS}" == "stable-patch" ]]; then
+            stable_release=true
           fi
           if [[ -n "${WINDOWS_NODE_TAG}" && ! "${WINDOWS_NODE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             echo "windows_node_tag must be an explicit openclaw-windows-node release tag, not latest: ${WINDOWS_NODE_TAG}" >&2
@@ -146,20 +178,57 @@ jobs:
           if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             tideclaw_alpha_publish=true
           fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WORKFLOW_REF}" != "refs/heads/main" && ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && "${tideclaw_alpha_publish}" != "true" ]]; then
-            echo "publish_openclaw_npm=true requires dispatching this workflow from main, release/YYYY.M.PATCH, or a Tideclaw alpha branch for alpha prereleases." >&2
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WORKFLOW_REF}" != "refs/heads/main" && ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && ! "${WORKFLOW_REF}" =~ ^refs/heads/stable/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ && "${tideclaw_alpha_publish}" != "true" ]]; then
+            echo "publish_openclaw_npm=true requires dispatching this workflow from main, release/YYYY.M.PATCH, stable/YYYY.M.PATCH, or a Tideclaw alpha branch for alpha prereleases." >&2
             exit 1
           fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PLUGIN_PUBLISH_SCOPE}" != "all-publishable" ]]; then
-            echo "publish_openclaw_npm=true requires plugin_publish_scope=all-publishable so every publishable official plugin is released with OpenClaw." >&2
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${stable_release}" == "true" ]]; then
+            if [[ "${RELEASE_NPM_DIST_TAG}" != "stable" ]]; then
+              echo "Stable releases must publish OpenClaw to npm dist-tag stable; latest remains owned by the daily line." >&2
+              exit 1
+            fi
+            if [[ "${PLUGIN_PUBLISH_SCOPE}" != "stable-manifest" ]]; then
+              echo "Stable publish_openclaw_npm=true requires plugin_publish_scope=stable-manifest so only manifest-covered plugins are released before OpenClaw." >&2
+              exit 1
+            fi
+            if [[ "${RELEASE_CLASS}" != "stable-base" && "${RELEASE_CLASS}" != "stable-patch" ]]; then
+              echo "Stable publish requires release_class=stable-base or stable-patch." >&2
+              exit 1
+            fi
+            if [[ -z "${STABLE_LINE// }" ]]; then
+              echo "Stable publish requires stable_line." >&2
+              exit 1
+            fi
+            if [[ ! "${STABLE_PLUGIN_MANIFEST_SHA256#sha256:}" =~ ^[a-f0-9]{64}$ ]]; then
+              echo "Stable publish requires stable_plugin_manifest_sha256 as a lowercase SHA-256 digest." >&2
+              exit 1
+            fi
+            if [[ -z "${PACKAGE_ACCEPTANCE_RUN_ID// }" ]]; then
+              echo "Stable publish requires package_acceptance_run_id for suite_profile=stable-plugin proof." >&2
+              exit 1
+            fi
+          elif [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${PLUGIN_PUBLISH_SCOPE}" != "all-publishable" ]]; then
+            echo "Daily/prerelease publish_openclaw_npm=true requires plugin_publish_scope=all-publishable so every publishable official plugin is released with OpenClaw." >&2
             exit 1
           fi
           if [[ "${PLUGIN_PUBLISH_SCOPE}" == "selected" && -z "${PLUGINS}" ]]; then
             echo "plugin_publish_scope=selected requires plugins." >&2
             exit 1
           fi
-          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "all-publishable" && -n "${PLUGINS}" ]]; then
-            echo "plugin_publish_scope=all-publishable must not include plugins." >&2
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" != "selected" && -n "${PLUGINS}" ]]; then
+            echo "plugins is only valid with plugin_publish_scope=selected." >&2
+            exit 1
+          fi
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" != "stable-manifest" && -n "${STABLE_LINE}${STABLE_PLUGIN_MANIFEST_SHA256}${PACKAGE_ACCEPTANCE_RUN_ID}" ]]; then
+            echo "stable plugin manifest inputs require plugin_publish_scope=stable-manifest." >&2
+            exit 1
+          fi
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" != "stable-manifest" && "${RELEASE_CLASS}" != "daily" ]]; then
+            echo "release_class must be daily unless plugin_publish_scope=stable-manifest." >&2
+            exit 1
+          fi
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" != "stable-manifest" && "${RELEASE_NPM_DIST_TAG}" == "stable" ]]; then
+            echo "npm_dist_tag=stable is only valid with plugin_publish_scope=stable-manifest and release_class=stable-base or stable-patch." >&2
             exit 1
           fi
           case "$RELEASE_PROFILE" in
@@ -414,7 +483,8 @@ jobs:
           set -euo pipefail
           git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
+            '+refs/heads/release/*:refs/remotes/origin/release/*' \
+            '+refs/heads/stable/*:refs/remotes/origin/stable/*'
           if git merge-base --is-ancestor HEAD origin/main; then
             exit 0
           fi
@@ -423,6 +493,11 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          while IFS= read -r stable_ref; do
+            if git merge-base --is-ancestor HEAD "${stable_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/stable)
           if [[ "${RELEASE_TAG}" == *"-alpha."* ]]; then
             if [[ ! "${WORKFLOW_REF_NAME}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
               echo "Alpha publish tags must be dispatched from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
@@ -433,7 +508,7 @@ jobs:
               exit 0
             fi
           fi
-          echo "Release tag must point to a commit reachable from main, release/*, or the matching Tideclaw alpha branch for alpha prereleases." >&2
+          echo "Release tag must point to a commit reachable from main, release/*, stable/*, or the matching Tideclaw alpha branch for alpha prereleases." >&2
           exit 1
 
       - name: Summarize release target
@@ -487,6 +562,15 @@ jobs:
         with:
           install-bun: "false"
 
+      - name: Upload stable plugin manifest artifact
+        if: ${{ inputs.plugin_publish_scope == 'stable-manifest' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ inputs.stable_plugin_manifest_artifact }}
+          path: release/stable-plugin-support.json
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Dispatch publish workflows
         env:
           GH_TOKEN: ${{ github.token }}
@@ -498,6 +582,11 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
+          RELEASE_CLASS: ${{ inputs.release_class }}
+          STABLE_LINE: ${{ inputs.stable_line }}
+          STABLE_PLUGIN_MANIFEST_SHA256: ${{ inputs.stable_plugin_manifest_sha256 }}
+          STABLE_PLUGIN_MANIFEST_ARTIFACT: ${{ inputs.stable_plugin_manifest_artifact }}
+          PACKAGE_ACCEPTANCE_RUN_ID: ${{ inputs.package_acceptance_run_id }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
           WAIT_FOR_CLAWHUB: ${{ inputs.wait_for_clawhub && 'true' || 'false' }}
           PREFLIGHT_ARTIFACT_NAME: ${{ needs.resolve_release_target.outputs.preflight_artifact_name }}
@@ -510,7 +599,7 @@ jobs:
           set -euo pipefail
 
           is_stable_release() {
-            [[ "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
+            [[ "${RELEASE_CLASS}" == "stable-base" || "${RELEASE_CLASS}" == "stable-patch" ]]
           }
 
           dispatch_workflow_at_ref() {
@@ -823,14 +912,19 @@ jobs:
           }
 
           resolve_clawhub_release_plan() {
+            local clawhub_publish_scope
             local -a plan_args
 
+            clawhub_publish_scope="${PLUGIN_PUBLISH_SCOPE}"
+            if [[ "${clawhub_publish_scope}" == "stable-manifest" ]]; then
+              clawhub_publish_scope="all-publishable"
+            fi
             clawhub_plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
             plan_args=(
               --release-tag "${RELEASE_TAG}"
               --release-publish-branch "${CHILD_WORKFLOW_REF}"
               --release-publish-run-id "${GITHUB_RUN_ID}"
-              --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
+              --plugin-publish-scope "${clawhub_publish_scope}"
             )
             if [[ -n "${PLUGINS// }" ]]; then
               plan_args+=(--plugins "${PLUGINS}")
@@ -1286,9 +1380,189 @@ jobs:
           guard_openclaw_npm_not_already_published
           resolve_clawhub_release_plan
 
+          validate_stable_plugin_inputs() {
+            if [[ "${PLUGIN_PUBLISH_SCOPE}" != "stable-manifest" ]]; then
+              return 0
+            fi
+
+            manifest_sha="${STABLE_PLUGIN_MANIFEST_SHA256#sha256:}"
+            actual_sha="$(node --import tsx --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { validateStablePluginSupportManifest } from "./src/plugins/stable-plugin-support.ts";
+
+          const manifest = JSON.parse(readFileSync("release/stable-plugin-support.json", "utf8"));
+          process.stdout.write(
+            validateStablePluginSupportManifest(manifest).stablePluginSupportSha256,
+          );
+          NODE
+            )"
+            if [[ "${actual_sha}" != "${manifest_sha}" ]]; then
+              echo "Stable plugin manifest digest mismatch: expected ${manifest_sha}, got ${actual_sha}." >&2
+              exit 1
+            fi
+            manifest_branch="$(node --import tsx --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { validateStablePluginSupportManifest } from "./src/plugins/stable-plugin-support.ts";
+
+          const manifest = validateStablePluginSupportManifest(
+            JSON.parse(readFileSync("release/stable-plugin-support.json", "utf8")),
+          ).manifest;
+          const branches = [...new Set(manifest.coveredPlugins.map((entry) => entry.targetBranch))];
+          if (branches.length !== 1) {
+            throw new Error("stable plugin manifest must have exactly one covered-plugin target branch");
+          }
+          process.stdout.write(branches[0]);
+          NODE
+            )"
+            if [[ "${GITHUB_REF}" != "refs/heads/${manifest_branch}" ]]; then
+              echo "Stable plugin publish must be dispatched from manifest target branch ${manifest_branch}; got ${GITHUB_REF}." >&2
+              exit 1
+            fi
+            run_json="$(gh run view "${PACKAGE_ACCEPTANCE_RUN_ID}" --repo "$GITHUB_REPOSITORY" --json workflowName,event,status,conclusion,url)"
+            workflow_name="$(printf '%s' "${run_json}" | jq -r '.workflowName')"
+            run_status="$(printf '%s' "${run_json}" | jq -r '.status')"
+            run_conclusion="$(printf '%s' "${run_json}" | jq -r '.conclusion')"
+            run_url="$(printf '%s' "${run_json}" | jq -r '.url')"
+            if [[ "${workflow_name}" != "Package Acceptance" || "${run_status}" != "completed" || "${run_conclusion}" != "success" ]]; then
+              echo "Stable plugin publish requires a successful Package Acceptance run; got ${workflow_name} ${run_status}/${run_conclusion}: ${run_url}" >&2
+              exit 1
+            fi
+            acceptance_dir="${RUNNER_TEMP}/stable-plugin-package-acceptance-proof"
+            rm -rf "${acceptance_dir}"
+            mkdir -p "${acceptance_dir}"
+            acceptance_artifact="stable-plugin-acceptance-${manifest_sha}-proof"
+            if ! gh run download "${PACKAGE_ACCEPTANCE_RUN_ID}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "${acceptance_artifact}" \
+              --dir "${acceptance_dir}"; then
+              echo "Stable plugin publish requires Package Acceptance artifact ${acceptance_artifact} from run ${PACKAGE_ACCEPTANCE_RUN_ID}." >&2
+              exit 1
+            fi
+            acceptance_inputs="$(find "${acceptance_dir}" -name stable-plugin-inputs.json -type f | sort | head -n 1)"
+            if [[ -z "${acceptance_inputs}" ]]; then
+              echo "Package Acceptance artifact ${acceptance_artifact} must contain stable-plugin-inputs.json." >&2
+              find "${acceptance_dir}" -maxdepth 3 -type f -print >&2 || true
+              exit 1
+            fi
+            acceptance_proof="$(find "${acceptance_dir}" -name stable-plugin-acceptance.json -type f | sort | head -n 1)"
+            if [[ -z "${acceptance_proof}" ]]; then
+              echo "Package Acceptance artifact ${acceptance_artifact} must contain stable-plugin-acceptance.json." >&2
+              find "${acceptance_dir}" -maxdepth 3 -type f -print >&2 || true
+              exit 1
+            fi
+            ACCEPTANCE_INPUTS="${acceptance_inputs}" ACCEPTANCE_PROOF="${acceptance_proof}" MANIFEST_SHA="${manifest_sha}" node --import tsx --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { validateStablePluginSupportManifest } from "./src/plugins/stable-plugin-support.ts";
+
+          const manifest = validateStablePluginSupportManifest(
+            JSON.parse(readFileSync("release/stable-plugin-support.json", "utf8")),
+          );
+          const inputs = JSON.parse(readFileSync(process.env.ACCEPTANCE_INPUTS, "utf8"));
+          const proof = JSON.parse(readFileSync(process.env.ACCEPTANCE_PROOF, "utf8"));
+          const expectedSha = process.env.MANIFEST_SHA;
+          const releaseVersion = (process.env.RELEASE_TAG ?? "").replace(/^v/, "");
+          if (manifest.stablePluginSupportSha256 !== expectedSha) {
+            throw new Error("stable manifest digest changed during package acceptance proof validation");
+          }
+          if (inputs.stablePluginSupportSha256 !== expectedSha) {
+            throw new Error("stable-plugin package acceptance artifact digest mismatch");
+          }
+          if (
+            proof.result !== "passed" ||
+            proof.stablePluginSupportSha256 !== expectedSha ||
+            proof.stablePluginInputs?.stablePluginSupportSha256 !== expectedSha
+          ) {
+            throw new Error("stable-plugin package acceptance proof does not bind a passing run to the manifest digest");
+          }
+          if (inputs.packageSpec !== `openclaw@${releaseVersion}`) {
+            throw new Error(`stable-plugin package acceptance artifact packageSpec mismatch: ${inputs.packageSpec}`);
+          }
+          const expectedTargets = manifest.manifest.coveredPlugins
+            .map((entry) => ({
+              packageName: entry.packageName,
+              pluginId: entry.pluginId,
+              targetVersion: entry.targetVersion,
+              targetNpmSpec: entry.targetNpmSpec,
+              stableLine: entry.stableLine,
+              coreTarget: `openclaw@${releaseVersion}`,
+              targetBranch: entry.targetBranch,
+              stablePluginSupportSha256: expectedSha,
+            }))
+            .sort((left, right) => left.packageName.localeCompare(right.packageName));
+          const actualTargets = [...(inputs.stablePluginTargets ?? [])].sort((left, right) =>
+            String(left.packageName ?? "").localeCompare(String(right.packageName ?? "")),
+          );
+          if (JSON.stringify(actualTargets) !== JSON.stringify(expectedTargets)) {
+            throw new Error("stable-plugin package acceptance targets do not match the support manifest");
+          }
+          const expectedSpecs = expectedTargets.map((entry) => entry.targetNpmSpec).sort();
+          const actualSpecs = [...(inputs.stablePluginPackageSpecs ?? [])].sort();
+          if (JSON.stringify(actualSpecs) !== JSON.stringify(expectedSpecs)) {
+            throw new Error("stable-plugin package acceptance package specs do not match the support manifest");
+          }
+          const rawProofTargets = [...(proof.pluginProofs ?? [])];
+          if (
+            rawProofTargets.some(
+              (entry) =>
+                entry.source !== "docker-npm-install" ||
+                entry.installSource !== "tarball" ||
+                entry.result !== "passed" ||
+                entry.observedPackageName !== entry.packageName ||
+                entry.observedVersion !== entry.targetVersion ||
+                !/^[a-f0-9]{64}$/u.test(String(entry.tarballSha256 ?? "")),
+            )
+          ) {
+            throw new Error("stable-plugin package acceptance proof must come from Docker npm installs of exact target package tarballs");
+          }
+          const actualProofTargets = rawProofTargets
+            .map((entry) => ({
+              packageName: entry.packageName,
+              pluginId: entry.pluginId,
+              targetVersion: entry.targetVersion,
+              targetNpmSpec: entry.targetNpmSpec,
+              stableLine: entry.stableLine,
+              stablePluginSupportSha256: entry.stablePluginSupportSha256,
+              result: entry.result,
+            }))
+            .sort((left, right) =>
+              String(left.packageName ?? "").localeCompare(String(right.packageName ?? "")),
+            );
+          const expectedProofTargets = expectedTargets.map((entry) => ({
+            packageName: entry.packageName,
+            pluginId: entry.pluginId,
+            targetVersion: entry.targetVersion,
+            targetNpmSpec: entry.targetNpmSpec,
+            stableLine: entry.stableLine,
+            stablePluginSupportSha256: expectedSha,
+            result: "passed",
+          }));
+          if (JSON.stringify(actualProofTargets) !== JSON.stringify(expectedProofTargets)) {
+            throw new Error("stable-plugin package acceptance proof targets do not match the support manifest");
+          }
+          NODE
+            {
+              echo "- Stable plugin manifest: \`${manifest_sha}\`"
+              echo "- Stable plugin package acceptance: \`${PACKAGE_ACCEPTANCE_RUN_ID}\` (${acceptance_artifact})"
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          validate_stable_plugin_inputs
+
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
+          fi
+          if [[ "${PLUGIN_PUBLISH_SCOPE}" == "stable-manifest" ]]; then
+            npm_args+=(
+              -f release_selector=stable
+              -f release_class="${RELEASE_CLASS}"
+              -f stable_line="${STABLE_LINE}"
+              -f stable_plugin_manifest_sha256="${STABLE_PLUGIN_MANIFEST_SHA256#sha256:}"
+              -f stable_plugin_manifest_artifact="${STABLE_PLUGIN_MANIFEST_ARTIFACT}"
+              -f package_acceptance_run_id="${PACKAGE_ACCEPTANCE_RUN_ID}"
+            )
+          else
+            npm_args+=(-f release_selector=daily -f release_class=daily)
           fi
 
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"

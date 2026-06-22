@@ -53,6 +53,8 @@ export type PluginsLoadConfig = {
 
 export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
   source: InstallRecordBase["source"] | "marketplace";
+  installIntentProvenance?: InstallRecordBase["installIntentProvenance"];
+  installIntentProvenanceMigration?: InstallRecordBase["installIntentProvenanceMigration"];
   marketplaceName?: string;
   marketplaceSource?: string;
   marketplacePlugin?: string;

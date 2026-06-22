@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import checkedInStablePluginSupportManifest from "../release/stable-plugin-support.json" with { type: "json" };
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectChangedExtensionIdsFromPaths,
@@ -11,12 +12,17 @@ import {
   collectPublishablePluginPackageErrors,
   OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
   parsePluginReleaseArgs,
+  parsePluginReleaseClass,
   parsePluginReleaseSelection,
   parsePluginReleaseSelectionMode,
+  parsePluginReleaseSelector,
+  resolveStableManifestPublishablePluginPackages,
+  resolveStablePluginSupportManifest,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-npm-release.ts";
+import { computeStablePluginSupportDigest } from "../src/plugins/stable-plugin-support.ts";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -47,8 +53,16 @@ describe("parsePluginReleaseSelectionMode", () => {
 
   it("rejects unsupported selection modes", () => {
     expect(() => parsePluginReleaseSelectionMode("all")).toThrowError(
-      'Unknown selection mode: all. Expected "selected" or "all-publishable".',
+      'Unknown selection mode: all. Expected "selected", "all-publishable", or "stable-manifest".',
     );
+  });
+});
+
+describe("parsePluginReleaseSelector and parsePluginReleaseClass", () => {
+  it("accepts stable selector inputs", () => {
+    expect(parsePluginReleaseSelector("stable")).toBe("stable");
+    expect(parsePluginReleaseClass("stable-base")).toBe("stable-base");
+    expect(parsePluginReleaseClass("stable-patch")).toBe("stable-patch");
   });
 });
 
@@ -100,9 +114,53 @@ describe("parsePluginReleaseArgs", () => {
     expect(parsePluginReleaseArgs(["--selection-mode", "all-publishable"])).toEqual({
       baseRef: undefined,
       headRef: undefined,
+      packageAcceptanceRunId: undefined,
+      releaseClass: "daily",
+      releaseSelector: "daily",
       selectionMode: "all-publishable",
       selection: [],
+      stableLine: undefined,
+      stablePluginManifestPath: undefined,
+      stablePluginManifestSha256: undefined,
       pluginsFlagProvided: false,
+    });
+  });
+
+  it("requires stable manifest proof inputs for stable selector mode", () => {
+    expect(() =>
+      parsePluginReleaseArgs([
+        "--selection-mode",
+        "stable-manifest",
+        "--release-selector",
+        "stable",
+      ]),
+    ).toThrowError("`--selection-mode stable-manifest` requires `--stable-line`.");
+
+    expect(
+      parsePluginReleaseArgs([
+        "--selection-mode",
+        "stable-manifest",
+        "--release-selector",
+        "stable",
+        "--release-class",
+        "stable-base",
+        "--stable-line",
+        "2026.6",
+        "--stable-plugin-manifest",
+        "release/stable-plugin-support.json",
+        "--stable-plugin-manifest-sha256",
+        "a".repeat(64),
+        "--package-acceptance-run-id",
+        "123",
+      ]),
+    ).toMatchObject({
+      selectionMode: "stable-manifest",
+      releaseSelector: "stable",
+      releaseClass: "stable-base",
+      stableLine: "2026.6",
+      stablePluginManifestPath: "release/stable-plugin-support.json",
+      stablePluginManifestSha256: "a".repeat(64),
+      packageAcceptanceRunId: "123",
     });
   });
 });
@@ -519,6 +577,118 @@ describe("collectPublishablePluginPackages", () => {
         version: "2026.4.10-alpha.1",
       },
     ]);
+  });
+});
+
+describe("stable plugin support manifest release planning", () => {
+  function writeStableManifest(repoDir: string) {
+    const manifestPath = join(repoDir, "stable-plugin-support.json");
+    const manifest = JSON.parse(JSON.stringify(checkedInStablePluginSupportManifest));
+    const text = `${JSON.stringify(manifest, null, 2)}\n`;
+    writeFileSync(manifestPath, text);
+    return {
+      manifestPath,
+      sha256: computeStablePluginSupportDigest(manifest),
+    };
+  }
+
+  it("resolves and validates stable manifest package targets", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    const { manifestPath, sha256 } = writeStableManifest(repoDir);
+
+    expect(
+      resolveStablePluginSupportManifest({
+        path: manifestPath,
+        expectedSha256: sha256,
+        stableLine: "2026.6",
+      }),
+    ).toEqual({
+      sha256,
+      stableLine: "2026.6",
+      baseVersion: "2026.6.33",
+      packages: [
+        {
+          packageName: "@openclaw/codex",
+          pluginId: "codex",
+          packageDir: "extensions/codex",
+          targetVersion: "2026.6.33",
+          targetNpmSpec: "@openclaw/codex@2026.6.33",
+          targetBranch: "stable/2026.6.33",
+        },
+        {
+          packageName: "@openclaw/discord",
+          pluginId: "discord",
+          packageDir: "extensions/discord",
+          targetVersion: "2026.6.33",
+          targetNpmSpec: "@openclaw/discord@2026.6.33",
+          targetBranch: "stable/2026.6.33",
+        },
+        {
+          packageName: "@openclaw/slack",
+          pluginId: "slack",
+          packageDir: "extensions/slack",
+          targetVersion: "2026.6.33",
+          targetNpmSpec: "@openclaw/slack@2026.6.33",
+          targetBranch: "stable/2026.6.33",
+        },
+      ],
+    });
+  });
+
+  it("rejects a stable manifest digest mismatch", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    const { manifestPath } = writeStableManifest(repoDir);
+
+    expect(() =>
+      resolveStablePluginSupportManifest({
+        path: manifestPath,
+        expectedSha256: "b".repeat(64),
+        stableLine: "2026.6",
+      }),
+    ).toThrowError("Stable plugin support manifest digest mismatch");
+  });
+
+  it("converts manifest-covered packages to stable npm publish targets", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    const { manifestPath, sha256 } = writeStableManifest(repoDir);
+    const manifest = resolveStablePluginSupportManifest({
+      path: manifestPath,
+      expectedSha256: sha256,
+      stableLine: "2026.6",
+    });
+
+    expect(
+      resolveStableManifestPublishablePluginPackages({
+        manifest,
+        releaseClass: "stable-base",
+        releaseSelector: "stable",
+        packageAcceptanceRunId: "456",
+        plugins: manifest.packages.map((plugin) => ({
+          extensionId: plugin.pluginId,
+          packageDir: plugin.packageDir,
+          packageName: plugin.packageName,
+          version: plugin.targetVersion,
+          channel: "stable",
+          publishTag: "latest",
+        })),
+      }),
+    ).toEqual(
+      manifest.packages.map((plugin) => ({
+        extensionId: plugin.pluginId,
+        packageDir: plugin.packageDir,
+        packageName: plugin.packageName,
+        version: "2026.6.33",
+        channel: "stable",
+        publishTag: "stable",
+        releaseClass: "stable-base",
+        releaseSelector: "stable",
+        stableLine: "2026.6",
+        stablePluginSupportSha256: sha256,
+        targetBranch: "stable/2026.6.33",
+        targetNpmSpec: plugin.targetNpmSpec,
+        packageAcceptanceRunId: "456",
+      })),
+    );
   });
 });
 

@@ -39,25 +39,34 @@ describe("shouldRequireNpmDistTagMirrorAuth", () => {
   });
 
   it("requires npm auth for real publishes that mirror dist-tags", () => {
-    const plan = resolveNpmPublishPlan("2026.4.1");
     const auth = resolveNpmDistTagMirrorAuth({});
 
     expect(
       shouldRequireNpmDistTagMirrorAuth({
         mode: "--publish",
-        mirrorDistTags: plan.mirrorDistTags,
+        mirrorDistTags: ["beta"],
         hasAuth: auth.hasAuth,
       }),
     ).toBe(true);
   });
 
-  it("treats stable correction releases as latest publishes with beta mirroring", () => {
+  it("treats daily stable correction releases as latest publishes with beta mirroring", () => {
     const plan = resolveNpmPublishPlan("2026.4.1-1");
 
     expect(plan).toEqual({
       channel: "stable",
       publishTag: "latest",
       mirrorDistTags: ["beta"],
+    });
+  });
+
+  it("treats explicit stable selector releases as stable publishes without mirroring", () => {
+    const plan = resolveNpmPublishPlan("2026.6.33", null, "stable");
+
+    expect(plan).toEqual({
+      channel: "stable",
+      publishTag: "stable",
+      mirrorDistTags: [],
     });
   });
 

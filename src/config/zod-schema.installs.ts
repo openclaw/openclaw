@@ -10,6 +10,24 @@ const InstallSourceSchema = z.union([
 ]);
 
 const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
+const InstallIntentProvenanceSchema = z.union([
+  z.literal("explicit_user_pin"),
+  z.literal("prior_default_intent_system_pin"),
+  z.literal("unknown"),
+]);
+const InstallIntentProvenanceMigrationSchema = z.object({
+  id: z.literal("stable-plugin-install-intent-v1"),
+  source: z.literal("doctor:stable-plugin-install-intent"),
+  migratedAt: z.string(),
+  decision: InstallIntentProvenanceSchema,
+  evidence: z
+    .object({
+      spec: z.string().optional(),
+      resolvedSpec: z.string().optional(),
+      trustedSourceLinkedOfficialInstall: z.boolean().optional(),
+    })
+    .optional(),
+});
 
 /** Zod object shape for persisted generic install records. */
 export const InstallRecordShape = {
@@ -36,6 +54,8 @@ export const InstallRecordShape = {
   npmIntegrity: z.string().optional(),
   npmShasum: z.string().optional(),
   npmTarballName: z.string().optional(),
+  installIntentProvenance: InstallIntentProvenanceSchema.optional(),
+  installIntentProvenanceMigration: InstallIntentProvenanceMigrationSchema.optional(),
   clawpackSha256: z.string().optional(),
   clawpackSpecVersion: z.number().int().nonnegative().optional(),
   clawpackManifestSha256: z.string().optional(),

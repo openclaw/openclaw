@@ -1736,6 +1736,7 @@
     "release:plugins:clawhub:plan": "node --import tsx scripts/plugin-clawhub-release-plan.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
+    "release:stable-plugin-drift": "node --import tsx scripts/stable-plugin-drift-report.ts",
     "release:verify-beta": "node --import tsx scripts/release-verify-beta.ts",
     "release:prep": "node scripts/release-preflight.mjs --fix",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",

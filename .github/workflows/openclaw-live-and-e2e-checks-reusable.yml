@@ -73,6 +73,26 @@ on:
         required: false
         default: ""
         type: string
+      stable_plugin_targets_json:
+        description: Stable plugin target rows for suite_profile=stable-plugin package proof
+        required: false
+        default: ""
+        type: string
+      stable_plugin_package_specs:
+        description: Newline-delimited exact stable plugin package specs for Docker package proof
+        required: false
+        default: ""
+        type: string
+      stable_plugin_package_tarballs_json:
+        description: JSON object mapping stable plugin package names to workspace-relative tarball metadata
+        required: false
+        default: "{}"
+        type: string
+      stable_plugin_support_sha256:
+        description: Canonical SHA-256 for release/stable-plugin-support.json
+        required: false
+        default: ""
+        type: string
       include_live_suites:
         description: Whether to run live-provider coverage
         required: false
@@ -185,6 +205,26 @@ on:
         type: string
       codex_plugin_spec:
         description: Optional Codex plugin install spec for the live package lane; blank packs extensions/codex from the selected ref
+        required: false
+        default: ""
+        type: string
+      stable_plugin_targets_json:
+        description: Stable plugin target rows for suite_profile=stable-plugin package proof
+        required: false
+        default: ""
+        type: string
+      stable_plugin_package_specs:
+        description: Newline-delimited exact stable plugin package specs for Docker package proof
+        required: false
+        default: ""
+        type: string
+      stable_plugin_package_tarballs_json:
+        description: JSON object mapping stable plugin package names to workspace-relative tarball metadata
+        required: false
+        default: "{}"
+        type: string
+      stable_plugin_support_sha256:
+        description: Canonical SHA-256 for release/stable-plugin-support.json
         required: false
         default: ""
         type: string
@@ -730,6 +770,10 @@ jobs:
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
       OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+      OPENCLAW_STABLE_PLUGIN_TARGETS_JSON: ${{ inputs.stable_plugin_targets_json }}
+      OPENCLAW_STABLE_PLUGIN_PACKAGE_SPECS: ${{ inputs.stable_plugin_package_specs }}
+      OPENCLAW_STABLE_PLUGIN_PACKAGE_TARBALLS_JSON: ${{ inputs.stable_plugin_package_tarballs_json }}
+      OPENCLAW_STABLE_PLUGIN_SUPPORT_SHA256: ${{ inputs.stable_plugin_support_sha256 }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
@@ -1139,6 +1183,168 @@ jobs:
           export OPENCLAW_DOCKER_ALL_BUILD=0
 
           node .release-harness/scripts/test-docker-all.mjs
+
+      - name: Write stable plugin Docker package proof
+        if: inputs.stable_plugin_support_sha256 != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          proof_dir=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}"
+          input_dir=".artifacts/docker-tests/stable-plugin-proof-input"
+          mkdir -p "${proof_dir}" "${input_dir}"
+
+          targets_path="${input_dir}/targets.json"
+          specs_path="${input_dir}/package-specs.txt"
+          tarballs_path="${input_dir}/package-tarballs.json"
+          inspector_path="${input_dir}/inspect-stable-plugin-packages.mjs"
+          proof_path="${proof_dir}/stable-plugin-docker-proof.json"
+
+          printf '%s\n' "${OPENCLAW_STABLE_PLUGIN_TARGETS_JSON}" > "${targets_path}"
+          printf '%s\n' "${OPENCLAW_STABLE_PLUGIN_PACKAGE_SPECS}" > "${specs_path}"
+          printf '%s\n' "${OPENCLAW_STABLE_PLUGIN_PACKAGE_TARBALLS_JSON:-[]}" > "${tarballs_path}"
+
+          cat > "${inspector_path}" <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { createHash } from "node:crypto";
+          import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+          import { dirname, join } from "node:path";
+          import { tmpdir } from "node:os";
+
+          const targets = JSON.parse(readFileSync(process.env.STABLE_PLUGIN_TARGETS_PATH, "utf8"));
+          const packageSpecs = readFileSync(process.env.STABLE_PLUGIN_PACKAGE_SPECS_PATH, "utf8")
+            .split(/\r?\n/u)
+            .map((line) => line.trim())
+            .filter(Boolean);
+          const tarballs = JSON.parse(readFileSync(process.env.STABLE_PLUGIN_TARBALLS_PATH, "utf8"));
+          if (!Array.isArray(targets) || targets.length === 0) {
+            throw new Error("stable plugin Docker proof requires non-empty targets");
+          }
+          if (!tarballs || typeof tarballs !== "object" || Array.isArray(tarballs)) {
+            throw new Error("stable plugin tarballs metadata must be an object keyed by package name");
+          }
+          const expectedSpecs = targets.map((target) => target.targetNpmSpec).sort();
+          if (JSON.stringify([...packageSpecs].sort()) !== JSON.stringify(expectedSpecs)) {
+            throw new Error("stable plugin Docker proof package specs do not match targets");
+          }
+          const expectedPackageNames = targets.map((target) => target.packageName).sort();
+          if (JSON.stringify(Object.keys(tarballs).sort()) !== JSON.stringify(expectedPackageNames)) {
+            throw new Error("stable plugin Docker proof tarball metadata does not match targets");
+          }
+
+          const packagePath = (packageName) => join(...packageName.split("/"));
+          const pluginProofs = targets.map((target) => {
+            const installDir = mkdtempSync(join(tmpdir(), "openclaw-stable-plugin-"));
+            const tarball = tarballs[target.packageName];
+            if (!tarball || typeof tarball !== "object") {
+              throw new Error(`stable plugin Docker proof tarball metadata is missing for ${target.packageName}`);
+            }
+            if (tarball.packageName !== target.packageName || tarball.version !== target.targetVersion) {
+              throw new Error(`stable plugin Docker proof tarball metadata mismatch for ${target.packageName}`);
+            }
+            if (
+              typeof tarball.path !== "string" ||
+              tarball.path.length === 0 ||
+              tarball.path.startsWith("/") ||
+              tarball.path.split("/").includes("..")
+            ) {
+              throw new Error(`stable plugin Docker proof tarball path must be workspace-relative for ${target.packageName}`);
+            }
+            if (typeof tarball.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(tarball.sha256)) {
+              throw new Error(`stable plugin Docker proof tarball sha256 is invalid for ${target.packageName}`);
+            }
+            const tarballPath = join(process.env.OPENCLAW_WORKSPACE_IN_CONTAINER ?? "/workspace", tarball.path);
+            if (!existsSync(tarballPath)) {
+              throw new Error(`stable plugin Docker proof tarball is missing for ${target.packageName}: ${tarball.path}`);
+            }
+            const observedSha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
+            if (observedSha256 !== tarball.sha256) {
+              throw new Error(`stable plugin Docker proof tarball sha256 mismatch for ${target.packageName}`);
+            }
+            execFileSync(
+              "npm",
+              [
+                "install",
+                "--prefix",
+                installDir,
+                "--no-audit",
+                "--fund=false",
+                tarballPath,
+              ],
+              { stdio: "pipe" },
+            );
+            const packageJsonPath = join(
+              installDir,
+              "node_modules",
+              packagePath(target.packageName),
+              "package.json",
+            );
+            const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+            if (packageJson.name !== target.packageName) {
+              throw new Error(
+                `stable plugin Docker proof package name mismatch for ${target.packageName}: ${packageJson.name}`,
+              );
+            }
+            if (packageJson.version !== target.targetVersion) {
+              throw new Error(
+                `stable plugin Docker proof version mismatch for ${target.packageName}: ${packageJson.version}`,
+              );
+            }
+            return {
+              packageName: target.packageName,
+              pluginId: target.pluginId,
+              targetVersion: target.targetVersion,
+              targetNpmSpec: target.targetNpmSpec,
+              stableLine: target.stableLine,
+              stablePluginSupportSha256: process.env.STABLE_PLUGIN_SUPPORT_SHA256,
+              observedPackageName: packageJson.name,
+              observedVersion: packageJson.version,
+              source: "docker-npm-install",
+              installSource: "tarball",
+              tarballPath: tarball.path,
+              tarballSha256: observedSha256,
+              npmIntegrity: typeof tarball.integrity === "string" ? tarball.integrity : "",
+              result: "passed",
+            };
+          });
+
+          const outputPath = process.env.STABLE_PLUGIN_PROOF_PATH;
+          mkdirSync(dirname(outputPath), { recursive: true });
+          writeFileSync(
+            outputPath,
+            `${JSON.stringify(
+              {
+                schemaVersion: 1,
+                result: "passed",
+                stablePluginSupportSha256: process.env.STABLE_PLUGIN_SUPPORT_SHA256,
+                dockerImage: process.env.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE,
+                dockerLanes: (process.env.DOCKER_E2E_LANES ?? "")
+                  .split(/[,\s]+/u)
+                  .map((lane) => lane.trim())
+                  .filter(Boolean),
+                completedAt: new Date().toISOString(),
+                pluginProofs,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          NODE
+
+          docker run --rm \
+            -v "${PWD}/.artifacts/docker-tests:/proof" \
+            -v "${PWD}:/workspace:ro" \
+            -e STABLE_PLUGIN_TARGETS_PATH=/proof/stable-plugin-proof-input/targets.json \
+            -e STABLE_PLUGIN_PACKAGE_SPECS_PATH=/proof/stable-plugin-proof-input/package-specs.txt \
+            -e STABLE_PLUGIN_TARBALLS_PATH=/proof/stable-plugin-proof-input/package-tarballs.json \
+            -e STABLE_PLUGIN_PROOF_PATH="/proof/targeted-${{ steps.plan.outputs.artifact_suffix }}/stable-plugin-docker-proof.json" \
+            -e STABLE_PLUGIN_SUPPORT_SHA256="${OPENCLAW_STABLE_PLUGIN_SUPPORT_SHA256}" \
+            -e OPENCLAW_WORKSPACE_IN_CONTAINER=/workspace \
+            -e OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE="${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}" \
+            -e DOCKER_E2E_LANES="${DOCKER_E2E_LANES}" \
+            "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}" \
+            node /proof/stable-plugin-proof-input/inspect-stable-plugin-packages.mjs
+
+          test -f "${proof_path}"
 
       - name: Summarize targeted Docker E2E lanes
         if: always()

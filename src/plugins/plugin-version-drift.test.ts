@@ -1,8 +1,16 @@
 /** Tests plugin version drift detection between package, manifest, and install records. */
 import { describe, expect, it } from "vitest";
+import checkedInStablePluginSupportManifest from "../../release/stable-plugin-support.json" with { type: "json" };
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { detectPluginVersionDrift } from "./plugin-version-drift.js";
+import {
+  computeStablePluginSupportManifestSha256,
+  detectPluginVersionDrift,
+  generateStablePluginDriftReport,
+  type StablePluginAcceptanceProof,
+  type StablePluginRegistryProof,
+  type StablePluginSupportManifest,
+} from "./plugin-version-drift.js";
 
 function npmRecord(
   version: string,
@@ -316,5 +324,182 @@ describe("detectPluginVersionDrift", () => {
     });
 
     expect(result.drifts.map((d) => d.pluginId)).toEqual(["discord", "matrix", "whatsapp"]);
+  });
+});
+
+const stableManifest = checkedInStablePluginSupportManifest as StablePluginSupportManifest;
+
+function registryProofs(
+  overrides: Partial<Record<string, Partial<StablePluginRegistryProof>>> = {},
+): StablePluginRegistryProof[] {
+  return stableManifest.coveredPlugins.map((entry) => ({
+    packageName: entry.packageName,
+    version: entry.targetVersion,
+    targetNpmSpec: entry.targetNpmSpec,
+    exists: true,
+    observedAt: "2026-06-19T13:00:00.000Z",
+    ...overrides[entry.packageName],
+  }));
+}
+
+function acceptanceProofs(
+  overrides: Partial<Record<string, Partial<StablePluginAcceptanceProof>>> = {},
+): StablePluginAcceptanceProof[] {
+  const manifestSha = computeStablePluginSupportManifestSha256(stableManifest);
+  return stableManifest.coveredPlugins.map((entry) => ({
+    packageName: entry.packageName,
+    targetVersion: entry.targetVersion,
+    targetNpmSpec: entry.targetNpmSpec,
+    stablePluginSupportSha256: manifestSha,
+    passed: true,
+    completedAt: "2026-06-19T13:05:00.000Z",
+    ...overrides[entry.packageName],
+  }));
+}
+
+describe("generateStablePluginDriftReport", () => {
+  it("reports ok for covered plugins with registry, catalog, proof, and installed match", () => {
+    const report = generateStablePluginDriftReport({
+      manifest: stableManifest,
+      stableLine: {
+        stableLine: "2026.6.33",
+        updatedAt: "2026-06-19T12:00:00.000Z",
+      },
+      registryProofs: registryProofs(),
+      acceptanceProofs: acceptanceProofs(),
+      catalogEntries: [
+        { packageName: "@openclaw/codex", pluginId: "codex", kind: "provider" },
+        { packageName: "@openclaw/discord", pluginId: "discord", kind: "channel" },
+        { packageName: "@openclaw/slack", pluginId: "slack", kind: "channel" },
+      ],
+      installedEntries: [
+        {
+          packageName: "@openclaw/slack",
+          pluginId: "slack",
+          installedVersion: "2026.6.33",
+        },
+      ],
+      generatedAt: "2026-06-19T13:10:00.000Z",
+    });
+
+    expect(report.summary.blockingDriftCount).toBe(0);
+    expect(report.rows.map((row) => row.status)).toEqual(["ok", "ok", "ok"]);
+    expect(report.issues.every((issue) => issue.action === "none")).toBe(true);
+  });
+
+  it("reports registry_missing when an exact covered package target is absent", () => {
+    const report = generateStablePluginDriftReport({
+      manifest: stableManifest,
+      registryProofs: registryProofs({
+        "@openclaw/slack": { exists: false },
+      }),
+      acceptanceProofs: acceptanceProofs(),
+    });
+
+    expect(report.rows.find((row) => row.packageName === "@openclaw/slack")?.status).toBe(
+      "registry_missing",
+    );
+  });
+
+  it("reports proof_missing when registry proof exists but package acceptance proof is absent", () => {
+    const report = generateStablePluginDriftReport({
+      manifest: stableManifest,
+      registryProofs: registryProofs(),
+      acceptanceProofs: acceptanceProofs().filter(
+        (proof) => proof.packageName !== "@openclaw/discord",
+      ),
+    });
+
+    expect(report.rows.find((row) => row.packageName === "@openclaw/discord")?.status).toBe(
+      "proof_missing",
+    );
+  });
+
+  it("reports proof_stale when proof references an older manifest digest", () => {
+    const report = generateStablePluginDriftReport({
+      manifest: stableManifest,
+      registryProofs: registryProofs(),
+      acceptanceProofs: acceptanceProofs({
+        "@openclaw/codex": { stablePluginSupportSha256: "old-digest" },
+      }),
+    });
+
+    expect(report.rows.find((row) => row.packageName === "@openclaw/codex")?.status).toBe(
+      "proof_stale",
+    );
+  });
+
+  it("reports installed_drift when inspected local state differs from the stable target", () => {
+    const report = generateStablePluginDriftReport({
+      manifest: stableManifest,
+      registryProofs: registryProofs(),
+      acceptanceProofs: acceptanceProofs(),
+      installedEntries: [
+        {
+          packageName: "@openclaw/slack",
+          pluginId: "slack",
+          installedVersion: "2026.6.32",
+          spec: "@openclaw/slack@2026.6.32",
+        },
+      ],
+    });
+
+    expect(report.rows.find((row) => row.packageName === "@openclaw/slack")?.status).toBe(
+      "installed_drift",
+    );
+  });
+
+  it("reports catalog_drift when official catalog mapping no longer matches manifest", () => {
+    const report = generateStablePluginDriftReport({
+      manifest: stableManifest,
+      registryProofs: registryProofs(),
+      acceptanceProofs: acceptanceProofs(),
+      catalogEntries: [
+        { packageName: "@openclaw/discord", pluginId: "discord-v2", kind: "channel" },
+      ],
+    });
+
+    expect(report.rows.find((row) => row.packageName === "@openclaw/discord")?.status).toBe(
+      "catalog_drift",
+    );
+  });
+
+  it("reports outside_stable_contract and dry-run issue decisions for non-covered installs", () => {
+    const report = generateStablePluginDriftReport({
+      manifest: stableManifest,
+      registryProofs: registryProofs(),
+      acceptanceProofs: acceptanceProofs(),
+      installedEntries: [
+        {
+          packageName: "@openclaw/matrix",
+          pluginId: "matrix",
+          installedVersion: "2026.6.33",
+        },
+      ],
+      updateIssues: false,
+    });
+
+    const outside = report.rows.find((row) => row.packageName === "@openclaw/matrix");
+    expect(outside?.status).toBe("outside_stable_contract");
+    expect(report.summary.outsideStableContractCount).toBe(1);
+    expect(report.issues.find((issue) => issue.packageName === "@openclaw/matrix")?.action).toBe(
+      "warn_only",
+    );
+  });
+
+  it("uses stable idempotency markers for blocking dry-run issue decisions", () => {
+    const report = generateStablePluginDriftReport({
+      manifest: stableManifest,
+      registryProofs: registryProofs({
+        "@openclaw/slack": { exists: false },
+      }),
+      acceptanceProofs: acceptanceProofs(),
+      updateIssues: false,
+    });
+    const issue = report.issues.find((entry) => entry.packageName === "@openclaw/slack");
+
+    expect(issue?.action).toBe("dry_run_create_or_update");
+    expect(issue?.idempotencyKey).toBe("2026.6.33:@openclaw/slack");
+    expect(issue?.marker).toBe("<!-- openclaw:stable-plugin-drift:2026.6.33:@openclaw/slack -->");
   });
 });

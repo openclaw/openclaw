@@ -15,6 +15,7 @@ const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
 const STABLE_MAIN_CLOSEOUT_WORKFLOW = ".github/workflows/openclaw-stable-main-closeout.yml";
+const STABLE_PLUGIN_DRIFT_WORKFLOW = ".github/workflows/stable-plugin-support-drift.yml";
 const WINDOWS_NODE_RELEASE_WORKFLOW = ".github/workflows/windows-node-release.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
@@ -1435,9 +1436,8 @@ describe("package artifact reuse", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
     expect(workflow).toContain("package_telegram:");
-    expect(workflow).toContain(
-      "needs: [resolve_package, package_integrity, docker_acceptance, package_telegram]",
-    );
+    expect(workflow).toContain("stable_plugin_acceptance_proof,");
+    expect(workflow).toContain("package_telegram,");
     expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
     expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
     expect(workflow).not.toContain("npm_telegram:");
@@ -1754,6 +1754,8 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("full_release_validation_run_id");
     expect(npmWorkflow).toContain("release_publish_run_id");
     expect(npmWorkflow).toContain("Real publish requires full_release_validation_run_id");
+    expect(npmWorkflow).toContain("stable/YYYY.M.PATCH for stable publishes");
+    expect(npmWorkflow).toContain("refs/heads/stable/");
     expect(npmWorkflow).toContain(
       "Workflow-dispatched real publish requires release_publish_run_id",
     );
@@ -1764,6 +1766,128 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("Unreleased prerelease fallback");
     expect(workflow).not.toContain("gh api --repo");
     expect(workflow).not.toContain("timeout-minutes: 360");
+  });
+
+  it("plumbs stable plugin package acceptance inputs into validation artifacts", () => {
+    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    const dockerWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
+
+    expect(workflow).toContain("- stable-plugin");
+    expect(workflow).toContain("stable_plugin_manifest_ref:");
+    expect(workflow).toContain("stable_plugin_targets_json:");
+    expect(workflow).toContain("stable_plugin_package_specs:");
+    expect(workflow).toContain("stable_plugin_package_tarballs_json:");
+    expect(workflow).toContain("stable_plugin_acceptance_artifact_prefix:");
+    expect(workflow).toContain("Validate stable plugin package inputs");
+    expect(workflow).toContain("STABLE_PLUGIN_MANIFEST_REF");
+    expect(workflow).toContain("STABLE_PLUGIN_TARGETS_JSON");
+    expect(workflow).toContain("STABLE_PLUGIN_PACKAGE_SPECS");
+    expect(workflow).toContain("STABLE_PLUGIN_PACKAGE_TARBALLS_JSON");
+    expect(workflow).toContain("STABLE_PLUGIN_ACCEPTANCE_ARTIFACT_PREFIX");
+    expect(workflow).toContain("suite_profile=stable-plugin requires stable_plugin_manifest_ref");
+    expect(workflow).toContain(
+      "suite_profile=stable-plugin requires stable_plugin_package_tarballs_json",
+    );
+    expect(workflow).toContain("stable_plugin_package_specs must exactly match");
+    expect(workflow).toContain("stable-plugin-inputs.json");
+    expect(workflow).toContain("Upload stable plugin acceptance inputs");
+    expect(workflow).toContain(
+      "stable_plugin_targets_json: ${{ inputs.stable_plugin_targets_json }}",
+    );
+    expect(workflow).toContain("Download stable plugin Docker proof");
+    expect(workflow).toContain("stable-plugin-docker-proof.json");
+    expect(workflow).toContain('source == "docker-npm-install"');
+    expect(workflow).toContain('installSource == "tarball"');
+    expect(dockerWorkflow).toContain("tarballSha256");
+    expect(dockerWorkflow).toContain("OPENCLAW_WORKSPACE_IN_CONTAINER");
+    expect(workflow).toContain("Stable plugin acceptance proof");
+    expect(workflow).toContain("stable-plugin-acceptance.json");
+    expect(workflow).toContain("Upload stable plugin acceptance proof");
+    expect(workflow).toContain("stable_plugin_support_sha256");
+  });
+
+  it("guards stable plugin manifest mode in release publish and plugin npm workflows", () => {
+    const releaseWorkflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const pluginNpmWorkflow = readFileSync(".github/workflows/plugin-npm-release.yml", "utf8");
+
+    expect(releaseWorkflow).toContain("- stable-manifest");
+    expect(releaseWorkflow).toContain("release_class:");
+    expect(releaseWorkflow).toContain("stable_line:");
+    expect(releaseWorkflow).toContain("stable_plugin_manifest_sha256:");
+    expect(releaseWorkflow).toContain("package_acceptance_run_id:");
+    expect(releaseWorkflow).toContain(
+      "Stable publish_openclaw_npm=true requires plugin_publish_scope=stable-manifest",
+    );
+    expect(releaseWorkflow).toContain(
+      "Stable releases must publish OpenClaw to npm dist-tag stable",
+    );
+    expect(releaseWorkflow).toContain(
+      "Stable plugin publish must be dispatched from manifest target branch",
+    );
+    expect(releaseWorkflow).toContain("stable/*");
+    expect(releaseWorkflow).toContain(
+      "Daily/prerelease publish_openclaw_npm=true requires plugin_publish_scope=all-publishable",
+    );
+    expect(releaseWorkflow).toContain(
+      "Stable plugin publish requires a successful Package Acceptance run",
+    );
+    expect(releaseWorkflow).toContain(
+      'acceptance_artifact="stable-plugin-acceptance-${manifest_sha}-proof"',
+    );
+    expect(releaseWorkflow).toContain("stable-plugin-acceptance.json");
+    expect(releaseWorkflow).toContain("stable-plugin package acceptance targets do not match");
+    expect(releaseWorkflow).toContain(
+      "stable-plugin package acceptance proof targets do not match",
+    );
+    expect(releaseWorkflow).toContain(
+      "stable-plugin package acceptance proof must come from Docker npm installs of exact target package tarballs",
+    );
+    expect(releaseWorkflow).toContain(
+      "stable-plugin package acceptance package specs do not match",
+    );
+    expect(releaseWorkflow).toContain("Upload stable plugin manifest artifact");
+    expect(releaseWorkflow).toContain("-f release_selector=stable");
+    expect(releaseWorkflow).toContain("-f stable_plugin_manifest_sha256=");
+
+    expect(pluginNpmWorkflow).toContain("- stable-manifest");
+    expect(pluginNpmWorkflow).toContain("release_selector:");
+    expect(pluginNpmWorkflow).toContain("stable_plugin_manifest_sha256:");
+    expect(pluginNpmWorkflow).toContain("Resolve stable plugin manifest");
+    expect(pluginNpmWorkflow).toContain("stable/*");
+    expect(pluginNpmWorkflow).toContain('--selection-mode "${PUBLISH_SCOPE}" --release-selector');
+    expect(pluginNpmWorkflow).toContain("Validate stable manifest plan");
+    expect(pluginNpmWorkflow).toContain(
+      "Stable plugin npm publish must be dispatched from manifest target branch",
+    );
+    expect(pluginNpmWorkflow).toContain("(.skippedPublished | length) == 0");
+    expect(pluginNpmWorkflow).toContain("OPENCLAW_PLUGIN_NPM_RELEASE_SELECTOR");
+    expect(pluginNpmWorkflow).toContain("OPENCLAW_PLUGIN_NPM_STABLE_MANIFEST_SHA256");
+  });
+
+  it("exposes stable plugin drift reporting as an operational workflow and package script", () => {
+    const workflow = readFileSync(STABLE_PLUGIN_DRIFT_WORKFLOW, "utf8");
+    const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+
+    expect(packageJson.scripts?.["release:stable-plugin-drift"]).toBe(
+      "node --import tsx scripts/stable-plugin-drift-report.ts",
+    );
+    expect(workflow).toContain("name: Stable Plugin Support Drift");
+    expect(workflow).toContain('cron: "15 17 * * *"');
+    expect(workflow).toContain("actions: read");
+    expect(workflow).toContain("release/stable-plugin-support.json");
+    expect(workflow).toContain("validateStablePluginSupportManifest");
+    expect(workflow).toContain("package_acceptance_run_id:");
+    expect(workflow).toContain('proof_artifact="stable-plugin-acceptance-${support_sha}-proof"');
+    expect(workflow).toContain("stable-plugin-acceptance.json");
+    expect(workflow).toContain("scripts/stable-plugin-drift-report.ts");
+    expect(workflow).toContain(
+      "--registry-proof .artifacts/stable-plugin-drift/registry-proof.json",
+    );
+    expect(workflow).toContain("Apply stable plugin drift issues");
+    expect(workflow).toContain('"issue", "create"');
+    expect(workflow).toContain("stable-plugin-drift-report");
   });
 
   it("keeps OpenClaw npm release pack tarball paths local before preflight upload", () => {

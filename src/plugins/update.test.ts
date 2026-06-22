@@ -817,6 +817,93 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("records prior default intent when stable sync converges a default official npm install", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/slack",
+      version: "2026.6.8",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/slack",
+      version: "2026.6.33",
+      integrity: "sha512-stable",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "slack",
+        targetDir: installPath,
+        version: "2026.6.33",
+        npmResolution: {
+          name: "@openclaw/slack",
+          version: "2026.6.33",
+          resolvedSpec: "@openclaw/slack@2026.6.33",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "slack",
+        spec: "@openclaw/slack",
+        installPath,
+        resolvedName: "@openclaw/slack",
+        resolvedSpec: "@openclaw/slack@2026.6.8",
+        resolvedVersion: "2026.6.8",
+      }),
+      pluginIds: ["slack"],
+      syncOfficialPluginInstalls: true,
+      updateChannel: "stable",
+    });
+
+    expectNpmUpdateCall({
+      spec: "@openclaw/slack@2026.6.33",
+      expectedPluginId: "slack",
+    });
+    expect(result.config.plugins?.installs?.slack?.spec).toBe("@openclaw/slack@2026.6.33");
+    expect(result.config.plugins?.installs?.slack?.installIntentProvenance).toBe(
+      "prior_default_intent_system_pin",
+    );
+  });
+
+  it("does not repair disabled official npm installs on the stable channel", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/slack",
+      version: "2026.6.8",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          entries: {
+            slack: {
+              enabled: false,
+            },
+          },
+          installs: {
+            slack: {
+              source: "npm",
+              spec: "@openclaw/slack",
+              installPath,
+              resolvedName: "@openclaw/slack",
+              resolvedSpec: "@openclaw/slack@2026.6.8",
+              resolvedVersion: "2026.6.8",
+            },
+          },
+        },
+      },
+      pluginIds: ["slack"],
+      skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
+      updateChannel: "stable",
+    });
+
+    expect(npmInstallCall()).toBeUndefined();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "slack",
+      status: "skipped",
+    });
+  });
+
   it("keeps integrity drift checks for exact prerelease-only official pins", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/voice-call",

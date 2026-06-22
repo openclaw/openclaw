@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
+import { validateStablePluginSupportManifest } from "../../src/plugins/stable-plugin-support.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
 import { collectReleaseVersionFloorErrors, resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
 
@@ -46,8 +47,15 @@ export type PublishablePluginPackage = {
   packageName: string;
   version: string;
   channel: "stable" | "alpha" | "beta";
-  publishTag: "latest" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta" | "stable";
   installNpmSpec?: string;
+  releaseClass?: PluginReleaseClass;
+  releaseSelector?: PluginReleaseSelector;
+  stableLine?: string;
+  stablePluginSupportSha256?: string;
+  targetBranch?: string;
+  targetNpmSpec?: string;
+  packageAcceptanceRunId?: string;
 };
 
 export type PluginReleasePlanItem = PublishablePluginPackage & {
@@ -58,9 +66,18 @@ export type PluginReleasePlan = {
   all: PluginReleasePlanItem[];
   candidates: PluginReleasePlanItem[];
   skippedPublished: PluginReleasePlanItem[];
+  packages: string[];
+  releaseClass: PluginReleaseClass;
+  releaseSelector: PluginReleaseSelector;
+  selectionMode: PluginReleaseSelectionMode;
+  stableLine?: string;
+  stablePluginSupportSha256?: string;
+  packageAcceptanceRunId?: string;
 };
 
-export type PluginReleaseSelectionMode = "selected" | "all-publishable";
+export type PluginReleaseSelectionMode = "selected" | "all-publishable" | "stable-manifest";
+export type PluginReleaseSelector = "daily" | "stable";
+export type PluginReleaseClass = "daily" | "stable-base" | "stable-patch";
 
 export type GitRangeSelection = {
   baseRef: string;
@@ -73,6 +90,28 @@ export type ParsedPluginReleaseArgs = {
   pluginsFlagProvided: boolean;
   baseRef?: string;
   headRef?: string;
+  releaseClass?: PluginReleaseClass;
+  releaseSelector?: PluginReleaseSelector;
+  stableLine?: string;
+  stablePluginManifestPath?: string;
+  stablePluginManifestSha256?: string;
+  packageAcceptanceRunId?: string;
+};
+
+export type ResolvedStablePluginSupportManifest = {
+  sha256: string;
+  stableLine: string;
+  baseVersion: string;
+  packages: StablePluginSupportPackage[];
+};
+
+export type StablePluginSupportPackage = {
+  packageName: string;
+  pluginId: string;
+  packageDir: string;
+  targetVersion: string;
+  targetNpmSpec: string;
+  targetBranch: string;
 };
 
 export type PublishablePluginPackageCandidate<
@@ -164,12 +203,34 @@ export function parsePluginReleaseSelection(value: string | undefined): string[]
 export function parsePluginReleaseSelectionMode(
   value: string | undefined,
 ): PluginReleaseSelectionMode {
-  if (value === "selected" || value === "all-publishable") {
+  if (value === "selected" || value === "all-publishable" || value === "stable-manifest") {
     return value;
   }
 
   throw new Error(
-    `Unknown selection mode: ${value ?? "<missing>"}. Expected "selected" or "all-publishable".`,
+    `Unknown selection mode: ${value ?? "<missing>"}. Expected "selected", "all-publishable", or "stable-manifest".`,
+  );
+}
+
+export function parsePluginReleaseSelector(value: string | undefined): PluginReleaseSelector {
+  if (value === undefined || value === "") {
+    return "daily";
+  }
+  if (value === "daily" || value === "stable") {
+    return value;
+  }
+  throw new Error(`Unknown release selector: ${value}. Expected "daily" or "stable".`);
+}
+
+export function parsePluginReleaseClass(value: string | undefined): PluginReleaseClass {
+  if (value === undefined || value === "") {
+    return "daily";
+  }
+  if (value === "daily" || value === "stable-base" || value === "stable-patch") {
+    return value;
+  }
+  throw new Error(
+    `Unknown release class: ${value}. Expected "daily", "stable-base", or "stable-patch".`,
   );
 }
 
@@ -179,6 +240,12 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   let pluginsFlagProvided = false;
   let baseRef: string | undefined;
   let headRef: string | undefined;
+  let releaseClass: PluginReleaseClass | undefined;
+  let releaseSelector: PluginReleaseSelector | undefined;
+  let stableLine: string | undefined;
+  let stablePluginManifestPath: string | undefined;
+  let stablePluginManifestSha256: string | undefined;
+  let packageAcceptanceRunId: string | undefined;
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -206,8 +273,41 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
       index += 1;
       continue;
     }
+    if (arg === "--release-selector") {
+      releaseSelector = parsePluginReleaseSelector(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg === "--release-class") {
+      releaseClass = parsePluginReleaseClass(argv[index + 1]);
+      index += 1;
+      continue;
+    }
+    if (arg === "--stable-line") {
+      stableLine = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (arg === "--stable-plugin-manifest") {
+      stablePluginManifestPath = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (arg === "--stable-plugin-manifest-sha256") {
+      stablePluginManifestSha256 = argv[index + 1];
+      index += 1;
+      continue;
+    }
+    if (arg === "--package-acceptance-run-id") {
+      packageAcceptanceRunId = argv[index + 1];
+      index += 1;
+      continue;
+    }
     throw new Error(`Unknown argument: ${arg}`);
   }
+
+  releaseSelector ??= "daily";
+  releaseClass ??= releaseSelector === "stable" ? "stable-base" : "daily";
 
   if (pluginsFlagProvided && selection.length === 0) {
     throw new Error("`--plugins` must include at least one package name.");
@@ -218,6 +318,9 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   if (selectionMode === "all-publishable" && pluginsFlagProvided) {
     throw new Error("`--selection-mode all-publishable` must not be combined with `--plugins`.");
   }
+  if (selectionMode === "stable-manifest" && pluginsFlagProvided) {
+    throw new Error("`--selection-mode stable-manifest` must not be combined with `--plugins`.");
+  }
   if (selection.length > 0 && (baseRef || headRef)) {
     throw new Error("Use either --plugins or --base-ref/--head-ref, not both.");
   }
@@ -227,8 +330,164 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   if ((baseRef && !headRef) || (!baseRef && headRef)) {
     throw new Error("Both --base-ref and --head-ref are required together.");
   }
+  if (releaseSelector === "stable" && selectionMode !== "stable-manifest") {
+    throw new Error("`--release-selector stable` requires `--selection-mode stable-manifest`.");
+  }
+  if (selectionMode === "stable-manifest" && releaseSelector !== "stable") {
+    throw new Error("`--selection-mode stable-manifest` requires `--release-selector stable`.");
+  }
+  if (releaseSelector === "daily" && releaseClass !== "daily") {
+    throw new Error("`--release-selector daily` requires `--release-class daily`.");
+  }
+  if (releaseSelector === "stable" && releaseClass === "daily") {
+    throw new Error(
+      "`--release-selector stable` requires `--release-class stable-base` or `stable-patch`.",
+    );
+  }
+  if (selectionMode === "stable-manifest") {
+    if (!stableLine?.trim()) {
+      throw new Error("`--selection-mode stable-manifest` requires `--stable-line`.");
+    }
+    if (!stablePluginManifestPath?.trim()) {
+      throw new Error("`--selection-mode stable-manifest` requires `--stable-plugin-manifest`.");
+    }
+    if (!stablePluginManifestSha256?.trim()) {
+      throw new Error(
+        "`--selection-mode stable-manifest` requires `--stable-plugin-manifest-sha256`.",
+      );
+    }
+    if (!packageAcceptanceRunId?.trim()) {
+      throw new Error("`--selection-mode stable-manifest` requires `--package-acceptance-run-id`.");
+    }
+  } else if (
+    stableLine?.trim() ||
+    stablePluginManifestPath?.trim() ||
+    stablePluginManifestSha256?.trim() ||
+    packageAcceptanceRunId?.trim()
+  ) {
+    throw new Error("Stable manifest inputs require `--selection-mode stable-manifest`.");
+  }
 
-  return { selection, selectionMode, pluginsFlagProvided, baseRef, headRef };
+  return {
+    selection,
+    selectionMode,
+    pluginsFlagProvided,
+    baseRef,
+    headRef,
+    releaseClass,
+    releaseSelector,
+    stableLine,
+    stablePluginManifestPath,
+    stablePluginManifestSha256,
+    packageAcceptanceRunId,
+  };
+}
+
+function normalizeSha256Digest(value: string, label: string): string {
+  const trimmed = value.trim();
+  const normalized = trimmed.startsWith("sha256:") ? trimmed.slice("sha256:".length) : trimmed;
+  if (!/^[a-f0-9]{64}$/u.test(normalized)) {
+    throw new Error(`${label} must be a lowercase SHA-256 digest, with optional sha256: prefix.`);
+  }
+  return normalized;
+}
+
+function requireManifestString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error(`Stable plugin support manifest ${label} must be a non-empty string.`);
+  }
+  return value.trim();
+}
+
+export function resolveStablePluginSupportManifest(params: {
+  path: string;
+  expectedSha256: string;
+  stableLine: string;
+}): ResolvedStablePluginSupportManifest {
+  const manifestText = readFileSync(params.path, "utf8");
+  const validatedManifest = validateStablePluginSupportManifest(JSON.parse(manifestText));
+  const manifest = validatedManifest.manifest;
+  const sha256 = validatedManifest.stablePluginSupportSha256;
+  const expectedSha256 = normalizeSha256Digest(
+    params.expectedSha256,
+    "--stable-plugin-manifest-sha256",
+  );
+  if (sha256 !== expectedSha256) {
+    throw new Error(
+      `Stable plugin support manifest digest mismatch: expected ${expectedSha256}, got ${sha256}.`,
+    );
+  }
+
+  const stableLine = requireManifestString(manifest.stableLine?.month, "stableLine.month");
+  if (stableLine !== params.stableLine.trim()) {
+    throw new Error(
+      `Stable plugin support manifest stable line mismatch: expected ${params.stableLine}, got ${stableLine}.`,
+    );
+  }
+  const baseVersion = requireManifestString(
+    manifest.stableLine?.baseVersion,
+    "stableLine.baseVersion",
+  );
+  const coveredPlugins = manifest.coveredPlugins;
+  if (!Array.isArray(coveredPlugins) || coveredPlugins.length === 0) {
+    throw new Error("Stable plugin support manifest coveredPlugins must be a non-empty array.");
+  }
+
+  const packages = coveredPlugins.map((entry, index): StablePluginSupportPackage => {
+    const packageName = requireManifestString(
+      entry.packageName,
+      `coveredPlugins[${index}].packageName`,
+    );
+    const targetVersion = requireManifestString(
+      entry.targetVersion,
+      `coveredPlugins[${index}].targetVersion`,
+    );
+    const targetNpmSpec = (entry.targetNpmSpec ?? `${packageName}@${targetVersion}`).trim();
+    const expectedSpec = `${packageName}@${targetVersion}`;
+    if (targetNpmSpec !== expectedSpec) {
+      throw new Error(
+        `Stable plugin support manifest ${packageName} targetNpmSpec must be ${expectedSpec}; got ${targetNpmSpec}.`,
+      );
+    }
+    const parsedVersion = parseReleaseVersion(targetVersion);
+    if (parsedVersion === null || parsedVersion.channel !== "stable") {
+      throw new Error(
+        `Stable plugin support manifest ${packageName} targetVersion must be a stable YYYY.M.PATCH version.`,
+      );
+    }
+    if (`${parsedVersion.year}.${parsedVersion.month}` !== stableLine) {
+      throw new Error(
+        `Stable plugin support manifest ${packageName} targetVersion ${targetVersion} is outside stable line ${stableLine}.`,
+      );
+    }
+    return {
+      packageName,
+      pluginId: requireManifestString(entry.pluginId, `coveredPlugins[${index}].pluginId`),
+      packageDir: requireManifestString(entry.packageDir, `coveredPlugins[${index}].packageDir`),
+      targetVersion,
+      targetNpmSpec,
+      targetBranch: requireManifestString(
+        entry.targetBranch,
+        `coveredPlugins[${index}].targetBranch`,
+      ),
+    };
+  });
+
+  const duplicatePackageNames = packages
+    .map((entry) => entry.packageName)
+    .filter((name, index, all) => all.indexOf(name) !== index);
+  if (duplicatePackageNames.length > 0) {
+    throw new Error(
+      `Stable plugin support manifest has duplicate packages: ${[...new Set(duplicatePackageNames)].join(", ")}.`,
+    );
+  }
+
+  return {
+    sha256,
+    stableLine,
+    baseVersion,
+    packages: packages.toSorted((left, right) => left.packageName.localeCompare(right.packageName)),
+  };
 }
 
 function readRequiredArgValue(
@@ -395,6 +654,64 @@ export function resolveSelectedPublishablePluginPackages(params: {
   return selected;
 }
 
+export function resolveStableManifestPublishablePluginPackages(params: {
+  plugins: PublishablePluginPackage[];
+  manifest: ResolvedStablePluginSupportManifest;
+  releaseClass: PluginReleaseClass;
+  releaseSelector: PluginReleaseSelector;
+  packageAcceptanceRunId: string;
+}): PublishablePluginPackage[] {
+  const byName = new Map(params.plugins.map((plugin) => [plugin.packageName, plugin]));
+  const resolved: PublishablePluginPackage[] = [];
+  const errors: string[] = [];
+
+  for (const manifestPackage of params.manifest.packages) {
+    const plugin = byName.get(manifestPackage.packageName);
+    if (!plugin) {
+      errors.push(
+        `${manifestPackage.packageName}: package is not a publishable plugin in this checkout.`,
+      );
+      continue;
+    }
+    if (plugin.version !== manifestPackage.targetVersion) {
+      errors.push(
+        `${manifestPackage.packageName}: package.json version ${plugin.version} does not match stable manifest target ${manifestPackage.targetVersion}.`,
+      );
+    }
+    if (plugin.packageDir !== manifestPackage.packageDir) {
+      errors.push(
+        `${manifestPackage.packageName}: packageDir ${plugin.packageDir} does not match stable manifest packageDir ${manifestPackage.packageDir}.`,
+      );
+    }
+    if (plugin.channel !== "stable") {
+      errors.push(
+        `${manifestPackage.packageName}: stable manifest releases require a stable final package version; got ${plugin.version}.`,
+      );
+    }
+    resolved.push({
+      ...plugin,
+      publishTag: "stable",
+      releaseClass: params.releaseClass,
+      releaseSelector: params.releaseSelector,
+      stableLine: params.manifest.stableLine,
+      stablePluginSupportSha256: params.manifest.sha256,
+      targetBranch: manifestPackage.targetBranch,
+      targetNpmSpec: manifestPackage.targetNpmSpec,
+      packageAcceptanceRunId: params.packageAcceptanceRunId,
+    });
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `Stable manifest plugin release plan validation failed:\n${errors
+        .map((error) => `- ${error}`)
+        .join("\n")}`,
+    );
+  }
+
+  return resolved;
+}
+
 export function collectChangedExtensionIdsFromPaths(paths: readonly string[]): string[] {
   const extensionIds = new Set<string>();
 
@@ -549,7 +866,26 @@ export function collectPluginReleasePlan(params?: {
   selection?: string[];
   selectionMode?: PluginReleaseSelectionMode;
   gitRange?: GitRangeSelection;
+  releaseClass?: PluginReleaseClass;
+  releaseSelector?: PluginReleaseSelector;
+  stableLine?: string;
+  stablePluginManifestPath?: string;
+  stablePluginManifestSha256?: string;
+  packageAcceptanceRunId?: string;
 }): PluginReleasePlan {
+  const releaseSelector = params?.releaseSelector ?? "daily";
+  const releaseClass =
+    params?.releaseClass ?? (releaseSelector === "stable" ? "stable-base" : "daily");
+  const selectionMode =
+    params?.selectionMode ?? (params?.gitRange ? "selected" : "all-publishable");
+  const stableManifest =
+    selectionMode === "stable-manifest"
+      ? resolveStablePluginSupportManifest({
+          path: params?.stablePluginManifestPath ?? "",
+          expectedSha256: params?.stablePluginManifestSha256 ?? "",
+          stableLine: params?.stableLine ?? "",
+        })
+      : undefined;
   const changedExtensionIds = params?.gitRange
     ? collectChangedExtensionIdsFromGitRange({
         rootDir: params.rootDir,
@@ -558,25 +894,39 @@ export function collectPluginReleasePlan(params?: {
     : [];
   const allPublishable = collectPublishablePluginPackages(params?.rootDir, {
     extensionIds:
-      params?.selectionMode === "all-publishable" || !params?.gitRange
+      params?.selectionMode === "all-publishable" ||
+      params?.selectionMode === "stable-manifest" ||
+      !params?.gitRange
         ? undefined
         : changedExtensionIds,
-    packageNames: params?.selection && params.selection.length > 0 ? params.selection : undefined,
+    packageNames: stableManifest
+      ? stableManifest.packages.map((plugin) => plugin.packageName)
+      : params?.selection && params.selection.length > 0
+        ? params.selection
+        : undefined,
   });
   const selectedPublishable =
-    params?.selectionMode === "all-publishable"
-      ? allPublishable
-      : params?.selection && params.selection.length > 0
-        ? resolveSelectedPublishablePluginPackages({
-            plugins: allPublishable,
-            selection: params.selection,
-          })
-        : params?.gitRange
-          ? resolveChangedPublishablePluginPackages({
+    params?.selectionMode === "stable-manifest" && stableManifest
+      ? resolveStableManifestPublishablePluginPackages({
+          plugins: allPublishable,
+          manifest: stableManifest,
+          releaseClass,
+          releaseSelector,
+          packageAcceptanceRunId: params?.packageAcceptanceRunId ?? "",
+        })
+      : params?.selectionMode === "all-publishable"
+        ? allPublishable
+        : params?.selection && params.selection.length > 0
+          ? resolveSelectedPublishablePluginPackages({
               plugins: allPublishable,
-              changedExtensionIds,
+              selection: params.selection,
             })
-          : allPublishable;
+          : params?.gitRange
+            ? resolveChangedPublishablePluginPackages({
+                plugins: allPublishable,
+                changedExtensionIds,
+              })
+            : allPublishable;
 
   const explicitPublishSelection =
     params?.selectionMode !== undefined || (params?.selection?.length ?? 0) > 0;
@@ -594,5 +944,12 @@ export function collectPluginReleasePlan(params?: {
     all,
     candidates: all.filter((plugin) => !plugin.alreadyPublished),
     skippedPublished: all.filter((plugin) => plugin.alreadyPublished),
+    packages: all.map((plugin) => `${plugin.packageName}@${plugin.version}`),
+    releaseClass,
+    releaseSelector,
+    selectionMode,
+    stableLine: stableManifest?.stableLine,
+    stablePluginSupportSha256: stableManifest?.sha256,
+    packageAcceptanceRunId: params?.packageAcceptanceRunId,
   };
 }

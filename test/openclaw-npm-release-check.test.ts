@@ -167,34 +167,34 @@ describe("resolveNpmPublishPlan", () => {
     });
   });
 
-  it("publishes stable releases to beta first", () => {
+  it("publishes stable releases to stable", () => {
     expect(resolveNpmPublishPlan("2026.3.29")).toEqual({
       channel: "stable",
-      publishTag: "beta",
+      publishTag: "stable",
       mirrorDistTags: [],
     });
   });
 
-  it("publishes stable correction releases to beta first too", () => {
+  it("publishes stable correction releases to stable too", () => {
     expect(resolveNpmPublishPlan("2026.3.29-2")).toEqual({
       channel: "stable",
-      publishTag: "beta",
+      publishTag: "stable",
       mirrorDistTags: [],
     });
   });
 
-  it("can publish stable releases directly to latest when requested", () => {
-    expect(resolveNpmPublishPlan("2026.3.29", undefined, "latest")).toEqual({
+  it("can publish stable releases directly to stable when requested", () => {
+    expect(resolveNpmPublishPlan("2026.3.29", undefined, "stable")).toEqual({
       channel: "stable",
-      publishTag: "latest",
+      publishTag: "stable",
       mirrorDistTags: [],
     });
   });
 
-  it("can publish stable correction releases directly to latest when requested", () => {
-    expect(resolveNpmPublishPlan("2026.3.29-1", undefined, "latest")).toEqual({
+  it("can publish stable correction releases directly to stable when requested", () => {
+    expect(resolveNpmPublishPlan("2026.3.29-1", undefined, "stable")).toEqual({
       channel: "stable",
-      publishTag: "latest",
+      publishTag: "stable",
       mirrorDistTags: [],
     });
   });
@@ -202,9 +202,15 @@ describe("resolveNpmPublishPlan", () => {
   it("ignores current beta dist-tag state for stable publishes", () => {
     expect(resolveNpmPublishPlan("2026.3.29", "2026.4.1-beta.1")).toEqual({
       channel: "stable",
-      publishTag: "beta",
+      publishTag: "stable",
       mirrorDistTags: [],
     });
+  });
+
+  it("rejects publishing stable releases to latest", () => {
+    expect(() => resolveNpmPublishPlan("2026.3.29", undefined, "latest")).toThrow(
+      "Stable releases must publish to the stable dist-tag.",
+    );
   });
 
   it("rejects publishing beta prereleases to latest", () => {
@@ -214,7 +220,7 @@ describe("resolveNpmPublishPlan", () => {
   });
 
   it("rejects publishing alpha prereleases to beta or latest", () => {
-    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2")).toThrow(
+    expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "beta")).toThrow(
       "Alpha prereleases must publish to the alpha dist-tag.",
     );
     expect(() => resolveNpmPublishPlan("2026.3.29-alpha.2", undefined, "latest")).toThrow(

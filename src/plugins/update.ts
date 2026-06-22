@@ -1,6 +1,7 @@
 /** Updates installed plugins across npm, ClawHub, marketplace, Git, and bundled bridge sources. */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { InstallIntentProvenance } from "../config/types.installs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -44,6 +45,8 @@ import { installPluginFromGitSpec } from "./git-install.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
+  type ChannelInstallConvergenceReason,
+  type StablePluginInstallClassification,
 } from "./install-channel-specs.js";
 import {
   installPluginFromNpmSpec,
@@ -936,8 +939,21 @@ function resolveNpmUpdateSpecs(params: {
   recordSpec?: string;
   fallbackSpec?: string;
   fallbackLabel?: string;
+  reason?: ChannelInstallConvergenceReason;
+  classification?: StablePluginInstallClassification;
 } {
-  const recordSpec = params.specOverride ?? params.officialSpecOverride ?? params.record.spec;
+  const exactRecordSpec =
+    params.record.spec && parseRegistryNpmSpec(params.record.spec)?.selectorKind === "exact-version"
+      ? params.record.spec
+      : undefined;
+  const recordSpec =
+    params.specOverride ??
+    (params.updateChannel === "stable"
+      ? (exactRecordSpec ??
+        params.record.resolvedSpec ??
+        params.officialSpecOverride ??
+        params.record.spec)
+      : (params.officialSpecOverride ?? params.record.spec));
   if (!recordSpec) {
     return {};
   }
@@ -950,6 +966,7 @@ function resolveNpmUpdateSpecs(params: {
   return resolveNpmInstallSpecsForUpdateChannel({
     spec: recordSpec,
     updateChannel: params.updateChannel,
+    record: params.record,
   });
 }
 
@@ -972,6 +989,24 @@ function resolveClawHubUpdateSpecs(params: {
     spec: recordSpec,
     updateChannel: params.updateChannel,
   });
+}
+
+function stableInstallIntentForUpdate(params: {
+  updateChannel?: UpdateChannel;
+  reason?: ChannelInstallConvergenceReason;
+  classification?: StablePluginInstallClassification;
+  record: PluginInstallRecord;
+}): InstallIntentProvenance | undefined {
+  if (params.updateChannel !== "stable" || params.reason !== "covered_stable_target") {
+    return params.record.installIntentProvenance;
+  }
+  if (params.classification === "explicit_user_pin") {
+    return "explicit_user_pin";
+  }
+  if (params.classification === "prior_default_intent_system_pin" || params.record.spec) {
+    return "prior_default_intent_system_pin";
+  }
+  return params.record.installIntentProvenance;
 }
 
 function isBridgeAlreadyInstalledFromPreferredSource(params: {
@@ -1322,7 +1357,10 @@ export async function updateNpmInstalledPlugins(params: {
         config: normalizedPluginConfig,
         rootConfig: params.config,
       });
-      if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
+      if (
+        !enableState.enabled &&
+        (params.updateChannel === "stable" || (!officialNpmSpec && !officialClawHubSpec))
+      ) {
         outcomes.push({
           pluginId,
           status: "skipped",
@@ -1548,6 +1586,12 @@ export async function updateNpmInstalledPlugins(params: {
             });
             if (nextRecordSpec !== record.spec) {
               const resolutionFields = buildNpmResolutionInstallFields(metadataResult.metadata);
+              const installIntentProvenance = stableInstallIntentForUpdate({
+                updateChannel: params.updateChannel,
+                reason: npmSpecs?.reason,
+                classification: npmSpecs?.classification,
+                record,
+              });
               next = {
                 ...next,
                 plugins: {
@@ -1557,6 +1601,7 @@ export async function updateNpmInstalledPlugins(params: {
                     [pluginId]: {
                       ...record,
                       spec: nextRecordSpec,
+                      ...(installIntentProvenance ? { installIntentProvenance } : {}),
                       resolvedName: resolutionFields.resolvedName ?? record.resolvedName,
                       resolvedVersion: resolutionFields.resolvedVersion ?? record.resolvedVersion,
                       resolvedSpec: resolutionFields.resolvedSpec ?? record.resolvedSpec,
@@ -2072,6 +2117,12 @@ export async function updateNpmInstalledPlugins(params: {
         Awaited<ReturnType<typeof installPluginFromNpmSpec>>,
         { ok: true }
       >;
+      const installIntentProvenance = stableInstallIntentForUpdate({
+        updateChannel: params.updateChannel,
+        reason: npmSpecs?.reason,
+        classification: npmSpecs?.classification,
+        record,
+      });
       next = recordPluginInstall(
         usedOfficialNpmFallback ? withoutPluginInstallRecord(next, resolvedPluginId) : next,
         {
@@ -2084,6 +2135,7 @@ export async function updateNpmInstalledPlugins(params: {
               (params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall) ||
               usedOfficialNpmFallback,
           }),
+          ...(installIntentProvenance ? { installIntentProvenance } : {}),
           installPath: result.targetDir,
           version: nextVersion,
           ...buildNpmResolutionInstallFields(npmResult.npmResolution),

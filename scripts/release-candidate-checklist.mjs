@@ -46,9 +46,14 @@ Options:
   --provider <provider>               Full validation provider. Default: ${DEFAULT_PROVIDER}
   --mode <fresh|upgrade|both>         Full validation cross-OS mode. Default: ${DEFAULT_MODE}
   --release-profile <beta|stable|full> Default: beta for prereleases; stable otherwise.
-  --npm-dist-tag <alpha|beta|latest>  Default: ${DEFAULT_NPM_DIST_TAG}
-  --plugin-publish-scope <scope>      selected|all-publishable. Default: ${DEFAULT_PLUGIN_SCOPE}
+  --npm-dist-tag <alpha|beta|stable|latest> Default: beta for prerelease, stable for stable candidates.
+  --plugin-publish-scope <scope>      selected|all-publishable|stable-manifest. Default: ${DEFAULT_PLUGIN_SCOPE}
   --plugins <names>                   Required when plugin scope is selected.
+  --release-class <class>             daily|stable-base|stable-patch. Default: daily for prerelease, stable-base for stable.
+  --stable-line <line>                Stable line month, for example 2026.6.
+  --stable-plugin-manifest-sha256 <sha> Stable plugin support manifest SHA-256 for stable-manifest scope.
+  --stable-plugin-manifest-artifact <name> Stable plugin manifest artifact name for release publish.
+  --package-acceptance-run <id>       Package Acceptance stable-plugin run id.
   --output-dir <dir>                  Evidence output dir. Default: .artifacts/release-candidate/<tag>
 `;
 }
@@ -74,6 +79,11 @@ export function parseArgs(argv) {
     npmDistTag: DEFAULT_NPM_DIST_TAG,
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
+    releaseClass: "",
+    stableLine: "",
+    stablePluginManifestSha256: "",
+    stablePluginManifestArtifact: "stable-plugin-support",
+    packageAcceptanceRunId: "",
     skipDispatch: false,
     skipLocalGeneratedCheck: false,
     skipParallels: false,
@@ -143,6 +153,21 @@ export function parseArgs(argv) {
       case "--plugins":
         options.plugins = requireValue(args, ++index, arg);
         break;
+      case "--release-class":
+        options.releaseClass = requireValue(args, ++index, arg);
+        break;
+      case "--stable-line":
+        options.stableLine = requireValue(args, ++index, arg);
+        break;
+      case "--stable-plugin-manifest-sha256":
+        options.stablePluginManifestSha256 = requireValue(args, ++index, arg);
+        break;
+      case "--stable-plugin-manifest-artifact":
+        options.stablePluginManifestArtifact = requireValue(args, ++index, arg);
+        break;
+      case "--package-acceptance-run":
+        options.packageAcceptanceRunId = requireValue(args, ++index, arg);
+        break;
       case "--output-dir":
         options.outputDir = requireValue(args, ++index, arg);
         break;
@@ -157,10 +182,24 @@ export function parseArgs(argv) {
   if (!options.tag) {
     throw new Error("--tag is required");
   }
+  const firstStableTag = options.tag === "v2026.6.33";
   options.releaseProfile ||=
-    options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
+    options.tag.includes("-alpha.") || options.tag.includes("-beta.")
+      ? "beta"
+      : firstStableTag
+        ? "stable"
+        : "full";
+  options.releaseClass ||= firstStableTag ? "stable-base" : "daily";
+  const stableCandidate =
+    options.releaseClass === "stable-base" || options.releaseClass === "stable-patch";
+  if (stableCandidate && options.npmDistTag === DEFAULT_NPM_DIST_TAG) {
+    options.npmDistTag = "stable";
+  }
   if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
     throw new Error("--release-profile must be beta, stable, or full");
+  }
+  if (!["daily", "stable-base", "stable-patch"].includes(options.releaseClass)) {
+    throw new Error("--release-class must be daily, stable-base, or stable-patch");
   }
   if (options.skipDispatch && (!options.fullReleaseRunId || !options.npmPreflightRunId)) {
     throw new Error("--skip-dispatch requires --full-release-run and --npm-preflight-run");
@@ -173,17 +212,57 @@ export function parseArgs(argv) {
       "--plugin-publish-scope selected is only for plugin-only repair publishes; release candidates publish OpenClaw with --plugin-publish-scope all-publishable",
     );
   }
-  if (options.pluginPublishScope === "all-publishable" && options.plugins.trim()) {
+  if (!["selected", "all-publishable", "stable-manifest"].includes(options.pluginPublishScope)) {
+    throw new Error("--plugin-publish-scope must be selected, all-publishable, or stable-manifest");
+  }
+  if (options.pluginPublishScope !== "selected" && options.plugins.trim()) {
     throw new Error("--plugins is only valid with --plugin-publish-scope selected");
+  }
+  if (stableCandidate) {
+    if (options.npmDistTag !== "stable") {
+      throw new Error("stable release candidates require --npm-dist-tag stable");
+    }
+    if (options.pluginPublishScope !== "stable-manifest") {
+      throw new Error("stable release candidates require --plugin-publish-scope stable-manifest");
+    }
+    if (options.releaseClass !== "stable-base" && options.releaseClass !== "stable-patch") {
+      throw new Error(
+        "stable release candidates require --release-class stable-base or stable-patch",
+      );
+    }
+    if (!options.stableLine.trim()) {
+      throw new Error("stable release candidates require --stable-line");
+    }
+    if (!/^(sha256:)?[a-f0-9]{64}$/u.test(options.stablePluginManifestSha256)) {
+      throw new Error(
+        "stable release candidates require --stable-plugin-manifest-sha256 as a lowercase SHA-256 digest",
+      );
+    }
+    if (!options.packageAcceptanceRunId.trim()) {
+      throw new Error("stable release candidates require --package-acceptance-run");
+    }
+  } else {
+    if (options.npmDistTag === "stable") {
+      throw new Error("--npm-dist-tag stable is only valid for stable release candidates");
+    }
+    if (options.pluginPublishScope !== "all-publishable") {
+      throw new Error(
+        "daily/prerelease release candidates require --plugin-publish-scope all-publishable",
+      );
+    }
+    if (
+      options.releaseClass !== "daily" ||
+      options.stableLine.trim() ||
+      options.stablePluginManifestSha256.trim() ||
+      options.packageAcceptanceRunId.trim()
+    ) {
+      throw new Error("stable plugin manifest inputs are only valid for stable release candidates");
+    }
   }
   if (options.windowsNodeTag && !WINDOWS_NODE_TAG_PATTERN.test(options.windowsNodeTag)) {
     throw new Error("--windows-node-tag must be an explicit version tag, not latest");
   }
-  if (
-    !options.tag.includes("-alpha.") &&
-    !options.tag.includes("-beta.") &&
-    !options.windowsNodeTag
-  ) {
+  if (stableCandidate && !options.windowsNodeTag) {
     throw new Error("stable release candidates require --windows-node-tag");
   }
   if (!["mock-openai", "live-frontier"].includes(options.telegramProviderMode)) {
@@ -535,24 +614,56 @@ function sha256(path) {
 }
 
 function pluginPlanArgs(options) {
-  const args = ["--selection-mode", options.pluginPublishScope];
+  const stableManifest = options.pluginPublishScope === "stable-manifest";
+  const args = [
+    "--selection-mode",
+    options.pluginPublishScope,
+    "--release-selector",
+    stableManifest ? "stable" : "daily",
+    "--release-class",
+    options.releaseClass,
+  ];
   if (options.pluginPublishScope === "selected") {
+    args.push("--plugins", options.plugins);
+  }
+  if (stableManifest) {
+    args.push(
+      "--stable-line",
+      options.stableLine,
+      "--stable-plugin-manifest",
+      "release/stable-plugin-support.json",
+      "--stable-plugin-manifest-sha256",
+      options.stablePluginManifestSha256,
+      "--package-acceptance-run-id",
+      options.packageAcceptanceRunId,
+    );
+  }
+  return args;
+}
+
+function clawHubPlanArgs(options) {
+  const scope =
+    options.pluginPublishScope === "stable-manifest"
+      ? "all-publishable"
+      : options.pluginPublishScope;
+  const args = ["--selection-mode", scope];
+  if (scope === "selected") {
     args.push("--plugins", options.plugins);
   }
   return args;
 }
 
-function collectPluginPlan(script, options) {
+function collectPluginPlan(script, options, planArgs = pluginPlanArgs) {
   return JSON.parse(
-    run("node", ["--import", "tsx", script, ...pluginPlanArgs(options)], { capture: true }),
+    run("node", ["--import", "tsx", script, ...planArgs(options)], { capture: true }),
   );
 }
 
-async function collectPluginPlanWithRetry(script, options) {
+async function collectPluginPlanWithRetry(script, options, planArgs = pluginPlanArgs) {
   let lastError;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      return collectPluginPlan(script, options);
+      return collectPluginPlan(script, options, planArgs);
     } catch (error) {
       lastError = error;
       if (attempt === 3) {
@@ -583,6 +694,7 @@ export function buildPublishCommand(options) {
     ["full_release_validation_run_id", options.fullReleaseRunId],
     ["npm_dist_tag", options.npmDistTag],
     ["plugin_publish_scope", options.pluginPublishScope],
+    ["release_class", options.releaseClass],
     ["publish_openclaw_npm", "true"],
     ["release_profile", "from-validation"],
     ["wait_for_clawhub", "false"],
@@ -598,6 +710,17 @@ export function buildPublishCommand(options) {
   }
   if (options.plugins.trim()) {
     fields.push(["plugins", options.plugins]);
+  }
+  if (options.pluginPublishScope === "stable-manifest") {
+    fields.push(
+      ["stable_line", options.stableLine],
+      [
+        "stable_plugin_manifest_sha256",
+        options.stablePluginManifestSha256.replace(/^sha256:/u, ""),
+      ],
+      ["stable_plugin_manifest_artifact", options.stablePluginManifestArtifact],
+      ["package_acceptance_run_id", options.packageAcceptanceRunId],
+    );
   }
   return [
     "gh",
@@ -827,6 +950,7 @@ async function main() {
   const pluginClawHubPlan = await collectPluginPlanWithRetry(
     "scripts/plugin-clawhub-release-plan.ts",
     options,
+    clawHubPlanArgs,
   );
   const publishCommand = buildPublishCommand(options);
   const evidence = {

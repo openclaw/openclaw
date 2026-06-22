@@ -24,8 +24,8 @@ export const JUNE_2026_PATCH_FLOOR = 5;
 /**
  * @typedef {object} NpmPublishPlan
  * @property {"stable" | "alpha" | "beta"} channel
- * @property {"latest" | "alpha" | "beta"} publishTag
- * @property {("latest" | "alpha" | "beta")[]} mirrorDistTags
+ * @property {"latest" | "stable" | "alpha" | "beta"} publishTag
+ * @property {("latest" | "stable" | "alpha" | "beta")[]} mirrorDistTags
  */
 
 /**
@@ -199,9 +199,10 @@ export function compareReleaseVersions(left, right) {
 /**
  * @param {string} version
  * @param {string | null} [currentBetaVersion]
+ * @param {"daily" | "stable"} [releaseSelector]
  * @returns {NpmPublishPlan}
  */
-export function resolveNpmPublishPlan(version, currentBetaVersion) {
+export function resolveNpmPublishPlan(version, currentBetaVersion, releaseSelector = "daily") {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
@@ -228,10 +229,18 @@ export function resolveNpmPublishPlan(version, currentBetaVersion) {
     if (betaVsStable !== null && betaVsStable > 0) {
       return {
         channel: "stable",
-        publishTag: "latest",
+        publishTag: releaseSelector === "stable" ? "stable" : "latest",
         mirrorDistTags: [],
       };
     }
+  }
+
+  if (releaseSelector === "stable") {
+    return {
+      channel: "stable",
+      publishTag: "stable",
+      mirrorDistTags: [],
+    };
   }
 
   return {

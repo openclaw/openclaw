@@ -5,11 +5,28 @@ import { pathToFileURL } from "node:url";
 import { collectPluginReleasePlan, parsePluginReleaseArgs } from "./lib/plugin-npm-release.ts";
 
 export function collectPluginNpmReleasePlan(argv: string[]) {
-  const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
+  const {
+    selection,
+    selectionMode,
+    baseRef,
+    headRef,
+    releaseClass,
+    releaseSelector,
+    stableLine,
+    stablePluginManifestPath,
+    stablePluginManifestSha256,
+    packageAcceptanceRunId,
+  } = parsePluginReleaseArgs(argv);
   return collectPluginReleasePlan({
     selection,
     selectionMode,
     gitRange: baseRef && headRef ? { baseRef, headRef } : undefined,
+    releaseClass,
+    releaseSelector,
+    stableLine,
+    stablePluginManifestPath,
+    stablePluginManifestSha256,
+    packageAcceptanceRunId,
   });
 }
 

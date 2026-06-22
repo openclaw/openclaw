@@ -17,22 +17,59 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), init);
 }
 
+function stablePluginArgs() {
+  return [
+    "--plugin-publish-scope",
+    "stable-manifest",
+    "--stable-line",
+    "2026.6",
+    "--stable-plugin-manifest-sha256",
+    "a".repeat(64),
+    "--package-acceptance-run",
+    "444",
+  ];
+}
+
 describe("release candidate checklist", () => {
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
-    expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
-      "stable",
-    );
+    expect(
+      parseArgs(["--tag", "v2026.6.33", "--windows-node-tag", "v0.6.3", ...stablePluginArgs()])
+        .releaseProfile,
+    ).toBe("stable");
     expect(
       parseArgs([
         "--tag",
-        "v2026.5.14",
+        "v2026.6.33",
         "--windows-node-tag",
         "v0.6.3",
         "--release-profile",
         "full",
+        ...stablePluginArgs(),
       ]).releaseProfile,
     ).toBe("full");
+    expect(parseArgs(["--tag", "v2026.7.1"]).releaseClass).toBe("daily");
+    expect(parseArgs(["--tag", "v2026.7.1"]).pluginPublishScope).toBe("all-publishable");
+    expect(
+      parseArgs(["--tag", "v2026.6.33", "--windows-node-tag", "v0.6.3", ...stablePluginArgs()])
+        .npmDistTag,
+    ).toBe("stable");
+  });
+
+  it("requires stable release candidates to use manifest-limited plugin proof", () => {
+    expect(() => parseArgs(["--tag", "v2026.6.33", "--windows-node-tag", "v0.6.3"])).toThrow(
+      "stable release candidates require --plugin-publish-scope stable-manifest",
+    );
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.6.33",
+        "--windows-node-tag",
+        "v0.6.3",
+        "--plugin-publish-scope",
+        "stable-manifest",
+      ]),
+    ).toThrow("stable release candidates require --stable-line");
   });
 
   it("runs Parallels against the exact prepared candidate tarball", () => {
@@ -166,21 +203,23 @@ describe("release candidate checklist", () => {
   });
 
   it("requires and carries an exact Windows Node tag for stable release candidates", () => {
-    expect(() => parseArgs(["--tag", "v2026.5.14"])).toThrow(
+    expect(() => parseArgs(["--tag", "v2026.6.33", ...stablePluginArgs()])).toThrow(
       "stable release candidates require --windows-node-tag",
     );
-    expect(() => parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "latest"])).toThrow(
-      "--windows-node-tag must be an explicit version tag, not latest",
-    );
+    expect(() =>
+      parseArgs(["--tag", "v2026.6.33", "--windows-node-tag", "latest", ...stablePluginArgs()]),
+    ).toThrow("--windows-node-tag must be an explicit version tag, not latest");
 
+    const stableArgs = stablePluginArgs();
     const options = {
       ...parseArgs([
         "--tag",
-        "v2026.5.14",
+        "v2026.6.33",
         "--windows-node-tag",
         "v0.6.3",
         "--workflow-ref",
-        "release/2026.5.14",
+        "release/2026.6.33",
+        ...stableArgs,
       ]),
       workflowRef: "release/2026.5.14",
       windowsNodeInstallerDigests: JSON.stringify({
@@ -190,6 +229,13 @@ describe("release candidate checklist", () => {
     };
 
     expect(buildPublishCommand(options)).toContain("'windows_node_tag=v0.6.3'");
+    expect(buildPublishCommand(options)).toContain("'npm_dist_tag=stable'");
+    expect(buildPublishCommand(options)).toContain("'plugin_publish_scope=stable-manifest'");
+    expect(buildPublishCommand(options)).toContain("'stable_line=2026.6'");
+    expect(buildPublishCommand(options)).toContain(
+      `'stable_plugin_manifest_sha256=${"a".repeat(64)}'`,
+    );
+    expect(buildPublishCommand(options)).toContain("'package_acceptance_run_id=444'");
     expect(buildPublishCommand(options)).toContain(
       `'windows_node_installer_digests={"OpenClawCompanion-Setup-x64.exe":"sha256:${"a".repeat(64)}","OpenClawCompanion-Setup-arm64.exe":"sha256:${"b".repeat(64)}"}'`,
     );

@@ -65,6 +65,32 @@ on:
           - product
           - full
           - custom
+          - stable-plugin
+      stable_plugin_manifest_ref:
+        description: Stable plugin support manifest ref or artifact identity for suite_profile=stable-plugin
+        required: false
+        default: ""
+        type: string
+      stable_plugin_targets_json:
+        description: Compact JSON array of manifest-covered stable plugin targets
+        required: false
+        default: ""
+        type: string
+      stable_plugin_package_specs:
+        description: Newline-delimited exact stable plugin package specs
+        required: false
+        default: ""
+        type: string
+      stable_plugin_package_tarballs_json:
+        description: JSON map of covered package names to prebuilt tarball proof; required for suite_profile=stable-plugin
+        required: false
+        default: ""
+        type: string
+      stable_plugin_acceptance_artifact_prefix:
+        description: Artifact prefix for stable-plugin package acceptance proof
+        required: false
+        default: stable-plugin-acceptance
+        type: string
       docker_lanes:
         description: Comma/space separated Docker lanes when suite_profile=custom
         required: false
@@ -156,9 +182,34 @@ on:
         default: package-under-test
         type: string
       suite_profile:
-        description: "Acceptance profile: smoke, package, product, full, or custom"
+        description: "Acceptance profile: smoke, package, product, full, custom, or stable-plugin"
         required: false
         default: package
+        type: string
+      stable_plugin_manifest_ref:
+        description: Stable plugin support manifest ref or artifact identity for suite_profile=stable-plugin
+        required: false
+        default: ""
+        type: string
+      stable_plugin_targets_json:
+        description: Compact JSON array of manifest-covered stable plugin targets
+        required: false
+        default: ""
+        type: string
+      stable_plugin_package_specs:
+        description: Newline-delimited exact stable plugin package specs
+        required: false
+        default: ""
+        type: string
+      stable_plugin_package_tarballs_json:
+        description: JSON map of covered package names to prebuilt tarball proof; required for suite_profile=stable-plugin
+        required: false
+        default: ""
+        type: string
+      stable_plugin_acceptance_artifact_prefix:
+        description: Artifact prefix for stable-plugin package acceptance proof
+        required: false
+        default: stable-plugin-acceptance
         type: string
       docker_lanes:
         description: Comma/space separated Docker lanes when suite_profile=custom
@@ -319,6 +370,8 @@ jobs:
       package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}
       package_sha256: ${{ steps.resolve.outputs.sha256 }}
       package_version: ${{ steps.resolve.outputs.package_version }}
+      stable_plugin_inputs_artifact: ${{ steps.stable_plugin.outputs.artifact_name }}
+      stable_plugin_support_sha256: ${{ steps.stable_plugin.outputs.sha256 }}
       published_upgrade_survivor_baselines: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
       published_upgrade_survivor_scenarios: ${{ inputs.published_upgrade_survivor_scenarios }}
       telegram_enabled: ${{ steps.profile.outputs.telegram_enabled }}
@@ -422,6 +475,9 @@ jobs:
               include_release_path_suites=true
               include_openwebui=true
               ;;
+            stable-plugin)
+              docker_lanes="doctor-switch update-channel-switch plugins plugin-update published-upgrade-survivor"
+              ;;
             custom)
               docker_lanes="$CUSTOM_DOCKER_LANES"
               if [[ -z "${docker_lanes// }" ]]; then
@@ -451,6 +507,109 @@ jobs:
             echo "telegram_enabled=$telegram_enabled"
             echo "telegram_mode=$TELEGRAM_MODE"
             echo "package_artifact_name=${PACKAGE_ARTIFACT_NAME}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate stable plugin package inputs
+        id: stable_plugin
+        env:
+          PACKAGE_SPEC: ${{ inputs.package_spec }}
+          STABLE_PLUGIN_MANIFEST_REF: ${{ inputs.stable_plugin_manifest_ref }}
+          STABLE_PLUGIN_TARGETS_JSON: ${{ inputs.stable_plugin_targets_json }}
+          STABLE_PLUGIN_PACKAGE_SPECS: ${{ inputs.stable_plugin_package_specs }}
+          STABLE_PLUGIN_PACKAGE_TARBALLS_JSON: ${{ inputs.stable_plugin_package_tarballs_json }}
+          STABLE_PLUGIN_ACCEPTANCE_ARTIFACT_PREFIX: ${{ inputs.stable_plugin_acceptance_artifact_prefix }}
+          SUITE_PROFILE: ${{ inputs.suite_profile }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${SUITE_PROFILE}" != "stable-plugin" ]]; then
+            if [[ -n "${STABLE_PLUGIN_MANIFEST_REF}${STABLE_PLUGIN_TARGETS_JSON}${STABLE_PLUGIN_PACKAGE_SPECS}${STABLE_PLUGIN_PACKAGE_TARBALLS_JSON}" ]]; then
+              echo "stable_plugin_* inputs require suite_profile=stable-plugin." >&2
+              exit 1
+            fi
+            echo "artifact_name=" >> "$GITHUB_OUTPUT"
+            echo "sha256=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ -z "${STABLE_PLUGIN_MANIFEST_REF// }" ]]; then
+            echo "suite_profile=stable-plugin requires stable_plugin_manifest_ref." >&2
+            exit 1
+          fi
+          if [[ -z "${STABLE_PLUGIN_TARGETS_JSON// }" ]]; then
+            echo "suite_profile=stable-plugin requires stable_plugin_targets_json." >&2
+            exit 1
+          fi
+          if [[ -z "${STABLE_PLUGIN_PACKAGE_SPECS// }" ]]; then
+            echo "suite_profile=stable-plugin requires stable_plugin_package_specs." >&2
+            exit 1
+          fi
+          if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+            echo "suite_profile=stable-plugin requires package_spec to be an exact stable OpenClaw package." >&2
+            exit 1
+          fi
+
+          mkdir -p .artifacts/stable-plugin-acceptance
+          targets_path=.artifacts/stable-plugin-acceptance/targets.json
+          specs_path=.artifacts/stable-plugin-acceptance/package-specs.txt
+          tarballs_path=.artifacts/stable-plugin-acceptance/package-tarballs.json
+          printf '%s' "${STABLE_PLUGIN_TARGETS_JSON}" > "${targets_path}"
+          printf '%s\n' "${STABLE_PLUGIN_PACKAGE_SPECS}" > "${specs_path}"
+          if [[ -z "${STABLE_PLUGIN_PACKAGE_TARBALLS_JSON// }" ]]; then
+            echo "suite_profile=stable-plugin requires stable_plugin_package_tarballs_json so Docker proof installs exact candidate plugin tarballs before npm publish." >&2
+            exit 1
+          fi
+          printf '%s' "${STABLE_PLUGIN_PACKAGE_TARBALLS_JSON}" > "${tarballs_path}"
+
+          support_sha256="$(jq -r '
+            if type == "array" and length > 0 and
+              all(.[]; (.packageName | type == "string") and (.pluginId | type == "string") and (.targetVersion | type == "string") and (.targetNpmSpec | type == "string") and (.stableLine | type == "string") and (.coreTarget | type == "string") and (.targetBranch | type == "string") and (.stablePluginSupportSha256 | test("^[a-f0-9]{64}$"))) and
+              ([.[].stablePluginSupportSha256] | unique | length) == 1
+            then .[0].stablePluginSupportSha256
+            else error("invalid stable plugin targets json")
+            end
+          ' "${targets_path}")"
+          jq -e --arg package_spec "${PACKAGE_SPEC}" 'all(.[]; .coreTarget == $package_spec)' "${targets_path}" >/dev/null
+          expected_specs="$(jq -r '.[].targetNpmSpec' "${targets_path}" | LC_ALL=C sort)"
+          actual_specs="$(grep -v '^[[:space:]]*$' "${specs_path}" | LC_ALL=C sort)"
+          if [[ "${actual_specs}" != "${expected_specs}" ]]; then
+            echo "stable_plugin_package_specs must exactly match stable_plugin_targets_json targetNpmSpec values." >&2
+            diff -u <(printf '%s\n' "${expected_specs}") <(printf '%s\n' "${actual_specs}") >&2 || true
+            exit 1
+          fi
+          jq -e --slurpfile targets "${targets_path}" '
+            . as $tarballs |
+            type == "object" and
+            (($targets[0] | map(.packageName) | sort) == (keys | sort)) and
+            all($targets[0][]; . as $target |
+              ($tarballs[$target.packageName] | type == "object") and
+              ($tarballs[$target.packageName].packageName == $target.packageName) and
+              ($tarballs[$target.packageName].version == $target.targetVersion) and
+              (($tarballs[$target.packageName].path | type == "string") and ($tarballs[$target.packageName].path | length > 0) and (($tarballs[$target.packageName].path | startswith("/")) | not) and (($tarballs[$target.packageName].path | split("/") | index("..")) == null)) and
+              (($tarballs[$target.packageName].sha256 | type == "string") and ($tarballs[$target.packageName].sha256 | test("^[a-f0-9]{64}$"))) and
+              (($tarballs[$target.packageName].integrity? // "" | type == "string"))
+            )
+          ' "${tarballs_path}" >/dev/null
+
+          artifact_name="${STABLE_PLUGIN_ACCEPTANCE_ARTIFACT_PREFIX}-${support_sha256}"
+          jq -n \
+            --arg packageSpec "${PACKAGE_SPEC}" \
+            --arg manifestRef "${STABLE_PLUGIN_MANIFEST_REF}" \
+            --arg supportSha256 "${support_sha256}" \
+            --slurpfile targets "${targets_path}" \
+            --rawfile packageSpecs "${specs_path}" \
+            --slurpfile packageTarballs "${tarballs_path}" \
+            '{
+              packageSpec: $packageSpec,
+              stablePluginManifestRef: $manifestRef,
+              stablePluginSupportSha256: $supportSha256,
+              stablePluginTargets: $targets[0],
+              stablePluginPackageSpecs: ($packageSpecs | split("\n") | map(select(length > 0))),
+              stablePluginPackageTarballs: $packageTarballs[0]
+            }' > .artifacts/stable-plugin-acceptance/stable-plugin-inputs.json
+          {
+            echo "artifact_name=${artifact_name}"
+            echo "sha256=${support_sha256}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Resolve published upgrade survivor baselines
@@ -501,6 +660,15 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+      - name: Upload stable plugin acceptance inputs
+        if: inputs.suite_profile == 'stable-plugin'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.stable_plugin.outputs.artifact_name }}
+          path: .artifacts/stable-plugin-acceptance/stable-plugin-inputs.json
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Summarize package candidate
         env:
           PACKAGE_SHA256: ${{ steps.resolve.outputs.sha256 }}
@@ -513,6 +681,8 @@ jobs:
           PUBLISHED_UPGRADE_SURVIVOR_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
           PUBLISHED_UPGRADE_SURVIVOR_BASELINES: ${{ steps.upgrade_survivor_baselines.outputs.baselines }}
           PUBLISHED_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
+          STABLE_PLUGIN_INPUTS_ARTIFACT: ${{ steps.stable_plugin.outputs.artifact_name }}
+          STABLE_PLUGIN_SUPPORT_SHA256: ${{ steps.stable_plugin.outputs.sha256 }}
         shell: bash
         run: |
           {
@@ -532,6 +702,10 @@ jobs:
             echo "- Published upgrade survivor baseline: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINE}\`"
             echo "- Published upgrade survivor baselines: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINES}\`"
             echo "- Published upgrade survivor scenarios: \`${PUBLISHED_UPGRADE_SURVIVOR_SCENARIOS}\`"
+            if [[ -n "${STABLE_PLUGIN_INPUTS_ARTIFACT// }" ]]; then
+              echo "- Stable plugin support manifest SHA-256: \`${STABLE_PLUGIN_SUPPORT_SHA256}\`"
+              echo "- Stable plugin inputs artifact: \`${STABLE_PLUGIN_INPUTS_ARTIFACT}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   package_integrity:
@@ -576,6 +750,10 @@ jobs:
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
       include_openwebui: ${{ needs.resolve_package.outputs.include_openwebui == 'true' }}
       docker_lanes: ${{ needs.resolve_package.outputs.docker_lanes }}
+      stable_plugin_targets_json: ${{ inputs.stable_plugin_targets_json }}
+      stable_plugin_package_specs: ${{ inputs.stable_plugin_package_specs }}
+      stable_plugin_package_tarballs_json: ${{ inputs.stable_plugin_package_tarballs_json }}
+      stable_plugin_support_sha256: ${{ needs.resolve_package.outputs.stable_plugin_support_sha256 }}
       published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}
       published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}
@@ -630,6 +808,90 @@ jobs:
       OPENCLAW_GEMINI_SETTINGS_JSON: ${{ secrets.OPENCLAW_GEMINI_SETTINGS_JSON }}
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
 
+  stable_plugin_acceptance_proof:
+    name: Stable plugin acceptance proof
+    needs: [resolve_package, docker_acceptance]
+    if: inputs.suite_profile == 'stable-plugin'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download stable plugin acceptance inputs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ${{ needs.resolve_package.outputs.stable_plugin_inputs_artifact }}
+          path: .artifacts/stable-plugin-acceptance-proof
+
+      - name: Download stable plugin Docker proof
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: docker-e2e-*
+          path: .artifacts/stable-plugin-docker-proof
+          merge-multiple: true
+
+      - name: Write stable plugin acceptance proof
+        env:
+          DOCKER_LANES: ${{ needs.resolve_package.outputs.docker_lanes }}
+          PACKAGE_VERSION: ${{ needs.resolve_package.outputs.package_version }}
+          PACKAGE_SHA256: ${{ needs.resolve_package.outputs.package_sha256 }}
+          PACKAGE_SOURCE_SHA: ${{ needs.resolve_package.outputs.package_source_sha }}
+          STABLE_PLUGIN_SUPPORT_SHA256: ${{ needs.resolve_package.outputs.stable_plugin_support_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          inputs_path=.artifacts/stable-plugin-acceptance-proof/stable-plugin-inputs.json
+          docker_proof_path="$(find .artifacts/stable-plugin-docker-proof -name stable-plugin-docker-proof.json -type f | sort | head -n 1)"
+          proof_path=.artifacts/stable-plugin-acceptance-proof/stable-plugin-acceptance.json
+          if [[ ! -f "${inputs_path}" ]]; then
+            echo "stable-plugin-inputs.json is missing from stable plugin acceptance artifact." >&2
+            exit 1
+          fi
+          if [[ -z "${docker_proof_path}" ]]; then
+            echo "stable-plugin Docker proof is missing from Docker E2E artifacts." >&2
+            find .artifacts/stable-plugin-docker-proof -maxdepth 4 -type f -print >&2 || true
+            exit 1
+          fi
+          jq -e --arg support_sha "${STABLE_PLUGIN_SUPPORT_SHA256}" '
+            .stablePluginSupportSha256 == $support_sha and
+            (.stablePluginTargets | type == "array" and length > 0) and
+            (.stablePluginPackageSpecs | type == "array" and length == (.stablePluginTargets | length))
+          ' "${inputs_path}" >/dev/null
+          jq -e --arg support_sha "${STABLE_PLUGIN_SUPPORT_SHA256}" '
+            .result == "passed" and
+            .stablePluginSupportSha256 == $support_sha and
+            (.pluginProofs | type == "array" and length > 0) and
+            all(.pluginProofs[]; .stablePluginSupportSha256 == $support_sha and .source == "docker-npm-install" and .installSource == "tarball" and .result == "passed")
+          ' "${docker_proof_path}" >/dev/null
+          jq -n \
+            --arg packageVersion "${PACKAGE_VERSION}" \
+            --arg packageSha256 "${PACKAGE_SHA256}" \
+            --arg packageSourceSha "${PACKAGE_SOURCE_SHA}" \
+            --arg supportSha256 "${STABLE_PLUGIN_SUPPORT_SHA256}" \
+            --arg dockerLanes "${DOCKER_LANES}" \
+            --arg completedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --slurpfile inputs "${inputs_path}" \
+            --slurpfile dockerProof "${docker_proof_path}" \
+            '{
+              schemaVersion: 1,
+              result: "passed",
+              packageVersion: $packageVersion,
+              packageSha256: $packageSha256,
+              packageSourceSha: $packageSourceSha,
+              stablePluginSupportSha256: $supportSha256,
+              dockerLanes: ($dockerLanes | split(" ") | map(select(length > 0))),
+              completedAt: $completedAt,
+              stablePluginInputs: $inputs[0],
+              dockerProof: $dockerProof[0],
+              pluginProofs: $dockerProof[0].pluginProofs
+            }' > "${proof_path}"
+
+      - name: Upload stable plugin acceptance proof
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ needs.resolve_package.outputs.stable_plugin_inputs_artifact }}-proof
+          path: .artifacts/stable-plugin-acceptance-proof
+          retention-days: 30
+          if-no-files-found: error
+
   package_telegram:
     name: Telegram package acceptance
     needs: [resolve_package, package_integrity]
@@ -650,7 +912,14 @@ jobs:
 
   summary:
     name: Verify package acceptance
-    needs: [resolve_package, package_integrity, docker_acceptance, package_telegram]
+    needs:
+      [
+        resolve_package,
+        package_integrity,
+        docker_acceptance,
+        stable_plugin_acceptance_proof,
+        package_telegram,
+      ]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -659,6 +928,7 @@ jobs:
         env:
           DOCKER_RESULT: ${{ needs.docker_acceptance.result }}
           PACKAGE_INTEGRITY_RESULT: ${{ needs.package_integrity.result }}
+          STABLE_PLUGIN_PROOF_RESULT: ${{ needs.stable_plugin_acceptance_proof.result }}
           PACKAGE_TELEGRAM_RESULT: ${{ needs.package_telegram.result }}
           RESOLVE_RESULT: ${{ needs.resolve_package.result }}
         shell: bash
@@ -670,6 +940,7 @@ jobs:
             "resolve_package=${RESOLVE_RESULT}" \
             "package_integrity=${PACKAGE_INTEGRITY_RESULT}" \
             "docker_acceptance=${DOCKER_RESULT}" \
+            "stable_plugin_acceptance_proof=${STABLE_PLUGIN_PROOF_RESULT}" \
             "package_telegram=${PACKAGE_TELEGRAM_RESULT}"
           do
             name="${item%%=*}"

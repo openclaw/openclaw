@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "stableLine": {
+    "month": "2026.6",
+    "baseVersion": "2026.6.33"
+  },
+  "coveredPlugins": [
+    {
+      "packageName": "@openclaw/codex",
+      "pluginId": "codex",
+      "kind": "provider",
+      "sourceRepository": "openclaw/openclaw",
+      "packageDir": "extensions/codex",
+      "stableLine": "2026.6",
+      "targetVersion": "2026.6.33",
+      "targetNpmSpec": "@openclaw/codex@2026.6.33",
+      "targetBranch": "stable/2026.6.33",
+      "runtimeHarness": {
+        "harnessId": "codex",
+        "runtimePackage": "@openai/codex",
+        "installMode": "on_demand_runtime_dependencies",
+        "requiredPlatformPackages": [
+          "@openai/codex-linux-x64",
+          "@openai/codex-linux-arm64",
+          "@openai/codex-darwin-x64",
+          "@openai/codex-darwin-arm64",
+          "@openai/codex-win32-x64",
+          "@openai/codex-win32-arm64"
+        ]
+      },
+      "owners": []
+    },
+    {
+      "packageName": "@openclaw/discord",
+      "pluginId": "discord",
+      "kind": "channel",
+      "sourceRepository": "openclaw/openclaw",
+      "packageDir": "extensions/discord",
+      "stableLine": "2026.6",
+      "targetVersion": "2026.6.33",
+      "targetNpmSpec": "@openclaw/discord@2026.6.33",
+      "targetBranch": "stable/2026.6.33",
+      "owners": []
+    },
+    {
+      "packageName": "@openclaw/slack",
+      "pluginId": "slack",
+      "kind": "channel",
+      "sourceRepository": "openclaw/openclaw",
+      "packageDir": "extensions/slack",
+      "stableLine": "2026.6",
+      "targetVersion": "2026.6.33",
+      "targetNpmSpec": "@openclaw/slack@2026.6.33",
+      "targetBranch": "stable/2026.6.33",
+      "owners": []
+    }
+  ]
+}

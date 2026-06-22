@@ -1,0 +1,244 @@
+name: Stable Plugin Support Drift
+
+on:
+  workflow_dispatch:
+    inputs:
+      stable_line:
+        description: Stable line month to inspect
+        required: true
+        default: "2026.6"
+        type: string
+      stable_plugin_manifest_sha256:
+        description: Expected canonical SHA-256 for release/stable-plugin-support.json
+        required: false
+        type: string
+      package_acceptance_run_id:
+        description: Optional Package Acceptance run id containing stable-plugin acceptance proof
+        required: false
+        type: string
+      update_issues:
+        description: Create or update drift issues instead of dry-run issue output
+        required: true
+        default: false
+        type: boolean
+  schedule:
+    - cron: "15 17 * * *"
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+concurrency:
+  group: stable-plugin-support-drift-${{ github.event_name == 'workflow_dispatch' && inputs.stable_line || '2026.6' }}
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    name: Stable plugin drift report
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Build stable plugin evidence inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA256: ${{ github.event_name == 'workflow_dispatch' && inputs.stable_plugin_manifest_sha256 || '' }}
+          PACKAGE_ACCEPTANCE_RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.package_acceptance_run_id || '' }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/stable-plugin-drift
+          node --import tsx --input-type=module <<'NODE'
+          import { writeFileSync, readFileSync } from "node:fs";
+          import { execFileSync } from "node:child_process";
+          import { validateStablePluginSupportManifest } from "./src/plugins/stable-plugin-support.ts";
+
+          const manifest = validateStablePluginSupportManifest(
+            JSON.parse(readFileSync("release/stable-plugin-support.json", "utf8")),
+          );
+          const expected = (process.env.EXPECTED_SHA256 ?? "").replace(/^sha256:/, "");
+          if (expected && expected !== manifest.stablePluginSupportSha256) {
+            throw new Error(
+              `stable plugin manifest digest mismatch: expected ${expected}, got ${manifest.stablePluginSupportSha256}`,
+            );
+          }
+          const registryProofs = manifest.manifest.coveredPlugins.map((entry) => {
+            let version = "";
+            let exists = false;
+            try {
+              version = execFileSync("npm", ["view", entry.targetNpmSpec, "version"], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+              }).trim();
+              exists = version === entry.targetVersion;
+            } catch {
+              exists = false;
+            }
+            return {
+              packageName: entry.packageName,
+              version,
+              targetNpmSpec: entry.targetNpmSpec,
+              exists,
+              observedAt: new Date().toISOString(),
+            };
+          });
+          const catalogEntries = manifest.manifest.coveredPlugins.map((entry) => ({
+            packageName: entry.packageName,
+            pluginId: entry.pluginId,
+            kind: entry.kind,
+            source: "official-external-catalog",
+          }));
+          writeFileSync(
+            ".artifacts/stable-plugin-drift/registry-proof.json",
+            `${JSON.stringify(registryProofs, null, 2)}\n`,
+          );
+          writeFileSync(
+            ".artifacts/stable-plugin-drift/catalog.json",
+            `${JSON.stringify(catalogEntries, null, 2)}\n`,
+          );
+          writeFileSync(".artifacts/stable-plugin-drift/package-acceptance.json", "[]\n");
+          writeFileSync(
+            ".artifacts/stable-plugin-drift/manifest-digest.txt",
+            `${manifest.stablePluginSupportSha256}\n`,
+          );
+          NODE
+          support_sha="$(cat .artifacts/stable-plugin-drift/manifest-digest.txt)"
+          proof_artifact="stable-plugin-acceptance-${support_sha}-proof"
+          proof_dir=.artifacts/stable-plugin-drift/package-acceptance-proof
+          mkdir -p "${proof_dir}"
+          if [[ -n "${PACKAGE_ACCEPTANCE_RUN_ID// }" ]]; then
+            gh run download "${PACKAGE_ACCEPTANCE_RUN_ID}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "${proof_artifact}" \
+              --dir "${proof_dir}"
+          else
+            mapfile -t candidate_runs < <(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow package-acceptance.yml \
+                --status success \
+                --limit 20 \
+                --json databaseId \
+                --jq '.[].databaseId'
+            )
+            for run_id in "${candidate_runs[@]}"; do
+              if gh run download "${run_id}" \
+                --repo "$GITHUB_REPOSITORY" \
+                --name "${proof_artifact}" \
+                --dir "${proof_dir}" >/dev/null 2>&1; then
+                break
+              fi
+            done
+          fi
+          proof_path="$(find "${proof_dir}" -name stable-plugin-acceptance.json -type f | sort | head -n 1)"
+          if [[ -n "${proof_path}" ]]; then
+            completed_at="$(jq -r '.completedAt // ""' "${proof_path}")"
+            jq --arg completed_at "${completed_at}" '[.pluginProofs[]? | {
+              packageName,
+              targetVersion,
+              targetNpmSpec,
+              stableLine,
+              stablePluginSupportSha256,
+              result,
+              completedAt: (.completedAt // $completed_at)
+            }]' "${proof_path}" > .artifacts/stable-plugin-drift/package-acceptance.json
+          else
+            echo "No ${proof_artifact} artifact found; drift report will mark package acceptance proof missing." >&2
+            printf '[]\n' > .artifacts/stable-plugin-drift/package-acceptance.json
+          fi
+
+      - name: Generate stable plugin drift report
+        env:
+          STABLE_LINE: ${{ github.event_name == 'workflow_dispatch' && inputs.stable_line || '2026.6' }}
+          UPDATE_ISSUES: ${{ github.event_name == 'workflow_dispatch' && inputs.update_issues && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          issue_mode=--dry-run-issues
+          if [[ "${UPDATE_ISSUES}" == "true" ]]; then
+            issue_mode=--update-issues
+          fi
+          node --import tsx scripts/stable-plugin-drift-report.ts \
+            --stable-line "${STABLE_LINE}" \
+            --manifest release/stable-plugin-support.json \
+            --registry-proof .artifacts/stable-plugin-drift/registry-proof.json \
+            --package-acceptance .artifacts/stable-plugin-drift/package-acceptance.json \
+            --catalog .artifacts/stable-plugin-drift/catalog.json \
+            --output .artifacts/stable-plugin-drift/report.json \
+            --issues-output .artifacts/stable-plugin-drift/issues.json \
+            "${issue_mode}" \
+            --json
+          jq -r '"blocking_drift_count=" + (.summary.blockingDriftCount | tostring)' \
+            .artifacts/stable-plugin-drift/report.json >> "$GITHUB_OUTPUT"
+
+      - name: Apply stable plugin drift issues
+        if: github.event_name == 'workflow_dispatch' && inputs.update_issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { execFileSync } from "node:child_process";
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const issues = JSON.parse(readFileSync(".artifacts/stable-plugin-drift/issues.json", "utf8"));
+          const applied = [];
+          for (const issue of issues) {
+            if (issue.action !== "create_or_update") {
+              continue;
+            }
+            const existing = execFileSync(
+              "gh",
+              [
+                "issue",
+                "list",
+                "--repo",
+                process.env.GITHUB_REPOSITORY,
+                "--state",
+                "open",
+                "--search",
+                issue.marker,
+                "--json",
+                "number",
+                "--jq",
+                ".[0].number // empty",
+              ],
+              { encoding: "utf8" },
+            ).trim();
+            const bodyPath = `.artifacts/stable-plugin-drift/issue-${issue.idempotencyKey.replaceAll(/[^a-zA-Z0-9_.-]/g, "_")}.md`;
+            writeFileSync(bodyPath, `${issue.body}\n`);
+            if (existing) {
+              execFileSync(
+                "gh",
+                ["issue", "edit", existing, "--repo", process.env.GITHUB_REPOSITORY, "--title", issue.title, "--body-file", bodyPath],
+                { stdio: "inherit" },
+              );
+              applied.push({ ...issue, number: Number(existing), operation: "updated" });
+            } else {
+              const url = execFileSync(
+                "gh",
+                ["issue", "create", "--repo", process.env.GITHUB_REPOSITORY, "--title", issue.title, "--body-file", bodyPath],
+                { encoding: "utf8" },
+              ).trim();
+              applied.push({ ...issue, url, operation: "created" });
+            }
+          }
+          writeFileSync(
+            ".artifacts/stable-plugin-drift/issues-applied.json",
+            `${JSON.stringify(applied, null, 2)}\n`,
+          );
+          NODE
+
+      - name: Upload stable plugin drift report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: stable-plugin-drift-report
+          path: .artifacts/stable-plugin-drift
+          retention-days: 30
+          if-no-files-found: error
