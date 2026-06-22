@@ -105,9 +105,9 @@ describe("tool-activity-heartbeat", () => {
 describe("heartbeat wrapper metadata preservation", () => {
   // Regression: the heartbeat execute wrapper in attempt.ts replaces tool
   // objects via spread ({ ...tool, execute: ... }), which copies own enumerable
-  // properties but loses WeakMap-keyed metadata. The three copy calls below
-  // are the same pattern used in attempt.ts to preserve plugin, channel, and
-  // before-tool-call metadata across the wrapper boundary.
+  // properties but loses WeakMap-keyed metadata. The copy calls below are the
+  // same pattern used in attempt.ts to preserve plugin, channel, before-tool-call,
+  // and terminal presentation metadata across the wrapper boundary.
 
   it("preserves channel tool metadata on heartbeat-wrapped tools", () => {
     const source = { name: "test-tool", execute: vi.fn() as never };
