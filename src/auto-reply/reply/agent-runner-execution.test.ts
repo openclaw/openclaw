@@ -6031,6 +6031,7 @@ describe("runAgentTurnWithFallback", () => {
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
+      isRestartRecoveryArmed: () => true,
     });
 
     expect(result.kind).toBe("final");
@@ -6085,6 +6086,7 @@ describe("runAgentTurnWithFallback", () => {
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
+      isRestartRecoveryArmed: () => true,
     });
 
     expect(result).toEqual({

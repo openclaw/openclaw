@@ -1594,6 +1594,7 @@ export async function runAgentTurnWithFallback(params: {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
+  isRestartRecoveryArmed?: () => boolean;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -3119,6 +3120,14 @@ export async function runAgentTurnWithFallback(params: {
       // bookkeeping for drain/lane-cleared is still recorded.
       if (isReplyOperationRestartAbort(params.replyOperation)) {
         takePendingLifecycleTerminal()?.emit("end", err);
+        if (params.isRestartRecoveryArmed?.() !== true) {
+          return {
+            kind: "final",
+            payload: markAgentRunFailureReplyPayload({
+              text: buildRestartLifecycleReplyText(),
+            }),
+          };
+        }
         return {
           kind: "final",
           payload: {
