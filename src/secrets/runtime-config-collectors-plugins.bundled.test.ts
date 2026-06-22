@@ -101,6 +101,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       })?.manifest.configContracts?.secretInputs?.paths,
     ).toEqual([
       { path: "twilio.authToken", expected: "string" },
+      { path: "msteams.sharedSecret", expected: "string" },
       { path: "realtime.providers.*.apiKey", expected: "string" },
       { path: "streaming.providers.*.apiKey", expected: "string" },
       { path: "tts.providers.*.apiKey", expected: "string" },
@@ -155,6 +156,7 @@ describe("collectPluginConfigAssignments bundled plugin manifests", () => {
       }).get("voice-call")?.configContracts.secretInputs?.paths,
     ).toEqual([
       { path: "twilio.authToken", expected: "string" },
+      { path: "msteams.sharedSecret", expected: "string" },
       { path: "realtime.providers.*.apiKey", expected: "string" },
       { path: "streaming.providers.*.apiKey", expected: "string" },
       { path: "tts.providers.*.apiKey", expected: "string" },

@@ -1,7 +1,7 @@
 // Voice Call plugin module implements events behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
+import { isAllowlistedCaller } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
@@ -45,12 +45,13 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
 
     case "allowlist":
     case "pairing": {
-      const normalized = normalizePhoneNumber(from);
-      if (!normalized) {
+      if (!from) {
         console.log("[voice-call] Inbound call rejected: missing caller ID");
         return false;
       }
-      const allowed = isAllowlistedCaller(normalized, allowFrom);
+      // Pass the raw caller id so AAD callers (msteams) match by exact id, not
+      // phone digits.
+      const allowed = isAllowlistedCaller(from, allowFrom);
       const status = allowed ? "accepted" : "rejected";
       console.log(
         `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,

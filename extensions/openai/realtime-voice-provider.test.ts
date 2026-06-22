@@ -1614,6 +1614,48 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(onEvent).toHaveBeenCalledWith({ direction: "client", type: "response.create" });
   });
 
+  it("adds an image as ambient context without forcing a response", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onEvent,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.sendImage?.({
+      dataBase64: "QUJD",
+      mime: "image/jpeg",
+      text: "the caller's shared screen",
+    });
+
+    // The frame is added as a user conversation item (text label + input_image data URI)...
+    expect(parseSent(socket).at(-1)).toEqual({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: "the caller's shared screen" },
+          { type: "input_image", image_url: "data:image/jpeg;base64,QUJD" },
+        ],
+      },
+    });
+    // ...and crucially does NOT trigger a response (ambient context, not a prompt).
+    expect(onEvent).not.toHaveBeenCalledWith({ direction: "client", type: "response.create" });
+  });
+
   it("defers manual response.create while a realtime response is active", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

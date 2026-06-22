@@ -31,6 +31,11 @@ export type VoiceResponseParams = {
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
   userMessage: string;
+  /**
+   * Optional images for a vision-capable turn (e.g. the caller's latest shared video frame), so
+   * the streaming agent can answer "what's on my screen?"-style questions. Forwarded to the agent run.
+   */
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
 };
 
 export type VoiceResponseResult = {
@@ -222,6 +227,7 @@ export async function generateVoiceResponse(
     userMessage,
     coreConfig,
     agentRuntime,
+    images,
   } = params;
 
   if (!coreConfig) {
@@ -331,6 +337,7 @@ export async function generateVoiceResponse(
       workspaceDir,
       config: cfg,
       prompt: userMessage,
+      images,
       provider,
       model,
       thinkLevel,

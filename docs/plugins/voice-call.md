@@ -1,5 +1,5 @@
 ---
-summary: "Place outbound and accept inbound voice calls via Twilio, Telnyx, or Plivo, with optional realtime voice and streaming transcription"
+summary: "Place outbound and accept inbound voice calls via Twilio, Telnyx, Plivo, or Microsoft Teams, with optional realtime voice and streaming transcription"
 read_when:
   - You want to place an outbound voice call from OpenClaw
   - You are configuring or developing the voice-call plugin
@@ -14,7 +14,9 @@ transcription, and inbound calls with allowlist policies.
 
 **Current providers:** `twilio` (Programmable Voice + Media Streams),
 `telnyx` (Call Control v2), `plivo` (Voice API + XML transfer + GetInput
-speech), `mock` (dev/no network).
+speech), `msteams` (Microsoft Teams voice over an external bridge —
+inbound-first; see [Microsoft Teams voice](#microsoft-teams-voice-msteams)),
+`mock` (dev/no network).
 
 <Note>
 The Voice Call plugin runs **inside the Gateway process**. If you use a
@@ -652,6 +654,86 @@ auto-ending the call:
 
 - If the stream reconnects during that window, auto-end is canceled.
 - If no stream re-registers after the grace period, the call is ended to prevent stuck active calls.
+
+## Microsoft Teams voice (msteams)
+
+The `msteams` provider connects OpenClaw to **Microsoft Teams voice and video
+calls** — both **1:1 and group/meeting** calls. Unlike the carrier providers,
+Teams calls do **not** arrive on the webhook/media-stream plane: a **Windows-side
+bridge worker** owns the Microsoft Graph Calling notification endpoint and the
+`Microsoft.Skype.Bots.Media` audio/video sockets — those SDKs are Windows-only —
+and relays PCM audio (and, when enabled, the caller's **video frames** and the
+bot's own **avatar / display video tile**) to OpenClaw over a **per-call
+WebSocket**, authenticated with HMAC-SHA256 and bound to loopback by default.
+Inbound calls are **allowlist-gated**; the bot can also place an **outbound Teams
+call-back** to deliver a background result (it does not place outbound PSTN calls).
+
+```json5
+{
+  provider: "msteams",
+  // Inbound default is a safe "allowlist" (never "open"). List the caller's AAD
+  // object id in allowFrom; an empty allowFrom accepts no one. Set
+  // inboundPolicy: "open" only to accept any authenticated Teams caller.
+  inboundPolicy: "allowlist",
+  allowFrom: ["00000000-0000-0000-0000-000000000000"], // caller AAD object ids
+  responseModel: "openai/gpt-5.4", // agent model for the streaming path
+
+  msteams: {
+    port: 8443,
+    bindAddress: "127.0.0.1", // loopback by default; set a trusted-network IP only if the worker is remote
+    path: "/voice/msteams/stream",
+    sharedSecret: "${MSTEAMS_WS_SECRET}", // SecretRef-compatible; must match the worker
+    requireRecordingStatus: true, // gate transcripts on active Teams recording status
+  },
+
+  // Pick one mode:
+  streaming: { enabled: true, provider: "elevenlabs" }, // agent does work (STT -> agent -> TTS)
+  // realtime: { enabled: true, provider: "openai" },   // speech-to-speech, lowest latency
+}
+```
+
+Key points:
+
+- **Modes:** enable `streaming` (transcription → the OpenClaw agent → TTS, for
+  doing work) **or** `realtime` (speech-to-speech for low-latency
+  conversation). At least one is required.
+- **Allowlist:** because Teams callers have no phone number, `allowFrom`
+  entries accept the caller's **AAD object id** (a GUID) as well as E.164
+  numbers — list the caller's `aadId` for `inboundPolicy: "allowlist"`.
+- **Recording gate:** with `requireRecordingStatus: true` (default), no
+  media-derived transcript is processed until the worker reports active Teams
+  recording status (a Microsoft Media Access API obligation).
+- **Security:** the WebSocket listener binds to loopback by default, verifies
+  HMAC-SHA256 over the handshake, caps payloads, and the shared secret is
+  SecretRef-backed.
+- **Group & meeting calls:** in a call with two or more humans the bot stays
+  quiet and **speaks only when addressed** — by a wake phrase (e.g. "Hey
+  assistant", configurable via `groupCall.wakePhrases`), with a short
+  `groupCall.followUpWindowMs` window for follow-ups. 1:1 calls always respond.
+  Per-participant attribution labels each video frame with who is showing it.
+- **Outbound call-back:** when the caller asks to be **called back** (or a
+  background task is dispatched with `deliverVia: "call"`), the bot places an
+  outbound Teams call through the worker and **speaks the result**; configured
+  under `outbound` (`enabled`, `answerTimeoutMs`). If unanswered, Teams voicemail
+  captures the spoken result. The default delivery is a Teams **chat message**.
+- **Inbound video (vision):** with video enabled on the worker, the agent can
+  **see** what the caller shares. The `look_at_screen` tool answers questions
+  about the caller's **camera** or **screen-share (VBSS)** (the streaming path
+  auto-attaches a frame each turn). Recording-gated and bounded by
+  `msteams.maxVisionPerMinute` (per-call vision spend cap; default 30, `0` =
+  unlimited).
+- **Avatar & `show_to_caller` (CVI):** the bot can publish an **avatar video
+  tile** (rendered by the worker, lip-synced to its speech). In realtime mode the
+  **`show_to_caller`** tool displays an image on that tile mid-call — a screenshot
+  it takes (e.g. via the browser) or an image it generates/fetches — for a few
+  seconds, then returns to the avatar.
+- **Continuous vision (realtime):** the realtime path also pushes the latest
+  changed inbound frame into the session as ambient context (`sendImage`), so the
+  model stays visually aware between explicit `look_at_screen` calls —
+  recording-gated and budget-capped.
+
+See the [voice-call extension README](https://github.com/openclaw/openclaw/blob/main/extensions/voice-call/README.md)
+for the full WebSocket bridge protocol and worker setup.
 
 ## Stale call reaper
 

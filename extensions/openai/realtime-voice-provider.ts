@@ -18,6 +18,7 @@ import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceImageInput,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
@@ -470,6 +471,25 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       },
     });
     this.requestResponseCreate();
+  }
+
+  sendImage(image: RealtimeVoiceImageInput): void {
+    // Add the frame as a user conversation item so the model is visually aware. Deliberately NO
+    // requestResponseCreate() — unlike sendUserMessage, this is ambient context the model consults on
+    // its next natural (audio-driven) turn, not a prompt that forces it to speak about every frame.
+    // sendEvent is a no-op unless the socket is open.
+    const content: Array<Record<string, unknown>> = [];
+    if (image.text) {
+      content.push({ type: "input_text", text: image.text });
+    }
+    content.push({
+      type: "input_image",
+      image_url: `data:${image.mime};base64,${image.dataBase64}`,
+    });
+    this.sendEvent({
+      type: "conversation.item.create",
+      item: { type: "message", role: "user", content },
+    });
   }
 
   triggerGreeting(instructions?: string): void {
