@@ -32,13 +32,16 @@ async function drainFormattedEvents(
   sessionKey: string,
   params?: Partial<Parameters<typeof drainFormattedSystemEvents>[0]>,
 ) {
-  return await drainFormattedSystemEvents({
+  // These cases enqueue only trusted (operator/core) events, so they land in
+  // the actionable block; flatten it for the existing string assertions.
+  const result = await drainFormattedSystemEvents({
     cfg,
     sessionKey,
     isMainSession: false,
     isNewSession: false,
     ...params,
   });
+  return result?.actionable;
 }
 
 describe("system events (session routing)", () => {

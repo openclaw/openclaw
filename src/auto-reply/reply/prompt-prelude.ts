@@ -26,7 +26,14 @@ export function buildReplyPromptBodies(params: {
   prefixedBody?: string;
   transcriptBody?: string;
   threadContextNote?: string;
+  /** Operator/core-originated system events rendered as actionable `System:` lines. */
   systemEventBlocks?: string[];
+  /**
+   * Attacker-reachable inbound system events (tagged `quarantineInPrompt`).
+   * Routed through the untrusted-context header so an injected directive in an
+   * inbound event cannot be treated as an actionable instruction.
+   */
+  untrustedSystemEventBlocks?: string[];
   inboundEventKind?: InboundEventKind;
 }): {
   mediaNote?: string;
@@ -35,14 +42,21 @@ export function buildReplyPromptBodies(params: {
   queuedBody: string;
   transcriptCommandBody: string;
 } {
-  const systemEventEntries = (params.systemEventBlocks ?? []).filter(Boolean);
+  const actionableEntries = (params.systemEventBlocks ?? []).filter(Boolean);
+  const untrustedEventEntries = (params.untrustedSystemEventBlocks ?? []).filter(Boolean);
   const rawPrefixedBody = params.prefixedBody ?? params.effectiveBaseBody;
-  // System events are runtime/operator-sourced metadata, not user instructions.
-  // Quarantine them under the untrusted-context header instead of raw-prepending,
-  // so an injected directive in a system event cannot ride the bare user turn.
-  const bodyWithEvents = appendUntrustedContext(params.effectiveBaseBody, systemEventEntries);
-  const prefixedBodyWithEvents = appendUntrustedContext(rawPrefixedBody, [
-    ...systemEventEntries,
+  // Operator/core system events are trusted runtime metadata; prepend them as
+  // actionable `System:` lines. Inbound (quarantined) events stay under the
+  // untrusted-context header so an injected directive can't ride the user turn.
+  const baseBodyWithActionable = [...actionableEntries, params.effectiveBaseBody]
+    .filter(Boolean)
+    .join("\n\n");
+  const prefixedBodyWithActionable = [...actionableEntries, rawPrefixedBody]
+    .filter(Boolean)
+    .join("\n\n");
+  const bodyWithEvents = appendUntrustedContext(baseBodyWithActionable, untrustedEventEntries);
+  const prefixedBodyWithEvents = appendUntrustedContext(prefixedBodyWithActionable, [
+    ...untrustedEventEntries,
     ...(params.sessionCtx.UntrustedContext ?? []),
   ]);
   const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]
@@ -230,6 +244,7 @@ export function buildReplyPromptEnvelope(
     prefixedBody?: string;
     threadContextNote?: string;
     systemEventBlocks?: string[];
+    untrustedSystemEventBlocks?: string[];
   },
 ): ReplyPromptEnvelope {
   const base = buildReplyPromptEnvelopeBase(params);
@@ -242,6 +257,7 @@ export function buildReplyPromptEnvelope(
     transcriptBody: base.transcriptBody,
     threadContextNote: params.threadContextNote,
     systemEventBlocks: params.systemEventBlocks,
+    untrustedSystemEventBlocks: params.untrustedSystemEventBlocks,
     inboundEventKind: params.inboundEventKind,
   });
 

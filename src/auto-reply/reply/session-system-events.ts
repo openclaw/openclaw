@@ -99,16 +99,32 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   );
 }
 
-/** Drain queued system events, format as `System:` lines, return the block text (or undefined). */
+/**
+ * Drained system events partitioned by prompt-trust provenance.
+ *
+ * `actionable` events are operator/core-originated (cron, restart, maintenance,
+ * channel summary) and render as plain `System:` lines the agent may act on.
+ * `untrusted` events come from attacker-reachable inbound producers (tagged with
+ * `quarantineInPrompt`) and must be wrapped as untrusted context, never treated
+ * as instructions. Keeping the two groups separate at the drain boundary is what
+ * prevents inbound content from being laundered into actionable system lines.
+ */
+export type DrainedSystemEvents = {
+  actionable?: string;
+  untrusted?: string;
+};
+
+/** Drain queued system events, format as `System:` lines, partitioned by prompt-trust provenance. */
 export async function drainFormattedSystemEvents(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   isMainSession: boolean;
   isNewSession: boolean;
   suppressHeartbeatOwnedEvents?: boolean;
-}): Promise<string | undefined> {
+}): Promise<DrainedSystemEvents | undefined> {
   const summaryLines: string[] = [];
-  const systemLines: string[] = [];
+  const actionableLines: string[] = [];
+  const untrustedLines: string[] = [];
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
@@ -122,10 +138,13 @@ export async function drainFormattedSystemEvents(params: {
     if (!compacted) {
       continue;
     }
+    // Inbound producers tag events with quarantineInPrompt so attacker-reachable
+    // text is quarantined as untrusted context instead of an actionable line.
+    const target = event.quarantineInPrompt ? untrustedLines : actionableLines;
     const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
     let index = 0;
     for (const subline of compacted.split("\n")) {
-      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+      target.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
       index += 1;
     }
   }
@@ -139,13 +158,17 @@ export async function drainFormattedSystemEvents(params: {
       }
     }
   }
-  if (summaryLines.length === 0 && systemLines.length === 0) {
+  // Each sub-line gets its own prefix so continuation lines can't be mistaken
+  // for regular user content. Summary lines lead the actionable block.
+  const actionable =
+    summaryLines.length > 0
+      ? [...summaryLines, ...actionableLines].join("\n")
+      : actionableLines.length > 0
+        ? actionableLines.join("\n")
+        : undefined;
+  const untrusted = untrustedLines.length > 0 ? untrustedLines.join("\n") : undefined;
+  if (actionable === undefined && untrusted === undefined) {
     return undefined;
   }
-
-  // Each sub-line gets its own prefix so continuation lines can't be mistaken
-  // for regular user content.
-  return summaryLines.length > 0
-    ? [...summaryLines, ...systemLines].join("\n")
-    : systemLines.join("\n");
+  return { actionable, untrusted };
 }

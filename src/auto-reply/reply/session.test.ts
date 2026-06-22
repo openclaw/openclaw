@@ -3531,7 +3531,7 @@ describe("drainFormattedSystemEvents", () => {
       });
 
       const expectedTimestampText = requireString(expectedTimestamp, "formatted timestamp");
-      expect(result).toContain(`System: [${expectedTimestampText}] Model switched.`);
+      expect(result!.actionable).toContain(`System: [${expectedTimestampText}] Model switched.`);
     } finally {
       resetSystemEventsForTest();
       vi.useRealTimers();
@@ -3550,8 +3550,8 @@ describe("drainFormattedSystemEvents", () => {
       isNewSession: true,
     });
 
-    expect(result).toContain("System: WhatsApp: linked");
-    for (const line of result!.split("\n")) {
+    expect(result!.actionable).toContain("System: WhatsApp: linked");
+    for (const line of result!.actionable!.split("\n")) {
       expect(line).toMatch(/^System:/);
     }
   });
@@ -3576,8 +3576,8 @@ describe("drainFormattedSystemEvents", () => {
         suppressHeartbeatOwnedEvents: true,
       });
 
-      expect(result).toContain("Model switched.");
-      expect(result).not.toContain("rotate API keys");
+      expect(result!.actionable).toContain("Model switched.");
+      expect(result!.actionable).not.toContain("rotate API keys");
       // The cron event stays queued so the heartbeat path remains its single owner.
       expect(peekSystemEvents("agent:main:main")).toEqual(["Reminder: rotate API keys"]);
     } finally {
@@ -3599,7 +3599,7 @@ describe("drainFormattedSystemEvents", () => {
         isNewSession: false,
       });
 
-      expect(result).toContain("Reminder: rotate API keys");
+      expect(result!.actionable).toContain("Reminder: rotate API keys");
       expect(peekSystemEvents("agent:main:main")).toEqual([]);
     } finally {
       resetSystemEventsForTest();

@@ -20,6 +20,13 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  // Prompt-scoped provenance flag. When true, this event came from an
+  // attacker-reachable producer (inbound node/device events, hook results,
+  // child-process stderr) and must be rendered as quarantined untrusted
+  // context rather than an actionable `System:` line. Operator/cron/CLI/exec
+  // events leave this unset and stay actionable. This is NOT an identity
+  // downgrade and never touches senderIsOwner.
+  quarantineInPrompt?: boolean;
 };
 
 const MAX_EVENTS = 20;
@@ -37,6 +44,7 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  quarantineInPrompt?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -124,6 +132,7 @@ export function enqueueSystemEventEntry(
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    ...(options.quarantineInPrompt ? { quarantineInPrompt: true } : {}),
   };
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
