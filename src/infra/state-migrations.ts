@@ -169,6 +169,11 @@ export type LegacyStateDetection = {
     targetPath: string;
     hasLegacy: boolean;
   };
+  memoryStore: {
+    legacyPath: string;
+    targetPath: string;
+    hasLegacy: boolean;
+  };
   preview: string[];
 };
 
@@ -3981,6 +3986,11 @@ export async function detectLegacyStateMigrations(params: {
   const legacyAgentDir = path.join(stateDir, "agent");
   const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
   const hasLegacyAgentDir = existsDir(legacyAgentDir);
+
+  // Detect legacy memory store ~/.openclaw/memory/main.sqlite
+  const legacyMemoryStorePath = path.join(stateDir, "memory", "main.sqlite");
+  const hasLegacyMemoryStore = fileExists(legacyMemoryStorePath);
+  const targetMemoryStorePath = path.join(targetAgentDir, "openclaw-agent.sqlite");
   const pluginStateSidecarPath = resolveLegacyPluginStateSidecarPath(stateDir);
   const hasPluginStateSidecar = fileExists(pluginStateSidecarPath);
   const hasPendingPluginStateSidecarArchive = hasPendingSqliteSidecarArchive(
@@ -4117,6 +4127,9 @@ export async function detectLegacyStateMigrations(params: {
   if (execApprovals.hasLegacy) {
     preview.push(`- Exec approvals: ${execApprovals.sourcePath} → ${execApprovals.targetPath}`);
   }
+  if (hasLegacyMemoryStore) {
+    preview.push(`- Memory store: ${legacyMemoryStorePath} → ${targetMemoryStorePath}`);
+  }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
   }
@@ -4194,6 +4207,11 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: hasCurrentConversationBindings,
     },
     execApprovals,
+    memoryStore: {
+      legacyPath: legacyMemoryStorePath,
+      targetPath: targetMemoryStorePath,
+      hasLegacy: hasLegacyMemoryStore,
+    },
     preview,
   };
 }
@@ -4451,6 +4469,193 @@ export async function migrateLegacyAgentDir(
     } catch (err) {
       warnings.push(`Failed relocating legacy agent dir: ${String(err)}`);
     }
+  }
+
+  return { changes, warnings };
+}
+
+async function migrateLegacyMemoryStore(params: {
+  detected: LegacyStateDetection;
+  now: () => number;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  const { detected } = params;
+
+  if (!detected.memoryStore.hasLegacy) {
+    return { changes, warnings };
+  }
+
+  const legacyPath = detected.memoryStore.legacyPath;
+  const targetPath = detected.memoryStore.targetPath;
+
+  // Ensure target directory exists
+  ensureDir(path.dirname(targetPath));
+
+  // Check if target already exists and has data
+  const targetExists = fileExists(targetPath);
+  let targetHasData = false;
+  if (targetExists) {
+    try {
+      // Use same agent DB opening logic as runtime
+      const db = requireNodeSqlite().Database.open(targetPath);
+      const result = db.prepare("SELECT COUNT(*) as count FROM memory_index_chunks").get() as {
+        count: number;
+      };
+      targetHasData = (result?.count ?? 0) > 0;
+      db.close();
+    } catch {
+      targetHasData = false;
+    }
+  }
+
+  if (targetHasData) {
+    warnings.push(`Target memory store already has data at ${targetPath}. Skipping migration.`);
+    return { changes, warnings };
+  }
+
+  try {
+    // Verify legacy schema exists (meta, files, chunks)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const checkLegacySchema = (db: any): boolean => {
+      const hasMeta =
+        db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='meta'").get() !=
+        null;
+      const hasFiles =
+        db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='files'").get() !=
+        null;
+      const hasChunks =
+        db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks'").get() !=
+        null;
+      return hasMeta && hasFiles && hasChunks;
+    };
+
+    const legacyDb = requireNodeSqlite().Database.open(legacyPath, { readonly: true });
+    if (!checkLegacySchema(legacyDb)) {
+      warnings.push(
+        `Legacy memory store at ${legacyPath} does not have expected schema (meta, files, chunks). Skipping migration.`,
+      );
+      legacyDb.close();
+      return { changes, warnings };
+    }
+    legacyDb.close();
+
+    // Archive existing target if corrupt/empty
+    if (targetExists) {
+      const archivePath = `${targetPath}.corrupt-${now()}`;
+      fs.renameSync(targetPath, archivePath);
+      changes.push(`Archived corrupt target memory store → ${archivePath}`);
+    }
+
+    // Copy legacy database file to target location
+    fs.copyFileSync(legacyPath, targetPath);
+
+    // Open target for in-place migration
+    const db = requireNodeSqlite().Database.open(targetPath);
+
+    // Begin transaction
+    db.exec("SAVEPOINT migrate_legacy_memory_index_tables");
+    try {
+      // Check if legacy tables still present (should be after copy)
+      if (!checkLegacySchema(db)) {
+        db.exec("RELEASE migrate_legacy_memory_index_tables");
+        db.close();
+        warnings.push(
+          `Target database at ${targetPath} missing legacy tables after copy. Skipping.`,
+        );
+        return { changes, warnings };
+      }
+
+      // Create canonical tables if not exist (they should exist due to agent DB schema)
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS memory_index_meta (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS memory_index_sources (
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          hash TEXT NOT NULL,
+          mtime INTEGER NOT NULL,
+          size INTEGER NOT NULL,
+          PRIMARY KEY (path, source)
+        );
+        CREATE TABLE IF NOT EXISTS memory_index_chunks (
+          id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT 'memory',
+          start_line INTEGER NOT NULL,
+          end_line INTEGER NOT NULL,
+          hash TEXT NOT NULL,
+          model TEXT NOT NULL,
+          text TEXT NOT NULL,
+          embedding TEXT NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS memory_index_state (
+          id INTEGER PRIMARY KEY CHECK (id = 1),
+          revision INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO memory_index_state (id, revision) VALUES (1, 0);
+      `);
+
+      // Migrate data: meta -> memory_index_meta
+      db.exec(`
+        INSERT OR IGNORE INTO memory_index_meta (key, value)
+        SELECT key, value FROM meta;
+      `);
+
+      // Migrate: files -> memory_index_sources
+      db.exec(`
+        INSERT OR IGNORE INTO memory_index_sources (path, source, hash, mtime, size)
+        SELECT path, source, hash, mtime, size FROM files;
+      `);
+
+      // Migrate: chunks -> memory_index_chunks
+      db.exec(`
+        INSERT OR IGNORE INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
+        FROM chunks;
+      `);
+
+      // Update revision counter
+      const chunkRow = db.prepare("SELECT COUNT(*) as count FROM memory_index_chunks").get() as {
+        count: number;
+      };
+      const chunkCount = chunkRow.count;
+      db.prepare("UPDATE memory_index_state SET revision = ? WHERE id = 1").run(chunkCount);
+
+      // Drop legacy tables
+      db.exec("DROP TABLE IF EXISTS chunks");
+      db.exec("DROP TABLE IF EXISTS files");
+      db.exec("DROP TABLE IF EXISTS meta");
+
+      // Release transaction
+      db.exec("RELEASE migrate_legacy_memory_index_tables");
+
+      // Get file count for logging
+      const fileRow = db.prepare("SELECT COUNT(*) as count FROM memory_index_sources").get() as {
+        count: number;
+      };
+      const fileCount = fileRow.count;
+
+      db.close();
+
+      // Backup legacy store AFTER successful migration
+      const backupPath = `${legacyPath}.bak-${now()}`;
+      fs.renameSync(legacyPath, backupPath);
+      changes.push(
+        `Migrated memory store: ${legacyPath} → ${targetPath} (${fileCount} files, ${chunkCount} chunks)`,
+      );
+      changes.push(`Backed up legacy memory store → ${backupPath}`);
+    } catch (err) {
+      db.exec("ROLLBACK TO migrate_legacy_memory_index_tables");
+      db.exec("RELEASE migrate_legacy_memory_index_tables");
+      db.close();
+      throw err;
+    }
+  } catch (err) {
+    warnings.push(`Failed migrating memory store ${legacyPath} → ${targetPath}: ${String(err)}`);
   }
 
   return { changes, warnings };
@@ -4732,6 +4937,7 @@ export async function runLegacyStateMigrations(params: {
     stateDir: detected.stateDir,
   });
   const execApprovals = migrateLegacyExecApprovals(detected.execApprovals);
+  const memoryStore = await migrateLegacyMemoryStore({ detected, now });
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -4767,6 +4973,7 @@ export async function runLegacyStateMigrations(params: {
       ...pluginBindingApprovals.changes,
       ...currentConversationBindings.changes,
       ...execApprovals.changes,
+      ...memoryStore.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
       ...sessions.changes,
@@ -4787,6 +4994,7 @@ export async function runLegacyStateMigrations(params: {
       ...pluginBindingApprovals.warnings,
       ...currentConversationBindings.warnings,
       ...execApprovals.warnings,
+      ...memoryStore.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
       ...sessions.warnings,
