@@ -922,6 +922,7 @@ export async function handleOpenResponsesHttpRequest(
   let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
+  let finalizeStatus: ResponseResource["status"] | null = null;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
 
   const maybeFinalize = () => {
@@ -987,6 +988,7 @@ export async function handleOpenResponsesHttpRequest(
     if (finalizeRequested) {
       return;
     }
+    finalizeStatus = status;
     finalizeRequested = { status, text };
     maybeFinalize();
   };
@@ -1276,8 +1278,8 @@ export async function handleOpenResponsesHttpRequest(
 
         accumulatedText = content;
         sawAssistantDelta = true;
-        if (finalizeRequested) {
-          finalizeRequested = { ...finalizeRequested, text: content };
+        if (finalizeStatus !== null) {
+          finalizeRequested = { status: finalizeStatus, text: content };
         }
 
         writeSseEvent(res, {
