@@ -8,6 +8,7 @@ import {
   applyTemporalDecayToHybridResults,
   applyTemporalDecayToScore,
   calculateTemporalDecayMultiplier,
+  resolveTemporalDecaySearchConfig,
 } from "./temporal-decay.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -81,6 +82,8 @@ describe("temporal decay", () => {
       results: [
         { path: "MEMORY.md", score: 1, source: "memory" },
         { path: "memory/projects.md", score: 0.75, source: "memory" },
+        // QMD reports lowercased paths on case-insensitive file systems.
+        { path: "memory.md", score: 0.9, source: "memory" },
       ],
       workspaceDir: dir,
       temporalDecay: { enabled: true, halfLifeDays: 30 },
@@ -89,6 +92,7 @@ describe("temporal decay", () => {
 
     expect(decayed[0]?.score).toBeCloseTo(1);
     expect(decayed[1]?.score).toBeCloseTo(0.75);
+    expect(decayed[2]?.score).toBeCloseTo(0.9);
   });
 
   it("applies decay in hybrid merging before ranking", async () => {
@@ -155,5 +159,14 @@ describe("temporal decay", () => {
     });
 
     expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
+  });
+
+  it("propagates config resolution errors instead of silently disabling decay", () => {
+    // resolveTemporalDecaySearchConfig must let resolveMemorySearchConfig
+    // errors propagate so canonical validation failures surface to callers
+    // rather than silently returning decay-disabled defaults.
+    const nullConfig =
+      null as unknown as import("openclaw/plugin-sdk/memory-core-host-engine-foundation").OpenClawConfig;
+    expect(() => resolveTemporalDecaySearchConfig(nullConfig, "test-agent")).toThrow();
   });
 });

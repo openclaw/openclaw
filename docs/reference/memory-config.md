@@ -332,6 +332,11 @@ All under `memorySearch.query.hybrid`:
 
     Evergreen files (`MEMORY.md`, non-dated files in `memory/`) are never decayed.
 
+    Temporal decay applies the same half-life formula to both the builtin
+    hybrid engine and QMD search results. Raw relevance scores differ between
+    backends (QMD reranker scores vs. builtin weighted hybrid scores), so the
+    decay multiplier is identical but absolute score effects may differ.
+
   </Tab>
 </Tabs>
 
@@ -485,6 +490,21 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 | `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 
 `searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
+
+QMD search results honor `memorySearch.query.hybrid.temporalDecay` (see [Hybrid search config](#hybrid-search-config)): when enabled, dated memory files decay by age before final ranking, and the raw candidate pool is widened (up to a fixed cap) so fresher documents can be rescued by recency re-ranking. In `query` mode the widened pool is passed to QMD's own rerank candidate window (`--candidate-limit` on the direct CLI, `candidateLimit` on the mcporter unified query) as well as the result limit, so fresh hits beyond QMD's default candidate window still reach the decay step; older QMD builds that predate the flag fall back to widening the result limit only. Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      memorySearch: {
+        query: { hybrid: { temporalDecay: { enabled: true, halfLifeDays: 30 } } },
+      },
+    },
+  },
+  memory: { backend: "qmd" },
+}
+```
 
 `rerank: false` only changes QMD `query` mode and requires QMD 2.1 or newer. In direct CLI mode OpenClaw passes `--no-rerank`; in mcporter-backed MCP mode it passes `rerank: false` to QMD's unified query tool. Leave it unset to use QMD's default query reranking behavior.
 

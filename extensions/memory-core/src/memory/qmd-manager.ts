@@ -63,6 +63,11 @@ import {
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 import {
+  applyTemporalDecayToHybridResults,
+  resolveTemporalDecaySearchConfig,
+  type TemporalDecayConfig,
+} from "./temporal-decay.js";
+import {
   countChokidarWatchedEntries,
   type MemoryWatchPressureWarningState,
   warnIfMemoryWatchPressureHigh,
@@ -80,6 +85,13 @@ const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
+// Mirrors the builtin hybrid engine's DEFAULT_HYBRID_CANDIDATE_MULTIPLIER so
+// temporal decay re-ranks over a comparable raw candidate pool.
+const QMD_TEMPORAL_DECAY_CANDIDATE_MULTIPLIER = 4;
+// Hard cap on the widened candidate pool so 4x limits cannot push qmd's JSON
+// stdout (each entry carries a multi-line snippet) past MAX_QMD_OUTPUT_CHARS
+// and turn an enabled decay into parse failures on large indexes.
+const QMD_TEMPORAL_DECAY_CANDIDATE_CAP = 50;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -292,6 +304,7 @@ type QmdManagerRuntimeConfig = {
   workspaceDir: string;
   syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   contextLimits: ReturnType<typeof resolveAgentContextLimits>;
+  temporalDecay: TemporalDecayConfig;
 };
 type BuiltinQmdMcpTool = "query" | "search" | "vector_search" | "deep_search";
 type QmdMcporterSearchParams =
@@ -302,6 +315,7 @@ type QmdMcporterSearchParams =
       explicitToolOverride: true;
       query: string;
       limit: number;
+      candidateLimit?: number;
       minScore: number;
       collection?: string;
       timeoutMs: number;
@@ -313,6 +327,7 @@ type QmdMcporterSearchParams =
       explicitToolOverride: false;
       query: string;
       limit: number;
+      candidateLimit?: number;
       minScore: number;
       collection?: string;
       timeoutMs: number;
@@ -324,6 +339,7 @@ type QmdMcporterAcrossCollectionsParams =
       explicitToolOverride: true;
       query: string;
       limit: number;
+      candidateLimit?: number;
       minScore: number;
       collectionNames: string[];
     }
@@ -333,6 +349,7 @@ type QmdMcporterAcrossCollectionsParams =
       explicitToolOverride: false;
       query: string;
       limit: number;
+      candidateLimit?: number;
       minScore: number;
       collectionNames: string[];
     };
@@ -372,6 +389,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly indexPath: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
+  private readonly temporalDecay: TemporalDecayConfig;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
   private readonly sources = new Set<MemorySource>();
@@ -415,6 +433,10 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly sessionWarm = new Set<string>();
   private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
   private multiCollectionFilterSupported: boolean | null = null;
+  // null = unprobed, true/false = whether the installed qmd accepts the query
+  // `--candidate-limit` flag. Older qmd builds predate it; once rejected we stop
+  // emitting it and fall back to widening `-n` only.
+  private qmdCandidateLimitSupported: boolean | null = null;
 
   private constructor(params: {
     agentId: string;
@@ -429,6 +451,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.agentStateDir = path.join(this.stateDir, "agents", this.agentId);
     this.qmdDir = path.join(this.agentStateDir, "qmd");
     this.syncSettings = params.runtimeConfig.syncSettings;
+    this.temporalDecay = params.runtimeConfig.temporalDecay;
     // QMD uses XDG base dirs for its internal state.
     // Collections are managed via `qmd collection add` and stored inside the index DB.
     // - config:  $XDG_CONFIG_HOME (contexts, etc.)
@@ -1282,7 +1305,27 @@ export class QmdMemoryManager implements MemorySearchManager {
     );
     const requestedSources = opts?.sources?.length ? uniqueValues(opts.sources) : undefined;
     const collectionNames = this.listManagedCollectionNames(requestedSources);
-    const limit = resultLimit;
+    // With temporal decay enabled, widen the raw candidate pool the same way
+    // the builtin hybrid engine does (maxResults * candidateMultiplier), so a
+    // fresh document ranked just below the raw top N can still be rescued by
+    // recency re-ranking before the final truncation. The cap keeps the qmd
+    // CLI's JSON output within the stdout budget regardless of maxResults.
+    const limit = this.temporalDecay.enabled
+      ? Math.min(
+          resultLimit * QMD_TEMPORAL_DECAY_CANDIDATE_MULTIPLIER,
+          Math.max(resultLimit, QMD_TEMPORAL_DECAY_CANDIDATE_CAP),
+        )
+      : resultLimit;
+    // Widening the result `limit`/`-n` alone is not enough: qmd's `query` mode
+    // first selects a fixed candidate window (its own `candidateLimit`,
+    // defaulting to 40) and only reranks those before honoring `-n`. A fresh
+    // document ranked outside that default window is never reranked, so it
+    // never reaches OpenClaw's decay step even though we asked for more results.
+    // Pass the widened pool as qmd's `candidateLimit` too so the rerank window
+    // matches the result window. `candidateLimit` is a query-mode-only concept;
+    // BM25 `search` / vector `vsearch` have no rerank stage, so leave it unset
+    // for those transports.
+    const candidateLimit = this.temporalDecay.enabled ? limit : undefined;
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
       return [];
@@ -1306,6 +1349,7 @@ export class QmdMemoryManager implements MemorySearchManager {
                 explicitToolOverride: true,
                 query: trimmed,
                 limit,
+                candidateLimit,
                 minScore,
                 collectionNames,
               });
@@ -1317,6 +1361,7 @@ export class QmdMemoryManager implements MemorySearchManager {
               explicitToolOverride: true,
               query: trimmed,
               limit,
+              candidateLimit,
               minScore,
               collection: collectionNames[0],
               timeoutMs: this.qmd.limits.timeoutMs,
@@ -1330,6 +1375,7 @@ export class QmdMemoryManager implements MemorySearchManager {
               explicitToolOverride: false,
               query: trimmed,
               limit,
+              candidateLimit,
               minScore,
               collectionNames,
             });
@@ -1341,6 +1387,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             explicitToolOverride: false,
             query: trimmed,
             limit,
+            candidateLimit,
             minScore,
             collection: collectionNames[0],
             timeoutMs: this.qmd.limits.timeoutMs,
@@ -1353,9 +1400,10 @@ export class QmdMemoryManager implements MemorySearchManager {
             limit,
             collectionGroups,
             qmdSearchCommand,
+            candidateLimit,
           );
         }
-        const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit);
+        const args = this.buildSearchArgs(qmdSearchCommand, trimmed, limit, candidateLimit);
         args.push(...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames));
         return await this.runQmdSearch(args, qmdSearchCommand);
       } catch (err) {
@@ -1380,9 +1428,10 @@ export class QmdMemoryManager implements MemorySearchManager {
                 limit,
                 collectionGroups,
                 "query",
+                candidateLimit,
               );
             }
-            const fallbackArgs = this.buildSearchArgs("query", trimmed, limit);
+            const fallbackArgs = this.buildSearchArgs("query", trimmed, limit, candidateLimit);
             fallbackArgs.push(
               ...this.buildCollectionFilterArgs(collectionGroups[0] ?? collectionNames),
             );
@@ -1408,6 +1457,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       parsed = await runSearchAttempt(false);
     }
     const results: MemorySearchResult[] = [];
+    const absPathBySourceRel = new Map<string, string>();
     for (const entry of parsed) {
       const docHints = this.normalizeDocHints({
         preferredCollection: entry.collection,
@@ -1421,6 +1471,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       const lines = this.resolveSnippetLines(entry, snippet);
       const score = typeof entry.score === "number" ? entry.score : 0;
       const minScore = opts?.minScore ?? 0;
+      // Decay only lowers scores, so this raw-score floor is equivalent to the
+      // builtin engine's post-decay filter and never drops a rescuable entry.
       if (score < minScore) {
         continue;
       }
@@ -1432,6 +1484,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         snippet,
         source: doc.source,
       });
+      absPathBySourceRel.set(`${doc.source}:${doc.rel}`, doc.abs);
     }
     opts?.onDebug?.({
       backend: "qmd",
@@ -1443,6 +1496,40 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (opts?.sources?.length) {
       const allow = new Set(opts.sources);
       ranked = results.filter((r) => allow.has(r.source));
+    }
+    if (this.temporalDecay.enabled) {
+      // Match the builtin hybrid engine: decay the combined ranking score by
+      // document age so fresher dated memory outranks stale high-frequency hits.
+      // Memory-source entries keep their workspace-relative path so dated
+      // filename parsing and evergreen exemptions apply; other sources (e.g.
+      // session exports outside the workspace) decay by mtime via their
+      // absolute path instead of silently skipping decay on a failed stat.
+      const decayInput = ranked.map((entry) => ({
+        score: entry.score,
+        source: entry.source,
+        path:
+          entry.source === "memory"
+            ? entry.path
+            : (absPathBySourceRel.get(`${entry.source}:${entry.path}`) ?? entry.path),
+      }));
+      const decayed = await applyTemporalDecayToHybridResults({
+        results: decayInput,
+        temporalDecay: this.temporalDecay,
+        workspaceDir: this.workspaceDir,
+      });
+      // applyTemporalDecayToHybridResults preserves input order (positional
+      // Promise.all), so decayed[i] rescores ranked[i] without relying on
+      // undeclared-field pass-through.
+      // Reapply the relevance floor: decay can push stale hits below the
+      // caller's minScore, and the builtin path filters on post-decay scores.
+      // Decay is monotonically non-increasing, so the raw minScore filter
+      // applied while parsing qmd output cannot drop entries that this
+      // post-decay filter would have kept.
+      const minScore = opts?.minScore ?? 0;
+      ranked = decayed
+        .map((entry, i) => Object.assign({}, ranked[i], { score: entry.score }))
+        .filter((entry) => entry.score >= minScore)
+        .toSorted((a, b) => b.score - a.score);
     }
     return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
   }
@@ -2131,14 +2218,42 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): Promise<QmdQueryResult[]> {
     try {
       const result = await this.runQmd(args, { timeoutMs: this.qmd.limits.timeoutMs });
+      if (this.qmdCandidateLimitSupported === null && args.includes("--candidate-limit")) {
+        this.qmdCandidateLimitSupported = true;
+      }
       return parseQmdQueryJson(result.stdout, result.stderr);
     } catch (err) {
+      // Older qmd builds reject the query `--candidate-limit` flag. Remember that
+      // and retry once with the flag stripped so decay still benefits from the
+      // widened `-n` result pool instead of failing the whole search.
+      if (
+        this.qmdCandidateLimitSupported !== false &&
+        args.includes("--candidate-limit") &&
+        this.isUnsupportedQmdOptionError(err)
+      ) {
+        this.qmdCandidateLimitSupported = false;
+        log.warn(
+          "qmd query does not support --candidate-limit; retrying without it (decay re-ranks the widened -n pool only)",
+        );
+        return this.runQmdSearch(this.stripCandidateLimitArg(args), command);
+      }
       const recovered = this.parseFailedQmdSearchJson(err, command);
       if (recovered) {
         return recovered;
       }
       throw err instanceof Error ? err : new Error(String(err));
     }
+  }
+
+  private stripCandidateLimitArg(args: string[]): string[] {
+    const index = args.indexOf("--candidate-limit");
+    if (index < 0) {
+      return args;
+    }
+    const next = [...args];
+    // Remove the flag and its value argument.
+    next.splice(index, 2);
+    return next;
   }
 
   private parseFailedQmdSearchJson(
@@ -2315,6 +2430,12 @@ export class QmdMemoryManager implements MemorySearchManager {
           // its own reranking pipeline and does not accept a minScore parameter.
           searches: this.buildV2Searches(params.query, params.searchCommand),
           limit: params.limit,
+          // Widen the rerank candidate window to match the result pool so fresh
+          // hits beyond qmd's default candidate window survive to the
+          // client-side decay re-rank (mirrors the direct-CLI --candidate-limit).
+          ...(typeof params.candidateLimit === "number"
+            ? { candidateLimit: params.candidateLimit }
+            : {}),
         }
       : {
           // QMD 1.x tools accept a flat query string.
@@ -2377,6 +2498,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           explicitToolOverride: false,
           query: params.query,
           limit: params.limit,
+          candidateLimit: params.candidateLimit,
           minScore: params.minScore,
           collection: params.collection,
           timeoutMs: params.timeoutMs,
@@ -3247,13 +3369,14 @@ export class QmdMemoryManager implements MemorySearchManager {
     limit: number,
     collectionGroups: string[][],
     command: "query" | "search" | "vsearch",
+    candidateLimit?: number,
   ): Promise<QmdQueryResult[]> {
     log.debug(
       `qmd ${command} multi-source collection grouping active (${collectionGroups.length} groups)`,
     );
     const bestByResultKey = new Map<string, QmdQueryResult>();
     for (const collectionNames of collectionGroups) {
-      const args = this.buildSearchArgs(command, query, limit);
+      const args = this.buildSearchArgs(command, query, limit, candidateLimit);
       args.push(...this.buildCollectionFilterArgs(collectionNames));
       const parsed = await this.runQmdSearch(args, command);
       for (const entry of parsed) {
@@ -3335,6 +3458,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             explicitToolOverride: true,
             query: params.query,
             limit: params.limit,
+            candidateLimit: params.candidateLimit,
             minScore: params.minScore,
             collection: collectionName,
             timeoutMs: this.qmd.limits.timeoutMs,
@@ -3346,6 +3470,7 @@ export class QmdMemoryManager implements MemorySearchManager {
             explicitToolOverride: false,
             query: params.query,
             limit: params.limit,
+            candidateLimit: params.candidateLimit,
             minScore: params.minScore,
             collection: collectionName,
             timeoutMs: this.qmd.limits.timeoutMs,
@@ -3402,10 +3527,19 @@ export class QmdMemoryManager implements MemorySearchManager {
     command: "query" | "search" | "vsearch",
     query: string,
     limit: number,
+    candidateLimit?: number,
   ): string[] {
     const normalizedQuery = command === "search" ? normalizeHanBm25Query(query) : query;
     if (command === "query") {
       const args = ["query", normalizedQuery, "--json", "-n", String(limit)];
+      // Widen qmd's rerank candidate window to match the requested result pool
+      // so fresh hits beyond qmd's default candidate window survive to the
+      // client-side decay re-rank. Only emitted for query mode (the only mode
+      // with a rerank stage), only when a widened pool was requested, and only
+      // while the installed qmd is not known to reject the flag.
+      if (typeof candidateLimit === "number" && this.qmdCandidateLimitSupported !== false) {
+        args.push("--candidate-limit", String(candidateLimit));
+      }
       if (this.qmd.searchMode === "query" && this.qmd.rerank === false) {
         args.push("--no-rerank");
       }
@@ -3423,6 +3557,7 @@ function resolveQmdManagerRuntimeConfig(
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
     syncSettings: resolveMemorySearchSyncConfig(cfg, agentId),
     contextLimits: resolveAgentContextLimits(cfg, agentId),
+    temporalDecay: resolveTemporalDecaySearchConfig(cfg, agentId),
   };
 }
 
