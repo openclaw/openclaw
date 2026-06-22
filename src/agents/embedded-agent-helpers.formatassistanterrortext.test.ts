@@ -6,6 +6,7 @@ import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
   formatAssistantErrorText,
+  classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
@@ -116,6 +117,22 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe("LLM error server_error: Something exploded");
   });
+  it("classifies provider upstream_error payloads as server errors for fallback", () => {
+    const msg = makeAssistantMessageFixture({
+      errorMessage: "Upstream request failed",
+      errorType: "upstream_error",
+    });
+
+    expect(classifyAssistantFailoverReason(msg, { provider: "openai" })).toBe("server_error");
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantError(
+          '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
+        ),
+      ),
+    ).toBe("server_error");
+  });
+
   it("uses generic user-facing copy for escaped structured provider messages", () => {
     // The internal formatter keeps detail for logs, while user-facing text must
     // not expose arbitrary provider-controlled structured payload content.

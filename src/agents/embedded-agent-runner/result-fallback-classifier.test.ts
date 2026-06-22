@@ -49,6 +49,34 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies structured provider upstream_error payloads as fallback-worthy", () => {
+    const rawError =
+      '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}';
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai-compatible",
+      model: "primary-model",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: rawError,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `openai-compatible/primary-model ended with a provider error: ${rawError}`,
+      reason: "server_error",
+      code: "embedded_error_payload",
+      rawError,
+    });
+  });
+
   it("preserves hook block results with auth-like error payload text", () => {
     // Hook policy blocks are intentional local decisions, not provider failures
     // that should rotate models.
@@ -137,7 +165,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry non-business transport error payloads", () => {
+  it("classifies transient transport error payloads as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "llama-3.1",
@@ -154,7 +182,12 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       },
     });
 
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
+      reason: "timeout",
+      code: "embedded_error_payload",
+      rawError: "HTTP 500: internal server error",
+    });
   });
 
   it("keeps tool-authored incomplete summaries fallback-eligible", () => {
