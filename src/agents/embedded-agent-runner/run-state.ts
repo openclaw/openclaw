@@ -18,6 +18,10 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
  */
 export type EmbeddedAgentQueueHandle = {
   kind?: "embedded";
+  // The run this handle drives. Used to resolve the run's diagnostic clientContext
+  // so its lifecycle events attribute to the right caller even when another run
+  // shares the session. Optional for non-gateway handles that carry no context.
+  runId?: string;
   queueMessage: (text: string, options?: EmbeddedAgentQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;

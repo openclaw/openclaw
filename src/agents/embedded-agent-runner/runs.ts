@@ -11,6 +11,7 @@ import {
   queueReplyRunMessage,
   waitForReplyRunEndBySessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import { clearRunClientContext } from "../../infra/diagnostic-run-attribution.js";
 import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
@@ -312,7 +313,7 @@ export function queueEmbeddedAgentMessageWithOutcome(
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
-  logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+  logMessageQueued({ sessionId, source: "embedded-agent-runner", runId: prepared.handle.runId });
   void prepared.handle
     .queueMessage(text, options ?? { steeringMode: "all" })
     .catch((err: unknown) => {
@@ -346,7 +347,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
     const enqueuedAtMs = Date.now();
     await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
     const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
-    logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+    logMessageQueued({ sessionId, source: "embedded-agent-runner", runId: prepared.handle.runId });
     return {
       queued: true,
       sessionId,
@@ -685,6 +686,14 @@ export function setActiveEmbeddedRun(
   sessionKey?: string,
   sessionFile?: string,
 ) {
+  // Prompt-release optimization for the replace path: a replaced run never emits
+  // idle (the active-handle guard in clearActiveEmbeddedRun skips it), so drop its
+  // run-scoped clientContext here rather than waiting for the gateway's dispatch
+  // .finally (the authoritative owner). Idempotent with that clear.
+  const replacedRunId = ACTIVE_EMBEDDED_RUNS.get(sessionId)?.runId;
+  if (replacedRunId && replacedRunId !== handle.runId) {
+    clearRunClientContext(replacedRunId);
+  }
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   clearEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile });
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
@@ -697,6 +706,7 @@ export function setActiveEmbeddedRun(
     sessionFile,
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
+    runId: handle.runId,
   });
   markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey });
   if (!sessionId.startsWith("probe-")) {
@@ -747,6 +757,7 @@ export function clearActiveEmbeddedRun(
       sessionFile,
       state: "idle",
       reason: "run_completed",
+      runId: activeHandle.runId,
     });
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     if (!sessionId.startsWith("probe-")) {
@@ -764,12 +775,13 @@ export function forceClearEmbeddedAgentRun(
   reason = "stuck_recovery",
 ): boolean {
   let cleared = false;
+  const forcedRunId = ACTIVE_EMBEDDED_RUNS.get(sessionId)?.runId;
   if (ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
     ACTIVE_EMBEDDED_RUNS.delete(sessionId);
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
     clearActiveRunSessionFiles(sessionId);
-    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
+    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason, runId: forcedRunId });
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     notifyEmbeddedRunEnded(sessionId);
     cleared = true;

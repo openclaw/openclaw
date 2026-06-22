@@ -81,6 +81,10 @@ import {
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { normalizeDiagnosticClientContext } from "../../infra/diagnostic-client-context.js";
+import {
+  clearRunClientContext,
+  setRunClientContext,
+} from "../../infra/diagnostic-run-attribution.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
@@ -93,7 +97,6 @@ import {
   loadVoiceWakeRoutingConfig,
   resolveVoiceWakeRouteByTrigger,
 } from "../../infra/voicewake-routing.js";
-import { setDiagnosticSessionClientContext } from "../../logging/diagnostic.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
 import {
@@ -954,6 +957,11 @@ function dispatchAgentRunFromGateway(params: {
     })
     .finally(() => {
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
+      // Authoritative release of this run's diagnostic attribution: the gateway is
+      // the sole seeder, so it owns teardown for every path — including a run that
+      // fails or is rejected before it ever emits an idle lifecycle event. The
+      // emitter-side idle/replacement clears are prompt-release optimizations.
+      clearRunClientContext(params.runId.trim());
       params.cleanupAbortController();
     });
 }
@@ -2642,12 +2650,14 @@ export const agentHandlers: GatewayRequestHandlers = {
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
 
-          // Seed any caller-supplied opaque context onto this run's diagnostic
-          // session state, keyed by the same session the run uses, so every
-          // message.queued / session.state event the run emits carries it for
-          // plugins to interpret. No-op when absent or out of bounds.
-          setDiagnosticSessionClientContext(
-            { sessionKey: resolvedSessionKey, sessionId: resolvedSessionId },
+          // Bind any caller-supplied opaque context to this run by runId, so the
+          // run's message.queued / session.state events carry it for plugins to
+          // interpret — and a concurrent same-session run cannot overwrite it.
+          // Trim to match the run handle's effective id (agent-command derives
+          // runId = opts.runId?.trim()), or seed/resolve keys would diverge.
+          // No-op when absent or out of bounds.
+          setRunClientContext(
+            runId.trim(),
             normalizeDiagnosticClientContext(request.clientContext),
           );
 

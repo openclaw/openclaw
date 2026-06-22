@@ -3,7 +3,6 @@ import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DiagnosticClientContext } from "../infra/diagnostic-client-context.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
@@ -12,6 +11,7 @@ import {
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
+import { clearRunClientContext, getRunClientContext } from "../infra/diagnostic-run-attribution.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
@@ -52,7 +52,6 @@ import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
   getDiagnosticSessionStateCountForTest as getDiagnosticSessionStateCountForTestImpl,
-  peekDiagnosticSessionState,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
   type SessionRef,
@@ -673,6 +672,9 @@ export function logMessageQueued(params: {
   sessionKey?: string;
   channel?: string;
   source: string;
+  // Internal: the emitting run, used only to resolve that run's clientContext for
+  // the trusted channel. Never added to the public event payload.
+  runId?: string;
 }) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
@@ -698,12 +700,12 @@ export function logMessageQueued(params: {
     source: params.source,
     queueDepth: state.queueDepth,
   };
-  // clientContext rides the trusted privateData channel (onTrustedInternalDiagnosticEvent),
-  // never the public payload — keeps the event's public contract unchanged.
-  if (state.clientContext) {
-    emitInternalDiagnosticEventWithPrivateData(queuedEvent, {
-      clientContext: state.clientContext,
-    });
+  // clientContext is resolved by the emitting run's id and rides the trusted
+  // privateData channel (onTrustedInternalDiagnosticEvent), never the public
+  // payload — keeps the event's public contract unchanged.
+  const clientContext = getRunClientContext(params.runId);
+  if (clientContext) {
+    emitInternalDiagnosticEventWithPrivateData(queuedEvent, { clientContext });
   } else {
     emitDiagnosticEvent(queuedEvent);
   }
@@ -891,6 +893,9 @@ export function logSessionStateChange(
   params: SessionRef & {
     state: SessionStateValue;
     reason?: string;
+    // Internal: the emitting run, used only to resolve that run's clientContext
+    // for the trusted channel. Never added to the public event payload.
+    runId?: string;
   },
 ) {
   if (!areDiagnosticsEnabledForProcess()) {
@@ -929,55 +934,23 @@ export function logSessionStateChange(
     reason: params.reason,
     queueDepth: state.queueDepth,
   };
-  // clientContext rides the trusted privateData channel (onTrustedInternalDiagnosticEvent),
-  // never the public payload — keeps the event's public contract unchanged.
-  if (state.clientContext) {
-    emitInternalDiagnosticEventWithPrivateData(stateEvent, {
-      clientContext: state.clientContext,
-    });
+  // clientContext is resolved by the emitting run's id and rides the trusted
+  // privateData channel (onTrustedInternalDiagnosticEvent), never the public
+  // payload — keeps the event's public contract unchanged.
+  const clientContext = getRunClientContext(params.runId);
+  if (clientContext) {
+    emitInternalDiagnosticEventWithPrivateData(stateEvent, { clientContext });
   } else {
     emitDiagnosticEvent(stateEvent);
   }
-  // Bound clientContext to the active run's lifetime: when the session goes idle
-  // the owning run has completed (a *replaced* run does not emit idle — see the
-  // active-handle guard in the embedded-agent-runner), so drop the context here
-  // so it cannot leak onto a later, unrelated run's lifecycle events. The idle
-  // event emitted above still carries the completing run's context; a subsequent
-  // run re-seeds via the gateway. Per-run scoping keyed off runId (rather than
-  // this session-scoped diagnostic state) is tracked as a follow-up.
-  if (params.state === "idle" && state.clientContext) {
-    state.clientContext = undefined;
+  // Prompt-release optimization: idle is the run's terminal lifecycle event, so
+  // drop its registry entry now rather than waiting for the gateway's dispatch
+  // .finally (the authoritative owner). The idle event emitted above still
+  // carries the completing run's context. Idempotent with the gateway clear.
+  if (params.state === "idle") {
+    clearRunClientContext(params.runId);
   }
   markActivity();
-}
-
-/**
- * Seed an opaque, caller-supplied context bag onto a session's diagnostic state.
- * Once seeded, every later `message.queued` / `session.state` event for the run
- * carries it — the same shared-state propagation that already gives a later
- * `message.queued` its `sessionKey`. Bounding/validation is the caller's
- * responsibility (see normalizeDiagnosticClientContext).
- */
-export function setDiagnosticSessionClientContext(
-  ref: SessionRef,
-  clientContext: DiagnosticClientContext | undefined,
-): void {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
-  }
-  if (clientContext) {
-    getDiagnosticSessionState(ref).clientContext = clientContext;
-    return;
-  }
-  // No (or out-of-bounds) context for this run: actively clear any value a
-  // prior run left on the reused per-session diagnostic state, so later
-  // message.queued / session.state events are not misattributed to a stale
-  // upstream context. Per-session state is keyed by sessionId/sessionKey and
-  // lives until idle TTL, so the seed path must own clearing, not just setting.
-  const existing = peekDiagnosticSessionState(ref);
-  if (existing) {
-    existing.clientContext = undefined;
-  }
 }
 
 export function updateDiagnosticSessionFile(params: SessionRef) {

@@ -8,18 +8,27 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticEventPrivateData,
 } from "../infra/diagnostic-events.js";
+import {
+  resetRunClientContextForTest,
+  setRunClientContext,
+} from "../infra/diagnostic-run-attribution.js";
 import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.js";
 import {
   logMessageQueued,
   logSessionStateChange,
   resetDiagnosticStateForTest,
-  setDiagnosticSessionClientContext,
 } from "./diagnostic.js";
 
 const UPSTREAM = normalizeDiagnosticClientContext({
   schemaVersion: "agentweave.context.v1",
   agentId: "Conductor",
 });
+const OTHER = normalizeDiagnosticClientContext({
+  schemaVersion: "agentweave.context.v1",
+  agentId: "Soloist",
+});
+
+const SESSION = { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" };
 
 type Capture = {
   /** Events seen by a normal (public) subscriber — never get privateData. */
@@ -55,25 +64,22 @@ describe("clientContext propagation onto diagnostic events", () => {
     setDiagnosticsEnabledForProcess(true);
     resetDiagnosticStateForTest();
     resetDiagnosticSessionStateForTest();
+    resetRunClientContextForTest();
     resetDiagnosticEventsForTest();
   });
 
   afterEach(() => {
     resetDiagnosticEventsForTest();
+    resetRunClientContextForTest();
     setDiagnosticsEnabledForProcess(false);
   });
 
-  it("delivers seeded clientContext as privateData on session.state, never on the public payload", () => {
+  it("delivers a run's clientContext as privateData on session.state, never on the public payload", () => {
     const { publicEvents, trusted } = capture(() => {
-      setDiagnosticSessionClientContext(
-        { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" },
-        UPSTREAM,
-      );
-      logSessionStateChange({
-        sessionId: "s1",
-        sessionKey: "agent:main:paperclip-conductor",
-        state: "processing",
-      });
+      // The gateway binds context to the run's id at admission; the run's
+      // lifecycle events then carry it by passing that runId.
+      setRunClientContext("run-1", UPSTREAM);
+      logSessionStateChange({ ...SESSION, state: "processing", runId: "run-1" });
     });
 
     // Trusted observer gets the bag.
@@ -85,22 +91,11 @@ describe("clientContext propagation onto diagnostic events", () => {
     expect(JSON.stringify(publicEvents)).not.toContain("Conductor");
   });
 
-  it("lets a later message.queued inherit seeded clientContext on the trusted channel", () => {
+  it("lets a run's later message.queued inherit its clientContext on the trusted channel", () => {
     const { trusted } = capture(() => {
-      // The gateway handler seeds context keyed by sessionKey before the run
-      // emits anything. setActiveEmbeddedRun then emits session.state (with
-      // sessionKey), and the queue path emits message.queued by sessionId only
-      // — both inherit the seeded context from the shared session state.
-      setDiagnosticSessionClientContext(
-        { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" },
-        UPSTREAM,
-      );
-      logSessionStateChange({
-        sessionId: "s1",
-        sessionKey: "agent:main:paperclip-conductor",
-        state: "processing",
-      });
-      logMessageQueued({ sessionId: "s1", source: "pi-embedded-runner" });
+      setRunClientContext("run-1", UPSTREAM);
+      logSessionStateChange({ ...SESSION, state: "processing", runId: "run-1" });
+      logMessageQueued({ sessionId: "s1", source: "embedded-agent-runner", runId: "run-1" });
     });
 
     expect(trusted).toEqual([
@@ -109,32 +104,38 @@ describe("clientContext propagation onto diagnostic events", () => {
     ]);
   });
 
-  it("clears stale clientContext when a later same-session run supplies none", () => {
-    const ref = { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" };
+  it("isolates two differently attributed runs on the same session", () => {
+    // The race the run-scoping closes: two accepted requests on one session with
+    // different upstream identities. Each run's events must carry only its own
+    // context — a later admission cannot overwrite an in-flight run's value
+    // because the contexts live under distinct runIds, not a shared session slot.
     const { trusted } = capture(() => {
-      // First run seeds upstream context.
-      setDiagnosticSessionClientContext(ref, UPSTREAM);
-      // Later run on the same (reused) diagnostic session has no context.
-      setDiagnosticSessionClientContext(ref, undefined);
-      logSessionStateChange({ ...ref, state: "processing" });
-      logMessageQueued({ sessionId: "s1", source: "dispatch" });
+      setRunClientContext("run-A", UPSTREAM);
+      setRunClientContext("run-B", OTHER);
+      // Interleave the two runs' lifecycle events on the same session.
+      logSessionStateChange({ ...SESSION, state: "processing", runId: "run-A" });
+      logMessageQueued({ sessionId: "s1", source: "embedded-agent-runner", runId: "run-B" });
+      logMessageQueued({ sessionId: "s1", source: "embedded-agent-runner", runId: "run-A" });
+      logSessionStateChange({ ...SESSION, state: "processing", runId: "run-B" });
     });
 
-    for (const entry of trusted) {
-      expect(entry.clientContext).toBeUndefined();
-    }
+    expect(trusted).toEqual([
+      { type: "session.state", clientContext: UPSTREAM },
+      { type: "message.queued", clientContext: OTHER },
+      { type: "message.queued", clientContext: UPSTREAM },
+      { type: "session.state", clientContext: OTHER },
+    ]);
   });
 
-  it("clears stale clientContext when a later same-session run is out of bounds", () => {
-    const ref = { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" };
-    // An oversized / invalid bag normalizes to undefined (whole-bag drop).
+  it("omits clientContext for a run whose context was rejected as out of bounds", () => {
+    // An oversized / invalid bag normalizes to undefined (whole-bag drop), so the
+    // run is seeded with no context.
     const oversized = normalizeDiagnosticClientContext({ blob: "x".repeat(9000) });
     expect(oversized).toBeUndefined();
 
     const { trusted } = capture(() => {
-      setDiagnosticSessionClientContext(ref, UPSTREAM);
-      setDiagnosticSessionClientContext(ref, oversized);
-      logSessionStateChange({ ...ref, state: "processing" });
+      setRunClientContext("run-1", oversized);
+      logSessionStateChange({ ...SESSION, state: "processing", runId: "run-1" });
     });
 
     const stateEntry = trusted.find((entry) => entry.type === "session.state");
@@ -142,15 +143,15 @@ describe("clientContext propagation onto diagnostic events", () => {
     expect(stateEntry?.clientContext).toBeUndefined();
   });
 
-  it("clears clientContext when the run completes (session idle), bounding it to the active run", () => {
-    const ref = { sessionKey: "agent:main:paperclip-conductor", sessionId: "s1" };
+  it("drops a run's clientContext when it completes (session idle), bounding it to the run", () => {
     const { trusted } = capture(() => {
-      setDiagnosticSessionClientContext(ref, UPSTREAM);
-      logSessionStateChange({ ...ref, state: "processing" });
+      setRunClientContext("run-1", UPSTREAM);
+      logSessionStateChange({ ...SESSION, state: "processing", runId: "run-1" });
       // Run completes: the idle event still carries the completing run's context...
-      logSessionStateChange({ ...ref, state: "idle", reason: "run_completed" });
-      // ...but a later event on the reused session (no re-seed) must not inherit it.
-      logMessageQueued({ sessionId: "s1", source: "dispatch" });
+      logSessionStateChange({ ...SESSION, state: "idle", reason: "run_completed", runId: "run-1" });
+      // ...but a later event for the same runId on the reused session must not
+      // inherit it — the registry entry was dropped on idle.
+      logMessageQueued({ sessionId: "s1", source: "dispatch", runId: "run-1" });
     });
 
     // processing + idle both attribute to the completing run.
@@ -161,12 +162,13 @@ describe("clientContext propagation onto diagnostic events", () => {
     expect(queued?.clientContext).toBeUndefined();
   });
 
-  it("omits clientContext for sessions without an upstream context", () => {
+  it("omits clientContext for runs without an upstream context", () => {
     const { publicEvents, trusted } = capture(() => {
       logSessionStateChange({
         sessionId: "s2",
         sessionKey: "agent:main:main",
         state: "processing",
+        runId: "run-unseeded",
       });
       logMessageQueued({ sessionId: "s2", sessionKey: "agent:main:main", source: "dispatch" });
     });
