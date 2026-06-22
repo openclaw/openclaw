@@ -23,6 +23,8 @@ import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-pr
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
+import type { AgentMessage } from "../../runtime/index.js";
+import type { SessionManager } from "../../sessions/index.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
 import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
@@ -507,6 +509,67 @@ export function mergeOrphanedTrailingUserPrompt(params: {
     merged: true,
     removeLeaf: true,
   };
+}
+
+/**
+ * True when a transcript leaf is an empty *aborted* assistant turn that a same-model
+ * retry left behind: stopReason "aborted" (a local interruption — the idle-timeout
+ * watchdog, run timeout, or user abort; see createLoopFailureMessage in agent-core) with
+ * no tool calls and no visible text. transformMessages already drops these before the
+ * model call, but on the transcript such a leaf sits between the persisted user turn and
+ * the replayed prompt, hiding the user leaf from the trailing-user orphan repair. Callers
+ * drop it back to its user parent so the replay merges instead of persisting a duplicate
+ * user turn and surfacing consecutive user turns to providers that reject them.
+ *
+ * Scope is deliberately limited to "aborted". An "error" leaf is a real provider/model
+ * outcome (rate limit, auth, overload, refusal, transport failure — usually carrying an
+ * errorMessage) and is preserved for the normal failover / suppressAssistantErrorPersistence
+ * / orphan paths rather than silently dropped here. Leaves with tool calls or visible text
+ * are likewise kept: dropping them would lose a real reply or break tool-call/result pairing.
+ */
+function isReplayableAbortedAssistantLeaf(message: AgentMessage): boolean {
+  if (message.role !== "assistant" || message.stopReason !== "aborted") {
+    return false;
+  }
+  return !message.content.some((block) => {
+    if (block.type === "toolCall") {
+      return true;
+    }
+    if (block.type === "text") {
+      return block.text.trim().length > 0;
+    }
+    return false;
+  });
+}
+
+/**
+ * Drops an empty aborted-assistant transcript leaf (see isReplayableAbortedAssistantLeaf)
+ * back to its user parent so a same-model retry replays the user turn through the normal
+ * trailing-user orphan repair instead of stacking a second user turn. Returns true when a
+ * leaf was dropped — the caller must rebuild the agent context and re-read the leaf; false
+ * leaves the transcript untouched. The caller passes the already-resolved leaf entry so this
+ * does not re-read it (the trailing-user repair reuses the same leaf). Only an aborted leaf
+ * whose immediate parent is a user turn is dropped; error leaves (real provider/model
+ * responses), tool-call scaffolding, or a leaf with visible text are preserved so we never
+ * discard a real response/reply or break tool-call/result pairing.
+ */
+export function dropReplayableAbortedAssistantLeaf(
+  session: Pick<SessionManager, "getEntry" | "branch">,
+  leafEntry: ReturnType<SessionManager["getLeafEntry"]> | null,
+): boolean {
+  if (
+    leafEntry?.type !== "message" ||
+    !isReplayableAbortedAssistantLeaf(leafEntry.message) ||
+    !leafEntry.parentId
+  ) {
+    return false;
+  }
+  const parentEntry = session.getEntry(leafEntry.parentId);
+  if (parentEntry?.type !== "message" || parentEntry.message.role !== "user") {
+    return false;
+  }
+  session.branch(parentEntry.id);
+  return true;
 }
 
 export function resolveAttemptFsWorkspaceOnly(params: {

@@ -36,7 +36,9 @@ vi.mock("../../music-generation-task-status.js", () => musicGenerationTaskStatus
 vi.mock("../../video-generation-task-status.js", () => videoGenerationTaskStatusMocks);
 vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
+import { SessionManager } from "../../sessions/index.js";
 import {
+  dropReplayableAbortedAssistantLeaf,
   forgetPromptBuildDrainCacheForRun,
   resolvePromptSubmissionSkipReason,
   resolveAttemptMediaTaskSystemPromptAddition,
@@ -277,5 +279,138 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     });
 
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("dropReplayableAbortedAssistantLeaf (SessionManager integration)", () => {
+  const appendRaw = (sm: SessionManager, message: unknown): string =>
+    sm.appendMessage(message as Parameters<SessionManager["appendMessage"]>[0]);
+
+  it("drops an empty aborted-assistant leaf back to its user parent", () => {
+    // Mirrors the idle-timeout retry transcript: the user turn was persisted, then an
+    // empty aborted-assistant leaf. The replay must resume from the user turn so the
+    // trailing-user repair can run instead of stacking a second user turn.
+    const sm = SessionManager.inMemory();
+    const userLeafId = appendRaw(sm, { role: "user", content: "hello", timestamp: Date.now() });
+    appendRaw(sm, {
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      stopReason: "aborted",
+      timestamp: Date.now(),
+    });
+
+    expect(dropReplayableAbortedAssistantLeaf(sm, sm.getLeafEntry())).toBe(true);
+    expect(sm.getLeafId()).toBe(userLeafId);
+    const userTurns = sm
+      .buildSessionContext()
+      .messages.filter((message) => message.role === "user");
+    expect(userTurns).toHaveLength(1);
+  });
+
+  it("keeps a completed assistant leaf untouched", () => {
+    const sm = SessionManager.inMemory();
+    appendRaw(sm, { role: "user", content: "hello", timestamp: Date.now() });
+    const assistantLeafId = appendRaw(sm, {
+      role: "assistant",
+      content: [{ type: "text", text: "hi" }],
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+
+    expect(dropReplayableAbortedAssistantLeaf(sm, sm.getLeafEntry())).toBe(false);
+    expect(sm.getLeafId()).toBe(assistantLeafId);
+  });
+
+  it("keeps an aborted assistant leaf that emitted a tool call", () => {
+    // A leaf carrying tool calls must stay so tool-call/result pairing is not broken.
+    const sm = SessionManager.inMemory();
+    appendRaw(sm, { role: "user", content: "hello", timestamp: Date.now() });
+    const toolCallLeafId = appendRaw(sm, {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+      stopReason: "aborted",
+      timestamp: Date.now(),
+    });
+
+    expect(dropReplayableAbortedAssistantLeaf(sm, sm.getLeafEntry())).toBe(false);
+    expect(sm.getLeafId()).toBe(toolCallLeafId);
+  });
+
+  it("keeps an empty aborted leaf whose parent is not a user turn", () => {
+    // Only an aborted leaf directly after a user turn is dropped; a parent that is itself
+    // an assistant means the user turn already had a reply we must not strip.
+    const sm = SessionManager.inMemory();
+    appendRaw(sm, { role: "user", content: "hello", timestamp: Date.now() });
+    appendRaw(sm, {
+      role: "assistant",
+      content: [{ type: "text", text: "partial answer" }],
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+    const abortedLeafId = appendRaw(sm, {
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      stopReason: "aborted",
+      timestamp: Date.now(),
+    });
+
+    expect(dropReplayableAbortedAssistantLeaf(sm, sm.getLeafEntry())).toBe(false);
+    expect(sm.getLeafId()).toBe(abortedLeafId);
+  });
+
+  it("keeps an empty errored-assistant leaf (real provider/model error, not a local abort)", () => {
+    // An error leaf is a real provider/model outcome and must survive for the normal
+    // failover/orphan paths rather than be dropped like a local interruption.
+    const sm = SessionManager.inMemory();
+    appendRaw(sm, { role: "user", content: "hello", timestamp: Date.now() });
+    const errorLeafId = appendRaw(sm, {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      timestamp: Date.now(),
+    });
+
+    expect(dropReplayableAbortedAssistantLeaf(sm, sm.getLeafEntry())).toBe(false);
+    expect(sm.getLeafId()).toBe(errorLeafId);
+  });
+
+  it("drops an aborted leaf that produced only thinking (no visible text)", () => {
+    const sm = SessionManager.inMemory();
+    const userLeafId = appendRaw(sm, { role: "user", content: "hello", timestamp: Date.now() });
+    appendRaw(sm, {
+      role: "assistant",
+      content: [{ type: "thinking", thinking: "partial reasoning" }],
+      stopReason: "aborted",
+      timestamp: Date.now(),
+    });
+
+    expect(dropReplayableAbortedAssistantLeaf(sm, sm.getLeafEntry())).toBe(true);
+    expect(sm.getLeafId()).toBe(userLeafId);
+  });
+
+  it("keeps an aborted leaf that produced visible text", () => {
+    // A partial reply must survive even though the turn aborted; dropping it would
+    // discard real assistant output.
+    const sm = SessionManager.inMemory();
+    appendRaw(sm, { role: "user", content: "hello", timestamp: Date.now() });
+    const partialLeafId = appendRaw(sm, {
+      role: "assistant",
+      content: [{ type: "text", text: "partial answer" }],
+      stopReason: "aborted",
+      timestamp: Date.now(),
+    });
+
+    expect(dropReplayableAbortedAssistantLeaf(sm, sm.getLeafEntry())).toBe(false);
+    expect(sm.getLeafId()).toBe(partialLeafId);
+  });
+
+  it("leaves a trailing user leaf for the normal orphan repair", () => {
+    // A plain trailing user leaf is the existing orphan repair's job, not this helper's;
+    // only an aborted-assistant leaf whose parent is a user turn is dropped here.
+    const sm = SessionManager.inMemory();
+    const userLeafId = appendRaw(sm, { role: "user", content: "hello", timestamp: Date.now() });
+
+    expect(dropReplayableAbortedAssistantLeaf(sm, sm.getLeafEntry())).toBe(false);
+    expect(sm.getLeafId()).toBe(userLeafId);
   });
 });
