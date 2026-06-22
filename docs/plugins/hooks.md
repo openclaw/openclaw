@@ -183,11 +183,19 @@ file.
   hints for well-known tool envelopes such as `apply_patch`; when present,
   these paths may be incomplete or may over-approximate what the tool will
   actually touch (for example, with malformed or partial inputs)
+- optional `event.externalContent`, a host-derived provenance signal showing
+  that untrusted external content was present in the model context that led to
+  this tool call. `event.externalContent.sources` can include `email`,
+  `webhook`, `api`, `browser`, `channel_metadata`, `web_search`, `web_fetch`,
+  or `unknown`. The signal is best-effort and monotonic within a run: once a
+  wrapped external prompt or tool result is observed, later tool policy hooks
+  in the same run receive the merged source set.
 - optional `event.runId`
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
   `ctx.runId`, `ctx.jobId` (set on cron-driven runs), `ctx.toolKind`,
-  `ctx.toolInputKind`, and diagnostic `ctx.trace`
+  `ctx.toolInputKind`, diagnostic `ctx.trace`, and the same optional
+  `ctx.externalContent` provenance signal passed on the event
 
 It can return:
 
