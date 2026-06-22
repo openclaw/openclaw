@@ -528,17 +528,21 @@ export class CodexAppServerEventProjector {
       const replace =
         this.streamedPartialAssistantItemId !== undefined &&
         this.streamedPartialAssistantItemId !== itemId;
-      if (replace) {
+      // Codex defines final_answer as terminal text. Replacement mode is for
+      // phase-unknown/provisional items; append-only consumers cannot retract
+      // bytes after a known terminal answer has started.
+      if (replace && (!knownFinalAnswer || this.streamedPartialAssistantItemReplaceable)) {
         this.streamedPartialAssistantItemReplaceable = true;
       } else if (this.streamedPartialAssistantItemId === undefined) {
         this.streamedPartialAssistantItemReplaceable = !knownFinalAnswer;
       }
       this.streamedPartialAssistantItemId = itemId;
       const replaceable = this.streamedPartialAssistantItemReplaceable;
+      const replacement = replace && replaceable;
       const streamPayload = {
         text,
-        delta: replace ? "" : delta,
-        ...(replace ? { replace: true as const } : {}),
+        delta: replacement ? "" : delta,
+        ...(replacement ? { replace: true as const } : {}),
       };
       this.emitAgentEvent({
         stream: "assistant",
