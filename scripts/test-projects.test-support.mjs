@@ -953,8 +953,59 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
   [
+    "scripts/github/resolve-openclaw-ref.sh",
+    ["test/scripts/resolve-openclaw-ref.test.ts"],
+  ],
+  ["scripts/ci-hydrate-testbox-env.sh", ["test/scripts/ci-hydrate-testbox-env.test.ts"]],
+  [
     "scripts/github/run-openclaw-cross-os-release-checks.sh",
     ["test/scripts/openclaw-cross-os-release-workflow.test.ts"],
+  ],
+  ["scripts/android-release.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
+  ["scripts/android-release-signing.mjs", ["test/scripts/android-release-signing.test.ts"]],
+  ["scripts/android-release-upload.sh", ["test/scripts/android-release-wrapper-args.test.ts"]],
+  ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  ["scripts/ios-release-prepare.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  ["scripts/ios-release-signing.mjs", ["test/scripts/ios-release-signing.test.ts"]],
+  ["scripts/ios-release-upload.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  ["scripts/lib/restart-mac-gateway.sh", ["test/scripts/restart-mac.test.ts"]],
+  [
+    "scripts/openclaw-release-clawhub-runtime-state.ts",
+    ["test/scripts/openclaw-release-clawhub-runtime-state.test.ts"],
+  ],
+  [
+    "scripts/openclaw-release-clawhub-plan.ts",
+    ["test/scripts/release-wrapper-scripts.test.ts"],
+  ],
+  [
+    "scripts/plan-release-workflow-matrix.mjs",
+    ["test/scripts/release-workflow-matrix-plan.test.ts"],
+  ],
+  ["scripts/release-fast-pretag-check.sh", ["test/scripts/package-acceptance-workflow.test.ts"]],
+  [
+    "scripts/plugin-clawhub-release-check.ts",
+    ["test/scripts/release-wrapper-scripts.test.ts"],
+  ],
+  [
+    "scripts/plugin-clawhub-release-plan.ts",
+    ["test/scripts/release-wrapper-scripts.test.ts"],
+  ],
+  [
+    "scripts/plugin-npm-release-check.ts",
+    ["test/scripts/release-wrapper-scripts.test.ts"],
+  ],
+  [
+    "scripts/plugin-npm-release-plan.ts",
+    ["test/scripts/release-wrapper-scripts.test.ts"],
+  ],
+  [
+    "scripts/plugin-release-pretag-pack-check.ts",
+    ["test/scripts/plugin-release-pretag-pack-check.test.ts"],
+  ],
+  ["scripts/release-verify-beta.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+  [
+    "scripts/validate-release-publish-approval.mjs",
+    ["test/scripts/validate-release-publish-approval.test.ts"],
   ],
   [
     "scripts/github/security-sensitive-guard.mjs",
@@ -975,6 +1026,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/deadcode-unused-files.allowlist.mjs",
     ["test/scripts/check-deadcode-unused-files.test.ts"],
   ],
+  ["scripts/docs-list.js", ["test/scripts/docs-list.test.ts"]],
   ["scripts/docs-link-audit.mjs", ["src/scripts/docs-link-audit.test.ts"]],
   ["scripts/lib/arg-utils.mjs", ["test/scripts/arg-utils.test.ts"]],
   [
@@ -1036,6 +1088,14 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [
     "scripts/docker/install-sh-e2e/run.sh",
     ["test/scripts/docker-build-helper.test.ts", "test/scripts/test-install-sh-docker.test.ts"],
+  ],
+  [
+    "scripts/docker/install-sh-common/cli-verify.sh",
+    ["test/scripts/test-install-sh-docker.test.ts"],
+  ],
+  [
+    "scripts/docker/install-sh-common/version-parse.sh",
+    ["test/scripts/test-install-sh-docker.test.ts"],
   ],
   ["scripts/docker/install-sh-nonroot/Dockerfile", INSTALL_DOCKERFILE_TEST_TARGETS],
   ["scripts/docker/install-sh-nonroot/run.sh", ["test/scripts/test-install-sh-docker.test.ts"]],
@@ -1192,6 +1252,12 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/plugin-npm-package-manifest.test.ts",
     ],
   ],
+  [
+    "scripts/lib/plugin-package-dependencies.mjs",
+    ["test/scripts/plugin-package-dependencies.test.ts"],
+  ],
+  ["scripts/proxy-install-ca.mjs", ["test/scripts/proxy-install-ca.test.ts"]],
+  ["scripts/release-preflight.mjs", ["test/scripts/release-preflight.test.ts"]],
   [
     "scripts/lib/plugin-npm-runtime-assets.mjs",
     ["test/scripts/plugin-npm-runtime-build-args.test.ts"],
@@ -1830,7 +1896,6 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.d.mts", ["test/scripts/test-projects.test.ts"]],
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
-  ["scripts/tsdown-build.mjs", ["test/scripts/tsdown-build.test.ts"]],
   ["scripts/dev/gateway-smoke.ts", ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
   ["scripts/dev/test-device-pair-telegram.ts", ["test/scripts/test-device-pair-telegram.test.ts"]],
   ["scripts/test-live-media.ts", ["test/scripts/test-live-media.test.ts"]],
@@ -1975,6 +2040,10 @@ const SOURCE_TEST_TARGETS = new Map([
     "test/helpers/agents/happy-path-prompt-snapshots.ts",
     HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS,
   ],
+  [
+    "test/e2e/qa-lab/runtime/qa-otel-smoke-runtime.ts",
+    ["test/e2e/qa-lab/runtime/qa-otel-smoke.e2e.test.ts"],
+  ],
   ["src/plugins/runtime-sidecar-paths-baseline.ts", RUNTIME_SIDECAR_BASELINE_OWNER_TEST_TARGETS],
   ["src/plugins/runtime-sidecar-paths.ts", RUNTIME_SIDECAR_PATH_CONSUMER_TEST_TARGETS],
   ["ui/config/control-ui-chunking.ts", ["ui/src/ui/control-ui-chunking.test.ts"]],
@@ -1991,14 +2060,6 @@ const SOURCE_TEST_TARGETS = new Map([
     ["src/plugins/contracts/plugin-sdk-subpaths.test.ts", ...GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ],
   ["src/plugin-sdk/reply-runtime.ts", ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"]],
-  [
-    "test/helpers/channels/directory-ids.ts",
-    [
-      "extensions/discord/src/directory-contract.test.ts",
-      "extensions/slack/src/directory-contract.test.ts",
-      "extensions/telegram/src/directory-contract.test.ts",
-    ],
-  ],
   ["extensions/google-meet/index.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
@@ -2031,16 +2092,8 @@ const SOURCE_TEST_TARGETS = new Map([
     ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
   ],
   [
-    "src/memory-host-sdk/host/embedding-defaults.ts",
+    "packages/memory-host-sdk/src/host/embedding-defaults.ts",
     ["packages/memory-host-sdk/src/host/embeddings.test.ts"],
-  ],
-  [
-    "src/plugin-sdk/test-helpers/directory-ids.ts",
-    [
-      "extensions/discord/src/directory-contract.test.ts",
-      "extensions/slack/src/directory-contract.test.ts",
-      "extensions/telegram/src/directory-contract.test.ts",
-    ],
   ],
   ["src/auto-reply/reply/dispatch-from-config.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
   ["src/auto-reply/reply/source-reply-delivery-mode.ts", GROUP_VISIBLE_REPLY_TEST_TARGETS],
@@ -3109,11 +3162,15 @@ function resolveParallelsToolingTestTargets(changedPath) {
   if (
     !/^scripts\/e2e\/parallels\/[^/]+\.ts$/u.test(changedPath) &&
     !/^scripts\/e2e\/parallels-(?:linux|macos|npm-update|windows)-smoke\.sh$/u.test(changedPath) &&
-    !/^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath)
+    !/^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath) &&
+    !/^scripts\/e2e\/lib\/parallels-(?:macos|package)-common\.sh$/u.test(changedPath)
   ) {
     return null;
   }
-  if (/^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath)) {
+  if (
+    /^scripts\/e2e\/lib\/parallels-package\/build-info-commit\.mjs$/u.test(changedPath) ||
+    /^scripts\/e2e\/lib\/parallels-(?:macos|package)-common\.sh$/u.test(changedPath)
+  ) {
     return ["test/scripts/parallels-lib-helpers.test.ts"];
   }
   const targets = ["test/scripts/parallels-smoke-model.test.ts"];

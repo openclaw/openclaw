@@ -25,7 +25,6 @@ vi.mock("../../utils/provider-utils.js", () => ({
 const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
-  buildEmbeddedRunContexts,
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
   resolveProviderScopedAuthProfile,
@@ -261,7 +260,7 @@ describe("agent-runner-utils", () => {
       chatType: "direct",
     });
 
-    const resolved = buildEmbeddedRunContexts({
+    const resolved = buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "OpenAI",
@@ -272,12 +271,12 @@ describe("agent-runner-utils", () => {
       },
       hasRepliedRef: undefined,
       provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      runId: "run-1",
     });
 
-    expect(resolved.authProfile).toEqual({
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
+    expect(resolved.runBaseParams.authProfileId).toBeUndefined();
+    expect(resolved.runBaseParams.authProfileIdSource).toBeUndefined();
     expect(resolved.embeddedContext.sessionId).toBe(run.sessionId);
     expect(resolved.embeddedContext.sessionKey).toBe(run.sessionKey);
     expect(resolved.embeddedContext.agentId).toBe(run.agentId);
@@ -297,7 +296,7 @@ describe("agent-runner-utils", () => {
   it("prefers OriginatingChannel over Provider for messageProvider", () => {
     const run = makeRun({ agentAccountId: "work", chatType: "group" });
 
-    const resolved = buildEmbeddedRunContexts({
+    const resolved = buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "heartbeat",
@@ -306,6 +305,8 @@ describe("agent-runner-utils", () => {
       },
       hasRepliedRef: undefined,
       provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
     });
 
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
@@ -332,7 +333,7 @@ describe("agent-runner-utils", () => {
     });
     const run = makeRun({ agentAccountId: "work", chatType: "direct" });
 
-    const resolved = buildEmbeddedRunContexts({
+    const resolved = buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "cron-event",
@@ -346,6 +347,8 @@ describe("agent-runner-utils", () => {
       },
       hasRepliedRef: undefined,
       provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
     });
 
     expect(resolved.embeddedContext.messageProvider).toBe("slack");
@@ -360,7 +363,7 @@ describe("agent-runner-utils", () => {
   it("carries inbound audio context into embedded message tools", () => {
     const run = makeRun();
 
-    const resolved = buildEmbeddedRunContexts({
+    const resolved = buildEmbeddedRunExecutionParams({
       run,
       sessionCtx: {
         Provider: "telegram",
@@ -370,6 +373,8 @@ describe("agent-runner-utils", () => {
       },
       hasRepliedRef: undefined,
       provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
     });
 
     expect(resolved.embeddedContext.currentInboundAudio).toBe(true);

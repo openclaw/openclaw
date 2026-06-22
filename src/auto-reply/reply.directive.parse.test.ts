@@ -70,6 +70,12 @@ describe("directive parsing", () => {
     expect(res.fastMode).toBe(true);
   });
 
+  it("matches auto fast directive", () => {
+    const res = extractFastDirective("/fast auto please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.fastMode).toBe("auto");
+  });
+
   it("parses default thinking and fast directives as override clears", () => {
     const think = parseInlineDirectives("/think default");
     expect(think.hasThinkDirective).toBe(true);

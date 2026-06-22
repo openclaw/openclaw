@@ -16,6 +16,7 @@ import type { BundledChannelConfigCollector } from "./manifest-registry.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  normalizeManifestChannelCommandDefaults,
   type OpenClawPackageManifest,
   type PackageManifest,
   type PluginPackageChannel,
@@ -274,28 +275,6 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
   return path.join(rootDir, DEFAULT_PLUGIN_ENTRY_CANDIDATES[0]);
 }
 
-function normalizePackageChannelCommands(
-  commands: unknown,
-): PluginPackageChannel["commands"] | undefined {
-  if (!isRecord(commands)) {
-    return undefined;
-  }
-  const nativeCommandsAutoEnabled =
-    typeof commands.nativeCommandsAutoEnabled === "boolean"
-      ? commands.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof commands.nativeSkillsAutoEnabled === "boolean"
-      ? commands.nativeSkillsAutoEnabled
-      : undefined;
-  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
-    ? {
-        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
-        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
-      }
-    : undefined;
-}
-
 function normalizePackageChannelExposure(
   exposure: unknown,
 ): PluginPackageChannel["exposure"] | undefined {
@@ -480,7 +459,7 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
   if (exposure) {
     channel.exposure = exposure;
   }
-  const commands = normalizePackageChannelCommands(value.commands);
+  const commands = normalizeManifestChannelCommandDefaults(value.commands);
   if (commands) {
     channel.commands = commands;
   }

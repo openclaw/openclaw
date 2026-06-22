@@ -33,13 +33,13 @@ DIST_PNPM_CMD=()
 SPARKLE_BUILD_DEPS_RETRIED=0
 
 resolve_dist_pnpm_cmd() {
-  if command -v pnpm >/dev/null 2>&1; then
-    DIST_PNPM_CMD=(pnpm)
+  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
+    DIST_PNPM_CMD=(corepack pnpm)
     return 0
   fi
 
-  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
-    DIST_PNPM_CMD=(corepack pnpm)
+  if command -v pnpm >/dev/null 2>&1; then
+    DIST_PNPM_CMD=(pnpm)
     return 0
   fi
 

@@ -32,7 +32,7 @@ Details: [Plugins](/tools/plugin)
 
 <Steps>
   <Step title="Ensure plugin is available">
-    Current packaged OpenClaw releases already bundle it. Older/custom installs can add it manually with the commands above.
+    Install `@openclaw/mattermost` with the command above, then restart the Gateway if it is already running.
   </Step>
   <Step title="Create a Mattermost bot">
     Create a Mattermost bot account and copy the **bot token**.

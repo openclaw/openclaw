@@ -2,6 +2,7 @@
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
  */
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
+import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 
@@ -12,6 +13,7 @@ type MinimaxBaseResp = {
 
 const MINIMAX_VLM_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const MINIMAX_VLM_ERROR_BODY_MAX_CHARS = 400;
+const DEFAULT_MINIMAX_VLM_TIMEOUT_MS = 60_000;
 
 async function readErrorBodySnippet(res: Response): Promise<string> {
   try {
@@ -158,12 +160,10 @@ export async function minimaxUnderstandImage(params: {
   // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
   ensureGlobalUndiciEnvProxyDispatcher();
 
-  const timeoutMs =
-    typeof params.timeoutMs === "number" &&
-    Number.isFinite(params.timeoutMs) &&
-    params.timeoutMs > 0
-      ? Math.floor(params.timeoutMs)
-      : 60_000;
+  const timeoutMs = resolvePositiveTimerTimeoutMs(
+    params.timeoutMs,
+    DEFAULT_MINIMAX_VLM_TIMEOUT_MS,
+  );
 
   const res = await fetch(url, {
     method: "POST",

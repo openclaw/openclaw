@@ -69,6 +69,17 @@
         "fileName"
       ]
     },
+    "api": {
+      "emoji": "🌐",
+      "title": "API",
+      "detailKeys": [
+        "url",
+        "endpoint",
+        "path",
+        "method",
+        "name"
+      ]
+    },
     "browser": {
       "emoji": "🌐",
       "title": "Browser",

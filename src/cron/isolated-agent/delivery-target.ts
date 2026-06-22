@@ -143,7 +143,7 @@ export async function resolveDeliveryTarget(
     accountId?: string;
     sessionKey?: string;
   },
-  options?: { dryRun?: boolean },
+  options?: { dryRun?: boolean; inheritSessionThread?: boolean },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
@@ -474,18 +474,19 @@ export async function resolveDeliveryTarget(
       : undefined;
   // Thread precedence is explicit config, route canonicalization, parser-derived
   // explicit target, then same-peer session history.
-  const threadId =
-    explicitThreadId ??
-    route?.threadId ??
-    parserExplicitThreadId ??
-    (shouldCarrySessionThread({
+  const canUseSessionThread =
+    options?.inheritSessionThread !== false &&
+    shouldCarrySessionThread({
       resolved,
       explicitTo,
       route,
       lastRoute,
-    })
-      ? resolved.threadId
-      : undefined);
+    });
+  const threadId =
+    explicitThreadId ??
+    route?.threadId ??
+    parserExplicitThreadId ??
+    (canUseSessionThread ? resolved.threadId : undefined);
   if (options?.dryRun) {
     return {
       ok: true,

@@ -24,7 +24,14 @@ import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors
 
 const ROOT_HELP_ALIASES = new Set(["tools"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
-const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set(["doctor", "gateway", "models", "plugins"]);
+const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set([
+  "doctor",
+  "gateway",
+  "models",
+  "plugins",
+  "sessions",
+  "tasks",
+]);
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([

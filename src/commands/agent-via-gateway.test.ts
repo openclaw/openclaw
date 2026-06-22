@@ -308,6 +308,78 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("reads a UTF-8 message file for gateway dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "task.md");
+      const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
+      fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      const params = requireRecord(request.params, "gateway request params");
+      expect(params.message).toBe(messageBody);
+    });
+  });
+
+  it("reads a UTF-8 message file for local embedded dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "task.md");
+      const messageBody = 'first line\n```json\n{"ok":true}\n```\nsecond line\n';
+      fs.writeFileSync(messageFile, `\uFEFF${messageBody}`, "utf8");
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        { messageFile, sessionKey: "agent:main:incident-42", local: true },
+        runtime,
+      );
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const opts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(opts.message).toBe(messageBody);
+      expect(opts).not.toHaveProperty("messageFile");
+    });
+  });
+
+  it("rejects inline and file messages together", async () => {
+    await expect(
+      agentCliCommand(
+        { message: "inline", messageFile: "task.md", sessionKey: "agent:main:incident-42" },
+        runtime,
+      ),
+    ).rejects.toThrow("Use either --message or --message-file, not both");
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("reports missing message files before dispatch", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "missing.md");
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("Message file not found");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects message files that are not valid UTF-8", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "task.bin");
+      fs.writeFileSync(messageFile, Buffer.from([0xff]));
+
+      await expect(
+        agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime),
+      ).rejects.toThrow("Message file must be valid UTF-8");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["/new", "/RESET", "/reset check status"] as const)(
     "uses backend admin authority for %s gateway commands",
     async (message) => {
@@ -1694,6 +1766,27 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("preserves inline message whitespace for local embedded runs", async () => {
+    await withTempStore(async () => {
+      mockLocalAgentReply();
+
+      await agentCliCommand(
+        {
+          message: "  keep spaces  ",
+          to: "+1555",
+          local: true,
+        },
+        runtime,
+      );
+
+      const localOpts = requireRecord(
+        requireFirstCallArg(agentCommand, "embedded agent"),
+        "embedded agent options",
+      );
+      expect(localOpts.message).toBe("  keep spaces  ");
+    });
+  });
+
   it("passes explicit session keys to local embedded runs", async () => {
     await withTempStore(async () => {
       mockLocalAgentReply();
@@ -1816,6 +1909,26 @@ describe("agentCliCommand", () => {
       expect(errorMessages.some((m) => m.includes("EMBEDDED FALLBACK"))).toBe(false);
     });
   }
+
+  it("rejects /compact from --message-file before any gateway or embedded turn", async () => {
+    await withTempStore(async ({ dir }) => {
+      const messageFile = path.join(dir, "compact.md");
+      fs.writeFileSync(messageFile, "/compact:Keep recent decisions.", "utf8");
+      callGateway.mockRejectedValue(createGatewayTimeoutError());
+
+      await agentCliCommand(
+        { messageFile, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
+        runtime,
+      );
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(agentCommand).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    const errorMessages = mockMessages(runtime.error);
+    expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
+    expect(errorMessages.some((m) => m.includes("EMBEDDED FALLBACK"))).toBe(false);
+  });
 
   it("does not mistake a /compacting-prefixed message for the /compact control command", async () => {
     await withTempStore(async () => {
