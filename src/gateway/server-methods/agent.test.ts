@@ -41,7 +41,12 @@ const mocks = vi.hoisted(() => ({
   agentCommand: vi.fn(),
   clearAgentRunContext: vi.fn(),
   registerAgentRunContext: vi.fn(),
-  emitAgentEvent: vi.fn(),
+  agentEventListeners: new Set<(event: unknown) => void>(),
+  emitAgentEvent: vi.fn((event: unknown) => {
+    for (const listener of mocks.agentEventListeners) {
+      listener(event);
+    }
+  }),
   performGatewaySessionReset: vi.fn(),
   emitGatewaySessionEndPluginHook: vi.fn(),
   emitGatewaySessionStartPluginHook: vi.fn(),
@@ -157,7 +162,10 @@ vi.mock("../../infra/agent-events.js", () => ({
   getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
   getAgentRunContext: vi.fn(),
   registerAgentRunContext: mocks.registerAgentRunContext,
-  onAgentEvent: vi.fn(),
+  onAgentEvent: vi.fn((listener: (event: unknown) => void) => {
+    mocks.agentEventListeners.add(listener);
+    return () => mocks.agentEventListeners.delete(listener);
+  }),
 }));
 
 vi.mock("../../agents/subagent-registry-read.js", () => ({
@@ -573,6 +581,7 @@ describe("gateway agent handler", () => {
     resetTaskRegistryForTests();
     resetSubagentRegistryForTests({ persist: false });
     subagentRegistryTesting.setDepsForTest();
+    mocks.agentEventListeners.clear();
     mocks.loadConfigReturn = {};
     mocks.emitGatewaySessionEndPluginHook.mockReset();
     mocks.emitGatewaySessionStartPluginHook.mockReset();
@@ -3312,6 +3321,16 @@ describe("gateway agent handler", () => {
           client: pluginClient,
         },
       );
+      mocks.emitAgentEvent({
+        runId,
+        sessionKey: childSessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: Date.now() - 100,
+          endedAt: Date.now(),
+        },
+      });
 
       await waitForAssertion(() => {
         const tasks = listTaskRecords().filter((task) => task.runId === runId);
@@ -5673,6 +5692,7 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.emitGatewaySessionStartPluginHook.mockReset();
     mocks.getLatestSubagentRunByChildSessionKey.mockReset();
     mocks.replaceSubagentRunAfterSteer.mockReset();
+    mocks.agentEventListeners.clear();
     mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
     mocks.getChannelPlugin.mockReset();
