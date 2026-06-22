@@ -77,6 +77,32 @@ describe("diagnostic log events", () => {
     expect(metadata.trustedTraceContext).toBeUndefined();
   });
 
+  it("extracts the message when the log text precedes the context object", async () => {
+    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "log.record") {
+        received.push(evt);
+      }
+    });
+
+    const logger = getChildLogger({
+      subsystem: "diagnostic",
+      trace: { traceId: TRACE_ID, spanId: SPAN_ID },
+    });
+    // Dominant OpenClaw call shape: message string first, structured context object last.
+    logger.info("message-first diagnostic log", { runId: "run-1" });
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    expect(received).toHaveLength(1);
+    const [event] = received;
+    expect(event.message).toBe("message-first diagnostic log");
+    expect(event.attributes).toStrictEqual({
+      subsystem: "diagnostic",
+      runId: "run-1",
+    });
+  });
+
   it("uses active request trace context for unbound log records", async () => {
     const trace = createDiagnosticTraceContext({
       traceId: TRACE_ID,
