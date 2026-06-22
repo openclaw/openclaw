@@ -110,8 +110,11 @@ describe("Codex usage-limit fallback real behavior proof", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result!.reason).toBe("rate_limit");
-    expect(result!.code).toBe("embedded_error_payload");
+    expect(result).toEqual({
+      message: `openrouter/openai/gpt-5.5 ended with a provider error: ${CODEX_USAGE_LIMIT_ERROR_TEXT}`,
+      reason: "rate_limit",
+      code: "embedded_error_payload",
+      rawError: CODEX_USAGE_LIMIT_ERROR_TEXT,
+    });
   });
 });
