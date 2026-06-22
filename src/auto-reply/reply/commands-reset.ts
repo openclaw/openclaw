@@ -61,10 +61,21 @@ function collectConfiguredModelRefs(params: HandleCommandsParams): Set<string> {
   return refs;
 }
 
+const MODEL_REF_PREFIX_RE =
+  /^(?:gpt|o[134]|claude|gemini|llama|mistral|mixtral|codestral|qwen|deepseek|grok|kimi|command-r|sonar|phi)(?:[-_:./]|\d|$)/i;
+
 function isModelRefTail(params: HandleCommandsParams, tail: string): boolean {
   const normalized = tail.trim().toLowerCase();
   if (!normalized) {
     return false;
+  }
+  const refs = collectConfiguredModelRefs(params);
+  const tokens = normalized.split(/\s+/);
+  if (tokens.length === 2) {
+    const [provider, model] = tokens;
+    if (provider && model && refs.has(provider)) {
+      return refs.has(`${provider}/${model}`) || refs.has(model) || MODEL_REF_PREFIX_RE.test(model);
+    }
   }
   if (
     !normalized.includes("/") &&
@@ -75,18 +86,16 @@ function isModelRefTail(params: HandleCommandsParams, tail: string): boolean {
   ) {
     return true;
   }
-  if (collectConfiguredModelRefs(params).has(normalized)) {
+  if (refs.has(normalized)) {
     return true;
   }
   if (normalized.includes("/")) {
     return true;
   }
-  return /^(?:gpt|o[134]|claude|gemini|llama|mistral|mixtral|codestral|qwen|deepseek|grok|kimi|command-r|sonar|phi)(?:[-_:./]|\d|$)/i.test(
-    normalized,
-  );
+  return MODEL_REF_PREFIX_RE.test(normalized);
 }
 
-function getNativeCommandTitle(params: HandleCommandsParams): string | undefined {
+function getNativeCommandTitleTail(params: HandleCommandsParams): string | undefined {
   if ((params.ctx.CommandSource ?? "text") === "text") {
     return undefined;
   }
@@ -95,21 +104,11 @@ function getNativeCommandTitle(params: HandleCommandsParams): string | undefined
     return undefined;
   }
   const trimmed = title.trim();
-  return isModelRefTail(params, trimmed) ? undefined : trimmed;
+  const newMatch = trimmed.match(/^\/new(?:\s+(.+))?$/i);
+  return newMatch ? newMatch[1]?.trim() : trimmed;
 }
 
-function parseNamedNewSessionTail(
-  params: HandleCommandsParams,
-  resetTail: string,
-): string | undefined {
-  const nativeTitle = getNativeCommandTitle(params);
-  if (nativeTitle) {
-    return nativeTitle;
-  }
-  const tail = resetTail.trim();
-  if (!tail) {
-    return undefined;
-  }
+function parseExplicitNamedNewSessionTail(tail: string): string | undefined {
   if (/^(?:--model(?:=|\s+)|model:)/i.test(tail)) {
     return undefined;
   }
@@ -124,6 +123,32 @@ function parseNamedNewSessionTail(
   const quotedMatch = tail.match(/^"([^"]+)"$|^'([^']+)'$/);
   if (quotedMatch?.[1] || quotedMatch?.[2]) {
     return (quotedMatch[1] ?? quotedMatch[2] ?? "").trim();
+  }
+  return undefined;
+}
+
+function parseNamedNewSessionTail(
+  params: HandleCommandsParams,
+  resetTail: string,
+): string | undefined {
+  const nativeTitle = getNativeCommandTitleTail(params);
+  if (nativeTitle) {
+    const explicitNativeName = parseExplicitNamedNewSessionTail(nativeTitle);
+    if (explicitNativeName) {
+      return explicitNativeName;
+    }
+    return isModelRefTail(params, nativeTitle) ? undefined : nativeTitle;
+  }
+  const tail = resetTail.trim();
+  if (!tail) {
+    return undefined;
+  }
+  const explicitName = parseExplicitNamedNewSessionTail(tail);
+  if (explicitName) {
+    return explicitName;
+  }
+  if (/^(?:--model(?:=|\s+)|model:)/i.test(tail)) {
+    return undefined;
   }
   if (!tail.startsWith("-") && !/\s/.test(tail) && !isModelRefTail(params, tail)) {
     return tail;

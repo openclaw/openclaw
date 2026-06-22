@@ -179,6 +179,30 @@ describe("delete session command", () => {
     );
   });
 
+  it("does not delete another agent configured main session", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:work:home",
+      entry: {
+        sessionId: "work-home-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    });
+    const params = buildDeleteParams("/delete", storePath, { sessionKey: "agent:work:home" });
+    params.cfg = { session: { mainKey: "home" } } as OpenClawConfig;
+
+    const result = await handleDeleteSessionCommand(params, true);
+
+    expect(result?.reply?.text).toContain("main session cannot be deleted");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(getSessionEntry({ storePath, sessionKey: "agent:work:home" })?.sessionId).toBe(
+      "work-home-session",
+    );
+  });
+
   it("does not delete for an unauthorized sender", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry({

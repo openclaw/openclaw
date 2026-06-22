@@ -681,6 +681,86 @@ describe("handleCommands reset hooks", () => {
     expect(result).toBeNull();
   });
 
+  it("keeps native provider/model /new title args available for model fallthrough", async () => {
+    const params = buildResetParams(
+      "/new openai gpt-5.5",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.invalid",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 16_000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "openai gpt-5.5" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("parses native /new name syntax before writing session labels", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:main:main",
+      entry: { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    });
+    const params = buildResetParams(
+      "/new --name Planning notes",
+      {
+        commands: { text: true },
+        channels: { slack: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "/new --name Planning notes" } },
+        Provider: "slack",
+        Surface: "slack",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Planning notes”." },
+    });
+    expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Planning notes",
+    );
+  });
+
   it("keeps reset tails falling through so the model receives the user input", async () => {
     const params = buildResetParams("/Reset take notes", {
       commands: { text: true },

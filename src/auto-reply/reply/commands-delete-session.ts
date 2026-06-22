@@ -1,6 +1,6 @@
 import { resolveMainSessionKey, resolveSessionStoreEntry } from "../../config/sessions.js";
 import { callGateway } from "../../gateway/call.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { normalizeMainKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { rejectUnauthorizedCommand, requireGatewayClientScope } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
@@ -26,8 +26,9 @@ function deleteSessionReply(text: string): CommandHandlerResult {
   return { shouldContinue: false, reply: { text } };
 }
 
-function isAgentMainSessionKey(sessionKey: string): boolean {
-  return parseAgentSessionKey(sessionKey)?.rest === "main";
+function isAgentMainSessionKey(params: HandleCommandsParams, sessionKey: string): boolean {
+  const rest = parseAgentSessionKey(sessionKey)?.rest;
+  return rest === "main" || rest === normalizeMainKey(params.cfg.session?.mainKey);
 }
 
 export const handleDeleteSessionCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -57,7 +58,7 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   if (
     params.sessionKey === resolveMainSessionKey(params.cfg) ||
     params.sessionKey === "global" ||
-    isAgentMainSessionKey(params.sessionKey)
+    isAgentMainSessionKey(params, params.sessionKey)
   ) {
     return deleteSessionReply("The main session cannot be deleted from chat. Use /reset instead.");
   }
