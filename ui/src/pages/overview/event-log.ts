@@ -1,9 +1,9 @@
 // Control UI view renders overview event log screen content.
 import { html, nothing } from "lit";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import type { EventLogEntry } from "../../ui/app-events.ts";
-import { icons } from "../../ui/icons.ts";
 import { formatEventPayload } from "../../ui/presenter.ts";
 
 export type OverviewEventLogProps = {

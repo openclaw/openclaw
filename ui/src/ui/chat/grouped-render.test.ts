@@ -41,7 +41,7 @@ vi.mock("../markdown.ts", async (importOriginal) => {
   };
 });
 
-vi.mock("../icons.ts", () => ({
+vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 

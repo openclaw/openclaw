@@ -17,7 +17,7 @@ import {
   renderFallbackIndicator,
 } from "./status-indicators.ts";
 
-vi.mock("../icons.ts", () => ({
+vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 

@@ -1,7 +1,7 @@
 // Control UI chat module implements status indicators behavior.
 import { html, nothing } from "lit";
+import { icons } from "../../components/icons.ts";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
-import { icons } from "../icons.ts";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS, type ChatRunUiStatus } from "./run-lifecycle.ts";
 
 const COMPACTION_TOAST_DURATION_MS = 5000;

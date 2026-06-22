@@ -1,11 +1,11 @@
 // Control UI view renders workboard screen content.
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs } from "../../lib/format.ts";
 import { clearActiveFloatingTooltips } from "../../ui/dom-tooltips.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
-import { icons } from "../../ui/icons.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../../ui/types.ts";
 import {
   addWorkboardCardComment,

@@ -1,7 +1,7 @@
 // Instances page renders its screen content.
 import { html, nothing } from "lit";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { icons } from "../../ui/icons.ts";
 import { formatPresenceAge } from "../../ui/presenter.ts";
 import type { PresenceEntry } from "../../ui/types.ts";
 

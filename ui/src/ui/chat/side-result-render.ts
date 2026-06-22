@@ -1,7 +1,7 @@
 // Control UI chat module implements side result render behavior.
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { icons } from "../icons.ts";
+import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { ChatSideResult } from "./side-result.ts";

@@ -1,6 +1,6 @@
 // Control UI chat module implements copy as markdown behavior.
 import { html, type TemplateResult } from "lit";
-import { icons } from "../icons.ts";
+import { icons } from "../../components/icons.ts";
 import { copyToClipboard } from "./clipboard.ts";
 
 const COPIED_FOR_MS = 1500;

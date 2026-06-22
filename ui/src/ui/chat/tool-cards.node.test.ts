@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildToolCardSidebarContent, extractToolCards } from "./tool-cards.ts";
 
-vi.mock("../icons.ts", () => ({
+vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 
