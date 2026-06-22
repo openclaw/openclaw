@@ -94,11 +94,11 @@ export function resolveSessionDisplayName(
     return name.toLowerCase().startsWith(prefix.toLowerCase()) ? name : `${prefix} ${name}`;
   };
 
-  if (title && title !== key) {
-    return applyTypedPrefix(title);
-  }
   if (label && label !== key) {
     return applyTypedPrefix(label);
+  }
+  if (title && title !== key) {
+    return applyTypedPrefix(title);
   }
   if (displayName && displayName !== key) {
     return applyTypedPrefix(displayName);
