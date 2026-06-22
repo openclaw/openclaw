@@ -298,7 +298,7 @@ function shouldEnableOpenAIResponsesServerCompaction(
   if (configured === false) {
     return false;
   }
-  if (explicitStore !== true) {
+  if (explicitStore === false) {
     return false;
   }
   if (configured === true) {

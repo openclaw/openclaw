@@ -247,4 +247,53 @@ describe("openai responses payload policy", () => {
     expect(policy.allowsServiceTier).toBe(true);
     expect(policy.shouldStripStore).toBe(false);
   });
+
+  it("auto-injects server compaction for openai-chatgpt-responses when enableServerCompaction is true", () => {
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          contextWindow: 400_000,
+        },
+        {
+          enableServerCompaction: true,
+          storeMode: "provider-policy",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      context_management: [{ type: "compaction", compact_threshold: 280_000 }],
+    });
+  });
+
+  it("suppresses server compaction for openai-chatgpt-responses when store is explicitly disabled", () => {
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+          contextWindow: 400_000,
+        },
+        {
+          enableServerCompaction: true,
+          storeMode: "disable",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      store: false,
+    });
+    expect(payload).not.toHaveProperty("context_management");
+  });
 });

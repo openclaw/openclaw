@@ -4373,6 +4373,43 @@ describe("applyExtraParamsToAgent", () => {
       expect(run().store).toBe(false);
     },
   );
+  it("injects context_management for openai-chatgpt-responses when responsesServerCompaction is configured", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openai",
+      applyModelId: "gpt-5.5",
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                params: {
+                  responsesServerCompaction: true,
+                  responsesCompactThreshold: 360_000,
+                },
+              },
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        id: "gpt-5.5",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        contextWindow: 400_000,
+      } as Model<"openai-chatgpt-responses">,
+      payload: {
+        store: false,
+      },
+    });
+    expect(payload.store).toBe(false);
+    expect(payload.context_management).toEqual([
+      {
+        type: "compaction",
+        compact_threshold: 360_000,
+      },
+    ]);
+  });
 
   it("strips prompt cache fields for non-OpenAI openai-responses endpoints", () => {
     const payload = runResponsesPayloadMutationCase({
