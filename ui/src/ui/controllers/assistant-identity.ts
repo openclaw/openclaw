@@ -1,7 +1,10 @@
+import {
+  loadLocalAssistantIdentity,
+  saveLocalAssistantIdentity,
+} from "../../app/assistant-identity.ts";
 // Control UI controller manages assistant identity gateway state.
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
-import { loadLocalAssistantIdentity, saveLocalAssistantIdentity } from "../storage.ts";
 
 export type AssistantIdentityState = {
   client: GatewayBrowserClient | null;

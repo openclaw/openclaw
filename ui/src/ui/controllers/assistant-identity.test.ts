@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { loadLocalAssistantIdentity } from "../storage.ts";
 import { loadAssistantIdentity, setAssistantAvatarOverride } from "./assistant-identity.ts";
 
 function createDeferred<T>() {
