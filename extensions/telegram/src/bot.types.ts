@@ -1,4 +1,5 @@
 // Telegram type declarations define plugin contracts.
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -9,6 +10,7 @@ export type TelegramBotOptions = {
   token: string;
   accountId?: string;
   runtime?: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
   requireMention?: boolean;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;

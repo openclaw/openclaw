@@ -212,6 +212,8 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
       'export type { TelegramProbe } from "./src/probe.js";',
       'export { auditTelegramGroupMembership, collectTelegramUnmentionedGroupIds } from "./src/audit.js";',
       'export { resolveTelegramRuntimeGroupPolicy } from "./src/group-access.js";',
+      'export { registerTelegramIngressExtension } from "./src/telegram-ingress-extensions.js";',
+      'export type { TelegramIngressExtension, TelegramRawUpdateHandlerContext, TelegramRawUpdateHandlerResult } from "./src/telegram-ingress-extensions.js";',
       'export { buildTelegramExecApprovalPendingPayload, shouldSuppressTelegramExecApprovalForwardingFallback } from "./src/exec-approval-forwarding.js";',
       'export { telegramMessageActions } from "./src/channel-actions.js";',
       'export { monitorTelegramProvider } from "./src/monitor.js";',

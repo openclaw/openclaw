@@ -9,7 +9,7 @@ beforeAll(async () => {
 });
 
 describe("resolveTelegramAllowedUpdates", () => {
-  it("includes the default update types plus reaction and channel post support", () => {
+  it("keeps the no-extension default update list unchanged", () => {
     const updates = resolveTelegramAllowedUpdates();
     expect(DEFAULT_TELEGRAM_UPDATE_TYPES).toEqual([
       "message",

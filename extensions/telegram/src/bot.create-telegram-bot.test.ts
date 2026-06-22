@@ -82,6 +82,8 @@ const {
   resolveTelegramThreadSpec,
 } = await import("./bot/helpers.js");
 const { resolveTelegramGroupPromptSettings } = await import("./group-config-helpers.js");
+const { registerTelegramIngressExtension } = await import("../runtime-api.js");
+const { resetTelegramIngressExtensionsForTests } = await import("./telegram-ingress-extensions.js");
 let createTelegramBot: (
   opts: TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -232,6 +234,7 @@ describe("createTelegramBot", () => {
     }
   });
   afterEach(() => {
+    resetTelegramIngressExtensionsForTests();
     pluginStateTestRuntime.resetPluginStateStoreForTests();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
@@ -292,6 +295,99 @@ describe("createTelegramBot", () => {
       .calls;
     const errorMessage = sanitizeTerminalText(String(errorCalls[0]?.[0]));
     expect(errorMessage.startsWith("telegram bot error: Error: handler boom")).toBe(true);
+  });
+
+  it("lets Telegram ingress extensions claim raw guest message updates", async () => {
+    const handleRawUpdate = vi.fn(() => "handled" as const);
+    registerTelegramIngressExtension({
+      id: "telegram-guest-mode",
+      handleRawUpdate,
+    });
+    const channelRuntime = { runtimeContexts: {} } as TelegramBotOptions["channelRuntime"];
+
+    createTelegramBot({ token: "tok", accountId: "acct-a", channelRuntime });
+    const finalHandler = vi.fn(async () => undefined);
+    const update = {
+      update_id: 123,
+      guest_message: {
+        guest_query_id: "guest-query-1",
+        message_id: 44,
+        chat: { id: 99, type: "private" },
+        from: { id: 42 },
+        text: "hello from guest mode",
+      },
+    };
+
+    await runTelegramMiddlewareChain({
+      ctx: { update },
+      finalHandler,
+    });
+
+    expect(handleRawUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update,
+        accountId: "acct-a",
+        bot: expect.any(Object),
+        runtime: expect.any(Object),
+        channelRuntime,
+      }),
+    );
+    expect(finalHandler).not.toHaveBeenCalled();
+  });
+
+  it("lets Telegram ingress extensions continue raw updates to downstream middleware", async () => {
+    const handleRawUpdate = vi.fn(() => "continue" as const);
+    registerTelegramIngressExtension({
+      id: "telegram-guest-mode",
+      handleRawUpdate,
+    });
+
+    createTelegramBot({ token: "tok" });
+    const finalHandler = vi.fn(async () => undefined);
+    const update = {
+      update_id: 124,
+      guest_message: {
+        guest_query_id: "guest-query-2",
+        message_id: 45,
+        chat: { id: 99, type: "private" },
+        from: { id: 42 },
+        text: "unhandled guest mode",
+      },
+    };
+
+    await runTelegramMiddlewareChain({
+      ctx: { update },
+      finalHandler,
+    });
+
+    expect(handleRawUpdate).toHaveBeenCalledTimes(1);
+    expect(finalHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs Telegram ingress extension errors and continues downstream middleware", async () => {
+    const runtime = {
+      error: vi.fn(),
+      exit: vi.fn(),
+      log: vi.fn(),
+    };
+    registerTelegramIngressExtension({
+      id: "failing-ingress",
+      handleRawUpdate: () => {
+        throw new Error("raw handler boom");
+      },
+    });
+
+    createTelegramBot({ token: "tok", runtime });
+    const finalHandler = vi.fn(async () => undefined);
+    await runTelegramMiddlewareChain({
+      ctx: { update: { update_id: 125, guest_message: {} } },
+      finalHandler,
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      '[telegram] ingress extension "failing-ingress" failed: raw handler boom',
+    );
+    expect(finalHandler).toHaveBeenCalledTimes(1);
   });
 
   it("uses wrapped fetch when global fetch is available", () => {

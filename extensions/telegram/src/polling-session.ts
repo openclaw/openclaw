@@ -1,6 +1,9 @@
 // Telegram plugin module implements polling session behavior.
 import { type RunOptions, run } from "@grammyjs/runner";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelAccountSnapshot,
+  ChannelRuntimeSurface,
+} from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
@@ -235,6 +238,7 @@ type TelegramPollingSessionOpts = {
   config: NonNullable<Parameters<typeof createTelegramBot>[0]["config"]>;
   accountId: string;
   runtime: Parameters<typeof createTelegramBot>[0]["runtime"];
+  channelRuntime?: ChannelRuntimeSurface;
   proxyFetch: Parameters<typeof createTelegramBot>[0]["proxyFetch"];
   botInfo?: Parameters<typeof createTelegramBot>[0]["botInfo"];
   abortSignal?: AbortSignal;
@@ -496,6 +500,7 @@ export class TelegramPollingSession {
         proxyFetch: this.opts.proxyFetch,
         config: this.opts.config,
         accountId: this.opts.accountId,
+        channelRuntime: this.opts.channelRuntime,
         botInfo: this.opts.botInfo,
         fetchAbortSignal: fetchAbortController.signal,
         minimumClientTimeoutSeconds: TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS,

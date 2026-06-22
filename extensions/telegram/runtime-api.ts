@@ -49,6 +49,12 @@ export {
 export type { TelegramProbe } from "./src/probe.js";
 export { auditTelegramGroupMembership, collectTelegramUnmentionedGroupIds } from "./src/audit.js";
 export { resolveTelegramRuntimeGroupPolicy } from "./src/group-access.js";
+export { registerTelegramIngressExtension } from "./src/telegram-ingress-extensions.js";
+export type {
+  TelegramIngressExtension,
+  TelegramRawUpdateHandlerContext,
+  TelegramRawUpdateHandlerResult,
+} from "./src/telegram-ingress-extensions.js";
 export {
   buildTelegramExecApprovalPendingPayload,
   shouldSuppressTelegramExecApprovalForwardingFallback,

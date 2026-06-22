@@ -55,6 +55,7 @@ import { stringifyTelegramRawUpdateForLog } from "./raw-update-log.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import { handleTelegramIngressExtensionRawUpdate } from "./telegram-ingress-extensions.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type { TelegramBotOptions } from "./bot.types.js";
@@ -217,6 +218,20 @@ export function createTelegramBotCore(
       updateTracker.finishUpdate(begin.update, { completed: false });
       throw error;
     }
+  });
+
+  bot.use(async (ctx, next) => {
+    const handled = await handleTelegramIngressExtensionRawUpdate({
+      update: ctx.update,
+      accountId: account.accountId,
+      bot,
+      runtime,
+      channelRuntime: opts.channelRuntime,
+    });
+    if (handled) {
+      return;
+    }
+    await next();
   });
 
   // Answer callback queries immediately before sequentialize queues them behind

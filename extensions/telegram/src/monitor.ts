@@ -165,7 +165,6 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     const proxyFetch =
       opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
-
     if (opts.useWebhook) {
       const { startTelegramWebhook } = await loadTelegramMonitorWebhookRuntime();
       if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
@@ -192,6 +191,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         publicUrl: opts.webhookUrl,
         webhookCertPath: opts.webhookCertPath,
         setStatus: opts.setStatus,
+        channelRuntime: opts.channelRuntime,
       });
       await waitForAbortSignal(opts.abortSignal);
       return;
@@ -290,6 +290,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         proxyFetch,
         botInfo: opts.botInfo,
         abortSignal: opts.abortSignal,
+        channelRuntime: opts.channelRuntime,
         runnerOptions: createTelegramRunnerOptions(cfg),
         getLastUpdateId: () => lastUpdateId,
         persistUpdateId,
