@@ -69,6 +69,18 @@ describe("activation planner", () => {
           origin: "bundled",
         },
         {
+          id: "custom-harness-plugin",
+          providers: [],
+          channels: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          activation: {
+            onAgentHarnesses: ["custom-harness"],
+          },
+          origin: "workspace",
+        },
+        {
           id: "demo-channel",
           channels: ["telegram"],
           providers: [],
@@ -140,6 +152,33 @@ describe("activation planner", () => {
         trigger: {
           kind: "command",
           command: "memory",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("plans manifest-owned custom harnesses and respects their activation policy", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+      }),
+    ).toEqual(["custom-harness-plugin"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            entries: {
+              "custom-harness-plugin": { enabled: false },
+            },
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
         },
       }),
     ).toEqual([]);

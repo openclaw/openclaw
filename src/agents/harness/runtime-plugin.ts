@@ -3,8 +3,13 @@
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
-import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
+import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
+import { hasExplicitManifestOwnerTrust } from "../../plugins/manifest-owner-policy.js";
 import {
   loadPluginRegistrySnapshot,
   normalizePluginsConfigWithRegistry,
@@ -16,15 +21,8 @@ import {
 } from "../../plugins/providers.js";
 import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
-
-/**
- * Lazy-loads plugin-backed harness runtimes before selection.
- *
- * Only cold-loadable runtimes live here; always-loaded core/openclaw runtimes should not trigger
- * plugin registry scans on every embedded-agent turn.
- */
-const COLD_LOADABLE_HARNESS_PLUGIN_IDS = new Set(["codex", "copilot"]);
 
 function dedupePluginIds(values: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -82,13 +80,35 @@ function resolveHarnessPluginIds(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
 }): string[] {
+  const activationPlan = resolveManifestActivationPlan({
+    trigger: { kind: "agentHarness", runtime: params.runtime },
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
+  const harnessPluginIds = activationPlan.entries
+    .filter(
+      (entry) =>
+        entry.origin === "bundled" ||
+        hasExplicitManifestOwnerTrust({
+          plugin: { id: entry.pluginId },
+          normalizedConfig: normalizedPlugins,
+        }),
+    )
+    .map((entry) => entry.pluginId);
+  if (harnessPluginIds.length === 0) {
+    return [];
+  }
   if (params.runtime !== "codex") {
-    return [params.runtime];
+    return harnessPluginIds;
+  }
+  if (!harnessPluginIds.includes("codex")) {
+    return harnessPluginIds;
   }
   if (restrictiveAllowlistOmitsPlugin(params.config, "codex")) {
     // Respect a restrictive allowlist even when Codex would normally pull in provider owner
     // plugins. Operators who set an allowlist expect no implicit plugin expansion.
-    return ["codex"];
+    return harnessPluginIds;
   }
   const providerOwnerPluginIds = dedupePluginIds(
     resolveOwningPluginIdsForProviderRef({
@@ -98,7 +118,7 @@ function resolveHarnessPluginIds(params: {
     }) ?? [],
   );
   if (providerOwnerPluginIds.length === 0) {
-    return ["codex"];
+    return harnessPluginIds;
   }
   const safeProviderOwnerPluginIds = dedupePluginIds([
     ...resolveBundledProviderCompatPluginIds({
@@ -114,6 +134,7 @@ function resolveHarnessPluginIds(params: {
   ]);
   return dedupePluginIds([
     "codex",
+    ...harnessPluginIds,
     ...providerOwnerPluginIds.filter(
       (pluginId) => pluginId !== "codex" && safeProviderOwnerPluginIds.includes(pluginId),
     ),
@@ -164,7 +185,11 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   if (
     isDefaultAgentRuntimeId(runtime) ||
     runtime === OPENCLAW_AGENT_RUNTIME_ID ||
-    !COLD_LOADABLE_HARNESS_PLUGIN_IDS.has(runtime)
+    isCliRuntimeAliasForProvider({
+      runtime,
+      provider: params.provider,
+      cfg: params.config,
+    })
   ) {
     return;
   }
@@ -177,6 +202,9 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
+  if (pluginIds.length === 0) {
+    return;
+  }
   const memoryPluginIds = resolveSelectedMemoryPluginIds({
     config: params.config,
     workspaceDir: params.workspaceDir,
