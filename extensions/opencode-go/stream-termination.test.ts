@@ -169,9 +169,13 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
 
     // And it pushed a terminal error event to the downstream consumer.
     const terminal = received.find(
-      (event) => event.type === "error" && (event as any).reason === "aborted",
+      (event) => event.type === "error" && (event as any).reason === "error",
     );
     expect(terminal).toBeDefined();
+    expect((terminal as any)?.error).toMatchObject({
+      stopReason: "error",
+      errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
+    });
 
     // Cleanup: end base stream so consumer promise resolves.
     controller.end();
@@ -487,7 +491,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     expect(abortCalled).toBe(true);
     expect(getReturnCalls()).toBe(1);
     expect(
-      received.some((event) => event.type === "error" && (event as any).reason === "aborted"),
+      received.some((event) => event.type === "error" && (event as any).reason === "error"),
     ).toBe(true);
 
     await consumer;
@@ -531,7 +535,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
 
     expect(abortCalled).toBe(true);
     expect(
-      received.some((event) => event.type === "error" && (event as any).reason === "aborted"),
+      received.some((event) => event.type === "error" && (event as any).reason === "error"),
     ).toBe(true);
     await consumer;
   });

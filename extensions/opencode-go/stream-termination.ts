@@ -101,25 +101,25 @@ function combineAbortSignals(signals: (AbortSignal | undefined)[]): {
   };
 }
 
-function buildAbortedErrorEvent(partial: AssistantMessage | undefined): AssistantMessageEvent {
+const STALLED_STREAM_ERROR_MESSAGE =
+  "opencode-go stream timed out after provider-owned SSE boundary stalled";
+
+function buildStalledErrorEvent(partial: AssistantMessage | undefined): AssistantMessageEvent {
   if (partial) {
     return {
       type: "error",
-      reason: "aborted",
+      reason: "error",
       error: {
         ...partial,
-        stopReason: "aborted",
-        errorMessage: "opencode-go stream stalled; aborted at provider-owned SSE boundary",
+        stopReason: "error",
+        errorMessage: STALLED_STREAM_ERROR_MESSAGE,
       },
     };
   }
   return {
     type: "error",
-    reason: "aborted",
-    error: synthesizeMinimalAssistantMessage(
-      "opencode-go stream stalled; aborted at provider-owned SSE boundary",
-      "aborted",
-    ),
+    reason: "error",
+    error: synthesizeMinimalAssistantMessage(STALLED_STREAM_ERROR_MESSAGE, "error"),
   };
 }
 
@@ -287,7 +287,7 @@ export function createOpencodeGoStalledStreamWrapper(
       controller.abort(new Error("opencode-go stream stalled"));
       combinedSignal.cleanup();
       releaseBaseStream();
-      output.push(buildAbortedErrorEvent(lastSeenPartial));
+      output.push(buildStalledErrorEvent(lastSeenPartial));
       output.end();
     };
 
