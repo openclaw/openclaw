@@ -1,11 +1,8 @@
 // Session store writer tests cover serialized session writes and cleanup.
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../test-utils/deferred.js";
-import {
-  clearSessionStoreCacheForTest,
-  getSessionStoreWriterQueueSizeForTest,
-  withSessionStoreWriterForTest,
-} from "./store.js";
+import { runExclusiveSessionStoreWrite } from "./store-writer.js";
+import { clearSessionStoreCacheForTest, getSessionStoreWriterQueueSizeForTest } from "./store.js";
 
 describe("session store writer", () => {
   afterEach(() => {
@@ -18,13 +15,13 @@ describe("session store writer", () => {
     const releaseFirst = createDeferred();
     const order: string[] = [];
 
-    const first = withSessionStoreWriterForTest(storePath, async () => {
+    const first = runExclusiveSessionStoreWrite(storePath, async () => {
       order.push("first:start");
       firstStarted.resolve();
       await releaseFirst.promise;
       order.push("first:end");
     });
-    const second = withSessionStoreWriterForTest(storePath, async () => {
+    const second = runExclusiveSessionStoreWrite(storePath, async () => {
       order.push("second");
     });
 
@@ -40,7 +37,7 @@ describe("session store writer", () => {
   });
 
   it("rejects empty store paths before enqueuing work", async () => {
-    await expect(withSessionStoreWriterForTest("", async () => undefined)).rejects.toThrow(
+    await expect(runExclusiveSessionStoreWrite("", async () => undefined)).rejects.toThrow(
       /storePath must be a non-empty string/,
     );
     expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);

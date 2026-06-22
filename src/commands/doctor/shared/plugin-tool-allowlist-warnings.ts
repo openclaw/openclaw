@@ -7,20 +7,18 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
-import { parseModelRef } from "../../../agents/model-selection-normalize.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../agents/tool-policy.js";
-import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type ToolAllowlistSource = {
   label: string;
@@ -198,22 +196,6 @@ function resolveProviderToolPolicy(params: {
   }
   return (
     (providerModel ? lookup.get(providerModel)?.policy : undefined) ?? lookup.get(provider)?.policy
-  );
-}
-
-function resolvePrimaryModelRef(
-  cfg: OpenClawConfig,
-  agentModel?: AgentModelConfig,
-): { provider: string; model: string } {
-  const raw =
-    resolveAgentModelPrimaryValue(agentModel) ??
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
-    DEFAULT_MODEL;
-  return (
-    parseModelRef(raw, DEFAULT_PROVIDER, { allowPluginNormalization: false }) ?? {
-      provider: DEFAULT_PROVIDER,
-      model: DEFAULT_MODEL,
-    }
   );
 }
 
@@ -492,7 +474,10 @@ function nonSandboxToolPoliciesBlockMcp(params: {
 }): boolean {
   const globalTools = params.cfg.tools;
   const agentTools = asToolPolicyConfig(params.agent?.tools);
-  const modelRef = resolvePrimaryModelRef(params.cfg, params.agent?.model as AgentModelConfig);
+  const modelRef = resolveDoctorPrimaryModelRef(
+    params.cfg,
+    params.agent?.model as AgentModelConfig,
+  );
   const globalProviderPolicy = resolveProviderToolPolicy({
     byProvider: globalTools?.byProvider,
     modelProvider: modelRef.provider,

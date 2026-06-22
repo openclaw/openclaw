@@ -33,6 +33,7 @@ import type {
 import { readBool, readNonNegativeInteger, readString } from "@openclaw/acp-core/meta";
 import { defaultAcpSessionStore, type AcpSessionStore } from "@openclaw/acp-core/session";
 import { toAcpSessionLineageMeta } from "@openclaw/acp-core/session-lineage-meta";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeFastMode,
@@ -101,7 +102,7 @@ import {
   resolveListSessionsPageSize,
 } from "./translator.session-list.js";
 import { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
-import { ACP_AGENT_INFO, type AcpServerOptions } from "./types.js";
+import { ACP_AGENT_INFO } from "./types.js";
 
 // Maximum allowed prompt size (2MB) to prevent DoS via memory exhaustion (CWE-400, GHSA-cxpw-2g23-2vgw)
 const MAX_PROMPT_BYTES = 2 * 1024 * 1024;

@@ -38,6 +38,7 @@ export type CronAnnounceTarget = {
   to?: string;
   accountId?: string;
   sessionKey?: string;
+  inheritSessionThread?: boolean;
 };
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -58,12 +59,19 @@ async function resolveCronAnnounceDelivery(params: {
 > {
   // Resolve the target before building outbound identity/session so send errors
   // report the configured route, not only the cron job id.
-  const resolvedTarget = await resolveDeliveryTarget(params.cfg, params.agentId, {
-    channel: params.target.channel as CronMessageChannel | undefined,
-    to: params.target.to,
-    accountId: params.target.accountId,
-    sessionKey: params.target.sessionKey,
-  });
+  const targetResolutionOptions =
+    params.target.inheritSessionThread === false ? { inheritSessionThread: false } : undefined;
+  const resolvedTarget = await resolveDeliveryTarget(
+    params.cfg,
+    params.agentId,
+    {
+      channel: params.target.channel as CronMessageChannel | undefined,
+      to: params.target.to,
+      accountId: params.target.accountId,
+      sessionKey: params.target.sessionKey,
+    },
+    targetResolutionOptions,
+  );
 
   if (!resolvedTarget.ok) {
     return { ok: false, error: resolvedTarget.error };

@@ -199,7 +199,6 @@ vi.mock("@openclaw/acp-core/runtime/session-identifiers", () => ({
 
 vi.mock("../auto-reply/thinking.js", () => ({
   formatThinkingLevels: () => "low, medium, high",
-  formatXHighModelHint: () => "model-x",
   normalizeThinkLevel: (v?: string) => v || undefined,
   normalizeVerboseLevel: (v?: string) => v || undefined,
   isThinkingLevelSupported: (args: unknown) => state.isThinkingLevelSupportedMock(args),
