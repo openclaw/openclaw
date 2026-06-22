@@ -702,6 +702,23 @@ describe("gateway server chat", () => {
     expect(textValues).toEqual(["hello", "real reply", "real text field reply", "NO_REPLY"]);
   });
 
+  test("chat.history hides assistant control replies in Responses output blocks", async () => {
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "NO_REPLY" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "visible response" }],
+        timestamp: 2,
+      },
+    ]);
+
+    expect(collectHistoryTextValues(historyMessages)).toEqual(["visible response"]);
+  });
+
   test("chat.history mirrors current-session message tool sends before NO_REPLY", async () => {
     const replyText = "Here, love. Eva, not Evo.";
     const historyMessages = await loadChatHistoryWithMessages([

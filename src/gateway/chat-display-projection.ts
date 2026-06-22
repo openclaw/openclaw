@@ -580,7 +580,7 @@ function extractAssistantTextForSilentCheck(message: unknown): string | undefine
       return undefined;
     }
     const typed = block as { type?: unknown; text?: unknown };
-    if (typed.type !== "text" || typeof typed.text !== "string") {
+    if ((typed.type !== "text" && typed.type !== "output_text") || typeof typed.text !== "string") {
       return undefined;
     }
     texts.push(typed.text);
@@ -597,7 +597,11 @@ function hasAssistantNonTextContent(message: unknown): boolean {
     return false;
   }
   return content.some(
-    (block) => block && typeof block === "object" && (block as { type?: unknown }).type !== "text",
+    (block) =>
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type !== "text" &&
+      (block as { type?: unknown }).type !== "output_text",
   );
 }
 
