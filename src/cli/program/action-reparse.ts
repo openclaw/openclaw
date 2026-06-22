@@ -3,13 +3,33 @@ import type { Command } from "commander";
 import { buildParseArgv } from "../argv.js";
 import { resolveActionArgs, resolveCommandOptionArgs } from "./helpers.js";
 
+function getCommandPathFromRoot(command: Command | undefined): string[] {
+  const path: string[] = [];
+  let current = command;
+  while (current?.parent) {
+    const name = current.name();
+    if (name) {
+      path.unshift(name);
+    }
+    current = current.parent;
+  }
+  return path;
+}
+
 function buildFallbackArgv(program: Command, actionCommand: Command | undefined): string[] {
   const actionArgsList = resolveActionArgs(actionCommand);
   const parentOptionArgs =
     actionCommand?.parent === program ? resolveCommandOptionArgs(program) : [];
-  return actionCommand?.name()
-    ? [...parentOptionArgs, actionCommand.name(), ...actionArgsList]
-    : [...parentOptionArgs, ...actionArgsList];
+  const commandPath = getCommandPathFromRoot(actionCommand);
+  if (commandPath.length === 0) {
+    return [...parentOptionArgs, ...actionArgsList];
+  }
+  return [
+    ...commandPath.slice(0, -1),
+    ...parentOptionArgs,
+    commandPath[commandPath.length - 1],
+    ...actionArgsList,
+  ];
 }
 
 function findRootCommand(cmd: Command): Command {
