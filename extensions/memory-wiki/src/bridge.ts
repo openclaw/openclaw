@@ -225,9 +225,15 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
 
   const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
+  // Filter out artifacts from the wiki vault's own sources directory to prevent
+  // recursive self-import loops when the vault lives inside memory/. See #95657.
+  const wikiSourcesDir = path.resolve(params.config.vault.path, "sources") + path.sep;
+  const filteredArtifacts = publicArtifacts.filter(
+    (a) => !path.resolve(a.absolutePath).startsWith(wikiSourcesDir),
+  );
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
   const activeKeys = new Set<string>();
-  const artifacts = await collectBridgeArtifacts(params.config.bridge, publicArtifacts);
+  const artifacts = await collectBridgeArtifacts(params.config.bridge, filteredArtifacts);
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   assertMemoryWikiSourceSyncStateCapacity({
     state,
@@ -235,7 +241,7 @@ export async function syncMemoryWikiBridgeSources(params: {
     incomingCount: artifacts.length,
   });
   const agentIdsByWorkspace = new Map<string, string[]>();
-  for (const artifact of publicArtifacts) {
+  for (const artifact of filteredArtifacts) {
     agentIdsByWorkspace.set(artifact.workspaceDir, artifact.agentIds);
   }
   const artifactCount = artifacts.length;

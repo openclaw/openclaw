@@ -551,4 +551,66 @@ describe("syncMemoryWikiBridgeSources", () => {
       "# Deep Unicode Note",
     );
   });
+
+  it("filters out artifacts from the wiki vault sources directory to prevent self-import loops", async () => {
+    const workspaceDir = await createBridgeWorkspace("self-import-workspace");
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("self-import-vault"),
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexMemoryRoot: true,
+          indexDailyNotes: true,
+        },
+      },
+    });
+
+    // Simulate: the vault lives inside the workspace memory directory
+    // and the memory indexer has picked up a bridge-generated source file
+    const externalMemoryPath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(externalMemoryPath, "# Daily Note\n", "utf8");
+
+    // This artifact simulates a bridge-generated file that the memory indexer
+    // found inside the wiki vault's own sources directory — it should be filtered
+    const selfReferentialPath = path.join(vaultDir, "sources", "bridge-workspace-abc123.md");
+    await fs.mkdir(path.join(vaultDir, "sources"), { recursive: true });
+    await fs.writeFile(selfReferentialPath, "# Bridge Import\n", "utf8");
+
+    registerBridgeArtifacts([
+      {
+        kind: "daily-note",
+        workspaceDir,
+        relativePath: "memory/2026-04-05.md",
+        absolutePath: externalMemoryPath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir,
+        relativePath: "sources/bridge-workspace-abc123.md",
+        absolutePath: selfReferentialPath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+
+    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
+
+    // Only the external artifact should be imported; the self-referential one
+    // from the vault's own sources/ directory must be filtered out.
+    expect(result.artifactCount).toBe(1);
+    expect(result.importedCount).toBe(1);
+    expect(result.pagePaths).toHaveLength(1);
+    expect(result.pagePaths[0]).not.toContain("bridge-workspace-abc123");
+  });
 });
