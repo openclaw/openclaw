@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { formatApprovalDisplayPath } from "../../../../src/infra/approval-display-paths.ts";
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
-import "../components/modal-dialog.ts";
+import "../../components/modal-dialog.ts";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,

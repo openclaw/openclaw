@@ -81,7 +81,7 @@ import {
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 import { renderChatQueue } from "./chat-queue.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
-import "../../ui/components/resizable-divider.ts";
+import "../../components/resizable-divider.ts";
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "a[href]",

@@ -1,7 +1,7 @@
 // Control UI component implements the file preview modal element.
 import { LitElement, css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
-import { icons } from "../../components/icons.ts";
+import { icons } from "./icons.ts";
 
 export type FilePreviewModalFile = {
   path: string;
