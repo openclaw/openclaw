@@ -63,6 +63,20 @@ export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => vo
 /** Optional callback invoked when async media generation starts. */
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
+function resolvePinnedMediaRequesterOrigin(params: {
+  requesterOrigin?: DeliveryContext;
+  sessionOrigin?: DeliveryContext;
+}): DeliveryContext | undefined {
+  const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  const sessionOrigin = normalizeDeliveryContext(params.sessionOrigin);
+  const accountsConflict =
+    requesterOrigin?.channel === sessionOrigin?.channel &&
+    requesterOrigin?.accountId &&
+    sessionOrigin?.accountId &&
+    requesterOrigin.accountId !== sessionOrigin.accountId;
+  return accountsConflict ? requesterOrigin : mergeDeliveryContext(requesterOrigin, sessionOrigin);
+}
+
 /** Returns whether a media generation request should detach for a session. */
 export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
   const normalizedSessionKey = sessionKey?.trim();
@@ -151,10 +165,10 @@ function createMediaGenerationTaskRun(params: {
   try {
     // Pin the complete requester route when detached work starts. Completion-time
     // session state can move to another peer while generation is still running.
-    const requesterOrigin = mergeDeliveryContext(
-      normalizeDeliveryContext(params.requesterOrigin),
-      deliveryContextFromSession(loadRequesterSessionEntry(sessionKey).entry),
-    );
+    const requesterOrigin = resolvePinnedMediaRequesterOrigin({
+      requesterOrigin: params.requesterOrigin,
+      sessionOrigin: deliveryContextFromSession(loadRequesterSessionEntry(sessionKey).entry),
+    });
     const task = createRunningTaskRun({
       runtime: "cli",
       taskKind: params.taskKind,

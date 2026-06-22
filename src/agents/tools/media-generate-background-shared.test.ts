@@ -451,6 +451,39 @@ describe("createMediaGenerationTaskLifecycle", () => {
     );
   });
 
+  it("does not pin a session target from another account", () => {
+    subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({
+      entry: {
+        lastChannel: "telegram",
+        lastTo: "peer-b",
+        lastAccountId: "bot-b",
+      },
+    });
+    const lifecycle = createMediaGenerationTaskLifecycle({
+      toolName: "image_generate",
+      taskKind: "image_generation",
+      label: "Image generation",
+      queuedProgressSummary: "Queued image generation",
+      generatedLabel: "image",
+      failureProgressSummary: "Image generation failed",
+      eventSource: "image_generation",
+      announceType: "image generation task",
+      completionLabel: "image",
+    });
+
+    const handle = lifecycle.createTaskRun({
+      sessionKey: "agent:main:telegram:shared",
+      requesterOrigin: { channel: "telegram", accountId: "bot-a" },
+      prompt: "proof image",
+    });
+
+    expect(handle?.requesterOrigin).toEqual({
+      channel: "telegram",
+      to: undefined,
+      accountId: "bot-a",
+    });
+  });
+
   it("returns the completion wake delivery result", async () => {
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: true,
