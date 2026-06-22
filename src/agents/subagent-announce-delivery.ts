@@ -816,6 +816,9 @@ async function deliverGeneratedMediaCompletionDirect(params: {
   });
   const agentId = resolveAgentIdFromSessionKey(params.requesterSessionKey);
   const idempotencyKey = `${params.directIdempotencyKey}:generated-media-direct`;
+  const forceTelegramDocument =
+    params.sourceTool === "image_generate" &&
+    normalizeMessageChannel(params.deliveryTarget.channel) === "telegram";
   try {
     await subagentAnnounceDeliveryDeps.sendMessage({
       cfg: params.cfg,
@@ -827,6 +830,7 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       agentId,
       content: `The generated ${mediaLabel} is ready.`,
       mediaUrls: Array.from(params.mediaUrls),
+      ...(forceTelegramDocument ? { forceDocument: true } : {}),
       idempotencyKey,
       mirror: {
         sessionKey: params.requesterSessionKey,

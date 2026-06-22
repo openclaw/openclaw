@@ -34,6 +34,8 @@ export type ReplyPayload = {
   replyToCurrent?: boolean;
   /** Send audio as voice message (bubble) instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Send media as a document/file where supported, avoiding image/video recompression. */
+  forceDocument?: boolean;
   /**
    * Text synthesized into an audio-only TTS payload. Exposed to hooks for
    * archival/search use when no visible channel text is sent.

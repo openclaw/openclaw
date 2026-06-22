@@ -2224,6 +2224,47 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMediaOptions?.audioAsVoice).toBe(true);
   });
 
+  it("forwards payload-level forceDocument through generic plugin media delivery", async () => {
+    const sendMedia = vi.fn(async () => ({
+      channel: "matrix" as const,
+      messageId: "mx-doc",
+      roomId: "!room:example",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+              sendMedia,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { matrix: {} } } as OpenClawConfig,
+      channel: "matrix",
+      to: "room:!room:example",
+      payloads: [{ text: "render", mediaUrl: "file:///tmp/render.png", forceDocument: true }],
+    });
+
+    const sendMediaOptions = (
+      sendMedia.mock.calls as unknown as Array<
+        [{ forceDocument?: unknown; mediaUrl?: unknown; text?: unknown; to?: unknown }]
+      >
+    )[0]?.[0];
+    expect(sendMediaOptions?.to).toBe("room:!room:example");
+    expect(sendMediaOptions?.text).toBe("render");
+    expect(sendMediaOptions?.mediaUrl).toBe("file:///tmp/render.png");
+    expect(sendMediaOptions?.forceDocument).toBe(true);
+  });
+
   it("exposes audio-only spokenText to hooks without rendering it as media caption", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     hookMocks.runner.runMessageSending.mockResolvedValue({

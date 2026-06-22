@@ -2272,6 +2272,52 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("directly delivers generated Telegram images as documents when announce-agent returns no visible output", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      requesterSessionId: null,
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "image generation task",
+          taskLabel: "robot portrait",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-robot.png",
+          mediaUrls: ["/tmp/generated-robot.png"],
+          replyInstruction: "Deliver the generated image.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "123456789",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-robot.png"],
+        forceDocument: true,
+        idempotencyKey: "announce-telegram-dm-fallback:generated-media-direct",
+      }),
+    );
+  });
+
   it("falls back to requester-agent handoff when an active Telegram requester cannot be woken", async () => {
     const callGateway = createGatewayMock({
       result: {
