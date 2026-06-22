@@ -72,7 +72,7 @@ describe("task-executor-policy", () => {
       "Task needs follow-up: ACP import (run run-1234). Needs login.",
     );
     expect(formatTaskStateChangeMessage(blockedTask, progressEvent)).toBe(
-      "Background task update: ACP import. No output for 60s.",
+      "Background task update: ACP import (run run-1234). No output for 60s.",
     );
   });
 

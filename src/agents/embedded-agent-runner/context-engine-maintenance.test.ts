@@ -1549,7 +1549,7 @@ describe("runContextEngineMaintenance", () => {
         await waitForAssertion(() =>
           expectSystemEventContaining(
             sessionKey,
-            "Background task update: Context engine turn maintenance.",
+            "Background task update: Context engine turn maintenance (run ",
           ),
         );
 

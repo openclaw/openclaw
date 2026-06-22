@@ -4,6 +4,7 @@ import {
   createSafeGatewayRestartPreflight,
   requestSafeGatewayRestart,
 } from "../../infra/restart-coordinator.js";
+import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function isRestartRequestParams(value: unknown): value is Record<string, unknown> {
@@ -24,7 +25,7 @@ function normalizeSkipDeferral(value: unknown): boolean {
 
 /** Gateway request handlers for safe restart coordination. */
 export const restartHandlers: GatewayRequestHandlers = {
-  "gateway.restart.request": async ({ respond, params }) => {
+  "gateway.restart.request": async ({ respond, params, client }) => {
     if (!isRestartRequestParams(params)) {
       respond(
         false,
@@ -33,10 +34,18 @@ export const restartHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const actor = resolveControlPlaneActor(client);
     const result = requestSafeGatewayRestart({
       reason: normalizeReason(params.reason),
       delayMs: 0,
       skipDeferral: normalizeSkipDeferral(params.skipDeferral),
+      activeWorkInterruptApproved: params.interruptActiveWork === true,
+      requester: formatControlPlaneActor(actor),
+      audit: {
+        actor: actor.actor,
+        deviceId: actor.deviceId,
+        clientIp: actor.clientIp,
+      },
     });
     respond(true, result);
   },

@@ -124,7 +124,7 @@ describe("safe gateway restart coordinator", () => {
     expect(result.status).toBe("coalesced");
   });
 
-  it("forwards skipDeferral to scheduleGatewaySigusr1Restart and marks status scheduled", () => {
+  it("downgrades skipDeferral while active work exists without interruption approval", () => {
     scheduleGatewaySigusr1Restart.mockReturnValueOnce({
       ok: true,
       pid: 123,
@@ -148,12 +148,55 @@ describe("safe gateway restart coordinator", () => {
       },
     });
 
+    expect(result.status).toBe("deferred");
+    expect(result.preflight.safe).toBe(false);
+    expect(result.interruption).toEqual({
+      skipDeferralRequested: true,
+      activeWorkInterruptApproved: false,
+      skipDeferralDowngraded: true,
+    });
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+      delayMs: 0,
+      reason: "test.skip-deferral",
+    });
+  });
+
+  it("forwards skipDeferral when active-work interruption is explicitly approved", () => {
+    scheduleGatewaySigusr1Restart.mockReturnValueOnce({
+      ok: true,
+      pid: 123,
+      signal: "SIGUSR1",
+      delayMs: 0,
+      mode: "emit",
+      coalesced: false,
+      cooldownMsApplied: 0,
+    });
+
+    const result = requestSafeGatewayRestart({
+      reason: "test.approved-interrupt",
+      skipDeferral: true,
+      activeWorkInterruptApproved: true,
+      inspect: {
+        getQueueSize: () => 1,
+        getPendingReplies: () => 0,
+        getEmbeddedRuns: () => 0,
+        getCronRuns: () => 0,
+        getActiveTasks: () => 0,
+        getTaskBlockers: () => [],
+      },
+    });
+
     expect(result.status).toBe("scheduled");
     expect(result.preflight.safe).toBe(false);
+    expect(result.interruption).toEqual({
+      skipDeferralRequested: true,
+      activeWorkInterruptApproved: true,
+      skipDeferralDowngraded: false,
+    });
     expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
       delayMs: 0,
       preservePendingEmitHooksOnDeferralBypass: true,
-      reason: "test.skip-deferral",
+      reason: "test.approved-interrupt",
       skipDeferral: true,
     });
   });

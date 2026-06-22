@@ -1,11 +1,11 @@
 // Gateway tool restart tests cover the sentinel handoff that lets an agent
 // resume private work after the gateway process restarts.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { requestSafeGatewayRestart } from "../../infra/restart-coordinator.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createGatewayTool } from "./gateway-tool.js";
 
-type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
+type SafeGatewayRestartArgs = Parameters<typeof requestSafeGatewayRestart>[0];
 
 const {
   extractDeliveryInfoMock,
@@ -13,7 +13,7 @@ const {
   isRestartEnabledMock,
   callGatewayToolMock,
   clearRestartSentinelMock,
-  scheduleGatewaySigusr1RestartMock,
+  requestSafeGatewayRestartMock,
   writeRestartSentinelMock,
 } = vi.hoisted(() => ({
   isRestartEnabledMock: vi.fn(() => true),
@@ -32,15 +32,36 @@ const {
   ),
   writeRestartSentinelMock: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
   clearRestartSentinelMock: vi.fn(async () => undefined),
-  scheduleGatewaySigusr1RestartMock: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
-    ok: true,
-    pid: 123,
-    signal: "SIGUSR1" as const,
-    delayMs: 250,
-    mode: "emit" as const,
-    coalesced: false,
-    cooldownMsApplied: 0,
-    emitHooksQueued: true,
+  requestSafeGatewayRestartMock: vi.fn((_opts?: SafeGatewayRestartArgs) => ({
+    status: "scheduled" as const,
+    preflight: {
+      safe: true,
+      summary: "no active work",
+      counts: {
+        queueSize: 0,
+        pendingReplies: 0,
+        embeddedRuns: 0,
+        cronRuns: 0,
+        activeTasks: 0,
+        totalActive: 0,
+      },
+      taskBlockers: [],
+    },
+    restart: {
+      ok: true,
+      pid: 123,
+      signal: "SIGUSR1" as const,
+      delayMs: 250,
+      mode: "emit" as const,
+      coalesced: false,
+      cooldownMsApplied: 0,
+      emitHooksQueued: true,
+    },
+    interruption: {
+      skipDeferralRequested: false,
+      activeWorkInterruptApproved: false,
+      skipDeferralDowngraded: false,
+    },
   })),
 }));
 
@@ -64,8 +85,8 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   };
 });
 
-vi.mock("../../infra/restart.js", () => ({
-  scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
+vi.mock("../../infra/restart-coordinator.js", () => ({
+  requestSafeGatewayRestart: requestSafeGatewayRestartMock,
 }));
 
 vi.mock("../../logging/subsystem.js", () => ({
@@ -88,11 +109,11 @@ function requireRestartSentinelPayload(): RestartSentinelPayload {
   return payload;
 }
 
-function requireScheduledRestartArgs(): NonNullable<ScheduleGatewayRestartArgs> {
-  const calls = scheduleGatewaySigusr1RestartMock.mock.calls;
+function requireSafeRestartArgs(): NonNullable<SafeGatewayRestartArgs> {
+  const calls = requestSafeGatewayRestartMock.mock.calls;
   const args = calls[calls.length - 1]?.[0];
   if (!args) {
-    throw new Error("expected scheduled restart args");
+    throw new Error("expected safe restart args");
   }
   return args;
 }
@@ -117,16 +138,37 @@ describe("gateway tool restart continuation", () => {
     writeRestartSentinelMock.mockReset();
     writeRestartSentinelMock.mockResolvedValue(undefined);
     clearRestartSentinelMock.mockClear();
-    scheduleGatewaySigusr1RestartMock.mockReset();
-    scheduleGatewaySigusr1RestartMock.mockReturnValue({
-      ok: true,
-      pid: 123,
-      signal: "SIGUSR1",
-      delayMs: 250,
-      mode: "emit",
-      coalesced: false,
-      cooldownMsApplied: 0,
-      emitHooksQueued: true,
+    requestSafeGatewayRestartMock.mockReset();
+    requestSafeGatewayRestartMock.mockReturnValue({
+      status: "scheduled",
+      preflight: {
+        safe: true,
+        summary: "no active work",
+        counts: {
+          queueSize: 0,
+          pendingReplies: 0,
+          embeddedRuns: 0,
+          cronRuns: 0,
+          activeTasks: 0,
+          totalActive: 0,
+        },
+        taskBlockers: [],
+      },
+      restart: {
+        ok: true,
+        pid: 123,
+        signal: "SIGUSR1",
+        delayMs: 250,
+        mode: "emit",
+        coalesced: false,
+        cooldownMsApplied: 0,
+        emitHooksQueued: true,
+      },
+      interruption: {
+        skipDeferralRequested: false,
+        activeWorkInterruptApproved: false,
+        skipDeferralDowngraded: false,
+      },
     });
     callGatewayToolMock.mockReset();
     callGatewayToolMock.mockResolvedValue({ ok: true });
@@ -192,7 +234,7 @@ describe("gateway tool restart continuation", () => {
     expect(writeRestartSentinelMock).not.toHaveBeenCalled();
     // The sentinel is emitted by the restart scheduler hook, so failed restart
     // delivery can still clean up a prepared file before the process exits.
-    await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
+    await requireSafeRestartArgs().emitHooks?.beforeEmit?.();
 
     const payload = requireRestartSentinelPayload();
     expect(payload.kind).toBe("restart");
@@ -209,9 +251,14 @@ describe("gateway tool restart continuation", () => {
       kind: "agentTurn",
       message: "Reply with exactly: Yay! I did it!",
     });
-    const restartArgs = requireScheduledRestartArgs();
+    const restartArgs = requireSafeRestartArgs();
     expect(restartArgs.delayMs).toBe(250);
     expect(restartArgs.reason).toBe("continue after reboot");
+    expect(restartArgs.requester).toBe("agent-tool session=agent:main:main");
+    expect(restartArgs.audit).toEqual({
+      actor: "agent-tool",
+      deviceId: "agent:main:main",
+    });
     expect(restartArgs.sessionKey).toBe("agent:main:main");
     expect(typeof restartArgs.emitHooks?.beforeEmit).toBe("function");
     expect(typeof restartArgs.emitHooks?.afterEmitRejected).toBe("function");
@@ -236,21 +283,42 @@ describe("gateway tool restart continuation", () => {
       continuationMessage: "Reply after restart",
     });
 
-    expect(requireScheduledRestartArgs().sessionKey).toBe("agent:main:session-A");
-    await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
+    expect(requireSafeRestartArgs().sessionKey).toBe("agent:main:session-A");
+    await requireSafeRestartArgs().emitHooks?.beforeEmit?.();
     expect(requireRestartSentinelPayload().sessionKey).toBe("agent:main:session-A");
   });
 
   it("reports continuationQueued=false when a coalesced restart belongs to another session (#86742)", async () => {
-    scheduleGatewaySigusr1RestartMock.mockReturnValue({
-      ok: true,
-      pid: 123,
-      signal: "SIGUSR1",
-      delayMs: 0,
-      mode: "emit",
-      coalesced: true,
-      cooldownMsApplied: 0,
-      emitHooksQueued: false,
+    requestSafeGatewayRestartMock.mockReturnValue({
+      status: "coalesced",
+      preflight: {
+        safe: true,
+        summary: "no active work",
+        counts: {
+          queueSize: 0,
+          pendingReplies: 0,
+          embeddedRuns: 0,
+          cronRuns: 0,
+          activeTasks: 0,
+          totalActive: 0,
+        },
+        taskBlockers: [],
+      },
+      restart: {
+        ok: true,
+        pid: 123,
+        signal: "SIGUSR1",
+        delayMs: 0,
+        mode: "emit",
+        coalesced: true,
+        cooldownMsApplied: 0,
+        emitHooksQueued: false,
+      },
+      interruption: {
+        skipDeferralRequested: false,
+        activeWorkInterruptApproved: false,
+        skipDeferralDowngraded: false,
+      },
     });
     const tool = createGatewayTool({
       agentSessionKey: "agent:main:main",
@@ -282,7 +350,7 @@ describe("gateway tool restart continuation", () => {
         delayMs,
       }),
     ).rejects.toThrow("delayMs must be a non-negative integer");
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(requestSafeGatewayRestartMock).not.toHaveBeenCalled();
   });
 
   it("accepts string restart delayMs values through the shared numeric reader", async () => {
@@ -296,7 +364,7 @@ describe("gateway tool restart continuation", () => {
       delayMs: "250",
     });
 
-    expect(requireScheduledRestartArgs().delayMs).toBe(250);
+    expect(requireSafeRestartArgs().delayMs).toBe(250);
   });
 
   it("coerces legacy continuationKind inputs to an agentTurn", async () => {
@@ -311,7 +379,7 @@ describe("gateway tool restart continuation", () => {
       continuationMessage: "Reply after restart",
     });
 
-    await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
+    await requireSafeRestartArgs().emitHooks?.beforeEmit?.();
 
     // Older model-facing arguments should not reintroduce system-event
     // continuations; visible replies still go through the message tool.
@@ -333,7 +401,7 @@ describe("gateway tool restart continuation", () => {
       reason: "restart requested",
     });
 
-    await requireScheduledRestartArgs().emitHooks?.beforeEmit?.();
+    await requireSafeRestartArgs().emitHooks?.beforeEmit?.();
 
     const payload = requireRestartSentinelPayload();
     expect(payload.sessionKey).toBe("agent:main:main");
@@ -350,7 +418,7 @@ describe("gateway tool restart continuation", () => {
       action: "restart",
     });
 
-    const scheduledArgs = requireScheduledRestartArgs();
+    const scheduledArgs = requireSafeRestartArgs();
     await scheduledArgs.emitHooks?.beforeEmit?.();
     await scheduledArgs.emitHooks?.afterEmitRejected?.();
 

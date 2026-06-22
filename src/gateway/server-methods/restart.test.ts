@@ -50,12 +50,24 @@ function mockScheduledRestart(preflight: { safe: boolean; summary: string }) {
   });
 }
 
-function expectRestartRequest(skipDeferral: boolean) {
-  expect(requestSafeGatewayRestart).toHaveBeenCalledWith({
-    reason: "operator",
-    delayMs: 0,
-    skipDeferral,
-  });
+function expectRestartRequest(params: {
+  skipDeferral: boolean;
+  activeWorkInterruptApproved?: boolean;
+}) {
+  expect(requestSafeGatewayRestart).toHaveBeenCalledWith(
+    expect.objectContaining({
+      reason: "operator",
+      delayMs: 0,
+      skipDeferral: params.skipDeferral,
+      activeWorkInterruptApproved: params.activeWorkInterruptApproved ?? false,
+      requester: "actor=unknown-actor device=unknown-device ip=unknown-ip conn=unknown-conn",
+      audit: {
+        actor: "unknown-actor",
+        deviceId: "unknown-device",
+        clientIp: "unknown-ip",
+      },
+    }),
+  );
 }
 
 describe("gateway.restart.request handler", () => {
@@ -68,7 +80,7 @@ describe("gateway.restart.request handler", () => {
 
     await invokeRestartRequest({ reason: "operator" });
 
-    expectRestartRequest(false);
+    expectRestartRequest({ skipDeferral: false });
   });
 
   it("forwards skipDeferral: true only when params.skipDeferral === true", async () => {
@@ -76,7 +88,22 @@ describe("gateway.restart.request handler", () => {
 
     await invokeRestartRequest({ reason: "operator", skipDeferral: true });
 
-    expectRestartRequest(true);
+    expectRestartRequest({ skipDeferral: true });
+  });
+
+  it("forwards active-work interruption approval only when explicitly true", async () => {
+    mockScheduledRestart({ safe: false, summary: "" });
+
+    await invokeRestartRequest({
+      reason: "operator",
+      skipDeferral: true,
+      interruptActiveWork: true,
+    });
+
+    expectRestartRequest({
+      skipDeferral: true,
+      activeWorkInterruptApproved: true,
+    });
   });
 
   it("normalizes truthy non-boolean skipDeferral values to false", async () => {
@@ -84,7 +111,7 @@ describe("gateway.restart.request handler", () => {
 
     await invokeRestartRequest({ reason: "operator", skipDeferral: "true" });
 
-    expectRestartRequest(false);
+    expectRestartRequest({ skipDeferral: false });
   });
 
   it("forwards skipDeferral: false explicitly when the param is sent as false", async () => {
@@ -92,7 +119,7 @@ describe("gateway.restart.request handler", () => {
 
     await invokeRestartRequest({ reason: "operator", skipDeferral: false });
 
-    expectRestartRequest(false);
+    expectRestartRequest({ skipDeferral: false });
   });
 
   it("rejects non-object params without scheduling a restart", async () => {

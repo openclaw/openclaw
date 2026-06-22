@@ -14,8 +14,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { requestSafeGatewayRestart } from "../../infra/restart-coordinator.js";
 import { type RestartSentinelPayload, writeRestartSentinel } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON } from "../../infra/update-control-plane-sentinel.js";
@@ -353,9 +353,9 @@ export const updateHandlers: GatewayRequestHandlers = {
     // Restarting after a failed update leaves the process in a broken state
     // (corrupted node_modules, partial builds) and causes a crash loop.
     const updateWasPackageSwap = result.status === "ok" && result.mode !== "git";
-    const restart =
+    const safeRestart =
       handoff?.status === "started" || result.status === "ok"
-        ? scheduleGatewaySigusr1Restart({
+        ? requestSafeGatewayRestart({
             delayMs:
               handoff?.status === "started"
                 ? resolveManagedServiceHandoffRestartDelayMs(restartDelayMs, supervisor)
@@ -364,9 +364,11 @@ export const updateHandlers: GatewayRequestHandlers = {
                   : restartDelayMs,
             reason: "update.run",
             // Package swaps and managed handoffs should restart without waiting
-            // for normal deferral/cooldown windows; the new code is already staged.
+            // for cooldown, but active user-visible work still requires the
+            // safe restart coordinator's deferral unless explicitly approved.
             skipDeferral: updateWasPackageSwap || handoff?.status === "started",
             skipCooldown: updateWasPackageSwap || handoff?.status === "started",
+            requester: formatControlPlaneActor(actor),
             audit: {
               actor: actor.actor,
               deviceId: actor.deviceId,
@@ -375,6 +377,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             },
           })
         : null;
+    const restart = safeRestart?.restart ?? null;
     context?.logGateway?.info(
       `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
     );

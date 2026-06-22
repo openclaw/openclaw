@@ -3415,7 +3415,7 @@ describe("task-registry", () => {
       await waitForAssertion(() =>
         expectRecordFields(sentMessageCall(), {
           content:
-            "Background task update: ACP background task. No output for 60s. It may be waiting for input.",
+            "Background task update: ACP background task (run run-stat). No output for 60s. It may be waiting for input.",
         }),
       );
       expectRecordFields(requireTaskByRunId("run-state-change"), {
@@ -3570,6 +3570,13 @@ describe("task-registry", () => {
         notifyPolicy: "state_changes",
       });
 
+      await waitForAssertion(() =>
+        expectRecordFields(sentMessageCall(), {
+          content: "Background task started: ACP background task (run run-stat).",
+        }),
+      );
+      hoisted.sendMessageMock.mockClear();
+
       const relay = startAcpSpawnParentStreamRelay({
         runId: "run-state-stream",
         parentSessionKey: "agent:main:main",
@@ -3584,7 +3591,7 @@ describe("task-registry", () => {
       relay.notifyStarted();
       await flushAsyncWork();
       expectRecordFields(sentMessageCall(), {
-        content: "Background task update: ACP background task. Started.",
+        content: "Background task update: ACP background task (run run-stat). Started.",
       });
 
       hoisted.sendMessageMock.mockClear();
@@ -3592,7 +3599,7 @@ describe("task-registry", () => {
       await flushAsyncWork();
       expectRecordFields(sentMessageCall(), {
         content:
-          "Background task update: ACP background task. No prompt submission observed for 1s after child start.",
+          "Background task update: ACP background task (run run-stat). No prompt submission observed for 1s after child start.",
       });
 
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);

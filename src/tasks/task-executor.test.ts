@@ -344,7 +344,7 @@ describe("task-executor", () => {
       expect(runningFlow?.ownerKey).toBe("agent:main:main");
       expect(runningFlow?.status).toBe("running");
       expect(runningFlow?.goal).toBe("Write summary");
-      expect(runningFlow?.notifyPolicy).toBe("done_only");
+      expect(runningFlow?.notifyPolicy).toBe("state_changes");
 
       completeTaskRunByRunId({
         runId: "run-executor-flow",
@@ -358,7 +358,7 @@ describe("task-executor", () => {
       expect(succeededFlow?.status).toBe("succeeded");
       expect(succeededFlow?.endedAt).toBe(40);
       expect(succeededFlow?.goal).toBe("Write summary");
-      expect(succeededFlow?.notifyPolicy).toBe("done_only");
+      expect(succeededFlow?.notifyPolicy).toBe("state_changes");
     });
   });
 

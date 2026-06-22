@@ -665,8 +665,10 @@ describe("update-startup", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
       delayMs: 0,
       reason: "update.auto",
+      audit: { actor: "update.auto" },
       skipCooldown: true,
       skipDeferral: true,
+      preservePendingEmitHooksOnDeferralBypass: true,
     });
     expect(log.info).toHaveBeenCalledWith("auto-update handoff started", {
       channel: "beta",
@@ -702,8 +704,10 @@ describe("update-startup", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
       delayMs: 2000,
       reason: "update.auto",
+      audit: { actor: "update.auto" },
       skipCooldown: true,
       skipDeferral: true,
+      preservePendingEmitHooksOnDeferralBypass: true,
     });
   });
 

@@ -94,10 +94,23 @@ function ensureSingleTaskFlow(params: {
 type TaskRunCreateParams = DetachedTaskCreateParams;
 type RunningTaskRunCreateParams = DetachedRunningTaskCreateParams;
 
+function resolveDetachedTaskNotifyPolicy(
+  params: TaskRunCreateParams | RunningTaskRunCreateParams,
+): TaskNotifyPolicy | undefined {
+  if (params.notifyPolicy) {
+    return params.notifyPolicy;
+  }
+  if (params.scopeKind !== "session" || params.deliveryStatus === "not_applicable") {
+    return undefined;
+  }
+  return "state_changes";
+}
+
 export function createQueuedTaskRun(params: TaskRunCreateParams): TaskRecord | null {
   const task = createTaskRecord({
     ...params,
     status: "queued",
+    notifyPolicy: resolveDetachedTaskNotifyPolicy(params),
   });
   if (!task) {
     return null;
@@ -116,6 +129,7 @@ export function createRunningTaskRun(params: RunningTaskRunCreateParams): TaskRe
   const task = createTaskRecord({
     ...params,
     status: "running",
+    notifyPolicy: resolveDetachedTaskNotifyPolicy(params),
   });
   if (!task) {
     return null;

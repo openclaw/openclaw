@@ -302,6 +302,50 @@ function isActiveTaskStatus(status: string | undefined): boolean {
   return status === "queued" || status === "running";
 }
 
+function normalizeTaskIntentText(value: string | undefined): string {
+  return value?.replace(/\s+/g, " ").trim().toLowerCase() ?? "";
+}
+
+function findActiveAcpSpawnIntentTask(params: {
+  ownerKey: string | undefined;
+  targetAgentId: string;
+  task: string;
+  label?: string;
+}) {
+  const ownerKey = normalizeOptionalString(params.ownerKey);
+  if (!ownerKey) {
+    return undefined;
+  }
+  const taskText = normalizeTaskIntentText(params.task);
+  const labelText = normalizeTaskIntentText(params.label);
+  if (!taskText) {
+    return undefined;
+  }
+  return listTasksForOwnerKey(ownerKey).find(
+    (task) =>
+      task.runtime === "acp" &&
+      isActiveTaskStatus(task.status) &&
+      task.agentId === params.targetAgentId &&
+      normalizeTaskIntentText(task.task) === taskText &&
+      normalizeTaskIntentText(task.label) === labelText &&
+      Boolean(normalizeOptionalString(task.childSessionKey)) &&
+      Boolean(normalizeOptionalString(task.runId)),
+  );
+}
+
+function canAttachToExistingAcpSpawnIntent(params: SpawnAcpParams & { threadRequested: boolean }) {
+  return (
+    params.mode !== "session" &&
+    params.streamTo === undefined &&
+    !params.threadRequested &&
+    !normalizeOptionalString(params.resumeSessionId) &&
+    !normalizeOptionalString(params.cwd) &&
+    !normalizeOptionalString(params.model) &&
+    !normalizeOptionalString(params.thinking) &&
+    (!params.attachments || params.attachments.length === 0)
+  );
+}
+
 function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined): number {
   const normalizedOwnerKey = normalizeOptionalString(ownerKey);
   if (!normalizedOwnerKey) {
@@ -1366,6 +1410,32 @@ export async function spawnAcpDirect(
       errorCode: "agent_forbidden",
       error: agentPolicyError.message,
     });
+  }
+  if (canAttachToExistingAcpSpawnIntent({ ...params, threadRequested: requestThreadBinding })) {
+    const existing = findActiveAcpSpawnIntentTask({
+      ownerKey: requesterInternalKey,
+      targetAgentId,
+      task: params.task,
+      label: params.label,
+    });
+    const childSessionKey = normalizeOptionalString(existing?.childSessionKey);
+    const runId = normalizeOptionalString(existing?.runId);
+    if (existing && childSessionKey && runId) {
+      log.info("ACP spawn attached to existing active task intent", {
+        ownerKey: requesterInternalKey,
+        targetAgentId,
+        taskId: existing.taskId,
+        runId,
+      });
+      return {
+        status: "accepted",
+        childSessionKey,
+        runId,
+        mode: spawnMode,
+        runTimeoutSeconds,
+        note: "attached to existing active ACP task; follow-ups continue on the existing run.",
+      };
+    }
   }
   const subagentStore = resolveSubagentCapabilityStore(parentSessionKey, {
     cfg,

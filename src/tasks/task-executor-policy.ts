@@ -99,12 +99,16 @@ export function formatTaskStateChangeMessage(
   event: TaskEventRecord,
 ): string | null {
   const title = resolveTaskDisplayTitle(task);
+  const runLabel = resolveTaskRunLabel(task);
+  if (event.kind === "queued") {
+    return `Background task accepted: ${title}${runLabel}.`;
+  }
   if (event.kind === "running") {
-    return `Background task started: ${title}.`;
+    return `Background task started: ${title}${runLabel}.`;
   }
   if (event.kind === "progress") {
     const summary = sanitizeTaskStatusText(event.summary);
-    return summary ? `Background task update: ${title}. ${summary}` : null;
+    return summary ? `Background task update: ${title}${runLabel}. ${summary}` : null;
   }
   return null;
 }

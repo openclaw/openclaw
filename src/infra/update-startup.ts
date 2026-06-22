@@ -24,7 +24,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
-import { scheduleGatewaySigusr1Restart } from "./restart.js";
+import { requestSafeGatewayRestart } from "./restart-coordinator.js";
 import { detectRespawnSupervisor, type RespawnSupervisor } from "./supervisor-markers.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
@@ -660,9 +660,13 @@ export async function runGatewayUpdateCheck(params: {
 
   await writeState(nextState);
   if (pendingAutoUpdateRestartDelayMs !== null) {
-    scheduleGatewaySigusr1Restart({
+    requestSafeGatewayRestart({
       delayMs: pendingAutoUpdateRestartDelayMs,
       reason: "update.auto",
+      requester: "update.auto",
+      audit: {
+        actor: "update.auto",
+      },
       skipCooldown: true,
       skipDeferral: true,
     });

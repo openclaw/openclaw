@@ -1823,6 +1823,14 @@ export function createTaskRecord(params: {
   }));
   if (isTerminalTaskStatus(record.status)) {
     void maybeDeliverTaskTerminalUpdate(taskId);
+  } else if (record.status === "queued" || record.status === "running") {
+    void maybeDeliverTaskStateChangeUpdate(
+      taskId,
+      appendTaskEvent({
+        at: lastEventAt,
+        kind: record.status,
+      }),
+    );
   }
   return cloneTaskRecord(record);
 }

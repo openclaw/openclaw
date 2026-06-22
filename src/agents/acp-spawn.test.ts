@@ -1538,6 +1538,34 @@ describe("spawnAcpDirect", () => {
     expectAcceptedSpawn(result);
   });
 
+  it("attaches plain duplicate ACP spawn intents to the existing active task", async () => {
+    hoisted.listTasksForOwnerKeyMock.mockReturnValueOnce([
+      {
+        taskId: "task-existing",
+        runtime: "acp",
+        status: "running",
+        agentId: "codex",
+        ownerKey: "agent:main:telegram:direct:6098642967",
+        childSessionKey: "agent:codex:acp:existing",
+        runId: "run-existing",
+        label: "Investigate flaky tests",
+        task: "Investigate   flaky tests",
+      },
+    ]);
+
+    const result = await spawnAcpDirect(
+      createSpawnRequest({ label: "Investigate flaky tests" }),
+      createRequesterContext(),
+    );
+
+    const accepted = expectAcceptedSpawn(result);
+    expect(accepted.childSessionKey).toBe("agent:codex:acp:existing");
+    expect(accepted.runId).toBe("run-existing");
+    expect(accepted.note).toContain("attached to existing active ACP task");
+    expect(findAgentGatewayCall()).toBeUndefined();
+    expect(hoisted.createRunningTaskRunMock).not.toHaveBeenCalled();
+  });
+
   it("does not double-count ACP task rows for active registry-tracked ACP children", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,

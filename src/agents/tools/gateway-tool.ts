@@ -17,6 +17,7 @@ import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-pat
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import { requestSafeGatewayRestart } from "../../infra/restart-coordinator.js";
 import {
   buildRestartSuccessContinuation,
   clearRestartSentinel,
@@ -24,7 +25,6 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
-import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
 import { parseConfigPathArrayIndex } from "../../shared/path-array-index.js";
@@ -494,9 +494,14 @@ export function createGatewayTool(opts?: {
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
         let sentinelWritten = false;
-        const scheduled = scheduleGatewaySigusr1Restart({
+        const safeRestart = requestSafeGatewayRestart({
           delayMs,
-          reason,
+          reason: reason ?? "gateway.tool.restart",
+          requester: `agent-tool session=${sessionKey ?? "<none>"}`,
+          audit: {
+            actor: "agent-tool",
+            ...(sessionKey ? { deviceId: sessionKey } : {}),
+          },
           // Ownership and sentinel routing use the same trusted session identity,
           // so model-supplied params cannot queue work into another session.
           sessionKey,
@@ -513,8 +518,15 @@ export function createGatewayTool(opts?: {
           },
         });
         return jsonResult({
-          ...scheduled,
-          ...(payload.continuation ? { continuationQueued: scheduled.emitHooksQueued } : {}),
+          ...safeRestart.restart,
+          safeRestart: {
+            status: safeRestart.status,
+            preflight: safeRestart.preflight,
+            interruption: safeRestart.interruption,
+          },
+          ...(payload.continuation
+            ? { continuationQueued: safeRestart.restart.emitHooksQueued }
+            : {}),
         });
       }
 

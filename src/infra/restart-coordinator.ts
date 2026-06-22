@@ -2,12 +2,18 @@
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
   getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
 } from "../tasks/task-registry.maintenance.js";
-import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
+import {
+  scheduleGatewaySigusr1Restart,
+  type RestartAuditInfo,
+  type RestartEmitHooks,
+  type ScheduledRestart,
+} from "./restart.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR1
 // restarts, while still allowing explicit deferral bypasses for operators.
@@ -39,6 +45,11 @@ export type SafeGatewayRestartRequestResult = {
   status: "scheduled" | "deferred" | "coalesced";
   preflight: SafeGatewayRestartPreflight;
   restart: ScheduledRestart;
+  interruption: {
+    skipDeferralRequested: boolean;
+    activeWorkInterruptApproved: boolean;
+    skipDeferralDowngraded: boolean;
+  };
 };
 
 type SafeRestartInspectors = {
@@ -58,6 +69,7 @@ const defaultInspectors: SafeRestartInspectors = {
   getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
   getTaskBlockers: getInspectableActiveTaskRestartBlockers,
 };
+const restartLog = createSubsystemLogger("restart");
 
 function normalizeCount(value: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
@@ -172,15 +184,40 @@ export function requestSafeGatewayRestart(
     reason?: string;
     delayMs?: number;
     skipDeferral?: boolean;
+    activeWorkInterruptApproved?: boolean;
+    requester?: string;
+    audit?: RestartAuditInfo;
+    emitHooks?: RestartEmitHooks;
+    sessionKey?: string;
+    skipCooldown?: boolean;
     preservePendingEmitHooks?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
-  const skipDeferral = opts.skipDeferral === true;
+  const skipDeferralRequested = opts.skipDeferral === true;
+  const activeWorkInterruptApproved = opts.activeWorkInterruptApproved === true;
+  const skipDeferral = skipDeferralRequested && (preflight.safe || activeWorkInterruptApproved);
+  const skipDeferralDowngraded = skipDeferralRequested && !skipDeferral;
+  const requester = opts.requester?.trim() || "requester=<unknown>";
+  const reason = opts.reason ?? "gateway.restart.safe";
+  restartLog.info(
+    `safe restart requested ${requester} reason=${reason} active=${preflight.counts.totalActive} queue=${preflight.counts.queueSize} replies=${preflight.counts.pendingReplies} embedded=${preflight.counts.embeddedRuns} cron=${preflight.counts.cronRuns} tasks=${preflight.counts.activeTasks} skipDeferral=${skipDeferralRequested} interruptApproved=${activeWorkInterruptApproved}`,
+  );
+  if (skipDeferralDowngraded) {
+    // Tool-accessible restarts must not interrupt visible work merely because a
+    // loose caller set skipDeferral; require an explicit interruption approval.
+    restartLog.warn(
+      `safe restart skipDeferral downgraded ${requester} reason=${reason} active=${preflight.counts.totalActive}`,
+    );
+  }
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
-    reason: opts.reason ?? "gateway.restart.safe",
+    reason,
+    ...(opts.audit ? { audit: opts.audit } : {}),
+    ...(opts.emitHooks ? { emitHooks: opts.emitHooks } : {}),
+    ...(opts.sessionKey ? { sessionKey: opts.sessionKey } : {}),
+    ...(opts.skipCooldown === true ? { skipCooldown: true } : {}),
     ...(opts.preservePendingEmitHooks === true || skipDeferral
       ? { preservePendingEmitHooksOnDeferralBypass: true }
       : {}),
@@ -196,5 +233,10 @@ export function requestSafeGatewayRestart(
     status,
     preflight,
     restart,
+    interruption: {
+      skipDeferralRequested,
+      activeWorkInterruptApproved,
+      skipDeferralDowngraded,
+    },
   };
 }
