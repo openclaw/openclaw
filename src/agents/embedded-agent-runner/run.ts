@@ -2420,6 +2420,15 @@ async function runEmbeddedAgentInternal(
             );
             throw new LiveSessionModelSwitchError(requestedSelection);
           }
+          // A pending live `/model` switch that could not restart this attempt
+          // (mid-turn work already happened, so canRestartForLiveSwitch was
+          // false) still reflects the user's current model selection from the
+          // session store. Reuse the already-resolved selection so compaction
+          // targets the selected model instead of the stale run-start
+          // provider/modelId, which otherwise reverts the session to the
+          // pre-switch provider on every compaction (#95696).
+          const compactionProvider = requestedSelection?.provider ?? provider;
+          const compactionModelId = requestedSelection?.model ?? modelId;
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
@@ -2462,8 +2471,8 @@ async function runEmbeddedAgentInternal(
                     config: params.config,
                     skillsSnapshot: params.skillsSnapshot,
                     senderId: params.senderId,
-                    provider,
-                    modelId,
+                    provider: compactionProvider,
+                    modelId: compactionModelId,
                     harnessRuntime: agentHarness.id,
                     modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
@@ -2658,8 +2667,8 @@ async function runEmbeddedAgentInternal(
                     config: params.config,
                     skillsSnapshot: params.skillsSnapshot,
                     senderId: params.senderId,
-                    provider,
-                    modelId,
+                    provider: compactionProvider,
+                    modelId: compactionModelId,
                     harnessRuntime: agentHarness.id,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
