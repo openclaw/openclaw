@@ -19,6 +19,9 @@ type OpenRouterExtraParamsContext = {
 
 const BLOCKED_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
+/** Maximum number of fallback models allowed by OpenRouter's models array. */
+const OPENROUTER_MAX_FALLBACK_MODELS = 3;
+
 function sanitizeJsonLikeValue(value: unknown): unknown {
   if (value === undefined) {
     return undefined;
@@ -64,6 +67,39 @@ function mergeOpenRouterProviderRouting(params: {
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+/**
+ * Reads the `models` array from provider or model params for OpenRouter's
+ * automatic fallback feature. When provided, OpenRouter will try each model
+ * in order if the primary is down, rate-limited, or returns an error.
+ *
+ * @see https://openrouter.ai/docs/guides/routing/model-fallbacks
+ */
+function resolveOpenRouterModelsArray(params: {
+  providerParams?: Record<string, unknown>;
+  modelParams?: Record<string, unknown>;
+  extraParams: Record<string, unknown>;
+}): string[] | undefined {
+  const rawModels =
+    params.extraParams.models ??
+    params.providerParams?.models ??
+    params.modelParams?.models;
+
+  if (!Array.isArray(rawModels)) {
+    return undefined;
+  }
+
+  const models = rawModels
+    .map((entry) => (typeof entry === "string" ? entry.trim() : undefined))
+    .filter((entry): entry is string => Boolean(entry));
+
+  if (models.length === 0) {
+    return undefined;
+  }
+
+  // OpenRouter allows at most 3 fallback entries (primary + up to 3 fallbacks).
+  return models.slice(0, OPENROUTER_MAX_FALLBACK_MODELS + 1);
+}
+
 export function resolveOpenRouterExtraParamsForTransport(
   ctx: OpenRouterExtraParamsContext,
 ): { patch?: Record<string, unknown> } | undefined {
@@ -74,7 +110,12 @@ export function resolveOpenRouterExtraParamsForTransport(
     modelParams,
     extraParams: ctx.extraParams,
   });
-  if (!providerConfigParams && !modelParams && !providerRouting) {
+  const modelsArray = resolveOpenRouterModelsArray({
+    providerParams: providerConfigParams,
+    modelParams,
+    extraParams: ctx.extraParams,
+  });
+  if (!providerConfigParams && !modelParams && !providerRouting && !modelsArray) {
     return undefined;
   }
   return {
@@ -83,6 +124,7 @@ export function resolveOpenRouterExtraParamsForTransport(
       ...modelParams,
       ...ctx.extraParams,
       ...(providerRouting ? { provider: providerRouting } : {}),
+      ...(modelsArray ? { models: modelsArray } : {}),
     },
   };
 }

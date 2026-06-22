@@ -1202,6 +1202,143 @@ describe("openrouter provider hooks", () => {
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
+  it("injects OpenRouter models fallback array from extraParams into transport patch", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {
+        models: [
+          "openrouter/auto",
+          "anthropic/claude-sonnet-4",
+          "google/gemini-2.5-flash",
+        ],
+      },
+    } as never)?.patch;
+
+    expect(patch?.models).toEqual([
+      "openrouter/auto",
+      "anthropic/claude-sonnet-4",
+      "google/gemini-2.5-flash",
+    ]);
+  });
+
+  it("injects OpenRouter models fallback array from provider config params", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      config: {
+        models: {
+          providers: {
+            openrouter: {
+              params: {
+                models: [
+                  "xiaomi/mimo-v2.5",
+                  "anthropic/claude-sonnet-4",
+                ],
+              },
+            },
+          },
+        },
+      },
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {},
+    } as never)?.patch;
+
+    expect(patch?.models).toEqual([
+      "xiaomi/mimo-v2.5",
+      "anthropic/claude-sonnet-4",
+    ]);
+  });
+
+  it("truncates OpenRouter models array to max 4 entries (primary + 3 fallbacks)", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {
+        models: [
+          "openrouter/auto",
+          "anthropic/claude-sonnet-4",
+          "google/gemini-2.5-flash",
+          "deepseek/deepseek-v4-pro",
+          "meta-llama/llama-4-maverick",
+        ],
+      },
+    } as never)?.patch;
+
+    expect(patch?.models).toEqual([
+      "openrouter/auto",
+      "anthropic/claude-sonnet-4",
+      "google/gemini-2.5-flash",
+      "deepseek/deepseek-v4-pro",
+    ]);
+  });
+
+  it("prefers extraParams models over provider config models", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      config: {
+        models: {
+          providers: {
+            openrouter: {
+              params: {
+                models: ["google/gemini-2.5-flash"],
+              },
+            },
+          },
+        },
+      },
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {
+        models: [
+          "xiaomi/mimo-v2.5",
+          "anthropic/claude-sonnet-4",
+        ],
+      },
+    } as never)?.patch;
+
+    expect(patch?.models).toEqual([
+      "xiaomi/mimo-v2.5",
+      "anthropic/claude-sonnet-4",
+    ]);
+  });
+
+  it("returns undefined patch when no models or params are set", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const result = provider.extraParamsForTransport?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {},
+    } as never);
+
+    expect(result).toBeUndefined();
+  });
+
+  it("filters non-string entries from models array", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      extraParams: {
+        models: [
+          "openrouter/auto",
+          42,
+          null,
+          "anthropic/claude-sonnet-4",
+          "",
+          undefined,
+        ],
+      },
+    } as never)?.patch;
+
+    expect(patch?.models).toEqual([
+      "openrouter/auto",
+      "anthropic/claude-sonnet-4",
+    ]);
+  });
+
   it("keeps OpenRouter Anthropic prefill when reasoning is disabled or the route is custom", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const payloads: Array<Record<string, unknown>> = [];
