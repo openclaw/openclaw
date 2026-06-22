@@ -23,10 +23,25 @@ describe("gateway.tls schema", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("trims whitespace from a valid certPath", () => {
+  it("preserves exact bytes of a non-empty certPath (no silent trim)", () => {
     const res = validateConfigObject({
       gateway: { tls: { enabled: true, certPath: "  /etc/ssl/cert.pem  " } },
     });
     expect(res.ok).toBe(true);
+    if (res.ok) {
+      // Schema must validate without transforming the string; runtime path
+      // resolution owns normalization, so leading/trailing spaces are preserved.
+      expect(res.config.gateway?.tls?.certPath).toBe("  /etc/ssl/cert.pem  ");
+    }
+  });
+
+  it("preserves exact bytes of a non-empty keyPath (no silent trim)", () => {
+    const res = validateConfigObject({
+      gateway: { tls: { enabled: true, keyPath: "  /etc/ssl/private/server.key  " } },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.gateway?.tls?.keyPath).toBe("  /etc/ssl/private/server.key  ");
+    }
   });
 });

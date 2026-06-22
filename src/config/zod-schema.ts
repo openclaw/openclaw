@@ -1123,8 +1123,18 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             autoGenerate: z.boolean().optional(),
-            certPath: z.string().trim().min(1).optional(),
-            keyPath: z.string().trim().min(1).optional(),
+            // Reject blank values without transforming the string. Trimming here would
+            // silently rewrite a legitimate filesystem path that contains leading or
+            // trailing spaces and persist the trimmed value into validated config;
+            // runtime path resolution (resolveUserPath) owns all normalization.
+            certPath: z
+              .string()
+              .optional()
+              .refine((v) => v === undefined || v.trim().length > 0, "certPath must not be blank"),
+            keyPath: z
+              .string()
+              .optional()
+              .refine((v) => v === undefined || v.trim().length > 0, "keyPath must not be blank"),
             caPath: z.string().optional(),
           })
           .optional(),
