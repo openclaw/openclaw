@@ -74,28 +74,32 @@ function removePromptContextAroundOccurrence(params: {
   hiddenBefore: string;
   hiddenAfter: string;
 }): string | null {
-  const occurrence = splitLastPromptOccurrence(params.text, params.prompt);
-  if (!occurrence) {
-    return null;
-  }
-  const before = occurrence.before.trimEnd();
-  const after = occurrence.after.trimStart();
   const hiddenBefore = params.hiddenBefore.trim();
   const hiddenAfter = params.hiddenAfter.trim();
-  if (hiddenBefore && !before.endsWith(hiddenBefore)) {
-    return null;
+  let searchFrom = 0;
+  while (searchFrom <= params.text.length) {
+    const index = params.text.indexOf(params.prompt, searchFrom);
+    if (index === -1) {
+      return null;
+    }
+    const before = params.text.slice(0, index).trimEnd();
+    const after = params.text.slice(index + params.prompt.length).trimStart();
+    if (
+      (!hiddenBefore || before.endsWith(hiddenBefore)) &&
+      (!hiddenAfter || after.startsWith(hiddenAfter))
+    ) {
+      const keptBefore = hiddenBefore
+        ? before.slice(0, before.length - hiddenBefore.length).trimEnd()
+        : before;
+      const keptAfter = hiddenAfter ? after.slice(hiddenAfter.length).trimStart() : after;
+      return [keptBefore, params.prompt, keptAfter]
+        .filter((part) => part.length > 0)
+        .join("\n\n")
+        .trim();
+    }
+    searchFrom = index + Math.max(1, params.prompt.length);
   }
-  if (hiddenAfter && !after.startsWith(hiddenAfter)) {
-    return null;
-  }
-  const keptBefore = hiddenBefore
-    ? before.slice(0, before.length - hiddenBefore.length).trimEnd()
-    : before;
-  const keptAfter = hiddenAfter ? after.slice(hiddenAfter.length).trimStart() : after;
-  return [keptBefore, params.prompt, keptAfter]
-    .filter((part) => part.length > 0)
-    .join("\n\n")
-    .trim();
+  return null;
 }
 
 /**

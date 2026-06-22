@@ -161,6 +161,24 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("anchors hidden-context removal before append hooks that repeat the prompt", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const appendContext = "Hook summary: Hello";
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: [systemEvent, userText].join("\n\n"),
+        transcriptPrompt: userText,
+        modelPrompt: [systemEvent, userText, appendContext].join("\n\n"),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [userText, appendContext].join("\n\n"),
+      runtimeContext: systemEvent,
+    });
+  });
+
   it("does not extract no-transcript delimiter text", () => {
     const effectivePrompt = [
       "visible ask",
