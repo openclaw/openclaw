@@ -1524,6 +1524,8 @@ describe("classifyProviderRuntimeFailureKind", () => {
     { provider: "google", code: "UNAVAILABLE", expected: "overloaded" },
     { provider: "google", code: "DEADLINE_EXCEEDED", expected: "timeout" },
     { provider: "google", code: "INTERNAL", expected: "server_error" },
+    { provider: "google-vertex", code: "DEADLINE_EXCEEDED", expected: "timeout" },
+    { provider: "google-antigravity", code: "UNAVAILABLE", expected: "overloaded" },
     { provider: "openai", code: "INSUFFICIENT_QUOTA", expected: "billing" },
     { provider: "anthropic", code: "RATE_LIMIT_ERROR", expected: "rate_limit" },
     { provider: "anthropic", code: "API_ERROR", expected: "timeout" },
@@ -1533,6 +1535,38 @@ describe("classifyProviderRuntimeFailureKind", () => {
       expect(classifyAssistantFailoverReason(makeCodeOnlyAssistantError({ provider, code }))).toBe(
         expected,
       );
+    },
+  );
+
+  it.each([
+    { provider: "gateway", code: "UNAVAILABLE" },
+    { provider: "openai", code: "API_ERROR" },
+    { provider: "openai-compatible", code: "INSUFFICIENT_QUOTA" },
+  ] as const)(
+    "does not classify non-provider-owned code-only $code for $provider",
+    ({ provider, code }) => {
+      expect(classifyAssistantFailoverReason(makeCodeOnlyAssistantError({ provider, code }))).toBe(
+        null,
+      );
+    },
+  );
+
+  it.each([
+    { provider: "google", code: "DEADLINE_EXCEEDED", expected: "timeout" },
+    { provider: "google-vertex", code: "DEADLINE_EXCEEDED", expected: "timeout" },
+    { provider: "anthropic", code: "RATE_LIMIT_ERROR", expected: "rate_limit" },
+    { provider: "openai", code: "INSUFFICIENT_QUOTA", expected: "unclassified" },
+    { provider: "openai", code: "SERVER_ERROR", expected: "unclassified" },
+  ] as const)(
+    "does not report code-only $provider $code failures as empty responses",
+    ({ provider, code, expected }) => {
+      expect(
+        classifyProviderRuntimeFailureKind({
+          provider,
+          code,
+          message: "",
+        }),
+      ).toBe(expected);
     },
   );
 

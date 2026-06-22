@@ -891,40 +891,65 @@ function classifyFailoverClassificationFromHttpStatus(
   return null;
 }
 
-function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
+function classifyFailoverReasonFromCode(params: {
+  raw: string | undefined;
+  provider?: string;
+}): FailoverReason | null {
+  const { raw, provider } = params;
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
     return null;
   }
+  const providerId = normalizeOptionalLowercaseString(provider);
   switch (normalized) {
     case "RESOURCE_EXHAUSTED":
     case "RATE_LIMIT":
     case "RATE_LIMITED":
     case "RATE_LIMIT_EXCEEDED":
-    case "RATE_LIMIT_ERROR":
     case "TOO_MANY_REQUESTS":
     case "THROTTLED":
     case "THROTTLING":
     case "THROTTLINGEXCEPTION":
     case "THROTTLING_EXCEPTION":
       return "rate_limit";
-    case "INSUFFICIENT_QUOTA":
-      return "billing";
     case "DEACTIVATED_WORKSPACE":
       return "auth_permanent";
-    case "INTERNAL":
-    case "SERVER_ERROR":
-      return "server_error";
-    case "API_ERROR":
-    case "DEADLINE_EXCEEDED":
-      return "timeout";
-    case "UNAVAILABLE":
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
-    default:
-      return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
   }
+  if (providerId === "openai") {
+    if (normalized === "SERVER_ERROR") {
+      return "server_error";
+    }
+    if (normalized === "INSUFFICIENT_QUOTA") {
+      return "billing";
+    }
+  }
+  if (
+    providerId === "google" ||
+    providerId === "google-antigravity" ||
+    providerId === "google-vertex"
+  ) {
+    if (normalized === "UNAVAILABLE") {
+      return "overloaded";
+    }
+    if (normalized === "DEADLINE_EXCEEDED") {
+      return "timeout";
+    }
+    if (normalized === "INTERNAL") {
+      return "server_error";
+    }
+  }
+  if (providerId === "anthropic") {
+    if (normalized === "RATE_LIMIT_ERROR") {
+      return "rate_limit";
+    }
+    if (normalized === "API_ERROR") {
+      return "timeout";
+    }
+  }
+  return TIMEOUT_ERROR_CODES.has(normalized) ? "timeout" : null;
 }
 
 function isProvider(provider: string | undefined, match: string): boolean {
@@ -1189,7 +1214,10 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
     : mergeMessageAndDetailClassification(messageClassification, detailClassification);
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
+  const codeReason = classifyFailoverReasonFromCode({
+    raw: signal.code,
+    provider: signal.provider,
+  });
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
   }
@@ -1216,8 +1244,9 @@ export function classifyProviderRuntimeFailureKind(
   const normalizedSignal = typeof signal === "string" ? { message: signal } : signal;
   const message = normalizedSignal.message?.trim() ?? "";
   const status = inferSignalStatus(normalizedSignal);
+  const hasStructuredCodeSignal = Boolean(normalizedSignal.code || normalizedSignal.errorType);
 
-  if (!message && typeof status !== "number") {
+  if (!message && typeof status !== "number" && !hasStructuredCodeSignal) {
     return "empty_response";
   }
   if (normalizedSignal.code === "refresh_contention") {
