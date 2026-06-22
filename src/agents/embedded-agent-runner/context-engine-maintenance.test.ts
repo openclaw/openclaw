@@ -1569,6 +1569,68 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
+  it("fails deferred maintenance that exceeds the stale timeout", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-timeout-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-timeout";
+        const maintain = vi.fn(
+          async () =>
+            await new Promise<{
+              changed: false;
+              bytesFreed: 0;
+              rewrittenEntries: 0;
+            }>(() => {}),
+        );
+        const backgroundEngine = {
+          info: {
+            id: "test",
+            name: "Test Engine",
+            turnMaintenanceMode: "background" as const,
+          },
+          ingest: async () => ({ ingested: true }),
+          assemble: async ({ messages }: { messages: unknown[] }) => ({
+            messages,
+            estimatedTokens: 0,
+          }),
+          compact: async () => ({ ok: true, compacted: false }),
+          maintain,
+        } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+        await runContextEngineMaintenance({
+          contextEngine: backgroundEngine,
+          sessionId: "session-timeout",
+          sessionKey,
+          sessionFile: "/tmp/session-timeout.jsonl",
+          reason: "turn",
+        });
+
+        await waitForAssertion(() => expect(maintain).toHaveBeenCalledTimes(1));
+        const [runningTask] = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(runningTask?.status).toBe("running");
+
+        await vi.advanceTimersByTimeAsync(301_000);
+        await flushAsyncWork();
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+
+        const [timedOutTask] = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(timedOutTask?.status).toBe("failed");
+        expect(timedOutTask?.error).toContain("timed out");
+        expect(timedOutTask?.terminalSummary).toContain("timed out");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("surfaces deferred maintenance failures even when they fail quickly", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();

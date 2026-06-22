@@ -36,6 +36,7 @@ import {
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
 import { CODEX_NATIVE_SUBAGENT_STALE_ERROR } from "./codex-native-subagent-task.js";
+import { isContextEngineTurnMaintenanceTask } from "./context-engine-maintenance-task.js";
 import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
@@ -497,6 +498,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     return false;
   }
 
+  if (isContextEngineTurnMaintenanceTask(task)) {
+    // Deferred context-engine maintenance is owned by this Gateway process and
+    // has no child session to prove liveness after restart. Only the
+    // authoritative Gateway sweep may reclaim stale rows.
+    return !taskRegistryMaintenanceRuntime.isRuntimeAuthoritative();
+  }
+
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
     return !isChildlessNativeSubagentTask(task);
@@ -528,6 +536,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+  if (isContextEngineTurnMaintenanceTask(task)) {
+    return "context engine maintenance worker no longer active";
+  }
   const nativeDefinition = resolveChildlessNativeSubagentTaskDefinition(task);
   if (nativeDefinition) {
     return nativeDefinition.taskKind === "codex-native"

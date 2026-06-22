@@ -350,6 +350,81 @@ describe("task-registry maintenance issue #60299", () => {
     expect(getInspectableActiveTaskRestartBlockers()).toHaveLength(1);
   });
 
+  it("reclaims stale context-engine maintenance rows in the authoritative gateway", async () => {
+    const staleAt = Date.now() - 40 * 60_000;
+    const task = makeStaleTask({
+      taskId: "task-context-engine-maintenance-stale",
+      runtime: "acp",
+      taskKind: "context_engine_turn_maintenance",
+      sourceId: "context_engine_turn_maintenance",
+      ownerKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: undefined,
+      runId: "turn-maint:agent:main:main:old",
+      label: "Context engine turn maintenance",
+      task: "Deferred context-engine maintenance after turn.",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      runtimeAuthoritative: true,
+    });
+
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+      expect.objectContaining({
+        taskId: task.taskId,
+        decision: "would_reconcile",
+      }),
+    );
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    const storedTask = requireTaskRecord(currentTasks, task.taskId);
+    expect(storedTask.status).toBe("lost");
+    expect(storedTask.error).toBe("context engine maintenance worker no longer active");
+    expect(getInspectableActiveTaskRestartBlockers()).toHaveLength(0);
+  });
+
+  it("keeps stale context-engine maintenance rows in non-authoritative inspection", async () => {
+    const staleAt = Date.now() - 40 * 60_000;
+    const task = makeStaleTask({
+      taskId: "task-context-engine-maintenance-nonauthoritative",
+      runtime: "acp",
+      taskKind: "context_engine_turn_maintenance",
+      sourceId: "context_engine_turn_maintenance",
+      ownerKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: undefined,
+      runId: "turn-maint:agent:main:main:old",
+      label: "Context engine turn maintenance",
+      task: "Deferred context-engine maintenance after turn.",
+      createdAt: staleAt,
+      startedAt: staleAt,
+      lastEventAt: staleAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      runtimeAuthoritative: false,
+    });
+
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 0 });
+    expect(getTaskRegistryMaintenanceDiagnostics().staleRunningTasks).toContainEqual(
+      expect.objectContaining({
+        taskId: task.taskId,
+        decision: "retained",
+        reason: "acp_runtime_not_authoritative",
+      }),
+    );
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+    expect(getInspectableActiveTaskRestartBlockers()).toHaveLength(1);
+  });
+
   it("only treats started non-ended running tasks as restart blockers", () => {
     const now = Date.now();
     const activeRunning = makeStaleTask({
