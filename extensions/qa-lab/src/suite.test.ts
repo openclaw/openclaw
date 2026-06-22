@@ -1,6 +1,5 @@
 // Qa Lab tests cover suite plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summary.js";
@@ -8,16 +7,19 @@ import type { QaLabServerHandle } from "./lab-server.types.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import { qaSuiteProgressTesting, runQaFlowSuite } from "./suite.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const tempDirs = createTempDirHarness();
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-afterEach(() => {
+afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
   vi.useRealTimers();
+  await tempDirs.cleanup();
 });
 
 function makeQaSuiteTestLabHandle(): QaLabServerHandle {
@@ -31,30 +33,6 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
     runSelfCheck: vi.fn(async () => ({}) as Awaited<ReturnType<QaLabServerHandle["runSelfCheck"]>>),
     stop: vi.fn(async () => {}),
   };
-}
-
-async function createFakeCrablineCli() {
-  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-fake-crabline-"));
-  const cliPath = path.join(outputDir, "fake-crabline.mjs");
-  await fs.writeFile(
-    cliPath,
-    `#!/usr/bin/env node
-const command = process.argv.at(-1);
-if (command === "providers") {
-  process.stdout.write(JSON.stringify({
-    configured: [{ adapter: "telegram", platform: "telegram" }],
-    support: [{ platform: "telegram", status: "ready" }]
-  }));
-} else if (command === "doctor") {
-  process.stdout.write(JSON.stringify({ findings: [], ok: true }));
-} else {
-  process.stderr.write("unexpected command " + command);
-  process.exit(1);
-}
-`,
-    "utf8",
-  );
-  return { cliPath, outputDir };
 }
 
 describe("qa suite", () => {
@@ -252,7 +230,7 @@ describe("qa suite", () => {
   });
 
   it("writes standalone evidence while keeping suite summary evidence-free", async () => {
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-artifacts-"));
+    const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-");
     try {
       const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
         outputDir,
@@ -297,15 +275,22 @@ describe("qa suite", () => {
   });
 
   it("writes Crabline channel-driver smoke artifacts when selected", async () => {
-    const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-suite-crabline-"));
-    const fakeCrabline = await createFakeCrablineCli();
-    const originalCrablineBin = process.env.OPENCLAW_QA_CRABLINE_BIN;
-    const originalTelegramDriverToken = process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN;
-    const originalTelegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
-    process.env.OPENCLAW_QA_CRABLINE_BIN = fakeCrabline.cliPath;
-    process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN = "telegram-token";
-    delete process.env.TELEGRAM_BOT_TOKEN;
+    const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-");
     try {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: {
+          ok: true,
+          json: vi.fn(async () => ({
+            ok: true,
+            result: {
+              is_bot: true,
+              username: "crabline_bot",
+            },
+          })),
+        },
+        release: vi.fn(async () => {}),
+      });
+
       const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
         outputDir,
         startedAt: new Date("2026-04-11T00:00:00.000Z"),
@@ -331,25 +316,26 @@ describe("qa suite", () => {
         fastMode: true,
         concurrency: 1,
         channelDriverSelection: {
-          capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+          capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
           channel: "telegram",
           channelDriver: "crabline",
-          smokeArtifactPath: "crabline-channel-smoke.json",
+          smokeArtifactPath: "crabline-fake-provider-smoke.json",
         },
       });
 
       const matrix = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-channel-capability-matrix.json"), "utf8"),
+        await fs.readFile(path.join(outputDir, "crabline-fake-provider-capabilities.json"), "utf8"),
       ) as {
-        report?: { result?: { configured?: Array<{ adapter?: string; platform?: string }> } };
+        report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
       };
-      expect(matrix.report?.result?.configured).toEqual([
-        expect.objectContaining({ adapter: "telegram", platform: "telegram" }),
-      ]);
+      expect(matrix.report?.result).toMatchObject({
+        selectedChannel: "telegram",
+        supportedChannels: ["telegram"],
+      });
       const smoke = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-channel-smoke.json"), "utf8"),
-      ) as { smoke?: { result?: { findings?: string[]; ok?: boolean } } };
-      expect(smoke.smoke?.result).toMatchObject({ findings: [], ok: true });
+        await fs.readFile(path.join(outputDir, "crabline-fake-provider-smoke.json"), "utf8"),
+      ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
+      expect(smoke.smoke?.result).toMatchObject({ ok: true, provider: "telegram" });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
         entries?: Array<{ execution?: { channel?: { driver?: string; id?: string } } }>;
       };
@@ -358,23 +344,7 @@ describe("qa suite", () => {
         id: "telegram",
       });
     } finally {
-      if (originalTelegramBotToken === undefined) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = originalTelegramBotToken;
-      }
-      if (originalTelegramDriverToken === undefined) {
-        delete process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN;
-      } else {
-        process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN = originalTelegramDriverToken;
-      }
-      if (originalCrablineBin === undefined) {
-        delete process.env.OPENCLAW_QA_CRABLINE_BIN;
-      } else {
-        process.env.OPENCLAW_QA_CRABLINE_BIN = originalCrablineBin;
-      }
       await fs.rm(outputDir, { recursive: true, force: true });
-      await fs.rm(fakeCrabline.outputDir, { recursive: true, force: true });
     }
   });
 

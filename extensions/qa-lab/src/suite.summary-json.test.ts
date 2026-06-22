@@ -45,17 +45,17 @@ describe("buildQaSuiteSummaryJson", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
       channelDriverSelection: {
-        capabilityMatrixPath: "crabline-channel-capability-matrix.json",
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
-        smokeArtifactPath: "crabline-channel-smoke.json",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
       },
     });
 
     expect(json.run.channelDriver).toBe("crabline");
     expect(json.run.channel).toBe("telegram");
-    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-channel-capability-matrix.json");
-    expect(json.run.channelDriverSmokePath).toBe("crabline-channel-smoke.json");
+    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-fake-provider-capabilities.json");
+    expect(json.run.channelDriverSmokePath).toBe("crabline-fake-provider-smoke.json");
   });
 
   it("records declarative non-Crabline channel-driver metadata", () => {

@@ -1,6 +1,10 @@
 // Qa Lab plugin module implements cli behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
+  resolveOpenClawCrablineChannelDriverSelection,
+} from "crabline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -27,10 +31,6 @@ import {
   renderQaCoverageMarkdownReport,
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
-import {
-  QA_CRABLINE_DEFAULT_CHANNEL,
-  resolveQaCrablineChannelDriverSelection,
-} from "./crabline-channel-driver.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
@@ -910,9 +910,9 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
   }
   const channelDriverSelection =
     channelDriver === "crabline"
-      ? await resolveQaCrablineChannelDriverSelection({
+      ? resolveOpenClawCrablineChannelDriverSelection({
           channel: resolveQaSuiteScenarioChannel({
-            defaultChannel: QA_CRABLINE_DEFAULT_CHANNEL,
+            defaultChannel: OPENCLAW_CRABLINE_DEFAULT_CHANNEL,
             explicitChannel: opts.channel,
             scenarios: selectQaScenarioDefinitionsForChannelResolution({
               scenarioIds,

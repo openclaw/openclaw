@@ -1,222 +1,263 @@
-// Qa Lab plugin module implements the Crabline-backed QA transport.
+// Qa Lab plugin module implements Crabline fake-provider transport behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
-import type { ManifestDefinition, ProviderAdapter, ProviderContext, Registry } from "crabline";
+import { setTimeout as sleep } from "node:timers/promises";
+import {
+  OPENCLAW_CRABLINE_MANIFEST_PATH,
+  startOpenClawCrablineAdapter,
+  type OpenClawCrablineChannelDriverSelection,
+  type StartedOpenClawCrablineAdapter,
+} from "crabline";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createQaBusState, type QaBusState } from "./bus-state.js";
-import type { QaCrablineChannelDriverSelection } from "./crabline-channel-driver.js";
-import {
-  createQaCrablineManifestInput,
-  parseQaCrablineManifest,
-  type QaCrablineManifestSchema,
-} from "./crabline-manifest.js";
-import {
-  createQaChannelGatewayConfig,
-  QA_CHANNEL_REQUIRED_PLUGIN_IDS,
-} from "./qa-channel-transport.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { QaStateBackedTransportAdapter } from "./qa-transport.js";
 import type {
   QaTransportActionName,
   QaTransportGatewayClient,
+  QaTransportGatewayConfig,
   QaTransportReportParams,
   QaTransportState,
 } from "./qa-transport.js";
 import type {
-  QaBusCreateThreadInput,
-  QaBusDeleteMessageInput,
-  QaBusEditMessageInput,
   QaBusInboundMessageInput,
-  QaBusMessage,
-  QaBusReactToMessageInput,
+  QaBusOutboundMessageInput,
+  QaBusSearchMessagesInput,
+  QaBusWaitForInput,
 } from "./runtime-api.js";
 
 const CRABLINE_TRANSPORT_ID = "crabline";
-
-export type QaCrablineProviderAdapter = ProviderAdapter;
-
-type CrablineRuntimeModule = {
-  ManifestSchema: QaCrablineManifestSchema;
-  createRegistry: (manifest: ManifestDefinition, manifestPath: string) => Registry;
-};
-
-type CrablineRuntime = {
-  provider?: QaCrablineProviderAdapter;
-};
+const RECORDER_SYNC_INTERVAL_MS = 50;
 
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
-  createThread: (input: QaBusCreateThreadInput) => unknown;
-  deleteMessage: (input: QaBusDeleteMessageInput) => unknown;
-  editMessage: (input: QaBusEditMessageInput) => unknown;
-  reactToMessage: (input: QaBusReactToMessageInput) => unknown;
 };
 
-type CrablineStateParams = {
-  fixtureContext: ProviderContext;
-  provider: QaCrablineProviderAdapter;
-  selection: QaCrablineChannelDriverSelection;
-  state: QaBusState;
-};
+async function waitForCrablineReady(params: {
+  accountId: string;
+  channel: string;
+  gateway: QaTransportGatewayClient;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+}) {
+  const timeoutMs = params.timeoutMs ?? 45_000;
+  const pollIntervalMs = params.pollIntervalMs ?? 500;
+  const startedAt = Date.now();
+  let lastAccountStatus = `no ${params.channel} accounts reported`;
+  let lastProbeError: string | null = null;
 
-async function loadCrablineRuntime(env: NodeJS.ProcessEnv): Promise<CrablineRuntimeModule> {
-  const explicitRuntime = env.OPENCLAW_QA_CRABLINE_RUNTIME?.trim();
-  if (explicitRuntime) {
-    return (await import(
-      pathToFileURL(path.resolve(explicitRuntime)).href
-    )) as unknown as CrablineRuntimeModule;
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      const payload = (await params.gateway.call(
+        "channels.status",
+        { probe: false, timeoutMs: 2_000 },
+        { timeoutMs: 5_000 },
+      )) as {
+        channelAccounts?: Record<
+          string,
+          Array<{
+            accountId?: string;
+            running?: boolean;
+            restartPending?: boolean;
+          }>
+        >;
+      };
+      const accounts = payload.channelAccounts?.[params.channel] ?? [];
+      const account = accounts.find((entry) => entry.accountId === params.accountId) ?? accounts[0];
+      lastProbeError = null;
+      lastAccountStatus = account
+        ? JSON.stringify({
+            accountId: account.accountId ?? null,
+            running: account.running ?? null,
+            restartPending: account.restartPending ?? null,
+          })
+        : `no ${params.channel} accounts reported`;
+      if (account?.running && account.restartPending !== true) {
+        return;
+      }
+    } catch (error) {
+      lastProbeError = formatErrorMessage(error);
+    }
+    await sleep(pollIntervalMs);
   }
-  return (await import("crabline")) as unknown as CrablineRuntimeModule;
+
+  throw new QaSuiteInfraError(
+    "transport_ready_timeout",
+    [
+      `timed out after ${timeoutMs}ms waiting for ${params.channel} ready`,
+      `last status: ${lastAccountStatus}`,
+      ...(lastProbeError ? [`last probe error: ${lastProbeError}`] : []),
+    ].join("; "),
+  );
 }
 
-function createFixtureContext(params: {
-  fixtureId: string;
-  manifest: ManifestDefinition;
-  manifestPath: string;
-  providerId: string;
-}): ProviderContext {
-  const fixture = params.manifest.fixtures.find((entry) => entry.id === params.fixtureId);
-  const config = params.manifest.providers[params.providerId];
-  if (!fixture || !config) {
-    throw new Error("Crabline manifest is missing its runtime fixture/provider.");
-  }
-  return {
-    config,
-    fixture,
-    manifestPath: params.manifestPath,
-    providerId: params.providerId,
-    userName: params.manifest.userName,
-  };
-}
-
-function targetForConversation(message: QaBusMessage) {
-  return `${message.conversation.kind === "direct" ? "dm" : "channel"}:${message.conversation.id}`;
-}
-
-function withTarget(context: ProviderContext, targetId: string): ProviderContext {
-  return {
-    ...context,
-    fixture: {
-      ...context.fixture,
-      target: {
-        id: targetId,
-        metadata: {},
-      },
+async function postCrablineInbound(params: {
+  adapter: StartedOpenClawCrablineAdapter;
+  providerBody: Record<string, unknown>;
+}) {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.adapter.manifest.endpoints.adminInboundUrl,
+    init: {
+      body: JSON.stringify(params.providerBody),
+      headers: { "content-type": "application/json" },
+      method: "POST",
     },
-  };
+    policy: { allowPrivateNetwork: true },
+    auditContext: `qa-lab-crabline-${params.adapter.channel}-inbound`,
+  });
+  try {
+    if (!response.ok) {
+      throw new Error(
+        `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
+      );
+    }
+  } finally {
+    await release();
+  }
 }
 
-function createCrablineState(params: CrablineStateParams): QaCrablineTransportState {
+function createCrablineState(params: {
+  adapter: StartedOpenClawCrablineAdapter;
+  state: QaBusState;
+}): QaCrablineTransportState {
   const baseState = params.state;
+  const targetByProviderTarget = new Map<string, string>();
+  let recorderLineCursor = 0;
+  let syncPromise: Promise<void> | null = null;
+
+  const syncRecorder = async () => {
+    if (syncPromise) {
+      return await syncPromise;
+    }
+    syncPromise = (async () => {
+      const text = await fs
+        .readFile(params.adapter.manifest.recorderPath, "utf8")
+        .catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return "";
+          }
+          throw error;
+        });
+      const lines = text.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+      for (const line of lines.slice(recorderLineCursor)) {
+        const parsed = JSON.parse(line) as unknown;
+        const outbound = params.adapter.createOutboundFromRecorderEvent({
+          event: parsed,
+          targetByProviderTarget,
+        }) as QaBusOutboundMessageInput | null;
+        if (outbound) {
+          baseState.addOutboundMessage(outbound);
+        }
+      }
+      recorderLineCursor = lines.length;
+    })();
+    try {
+      await syncPromise;
+    } finally {
+      syncPromise = null;
+    }
+  };
+
+  const interval = setInterval(() => {
+    void syncRecorder().catch(() => undefined);
+  }, RECORDER_SYNC_INTERVAL_MS);
+  interval.unref?.();
 
   return {
-    reset() {
-      return baseState.reset();
+    async reset() {
+      await syncRecorder();
+      baseState.reset();
+      targetByProviderTarget.clear();
+      recorderLineCursor = await fs
+        .readFile(params.adapter.manifest.recorderPath, "utf8")
+        .then((text) => text.split(/\r?\n/u).filter((line) => line.trim().length > 0).length)
+        .catch(() => 0);
     },
     getSnapshot: baseState.getSnapshot.bind(baseState),
     async addInboundMessage(input: QaBusInboundMessageInput) {
-      const inbound = baseState.addInboundMessage(input);
-      const targetId = targetForConversation(inbound);
-      const context = withTarget(params.fixtureContext, targetId);
-      await params.provider.send({
-        ...context,
-        mode: "send",
-        nonce: inbound.id,
-        text: input.text,
+      const providerInbound = params.adapter.createInbound({ input });
+      targetByProviderTarget.set(providerInbound.providerTargetKey, providerInbound.qaTarget);
+      const message = baseState.addInboundMessage({
+        ...input,
+        conversation: providerInbound.stateConversation,
+        ...(providerInbound.threadId ? { threadId: providerInbound.threadId } : {}),
       });
-      return inbound;
+      await postCrablineInbound({
+        adapter: params.adapter,
+        providerBody: providerInbound.providerBody,
+      });
+      return message;
     },
     addOutboundMessage: baseState.addOutboundMessage.bind(baseState),
-    createThread: baseState.createThread.bind(baseState),
-    deleteMessage: baseState.deleteMessage.bind(baseState),
-    editMessage: baseState.editMessage.bind(baseState),
-    reactToMessage: baseState.reactToMessage.bind(baseState),
     readMessage: baseState.readMessage.bind(baseState),
-    searchMessages: baseState.searchMessages.bind(baseState),
-    waitFor: baseState.waitFor.bind(baseState),
+    async searchMessages(input: QaBusSearchMessagesInput) {
+      await syncRecorder();
+      return baseState.searchMessages(input);
+    },
+    async waitFor(input: QaBusWaitForInput) {
+      await syncRecorder();
+      return await baseState.waitFor(input);
+    },
     async cleanup() {
-      await params.provider.cleanup?.();
+      clearInterval(interval);
+      await syncRecorder();
+      await params.adapter.close();
     },
   };
 }
 
 class QaCrablineTransport extends QaStateBackedTransportAdapter {
-  readonly #selection: QaCrablineChannelDriverSelection;
+  readonly #adapter: StartedOpenClawCrablineAdapter;
+  readonly #selection: OpenClawCrablineChannelDriverSelection;
   readonly #state: QaCrablineTransportState;
 
   constructor(params: {
-    selection: QaCrablineChannelDriverSelection;
+    adapter: StartedOpenClawCrablineAdapter;
+    selection: OpenClawCrablineChannelDriverSelection;
     state: QaCrablineTransportState;
   }) {
     super({
       id: CRABLINE_TRANSPORT_ID,
-      label: `crabline + ${params.selection.channel}`,
-      accountId: `qa-crabline-${params.selection.channel}`,
-      requiredPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+      label: `crabline fake ${params.selection.channel}`,
+      accountId: params.adapter.accountId,
+      requiredPluginIds: params.adapter.requiredPluginIds,
       state: params.state,
     });
+    this.#adapter = params.adapter;
     this.#selection = params.selection;
     this.#state = params.state;
   }
 
-  createGatewayConfig = createQaChannelGatewayConfig;
+  createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig =>
+    this.#adapter.createGatewayConfig(params) as QaTransportGatewayConfig;
 
-  createChannelDriverSmokeEnv = (env: NodeJS.ProcessEnv) => ({ ...env });
-
-  waitReady = async (_params: {
+  waitReady = (params: {
     gateway: QaTransportGatewayClient;
     timeoutMs?: number;
     pollIntervalMs?: number;
-  }) => {};
+  }) =>
+    waitForCrablineReady({
+      ...params,
+      accountId: this.#adapter.accountId,
+      channel: this.#adapter.channel,
+    });
 
-  buildAgentDelivery = ({ target }: { target: string }) => ({
-    channel: "qa-channel",
-    replyChannel: "qa-channel",
-    replyTo: target,
-  });
+  buildAgentDelivery = ({ target }: { target: string }) =>
+    this.#adapter.createAgentDelivery({ target });
 
   handleAction = async (_params: {
     action: QaTransportActionName;
     args: Record<string, unknown>;
-    cfg: unknown;
+    cfg: OpenClawConfig;
     accountId?: string | null;
   }) => {
-    const accountId = _params.accountId?.trim() || this.accountId;
-    switch (_params.action) {
-      case "thread-create":
-        return {
-          thread: this.#state.createThread({
-            ...(_params.args as unknown as QaBusCreateThreadInput),
-            accountId,
-          }),
-        };
-      case "react":
-        return {
-          message: this.#state.reactToMessage({
-            ...(_params.args as unknown as QaBusReactToMessageInput),
-            accountId,
-          }),
-        };
-      case "edit":
-        return {
-          message: this.#state.editMessage({
-            ...(_params.args as unknown as QaBusEditMessageInput),
-            accountId,
-          }),
-        };
-      case "delete":
-        return {
-          message: this.#state.deleteMessage({
-            ...(_params.args as unknown as QaBusDeleteMessageInput),
-            accountId,
-          }),
-        };
-      default:
-        throw new Error(`unsupported Crabline action: ${String(_params.action)}`);
-    }
+    throw new Error(`Crabline fake-provider transport does not support ${_params.action} yet.`);
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
-    `Runs ${this.#selection.channel}-shaped QA messages through openclaw/crabline.`,
+    `Runs OpenClaw's ${this.#selection.channel} channel plugin against a Crabline fake provider server.`,
     "No live channel service or external credential lease is required.",
   ];
 
@@ -226,42 +267,33 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
 }
 
 export async function createQaCrablineTransportAdapter(params: {
-  env?: NodeJS.ProcessEnv;
-  observeIdleMs?: number;
-  observeTimeoutMs?: number;
   outputDir: string;
-  runtime?: CrablineRuntime;
-  selection: QaCrablineChannelDriverSelection;
+  selection: OpenClawCrablineChannelDriverSelection;
   state?: QaBusState;
 }) {
-  const env = params.env ?? process.env;
-  await fs.mkdir(path.join(params.outputDir, "artifacts", "crabline"), {
-    recursive: true,
-  });
-  const { fixtureId, manifest: manifestInput } = createQaCrablineManifestInput(
-    params.selection.channel,
+  const recorderPath = path.join(
+    params.outputDir,
+    "artifacts",
+    "crabline",
+    `${params.selection.channel}-fake-provider.jsonl`,
   );
-  const manifestPath = path.join(params.outputDir, "crabline-runtime.json");
-  const runtime = await loadCrablineRuntime(env);
-  const manifest = parseQaCrablineManifest(runtime.ManifestSchema, manifestInput);
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-
-  const provider =
-    params.runtime?.provider ??
-    runtime.createRegistry(manifest, manifestPath).resolve(params.selection.channel, fixtureId);
-  const fixtureContext = createFixtureContext({
-    fixtureId,
-    manifest,
-    manifestPath,
-    providerId: params.selection.channel,
+  await fs.mkdir(path.dirname(recorderPath), { recursive: true });
+  const adapter = await startOpenClawCrablineAdapter({
+    channel: params.selection.channel,
+    openclawConfig: {},
+    recorderPath,
   });
+  await fs.writeFile(
+    path.join(params.outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH),
+    `${JSON.stringify(adapter.manifest, null, 2)}\n`,
+    "utf8",
+  );
 
   return new QaCrablineTransport({
+    adapter,
     selection: params.selection,
     state: createCrablineState({
-      fixtureContext,
-      provider,
-      selection: params.selection,
+      adapter,
       state: params.state ?? createQaBusState(),
     }),
   });

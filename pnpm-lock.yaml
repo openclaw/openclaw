@@ -1358,8 +1358,8 @@ importers:
         specifier: workspace:*
         version: link:../whatsapp
       crabline:
-        specifier: github:openclaw/crabline#a6ce80ea479dbc2d07cc51564803b1e9d77c4d2b
-        version: https://codeload.github.com/openclaw/crabline/tar.gz/a6ce80ea479dbc2d07cc51564803b1e9d77c4d2b
+        specifier: github:openclaw/crabline#b3513f66053788c6a7bd2bc76fbfc7201f647d29
+        version: https://codeload.github.com/openclaw/crabline/tar.gz/b3513f66053788c6a7bd2bc76fbfc7201f647d29
       openclaw:
         specifier: 2026.5.28
         version: 2026.5.28
@@ -4992,8 +4992,8 @@ packages:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
     engines: {node: '>= 0.10'}
 
-  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/a6ce80ea479dbc2d07cc51564803b1e9d77c4d2b:
-    resolution: {gitHosted: true, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/a6ce80ea479dbc2d07cc51564803b1e9d77c4d2b}
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/b3513f66053788c6a7bd2bc76fbfc7201f647d29:
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/b3513f66053788c6a7bd2bc76fbfc7201f647d29}
     version: 0.1.0
     engines: {node: '>=22'}
     hasBin: true
@@ -10988,7 +10988,7 @@ snapshots:
       object-assign: 4.1.1
       vary: 1.1.2
 
-  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/a6ce80ea479dbc2d07cc51564803b1e9d77c4d2b:
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/b3513f66053788c6a7bd2bc76fbfc7201f647d29:
     dependencies:
       commander: 14.0.3
       picocolors: 1.1.1

@@ -464,7 +464,7 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
-    .option("--channel-driver <id>", "Internal host QA channel SDK driver id; currently crabline")
+    .option("--channel-driver <id>", "QA channel driver: qa-channel, crabline, or live")
     .option(
       "--channel <id>",
       "Internal host QA channel override for --channel-driver; defaults to scenario/default",

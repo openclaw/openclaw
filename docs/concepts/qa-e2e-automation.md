@@ -74,9 +74,9 @@ pnpm openclaw qa run \
 ```
 
 Use `smoke-ci` for deterministic profile proof with mock model providers and
-Crabline-backed channel mocks. Use `release` for the Stable/LTS proof lane. When
-a command also needs an OpenClaw root profile, put the root profile before the QA
-command:
+Crabline fake provider servers. Use `release` for Stable/LTS proof against live
+channels. When a command also needs an OpenClaw root profile, put the root
+profile before the QA command:
 
 ```bash
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
@@ -861,7 +861,10 @@ provider names.
 
 ## Transport adapters
 
-`qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is the first adapter on that seam, but the design target is wider: future real or synthetic channels should plug into the same suite runner instead of adding a transport-specific QA runner.
+`qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is
+the synthetic default. `crabline` starts local provider-shaped servers and runs
+OpenClaw's normal channel plugins against them. `live` is reserved for real
+provider credentials and external channels.
 
 At the architecture level, the split is:
 
@@ -871,10 +874,10 @@ At the architecture level, the split is:
 
 ### Adding a channel
 
-Adding a channel to the YAML QA system requires exactly two things:
-
-1. A transport adapter for the channel.
-2. A scenario pack that exercises the channel contract.
+Adding a channel to the YAML QA system requires the channel implementation plus
+a scenario pack that exercises the channel contract. For smoke CI coverage, add
+the matching Crabline fake provider server and expose it through the `crabline`
+driver.
 
 Do not add a new top-level QA command root when the shared `qa-lab` host can own the flow.
 

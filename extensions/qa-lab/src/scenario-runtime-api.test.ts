@@ -74,8 +74,6 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     extractQaToolPayload: fn,
     formatMemoryDreamingDay: fn,
     resolveSessionTranscriptsDirForAgent: fn,
-    activeMemoryToggleKey: fn,
-    setActiveMemorySessionDisabled: fn,
     buildAgentSessionKey: fn,
     normalizeLowercaseStringOrEmpty: fn,
     formatErrorMessage: fn,

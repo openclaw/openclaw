@@ -2,6 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  createOpenClawCrablineChannelReportNotes,
+  runOpenClawCrablineChannelDriverSmoke,
+  type OpenClawCrablineChannelDriverSelection,
+} from "crabline";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -13,11 +18,6 @@ import {
 } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
-import {
-  createQaCrablineChannelReportNotes,
-  runQaCrablineChannelDriverSmoke,
-  type QaCrablineChannelDriverSelection,
-} from "./crabline-channel-driver.js";
 import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
@@ -111,7 +111,7 @@ type QaSuiteEnvironment = {
 export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
 
 async function createQaSuiteTransportAdapter(params: {
-  channelDriverSelection?: QaCrablineChannelDriverSelection | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   outputDir: string;
   state: QaLabServerHandle["state"];
   transportId: QaTransportId;
@@ -137,7 +137,7 @@ export type QaSuiteRunParams = {
   providerMode?: QaProviderMode;
   transportId?: QaTransportId;
   channelDriver?: QaScorecardChannelDriver;
-  channelDriverSelection?: QaCrablineChannelDriverSelection | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
@@ -421,7 +421,7 @@ function buildRuntimeParityScenarioResult(params: {
 
 function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
-  channelDriverSelection?: QaCrablineChannelDriverSelection | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -431,7 +431,7 @@ function createQaSuiteReportNotes(params: {
 }) {
   return [
     ...params.transport.createReportNotes(params),
-    ...createQaCrablineChannelReportNotes(params.channelDriverSelection),
+    ...createOpenClawCrablineChannelReportNotes(params.channelDriverSelection),
   ];
 }
 
@@ -441,7 +441,7 @@ function buildQaIsolatedScenarioWorkerParams(params: {
   providerMode: QaProviderMode;
   transportId: QaTransportId;
   channelDriver?: QaScorecardChannelDriver;
-  channelDriverSelection?: QaCrablineChannelDriverSelection | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
@@ -562,7 +562,7 @@ export type QaSuiteSummaryJsonParams = {
   fastMode: boolean;
   concurrency: number;
   channelDriver?: QaScorecardChannelDriver | null;
-  channelDriverSelection?: QaCrablineChannelDriverSelection | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
 };
@@ -647,7 +647,7 @@ async function runQaRuntimeParitySuite(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
   enabledPluginIds?: string[];
   channelDriver?: QaScorecardChannelDriver | null;
-  channelDriverSelection?: QaCrablineChannelDriverSelection | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   concurrency: number;
   selectedScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   startLab?: QaSuiteStartLabFn;
@@ -881,7 +881,7 @@ async function writeQaSuiteArtifacts(params: {
   fastMode: boolean;
   concurrency: number;
   channelDriver?: QaScorecardChannelDriver | null;
-  channelDriverSelection?: QaCrablineChannelDriverSelection | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   isolatedWorkers?: boolean;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
@@ -889,21 +889,22 @@ async function writeQaSuiteArtifacts(params: {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
-  const channelDriverSmoke = params.channelDriverSelection
-    ? await runQaCrablineChannelDriverSmoke(params.channelDriverSelection, {
-        env: params.transport.createChannelDriverSmokeEnv?.(process.env) ?? process.env,
+  const crablineChannelDriverSelection = params.channelDriverSelection;
+  const crablineChannelDriverSmoke = crablineChannelDriverSelection
+    ? await runOpenClawCrablineChannelDriverSmoke({
         outputDir: params.outputDir,
+        selection: crablineChannelDriverSelection,
       })
     : undefined;
-  const channelDriverArtifactPaths = params.channelDriverSelection
+  const crablineChannelDriverArtifactPaths = crablineChannelDriverSelection
     ? [
         {
           kind: "channel-capability-matrix",
-          path: params.channelDriverSelection.capabilityMatrixPath,
+          path: crablineChannelDriverSelection.capabilityMatrixPath,
         },
         {
           kind: "channel-driver-smoke",
-          path: params.channelDriverSelection.smokeArtifactPath,
+          path: crablineChannelDriverSelection.smokeArtifactPath,
         },
       ]
     : [];
@@ -926,7 +927,7 @@ async function writeQaSuiteArtifacts(params: {
           artifactPaths: [
             { kind: "summary", path: path.basename(summaryPath) },
             { kind: "report", path: path.basename(reportPath) },
-            ...channelDriverArtifactPaths,
+            ...crablineChannelDriverArtifactPaths,
           ],
           evidenceMode: params.evidenceMode,
           channelId: params.channelDriverSelection?.channel ?? params.transport.id,
@@ -939,17 +940,17 @@ async function writeQaSuiteArtifacts(params: {
           scenarioResults: params.scenarios,
         })
       : undefined;
-  if (params.channelDriverSelection && channelDriverSmoke) {
+  if (crablineChannelDriverSelection && crablineChannelDriverSmoke) {
     await fs.writeFile(
-      path.join(params.outputDir, params.channelDriverSelection.capabilityMatrixPath),
+      path.join(params.outputDir, crablineChannelDriverSelection.capabilityMatrixPath),
       `${JSON.stringify(
         {
           version: 1,
           source: "openclaw/crabline",
-          channelDriver: params.channelDriverSelection.channelDriver,
-          selectedChannel: params.channelDriverSelection.channel,
-          manifestPath: channelDriverSmoke.manifestPath,
-          report: channelDriverSmoke.capabilityReport,
+          channelDriver: crablineChannelDriverSelection.channelDriver,
+          selectedChannel: crablineChannelDriverSelection.channel,
+          manifestPath: crablineChannelDriverSmoke.manifestPath,
+          report: crablineChannelDriverSmoke.capabilityReport,
         },
         null,
         2,
@@ -957,15 +958,15 @@ async function writeQaSuiteArtifacts(params: {
       "utf8",
     );
     await fs.writeFile(
-      path.join(params.outputDir, params.channelDriverSelection.smokeArtifactPath),
+      path.join(params.outputDir, crablineChannelDriverSelection.smokeArtifactPath),
       `${JSON.stringify(
         {
           version: 1,
           source: "openclaw/crabline",
-          channelDriver: params.channelDriverSelection.channelDriver,
-          selectedChannel: params.channelDriverSelection.channel,
-          manifestPath: channelDriverSmoke.manifestPath,
-          smoke: channelDriverSmoke.smoke,
+          channelDriver: crablineChannelDriverSelection.channelDriver,
+          selectedChannel: crablineChannelDriverSelection.channel,
+          manifestPath: crablineChannelDriverSmoke.manifestPath,
+          smoke: crablineChannelDriverSmoke.smoke,
         },
         null,
         2,
