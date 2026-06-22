@@ -20,6 +20,7 @@ import { isMatrixDeviceOwnerVerified } from "./verification-status.js";
 export type MatrixCryptoBootstrapperDeps<TRawEvent extends MatrixRawEvent> = {
   getUserId: () => Promise<string>;
   getPassword?: () => string | undefined;
+  preflightCrossSigningUiAuth: (authData: MatrixAuthDict | null) => Promise<void>;
   getDeviceId: () => string | null | undefined;
   verificationManager: MatrixVerificationManager;
   recoveryKeyStore: MatrixRecoveryKeyStore;
@@ -52,33 +53,29 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
   ): Promise<MatrixCryptoBootstrapResult> {
     const strict = options.strict === true;
     const forceReset = options.forceResetCrossSigning === true;
-    const hasPassword = Boolean(this.deps.getPassword?.());
-    // Forced reset with a password: bootstrap SSSS upfront (non-strict, recreation allowed)
-    // so broken SSSS is repaired before the destructive reset. For passwordless bots, defer
-    // SSSS to avoid mutating it before UIA succeeds (passwordless-bot guard).
-    const deferSecretStorageBootstrapUntilAfterCrossSigning = forceReset && !hasPassword;
     // Register verification listeners before expensive bootstrap work so incoming requests
     // are not missed during startup.
     this.registerVerificationRequestHandler(crypto);
 
-    if (!deferSecretStorageBootstrapUntilAfterCrossSigning) {
-      await this.bootstrapSecretStorage(crypto, {
-        strict: forceReset ? false : strict,
-        allowSecretStorageRecreateWithoutRecoveryKey: forceReset
-          ? true
-          : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
-        forceNewSecretStorage: forceReset,
-      });
+    if (forceReset) {
+      // The auth-only upload is side-effect free: all signing-key fields are optional.
+      // Prove UIA before replacing SSSS or generating a new local identity.
+      await this.preflightCrossSigningUiAuth();
     }
+    await this.bootstrapSecretStorage(crypto, {
+      strict: forceReset ? true : strict,
+      allowSecretStorageRecreateWithoutRecoveryKey: forceReset
+        ? true
+        : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
+      forceNewSecretStorage: forceReset,
+    });
 
     const crossSigning = await this.bootstrapCrossSigning(crypto, {
       forceResetCrossSigning: forceReset,
       allowAutomaticCrossSigningReset: options.allowAutomaticCrossSigningReset !== false,
-      // Password-backed resets repair SSSS before generating keys, so never reset twice.
-      // Passwordless resets must repair after the first unpublished reset fails during SSSS export;
-      // matrix-js-sdk cannot resume that reset, so one retry is the only recovery path.
+      // Forced reset already authenticated and recreated SSSS, so never generate a second identity.
       allowSecretStorageRecreateWithoutRecoveryKey: forceReset
-        ? deferSecretStorageBootstrapUntilAfterCrossSigning
+        ? false
         : options.allowSecretStorageRecreateWithoutRecoveryKey === true,
       strict,
     });
@@ -125,6 +122,17 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
         }
       }
     };
+  }
+
+  private async preflightCrossSigningUiAuth(): Promise<void> {
+    const userId = await this.deps.getUserId();
+    const authUploadDeviceSigningKeys = this.createSigningKeysUiAuthCallback({
+      userId,
+      password: this.deps.getPassword?.(),
+    });
+    await authUploadDeviceSigningKeys((authData) =>
+      this.deps.preflightCrossSigningUiAuth(authData),
+    );
   }
 
   private async bootstrapCrossSigning(
