@@ -521,10 +521,6 @@ function resolveLegacyWorkspaceStatePath(dir: string): string {
   return path.join(dir, LEGACY_WORKSPACE_STATE_DIRNAME, LEGACY_WORKSPACE_STATE_FILENAME);
 }
 
-export function resolveWorkspaceAttestationPath(dir: string): string {
-  return resolveWorkspaceAttestationPathInStateDir(dir, resolveStateDir());
-}
-
 function resolveWorkspaceAttestationPathInStateDir(dir: string, stateDir: string): string {
   const key = createHash("sha256").update(path.resolve(dir)).digest("hex");
   return path.join(stateDir, WORKSPACE_ATTESTATION_DIRNAME, `${key}.attested`);

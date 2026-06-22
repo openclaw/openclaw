@@ -1,3 +1,4 @@
+import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
 /**
  * Embedded-mode Gateway method stub.
  *
@@ -130,7 +131,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   sessionId: string | undefined;
   messages: unknown[];
   thinkingLevel?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   verboseLevel?: string;
 }> {
   const rt = await getRuntime();
@@ -211,7 +212,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
     sessionId,
     messages: bounded.messages,
     thinkingLevel: entry?.thinkingLevel as string | undefined,
-    fastMode: entry?.fastMode as boolean | undefined,
+    fastMode: normalizeFastMode(entry?.fastMode),
     verboseLevel: entry?.verboseLevel as string | undefined,
   };
 }

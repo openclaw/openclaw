@@ -41,6 +41,7 @@ describe("docs-sync-publish", () => {
       expect(() => parseArgs([flag, "--target", "generated-docs"])).toThrow(
         `${flag} requires a value`,
       );
+      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
   });
 });

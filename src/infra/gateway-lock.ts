@@ -14,7 +14,8 @@ import { z } from "zod";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
+import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { readWindowsProcessArgsSync } from "./windows-port-pids.js";
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
@@ -79,32 +80,8 @@ function readLinuxCmdline(pid: number): string[] | null {
 
 const CMDLINE_EXEC_TIMEOUT_MS = 1000;
 
-/**
- * Read the command line of a Windows process via `wmic`.
- * Returns an argv-style array, or null when the lookup fails (process gone,
- * `wmic` missing/deprecated, timeout, etc.).
- */
 function readWindowsCmdline(pid: number): string[] | null {
-  try {
-    // Omit `encoding` so execFileSync returns a Buffer — wmic emits UTF-16LE
-    // (with BOM) on most Windows 10/11 builds, which would be garbled as UTF-8.
-    const buf = execFileSync(
-      "wmic",
-      ["process", "where", `processid=${pid}`, "get", "CommandLine", "/value"],
-      { timeout: CMDLINE_EXEC_TIMEOUT_MS, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
-    ) as Buffer;
-    const raw =
-      buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe
-        ? buf.toString("utf16le")
-        : buf.toString("utf8");
-    const match = raw.match(/CommandLine=(.+)/);
-    if (!match) {
-      return null;
-    }
-    return parseWindowsCmdline(match[1].trim());
-  } catch {
-    return null;
-  }
+  return readWindowsProcessArgsSync(pid, CMDLINE_EXEC_TIMEOUT_MS);
 }
 
 /**

@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+} from "../infra/windows-install-roots.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsage,
@@ -135,7 +139,11 @@ function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyn
 function mockWindowsNodeHostProcess(processId = 5151): void {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   spawnSync.mockImplementation((command, args) => {
-    if (command === "powershell" && Array.isArray(args) && args.includes(NODE_PROCESS_QUERY)) {
+    if (
+      command === getWindowsPowerShellExePath() &&
+      Array.isArray(args) &&
+      args.includes(NODE_PROCESS_QUERY)
+    ) {
       return makeSpawnSyncResult({
         stdout: JSON.stringify([
           {
@@ -292,7 +300,7 @@ describe("Windows startup fallback", () => {
       const startupEntryPath = resolveStartupEntryPath(env);
       const startupScript = await fs.readFile(startupEntryPath, "utf8");
       expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
-      expect(startupScript).toContain('start "" /min cmd.exe /d /c');
+      expect(startupScript).toContain(`start "" /min ${getWindowsCmdExePath()} /d /c`);
       expect(startupScript).toContain("gateway.cmd");
       expectStartupFallbackSpawn();
       expect(childUnref).toHaveBeenCalled();
@@ -404,7 +412,7 @@ describe("Windows startup fallback", () => {
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
       spawnSync.mockImplementation((command, args) => {
         if (
-          command === "powershell" &&
+          command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
@@ -474,7 +482,7 @@ describe("Windows startup fallback", () => {
       fastForwardTaskStartWait();
       spawnSync.mockImplementation((command, args) => {
         if (
-          command === "powershell" &&
+          command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
@@ -562,7 +570,7 @@ describe("Windows startup fallback", () => {
       );
       spawnSync.mockImplementation((command, args) => {
         if (
-          command === "powershell" &&
+          command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",

@@ -30,6 +30,14 @@ describe("scripts/bench-sqlite-state", () => {
     expect(result.stderr.trim()).toBe("error: --output requires a value");
   });
 
+  it("rejects short flag output values before seeding benchmark databases", () => {
+    const result = runBench(["--output", "-h"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("error: --output requires a value");
+  });
+
   it("rejects invalid profiles without printing a stack trace", () => {
     const result = runBench(["--profile", "huge"]);
 
