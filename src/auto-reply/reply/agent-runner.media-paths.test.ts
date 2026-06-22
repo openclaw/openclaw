@@ -434,6 +434,53 @@ describe("runReplyAgent media path normalization", () => {
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
+  it("threads image attachments through the steer queue for a burst (issue #79949)", async () => {
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+      queued: true,
+      sessionId,
+      target: "embedded_run",
+      gatewayHealth: "live",
+    }));
+
+    const burstImages = [
+      { type: "image" as const, data: "AAA", mimeType: "image/jpeg" },
+      { type: "image" as const, data: "BBB", mimeType: "image/jpeg" },
+    ];
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        shouldFollowup: true,
+        isStreaming: true,
+        followupRun: createMockFollowupRun({
+          prompt: "generate chart",
+          images: burstImages,
+          run: {
+            agentId: "main",
+            agentDir: "/tmp/agent",
+            messageProvider: "whatsapp",
+            workspaceDir: "/tmp/workspace",
+          },
+        }) as unknown as FollowupRun,
+      }),
+    );
+
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
+      "session",
+      "generate chart",
+      expect.objectContaining({
+        steeringMode: "all",
+        images: burstImages,
+      }),
+    );
+    const steerOptions = queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.lastCall?.[2] as {
+      images?: unknown[];
+    };
+    expect(steerOptions.images).toHaveLength(2);
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
   it("queues active prompts in followup mode without steering", async () => {
     await runReplyAgent(
       makeRunReplyAgentParams({
