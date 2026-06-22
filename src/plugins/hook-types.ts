@@ -267,8 +267,29 @@ export type PluginHookContextWindowSource =
   | "agentContextTokens"
   | "default";
 
+export type PluginHookMessageAttachment = {
+  /** Local materialized path of the inbound attachment, when available. */
+  path?: string;
+  /** Source URL of the attachment (falls back to the path). */
+  url?: string;
+  mimeType?: string;
+  contentType?: string;
+};
+
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
+  /** Inbound body before agent-presentation rewrites, when available. */
+  body?: string;
+  /** Body as it will be presented to the agent, when available. */
+  content?: string;
+  /** Raw inbound body, when the channel provides one. */
+  rawBody?: string;
+  /** Channel-provided agent-facing body, when set. */
+  bodyForAgent?: string;
+  /** Materialized inbound attachments for the current message, when present. */
+  attachments?: PluginHookMessageAttachment[];
+  /** Alias of attachments for handlers that inspect media. */
+  media?: PluginHookMessageAttachment[];
 };
 
 export type PluginHookBeforeAgentReplyResult = {

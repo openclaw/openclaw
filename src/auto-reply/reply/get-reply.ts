@@ -959,9 +959,31 @@ export async function getReplyFromConfig(
         originatingChannel: sessionCtx.OriginatingChannel,
         provider: sessionCtx.Provider,
       });
+      const hookMediaPaths =
+        Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0
+          ? ctx.MediaPaths
+          : ctx.MediaPath?.trim()
+            ? [ctx.MediaPath.trim()]
+            : [];
+      const hookMediaUrls = Array.isArray(ctx.MediaUrls) ? ctx.MediaUrls : [];
+      const hookMediaTypes = Array.isArray(ctx.MediaTypes) ? ctx.MediaTypes : [];
+      const hookAttachments = hookMediaPaths.map((mediaPath, index) => ({
+        path: mediaPath,
+        url: hookMediaUrls[index] ?? mediaPath,
+        mimeType: hookMediaTypes[index] ?? ctx.MediaType,
+        contentType: hookMediaTypes[index] ?? ctx.MediaType,
+      }));
       const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
         hookRunner.runBeforeAgentReply(
-          { cleanedBody },
+          {
+            cleanedBody,
+            body: ctx.RawBody ?? ctx.Body ?? cleanedBody,
+            content: ctx.BodyForAgent ?? cleanedBody,
+            rawBody: ctx.RawBody,
+            bodyForAgent: ctx.BodyForAgent,
+            attachments: hookAttachments.length > 0 ? hookAttachments : undefined,
+            media: hookAttachments.length > 0 ? hookAttachments : undefined,
+          },
           {
             agentId,
             sessionKey: agentSessionKey,

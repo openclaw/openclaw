@@ -130,6 +130,63 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
 
     expect(result).toEqual({ text: SILENT_REPLY_TOKEN });
   });
+
+  it("passes inbound bodies and materialized attachments to the hook event", async () => {
+    mocks.runBeforeAgentReply.mockResolvedValue({
+      handled: true,
+      reply: { text: "plugin reply" },
+    });
+
+    await getReplyFromConfig(
+      buildGetReplyGroupCtx({
+        RawBody: "raw hello",
+        BodyForAgent: "agent hello",
+        MediaPaths: ["/tmp/media/inbound/file_1.zip", "/tmp/media/inbound/file_2.pdf"],
+        MediaUrls: ["https://example.com/file_1.zip"],
+        MediaTypes: ["application/zip"],
+        MediaType: "application/pdf",
+      }),
+      undefined,
+      {},
+    );
+
+    expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
+    const [[event]] = mocks.runBeforeAgentReply.mock.calls;
+    expect(event.cleanedBody).toBe("hello world");
+    expect(event.body).toBe("raw hello");
+    expect(event.rawBody).toBe("raw hello");
+    expect(event.bodyForAgent).toBe("agent hello");
+    expect(event.content).toBe("agent hello");
+    expect(event.attachments).toEqual([
+      {
+        path: "/tmp/media/inbound/file_1.zip",
+        url: "https://example.com/file_1.zip",
+        mimeType: "application/zip",
+        contentType: "application/zip",
+      },
+      {
+        path: "/tmp/media/inbound/file_2.pdf",
+        url: "/tmp/media/inbound/file_2.pdf",
+        mimeType: "application/pdf",
+        contentType: "application/pdf",
+      },
+    ]);
+    expect(event.media).toEqual(event.attachments);
+  });
+
+  it("omits attachments from the hook event when no media is present", async () => {
+    mocks.runBeforeAgentReply.mockResolvedValue({
+      handled: true,
+      reply: { text: "plugin reply" },
+    });
+
+    await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
+
+    expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
+    const [[event]] = mocks.runBeforeAgentReply.mock.calls;
+    expect(event.attachments).toBeUndefined();
+    expect(event.media).toBeUndefined();
+  });
 });
 afterEach(() => {
   vi.unstubAllEnvs();
