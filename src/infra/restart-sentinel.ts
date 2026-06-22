@@ -76,10 +76,6 @@ export type RestartSentinel = {
   payload: RestartSentinelPayload;
 };
 
-export type RestartSentinelFormatOptions = {
-  state?: "pending" | "completed";
-};
-
 const RESTART_SENTINEL_KEY = "current";
 const LEGACY_RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
@@ -326,17 +322,12 @@ export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): 
   }
 }
 
-export function formatRestartSentinelMessage(
-  payload: RestartSentinelPayload,
-  options?: RestartSentinelFormatOptions,
-): string {
-  const completedConfigRestart =
-    isRestartRequiredConfigWriteSentinel(payload) && options?.state === "completed";
-  const message = completedConfigRestart ? undefined : payload.message?.trim();
+export function formatRestartSentinelMessage(payload: RestartSentinelPayload): string {
+  const message = payload.message?.trim();
   if (message && (!payload.stats || payload.kind === "config-auto-recovery")) {
     return message;
   }
-  const lines: string[] = [summarizeRestartSentinel(payload, options)];
+  const lines: string[] = [summarizeRestartSentinel(payload)];
   if (message) {
     lines.push(message);
   }
@@ -344,7 +335,7 @@ export function formatRestartSentinelMessage(
   if (reason && reason !== message) {
     lines.push(`Reason: ${reason}`);
   }
-  if (!completedConfigRestart && payload.doctorHint?.trim()) {
+  if (payload.doctorHint?.trim()) {
     lines.push(payload.doctorHint.trim());
   }
   return lines.join("\n");
@@ -358,18 +349,12 @@ function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): 
   );
 }
 
-export function summarizeRestartSentinel(
-  payload: RestartSentinelPayload,
-  options?: RestartSentinelFormatOptions,
-): string {
+export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
   }
   if (isRestartRequiredConfigWriteSentinel(payload)) {
     const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
-    if (options?.state === "completed") {
-      return `Gateway restart completed${mode}`.trim();
-    }
     return `Gateway restart required${mode}`.trim();
   }
   const kind = payload.kind;

@@ -453,8 +453,8 @@ async function loadRestartSentinelStartupTask(params: {
     recordLatestUpdateRestartSentinel(payload);
   }
   const sessionKey = payload.sessionKey?.trim();
-  const message = formatRestartSentinelMessage(payload, { state: "completed" });
-  const summary = summarizeRestartSentinel(payload, { state: "completed" });
+  const message = formatRestartSentinelMessage(payload);
+  const summary = summarizeRestartSentinel(payload);
   const wakeDeliveryContext = mergeDeliveryContext(
     payload.threadId != null
       ? { ...payload.deliveryContext, threadId: payload.threadId }

@@ -216,9 +216,6 @@ describe("restart sentinel", () => {
       expect(summarizeRestartSentinel(read.payload)).toBe(
         "Gateway restart config-patch ok (config.patch)",
       );
-      expect(summarizeRestartSentinel(read.payload, { state: "completed" })).toBe(
-        "Gateway restart config-patch ok (config.patch)",
-      );
       expect(formatRestartSentinelMessage(read.payload)).toBe(
         ["Gateway restart config-patch ok (config.patch)", "Config updated successfully"].join(
           "\n",
@@ -292,16 +289,7 @@ describe("restart sentinel", () => {
         "Run openclaw doctor --non-interactive",
       ].join("\n"),
     );
-    expect(formatRestartSentinelMessage(payload, { state: "completed" })).toBe(
-      "Gateway restart completed (config.patch)",
-    );
     expect(summarizeRestartSentinel(payload)).toBe("Gateway restart required (config.patch)");
-    expect(summarizeRestartSentinel(payload, { state: "pending" })).toBe(
-      "Gateway restart required (config.patch)",
-    );
-    expect(summarizeRestartSentinel(payload, { state: "completed" })).toBe(
-      "Gateway restart completed (config.patch)",
-    );
 
     expect(
       summarizeRestartSentinel({
