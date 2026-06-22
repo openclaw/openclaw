@@ -46,6 +46,16 @@ export const resetAcpSessionManagerForTests = () =>
   managerModule.testing.resetAcpSessionManagerForTests();
 export const { AcpRuntimeError } = await import("../runtime/errors.js");
 
+export function createAcpSessionManagerWithMocks(): InstanceType<typeof AcpSessionManager> {
+  return new AcpSessionManager({
+    listAcpSessions: (params) => hoistedMocks.listAcpSessionEntriesMock(params),
+    readSessionEntry: (params) => hoistedMocks.readAcpSessionEntryMock(params),
+    upsertSessionMeta: (params) => hoistedMocks.upsertAcpSessionMetaMock(params),
+    getRuntimeBackend: (backendId) => hoistedMocks.getAcpRuntimeBackendMock(backendId),
+    requireRuntimeBackend: (backendId) => hoistedMocks.requireAcpRuntimeBackendMock(backendId),
+  });
+}
+
 export const baseCfg = {
   acp: {
     enabled: true,
@@ -112,10 +122,7 @@ function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unkn
   return mock.mock.calls.map((call) => call[0] as Record<string, unknown>);
 }
 
-function findMockCallFields(
-  mock: ReturnType<typeof vi.fn>,
-  expected: Record<string, unknown>,
-) {
+function findMockCallFields(mock: ReturnType<typeof vi.fn>, expected: Record<string, unknown>) {
   return mockCallArgs(mock).find((actual) =>
     Object.entries(expected).every(([key, value]) => Object.is(actual[key], value)),
   );

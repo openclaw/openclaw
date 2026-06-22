@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import {
   AcpRuntimeError,
-  AcpSessionManager,
+  createAcpSessionManagerWithMocks,
   baseCfg,
   createRuntime,
   hoisted,
@@ -101,7 +101,7 @@ describe("AcpSessionManager backend failover", () => {
   it("starts later failover turns on the configured primary backend", async () => {
     const harness = setupFailoverBackends({ initialBackend: "fallback-backend" });
 
-    const manager = new AcpSessionManager();
+    const manager = createAcpSessionManagerWithMocks();
     await manager.runTurn({
       cfg: harness.cfg,
       sessionKey: harness.sessionKey,
@@ -125,7 +125,7 @@ describe("AcpSessionManager backend failover", () => {
       throw new AcpRuntimeError("ACP_TURN_FAILED", "backend unavailable");
     });
 
-    const manager = new AcpSessionManager();
+    const manager = createAcpSessionManagerWithMocks();
     await manager.runTurn({
       cfg: harness.cfg,
       sessionKey: harness.sessionKey,
@@ -163,7 +163,7 @@ describe("AcpSessionManager backend failover", () => {
       throw new AcpRuntimeError("ACP_TURN_FAILED", "backend unavailable");
     });
 
-    const manager = new AcpSessionManager();
+    const manager = createAcpSessionManagerWithMocks();
     await expect(
       manager.runTurn({
         cfg: harness.cfg,
@@ -190,7 +190,7 @@ describe("AcpSessionManager backend failover", () => {
       ),
     });
 
-    const manager = new AcpSessionManager();
+    const manager = createAcpSessionManagerWithMocks();
     await expect(
       manager.runTurn({
         cfg: harness.cfg,
@@ -215,7 +215,7 @@ describe("AcpSessionManager backend failover", () => {
       throw new AcpRuntimeError("ACP_TURN_FAILED", "rate limit exceeded");
     });
 
-    const manager = new AcpSessionManager();
+    const manager = createAcpSessionManagerWithMocks();
     await expect(
       manager.runTurn({
         cfg: harness.cfg,
@@ -238,7 +238,7 @@ describe("AcpSessionManager backend failover", () => {
     });
     const events: unknown[] = [];
 
-    const manager = new AcpSessionManager();
+    const manager = createAcpSessionManagerWithMocks();
     await expect(
       manager.runTurn({
         cfg: harness.cfg,
