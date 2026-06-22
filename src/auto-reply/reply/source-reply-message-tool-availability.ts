@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -9,10 +9,10 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagent-capabilities.js";
+import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { FinalizedMsgContext } from "../templating.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 
