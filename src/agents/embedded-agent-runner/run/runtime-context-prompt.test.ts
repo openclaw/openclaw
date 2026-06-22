@@ -179,6 +179,25 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("strips the last matching prompt occurrence when prepend hooks quote the body", () => {
+    const systemEvent = "System: [2026-06-20 13:59:51] Slack DM from Alice";
+    const userText = "Hello";
+    const untrustedContext = "Untrusted channel metadata";
+    const effectivePrompt = [systemEvent, userText, untrustedContext].join("\n\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: userText,
+        modelPrompt: [effectivePrompt, effectivePrompt].join("\n\n"),
+      }),
+    ).toEqual({
+      prompt: userText,
+      modelPrompt: [effectivePrompt, userText].join("\n\n"),
+      runtimeContext: [systemEvent, untrustedContext].join("\n\n"),
+    });
+  });
+
   it("does not extract no-transcript delimiter text", () => {
     const effectivePrompt = [
       "visible ask",
