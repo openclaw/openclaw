@@ -1,6 +1,5 @@
 // Verifies local shell process handling for TUI local mode.
 import { EventEmitter } from "node:events";
-import os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 
@@ -148,7 +147,7 @@ describe("createLocalShellRunner", () => {
     expect(harness.messages.some((m) => m.includes("FATAL"))).toBe(true);
   });
 
-  it("falls back to home dir for spawn cwd when process.cwd() is deleted", async () => {
+  it("refuses to run and surfaces a clear error when process.cwd() is deleted", async () => {
     const spawnCommand = vi.fn((_command: string, _options: unknown) => {
       const stdout = new EventEmitter();
       const stderr = new EventEmitter();
@@ -181,9 +180,12 @@ describe("createLocalShellRunner", () => {
       cwdSpy.mockRestore();
     }
 
-    const spawnOptions = spawnCommand.mock.calls[0]?.[1] as
-      | { cwd?: string; env?: Record<string, string> }
-      | undefined;
-    expect(spawnOptions?.cwd).toBe(os.homedir());
+    // No implicit HOME/executable-dir fallback: the command is refused with a
+    // clear error so the operator can `cd` to an existing directory first,
+    // instead of silently running `!pwd` in a directory they did not choose.
+    expect(spawnCommand).not.toHaveBeenCalled();
+    expect(
+      harness.messages.some((m) => m.includes("local shell: working directory was deleted")),
+    ).toBe(true);
   });
 });

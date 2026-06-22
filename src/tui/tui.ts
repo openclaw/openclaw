@@ -532,12 +532,18 @@ function resolveEmptySessionInfoDefaults(config: OpenClawConfig): SessionInfo {
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
   const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
-  // Resolve the launch cwd once, tolerating a deleted launch directory. Paths
-  // that genuinely need a project cwd (agent workspace inference) skip when it
-  // is gone; paths that only need *some* valid cwd (auth spawn, session cwd)
-  // fall back to the CLI wrapper's directory.
+  // Resolve the launch cwd once for startup-only paths (agent workspace
+  // inference): if it was already deleted at launch there is no project path to
+  // match against, so that path skips. Paths that run later and only need *some*
+  // valid cwd (auth spawn, autocomplete provider) re-validate the cwd at use
+  // time via resolveLaunchCwd() so a cwd deleted *after* launch is not silently
+  // reused as a stale (now-deleted) path.
   const launchCwd = tryProcessCwd();
-  const fallbackLaunchCwd = launchCwd ?? path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
+  const wrapperDir = path.dirname(OPENCLAW_CLI_WRAPPER_PATH);
+  // Re-checked at each use: returns the live cwd when it still exists, else the
+  // CLI wrapper's directory (a neutral, always-existing internal path that does
+  // not change operator command/state trust semantics).
+  const resolveLaunchCwd = () => tryProcessCwd() ?? wrapperDir;
   const emptySessionInfoDefaults = resolveEmptySessionInfoDefaults(config);
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
@@ -827,7 +833,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
           thinkingLevels: sessionInfo.thinkingLevels,
           dynamicCommands: dynamicSlashCommandsKey === dynamicKey ? dynamicSlashCommands : [],
         }),
-        fallbackLaunchCwd,
+        resolveLaunchCwd(),
       ),
     );
   };
@@ -1221,7 +1227,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
                 const invocation = resolveLocalAuthSpawnInvocation({ command, args });
                 const child = spawn(invocation.command, invocation.args, {
-                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: fallbackLaunchCwd }),
+                  cwd: resolveLocalAuthSpawnCwd({ args, defaultCwd: resolveLaunchCwd() }),
                   env: process.env,
                   stdio: "inherit",
                   ...invocation.options,

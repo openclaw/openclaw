@@ -1,8 +1,7 @@
 // Launches and manages the local shell process used by TUI local mode.
 import { spawn } from "node:child_process";
-import os from "node:os";
 import type { Component, SelectItem } from "@earendil-works/pi-tui";
-import { resolveProcessCwdOrFallback } from "../infra/safe-cwd.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { createSearchableSelectList } from "./components/selectors.js";
 
 type LocalShellDeps = {
@@ -22,7 +21,7 @@ type LocalShellDeps = {
     onCancel?: () => void;
   };
   spawnCommand?: typeof spawn;
-  getCwd?: () => string;
+  getCwd?: () => string | null;
   env?: NodeJS.ProcessEnv;
   maxOutputChars?: number;
 };
@@ -32,11 +31,15 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
   let localExecAllowed = false;
   const createSelector = deps.createSelector ?? createSearchableSelectList;
   const spawnCommand = deps.spawnCommand ?? spawn;
-  // Fall back to the OS home dir when the launch cwd was deleted so `!cmd`
-  // local shell commands still run instead of crashing on process.cwd(). Home
-  // is the intuitive shell cwd for a missing project directory; this is a
-  // caller-specific choice distinct from runTui's wrapper-dir fallback.
-  const getCwd = deps.getCwd ?? (() => resolveProcessCwdOrFallback(os.homedir()));
+  // Re-validate the cwd at use time. When the working directory has been
+  // deleted we REFUSE to run the `!cmd` instead of silently re-targeting it at
+  // another directory: a local shell command's effects depend on where it runs,
+  // and falling back to $HOME (or any other implicit dir) would execute the
+  // operator's command in a context they did not choose. Surface a clear error
+  // so the operator can `cd` to an existing directory first. This is the
+  // explicit-failure behavior issue #73676 asks for ("clear error or fallback")
+  // for the operator-trust local-shell path.
+  const getCwd = deps.getCwd ?? tryProcessCwd;
   const env = deps.env ?? process.env;
   const maxChars = deps.maxOutputChars ?? 40_000;
 
@@ -104,6 +107,18 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
       return;
     }
 
+    // Re-validate the cwd at use time (it may have been deleted after TUI
+    // startup). Refuse rather than re-targeting the command at an implicit
+    // directory — see getCwd above.
+    const cwd = getCwd();
+    if (cwd === null) {
+      deps.chatLog.addSystem(
+        "local shell: working directory was deleted; cd to an existing directory first",
+      );
+      deps.tui.requestRender();
+      return;
+    }
+
     deps.chatLog.addSystem(`[local] $ ${cmd}`);
     deps.tui.requestRender();
 
@@ -117,7 +132,7 @@ export function createLocalShellRunner(deps: LocalShellDeps) {
         // Intentionally a shell: this is an operator-only local TUI feature (prefixed with `!`)
         // and is gated behind an explicit in-session approval prompt.
         shell: true,
-        cwd: getCwd(),
+        cwd,
         env: { ...env, OPENCLAW_SHELL: "tui-local" },
       });
 
