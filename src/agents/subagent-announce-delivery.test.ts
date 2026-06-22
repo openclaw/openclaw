@@ -4859,7 +4859,7 @@ describe("deliverSubagentAnnouncement requester session backfill (issue #86034)"
   // already-loaded requester session entry carries `lastTo`/`lastChannel`, so
   // effectiveDirectOrigin must backfill from it before the deliverability gate,
   // otherwise generated media is silently dropped.
-  it("backfills to/channel/accountId from the requester session entry when completion origin is missing them", async () => {
+  it("backfills to/accountId from the requester session entry when completion origin is incomplete", async () => {
     const agentId = `backfill-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const sessionKey = `agent:${agentId}:telegram:5866004662`;
     const storeTemplate = path.join(
@@ -4904,12 +4904,12 @@ describe("deliverSubagentAnnouncement requester session backfill (issue #86034)"
         targetRequesterSessionKey: sessionKey,
         triggerMessage: "image done",
         steerMessage: "image done",
-        // Origin carries channel/accountId but NOT `to` — simulates an
+        // Origin carries channel but NOT `to` or `accountId` — simulates an
         // image_generate task created off the direct-reply path.
-        requesterOrigin: { channel: "telegram", accountId: "bot-1" },
-        requesterSessionOrigin: { channel: "telegram", accountId: "bot-1" },
-        completionDirectOrigin: { channel: "telegram", accountId: "bot-1" },
-        directOrigin: { channel: "telegram", accountId: "bot-1" },
+        requesterOrigin: { channel: "telegram" },
+        requesterSessionOrigin: { channel: "telegram" },
+        completionDirectOrigin: { channel: "telegram" },
+        directOrigin: { channel: "telegram" },
         requesterIsSubagent: false,
         expectsCompletionMessage: true,
         bestEffortDeliver: true,
