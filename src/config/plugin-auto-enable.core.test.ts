@@ -1220,7 +1220,7 @@ describe("applyPluginAutoEnable core", () => {
     const second = applyPluginAutoEnable({
       config,
       discovery: mutableDiscovery,
-      env,
+      env: makeIsolatedEnv({ CACHE_CHANNEL_TOKEN: "configured" }),
       manifestRegistry,
     });
 
