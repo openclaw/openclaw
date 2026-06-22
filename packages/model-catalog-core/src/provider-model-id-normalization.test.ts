@@ -88,4 +88,36 @@ describe("provider model id policy normalization", () => {
       "opus-4.6",
     );
   });
+
+  it("CONTROL: a whitespace-free lowercase prefix strips correctly (no regression)", () => {
+    const policies = new Map([
+      ["openai", { stripPrefixes: ["openai/"], aliases: undefined }],
+    ]);
+
+    expect(
+      normalizeStaticProviderModelIdWithPolicies("openai", "openai/gpt-4", policies),
+    ).toBe("gpt-4");
+  });
+
+  it("DESIRED behavior (currently FAILS): a leading-space prefix strips exactly the matched prefix", () => {
+    const policies = new Map([
+      ["openai", { stripPrefixes: [" openai/"], aliases: undefined }],
+    ]);
+
+    // A whitespace-containing prefix should still strip only the normalized prefix
+    expect(
+      normalizeStaticProviderModelIdWithPolicies("openai", "openai/gpt-4", policies),
+    ).toBe("gpt-4");
+  });
+
+  it("DESIRED behavior (currently FAILS): a trailing-space prefix strips exactly the matched prefix", () => {
+    const policies = new Map([
+      ["openai", { stripPrefixes: ["openai/ "], aliases: undefined }],
+    ]);
+
+    // Same as above: trailing whitespace in manifest should not affect stripping
+    expect(
+      normalizeStaticProviderModelIdWithPolicies("openai", "openai/gpt-4", policies),
+    ).toBe("gpt-4");
+  });
 });
