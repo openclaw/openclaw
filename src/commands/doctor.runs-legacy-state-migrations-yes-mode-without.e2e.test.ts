@@ -76,14 +76,14 @@ describe("doctor command", () => {
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
-  it("refuses doctor repair mode in Nix before repair side effects", async () => {
+  it("allows doctor repair mode in Nix (non-config writes)", async () => {
     const previous = process.env.OPENCLAW_NIX_MODE;
     process.env.OPENCLAW_NIX_MODE = "1";
     try {
       mockDoctorConfigSnapshot();
-      await expect(doctorCommand(createDoctorRuntime(), { repair: true })).rejects.toThrow(
-        "OPENCLAW_NIX_MODE=1",
-      );
+      // Should not throw - repair flows that don't mutate openclaw.json are allowed
+      await doctorCommand(createDoctorRuntime(), { repair: true });
+      // Verifies that doctor can run without config mutation errors
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_NIX_MODE;
@@ -92,6 +92,7 @@ describe("doctor command", () => {
       }
     }
 
+    // Config writes should not occur from non-config repairs
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 

@@ -20,9 +20,13 @@ function loadConfigModule(): Promise<ConfigModule> {
 /** Runs the full interactive doctor flow against the provided or default runtime. */
 export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions = {}) {
   const effectiveRuntime = runtime ?? (await import("../runtime.js")).defaultRuntime;
-  if (options.repair === true || options.yes === true || options.generateGatewayToken === true) {
+  // Only guard explicit config-mutating operations upfront. Non-config repairs (session state,
+  // migrations) are allowed to proceed; they'll still fail if they attempt actual openclaw.json writes.
+  if (options.generateGatewayToken === true) {
     const { assertConfigWriteAllowedInCurrentMode } = await loadConfigModule();
-    assertConfigWriteAllowedInCurrentMode();
+    assertConfigWriteAllowedInCurrentMode({
+      operation: "doctor --generate-gateway-token",
+    });
   }
 
   const { createDoctorPrompter } = await import("../commands/doctor-prompter.js");

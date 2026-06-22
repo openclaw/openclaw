@@ -10,18 +10,22 @@ export const OPENCLAW_NIX_OVERVIEW_URL = "https://docs.openclaw.ai/install/nix";
 export class NixModeConfigMutationError extends Error {
   readonly code = "OPENCLAW_NIX_MODE_CONFIG_IMMUTABLE";
 
-  constructor(params: { configPath?: string } = {}) {
+  constructor(params: { configPath?: string; operation?: string } = {}) {
     super(formatNixModeConfigMutationMessage(params));
     this.name = "NixModeConfigMutationError";
   }
 }
 
 /** Build the operator-facing immutable-config message for Nix-managed installs. */
-export function formatNixModeConfigMutationMessage(params: { configPath?: string } = {}): string {
+export function formatNixModeConfigMutationMessage(
+  params: { configPath?: string; operation?: string } = {},
+): string {
+  const operationHint = params.operation ? `Operation: ${params.operation}` : "";
   return [
     "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
     "This usually means nix-openclaw, the first-party Nix distribution, or another Nix-managed package set this mode.",
     ...(params.configPath ? [`Config path: ${params.configPath}`] : []),
+    ...(operationHint ? [operationHint] : []),
     "Do not run setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor repair/token-generation, or config set against this file.",
     "Edit the Nix source for this install instead. For nix-openclaw, edit `programs.openclaw.config` or `instances.<name>.config`, then rebuild with Home Manager or NixOS.",
     `Agent-first Nix setup: ${NIX_OPENCLAW_AGENT_FIRST_URL}`,
@@ -34,11 +38,21 @@ export function assertConfigWriteAllowedInCurrentMode(
   params: {
     configPath?: string;
     env?: NodeJS.ProcessEnv;
+    operation?: string;
+    skipIfNoConfigMutation?: boolean;
   } = {},
 ): void {
   if (!resolveIsNixMode(params.env)) {
     return;
   }
   // In Nix mode, all writes must happen in the declarative source and then rebuild.
-  throw new NixModeConfigMutationError({ configPath: params.configPath });
+  // However, some operations (like auth-profile writes or session state repairs) don't
+  // touch openclaw.json and should be allowed when skipIfNoConfigMutation is true.
+  if (params.skipIfNoConfigMutation) {
+    return;
+  }
+  throw new NixModeConfigMutationError({
+    configPath: params.configPath,
+    operation: params.operation,
+  });
 }

@@ -41,6 +41,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { normalizeAgentModelRefForConfig } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import {
   applyProviderAuthConfigPatch,
   applyDefaultModel,
@@ -66,7 +67,6 @@ import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
-import { isRemoteEnvironment } from "../../infra/remote-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
@@ -455,38 +455,45 @@ async function persistProviderAuthResult(params: {
   // the provider explicitly returns a config patch or the user opts into a
   // default-model write.
   if (shouldUpdateConfig) {
-    const updated = await updateConfig((cfg) => {
-      const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
-      let next = cfg;
-      if (params.result.configPatch) {
-        next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
-          replaceDefaultModels: params.result.replaceDefaultModels,
+    // Nix-mode carve-out: skip config writes entirely (user must apply via Nix)
+    if (resolveIsNixMode()) {
+      params.runtime.log(
+        "Note: Config updates are skipped in Nix mode; apply provider config changes via Nix configuration.",
+      );
+    } else {
+      const updated = await updateConfig((cfg) => {
+        const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
+        let next = cfg;
+        if (params.result.configPatch) {
+          next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
+            replaceDefaultModels: params.result.replaceDefaultModels,
+          });
+        }
+        next = restorePriorAgentsDefaultsModelUnlessOptIn({
+          cfg: next,
+          priorAgentsDefaultsModel,
+          setDefault: params.setDefault,
         });
-      }
-      next = restorePriorAgentsDefaultsModelUnlessOptIn({
-        cfg: next,
-        priorAgentsDefaultsModel,
-        setDefault: params.setDefault,
+        if (params.setDefault && defaultModel) {
+          next = applyDefaultModel(next, defaultModel);
+        }
+        return next;
       });
-      if (params.setDefault && defaultModel) {
-        next = applyDefaultModel(next, defaultModel);
+      if (defaultModel) {
+        const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+          cfg: updated,
+          model: defaultModel,
+        });
+        const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
+          cfg: updated,
+          model: defaultModel,
+        });
+        for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
+          params.runtime.error?.(warning);
+        }
       }
-      return next;
-    });
-    if (defaultModel) {
-      const repaired = await repairCodexRuntimePluginInstallForModelSelection({
-        cfg: updated,
-        model: defaultModel,
-      });
-      const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
-        cfg: updated,
-        model: defaultModel,
-      });
-      for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
-        params.runtime.error?.(warning);
-      }
+      logConfigUpdated(params.runtime);
     }
-    logConfigUpdated(params.runtime);
   }
 
   for (const profile of profiles) {
