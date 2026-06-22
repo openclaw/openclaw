@@ -93,9 +93,9 @@ Once admitted, canonical Linux CI permits up to 12 concurrent Node jobs and 8 fo
 the smaller fast/check lanes; Windows and Android stay at two because those
 runner pools are narrower.
 
-The compact PR plan emits 34 Node jobs for the current suite: broad whole-config
-shards retain their own timeout, while include-pattern groups share isolated
-subprocess jobs.
+The compact PR plan emits 18 Node jobs for the current suite: whole-config
+groups are batched in isolated subprocesses with a 120-minute batch timeout,
+while include-pattern groups share the same bounded job budget.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 

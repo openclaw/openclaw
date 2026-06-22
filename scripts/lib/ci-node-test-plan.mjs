@@ -16,6 +16,8 @@ const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 const COMPACT_NODE_TEST_JOB_WEIGHT = 192;
 const COMPACT_NODE_TEST_JOB_GROUPS = 8;
+const COMPACT_WHOLE_NODE_TEST_JOB_GROUPS = 6;
+const COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES = 120;
 // Commands and cron run non-isolated, so keep their split shards as separate
 // processes. Combining their include lists can retain test state across groups.
 const BUNDLEABLE_NODE_TEST_CONFIGS = new Set(["test/vitest/vitest.infra.config.ts"]);
@@ -1096,17 +1098,23 @@ function createCompactNodeTestShardBundles(options = {}) {
       }
     }
 
-    for (const [index, group] of sortedGroups
-      .filter((candidate) => !candidate.includePatterns)
-      .entries()) {
-      const runnerClass = group.runner.includes("-8vcpu-") ? "large" : "small";
-      const distSuffix = group.requiresDist ? "-dist" : "";
+    const wholeGroups = sortedGroups.filter((candidate) => !candidate.includePatterns);
+    for (
+      let offset = 0;
+      offset < wholeGroups.length;
+      offset += COMPACT_WHOLE_NODE_TEST_JOB_GROUPS
+    ) {
+      const groupBatch = wholeGroups.slice(offset, offset + COMPACT_WHOLE_NODE_TEST_JOB_GROUPS);
+      const runnerClass = groupBatch[0].runner.includes("-8vcpu-") ? "large" : "small";
+      const distSuffix = groupBatch[0].requiresDist ? "-dist" : "";
+      const index = offset / COMPACT_WHOLE_NODE_TEST_JOB_GROUPS + 1;
       compactJobs.push({
-        checkName: `checks-node-compact-${runnerClass}${distSuffix}-whole-${index + 1}`,
-        groups: [group],
-        requiresDist: group.requiresDist,
-        runner: group.runner,
-        shardName: `compact-${runnerClass}${distSuffix}-whole-${index + 1}`,
+        checkName: `checks-node-compact-${runnerClass}${distSuffix}-whole-${index}`,
+        groups: groupBatch,
+        requiresDist: groupBatch[0].requiresDist,
+        runner: groupBatch[0].runner,
+        shardName: `compact-${runnerClass}${distSuffix}-whole-${index}`,
+        timeoutMinutes: COMPACT_WHOLE_NODE_TEST_TIMEOUT_MINUTES,
       });
     }
 

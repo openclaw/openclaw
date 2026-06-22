@@ -308,6 +308,7 @@ jobs:
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
+                timeout_minutes: shard.timeoutMinutes,
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -1172,7 +1173,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
       max-parallel: 12

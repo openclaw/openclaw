@@ -175,6 +175,11 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(compact.every((shard) => shard.groups.every((group) => group.configs.length > 0))).toBe(
       true,
     );
+    expect(
+      compact
+        .filter((shard) => shard.groups.some((group) => !group.includePatterns))
+        .every((shard) => shard.timeoutMinutes === 120),
+    ).toBe(true);
   });
 
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
