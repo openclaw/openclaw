@@ -332,12 +332,13 @@ extension SettingsProTab {
                 HStack(alignment: .top, spacing: 12) {
                     ProIconBadge(systemName: "bell.slash.fill", color: OpenClawBrand.warn)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Approval alerts are off")
+                        Text("Notifications are off")
                             .font(.subheadline.weight(.semibold))
                         Text(
                             """
-                            OpenClaw can still show approval review while the app is open and connected. \
-                            Enable Notifications to receive approval prompts outside the app.
+                            Exec approvals can only be reviewed while OpenClaw is open and connected.
+
+                            Enable Notifications to receive approval notifications while OpenClaw is not open.
                             """)
                             .font(.caption)
                             .foregroundStyle(.secondary)

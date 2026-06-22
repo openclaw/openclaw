@@ -52,12 +52,13 @@ private struct NotificationPermissionGuidanceCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Approval alerts are off")
+                Text("Notifications are off")
                     .font(.headline)
                 Text(
                     """
-                    This request can still be reviewed while OpenClaw is open and connected. Enable \
-                    Notifications to receive approval prompts outside the app.
+                    Exec approvals can only be reviewed while OpenClaw is open and connected.
+
+                    Enable Notifications to receive approval notifications while OpenClaw is not open.
                     """)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)

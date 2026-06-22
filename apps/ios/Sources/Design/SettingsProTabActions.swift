@@ -809,7 +809,7 @@ extension SettingsProTab {
         case .allowed:
             "OpenClaw can show approval prompts and event alerts when the app is not active."
         case .notAllowed:
-            "iOS is blocking OpenClaw notifications. Enable them in iOS Settings."
+            "Notifications have been denied. Enable them in iOS Settings."
         case .notSet:
             "Enable notifications here to receive approval prompts and event alerts outside the app."
         case .unknown:
@@ -828,10 +828,6 @@ extension SettingsProTab {
     }
 
     var notificationRelayDisclosureMessage: String {
-        let relayHost = PushBuildConfig.openClawHostedRelayHost
-        return """
-        This build sends push notification delivery data through OpenClaw's hosted relay at \(relayHost). \
-        Continue only if you want OpenClaw to request iOS notification access.
-        """
+        "Enabling Notifications sends delivery data through OpenClaw's hosted push relay."
     }
 }

@@ -90,7 +90,7 @@ enum SettingsNotificationStatus: Equatable {
         switch self {
         case .checking: "Checking"
         case .allowed: "Enabled"
-        case .notAllowed: "Blocked"
+        case .notAllowed: "Denied"
         case .notSet: "Not Enabled"
         case .unknown: "Unknown"
         }

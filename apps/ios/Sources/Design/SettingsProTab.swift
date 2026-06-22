@@ -226,7 +226,7 @@ struct SettingsProTab: View {
             } message: {
                 Text(self.scannerError ?? "")
             }
-            .alert("OpenClaw Hosted Push Relay", isPresented: self.$showNotificationRelayDisclosure) {
+            .alert("Warning: OpenClaw Hosted Push Relay", isPresented: self.$showNotificationRelayDisclosure) {
                     Button("Continue") {
                         self.requestNotificationAuthorizationFromSettings()
                     }
