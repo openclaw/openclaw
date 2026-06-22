@@ -658,31 +658,36 @@ export class TelegramPollingSession {
     return deferredSpooledUpdateClaimsByKey.has(buildDeferredSpooledUpdateClaimKey(update));
   }
 
-  #isTimedOutSpooledUpdateClaim(update: ClaimedTelegramSpooledUpdate): boolean {
-    const claimedAt = update.claim?.claimedAt;
-    return claimedAt !== undefined && Date.now() - claimedAt >= this.#spooledUpdateHandlerTimeoutMs;
-  }
-
-  async #failTimedOutLiveOwnedSpooledUpdateClaims(params: {
+  async #failTimedOutCurrentProcessSpooledUpdateClaims(params: {
     activeLaneKeys: Set<string>;
     spoolDir: string;
   }): Promise<void> {
     const claims = await listTelegramSpooledUpdateClaims({ spoolDir: params.spoolDir });
+    const now = Date.now();
     for (const claim of claims) {
+      const claimOwner = claim.claim;
+      if (!claimOwner) {
+        continue;
+      }
       if (this.#isDeferredSpooledUpdateClaim(claim)) {
         continue;
       }
       if (params.activeLaneKeys.has(this.#spooledUpdateLaneKey(claim))) {
         continue;
       }
-      if (!this.#isTimedOutSpooledUpdateClaim(claim)) {
+      if (now - claimOwner.claimedAt < this.#spooledUpdateHandlerTimeoutMs) {
         continue;
       }
       if (!isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim)) {
         continue;
       }
-      const claimedForMs = Date.now() - (claim.claim?.claimedAt ?? Date.now());
-      const message = `Telegram spooled update claim held by a live worker for ${formatDurationPrecise(claimedForMs)} without active handler state; marking failed so the lane can continue.`;
+      // Same PID with a stale owner id means this process orphaned a previous
+      // local handler state; different live PIDs may still be processing.
+      if (claimOwner.processPid !== process.pid) {
+        continue;
+      }
+      const claimedForMs = now - claimOwner.claimedAt;
+      const message = `Telegram spooled update claim owned by this process for ${formatDurationPrecise(claimedForMs)} without active handler state; marking failed so the lane can continue.`;
       try {
         const failed = await failTelegramSpooledUpdateClaim({
           update: claim,
@@ -691,13 +696,13 @@ export class TelegramPollingSession {
         });
         if (!failed) {
           this.opts.log(
-            `[telegram][diag] spooled update ${claim.updateId} live-owned claim no longer had a processing marker to fail.`,
+            `[telegram][diag] spooled update ${claim.updateId} current-process claim no longer had a processing marker to fail.`,
           );
           continue;
         }
       } catch (err) {
         this.opts.log(
-          `[telegram][diag] spooled update ${claim.updateId} live-owned claim could not be marked failed: ${formatErrorMessage(err)}`,
+          `[telegram][diag] spooled update ${claim.updateId} current-process claim could not be marked failed: ${formatErrorMessage(err)}`,
         );
         continue;
       }
@@ -828,7 +833,7 @@ export class TelegramPollingSession {
     spoolDir: string;
   }): Promise<SpooledUpdateDrainResult> {
     const activeLaneKeys = this.#activeSpooledUpdateLaneKeysForSpool(params.spoolDir);
-    await this.#failTimedOutLiveOwnedSpooledUpdateClaims({
+    await this.#failTimedOutCurrentProcessSpooledUpdateClaims({
       activeLaneKeys,
       spoolDir: params.spoolDir,
     });

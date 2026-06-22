@@ -1976,7 +1976,7 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("fails timed-out live-owned claims before draining later same-lane updates", async () => {
+  it("fails timed-out current-process claims before draining later same-lane updates", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const log = vi.fn();
@@ -2022,7 +2022,7 @@ describe("TelegramPollingSession", () => {
       expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
       expectLogIncludes(
         log,
-        "spooled update 42 Telegram spooled update claim held by a live worker",
+        "spooled update 42 Telegram spooled update claim owned by this process",
       );
       stopWorker();
     });
