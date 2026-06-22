@@ -1332,6 +1332,356 @@ describe("session cost usage", () => {
     });
   });
 
+  it("combines cached active and archived same-stem session summaries", async () => {
+    const root = await makeSessionCostRoot("cost-cache-session-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-lineage.jsonl");
+    const archiveFile = path.join(
+      sessionsDir,
+      "sess-cache-lineage.jsonl.deleted.2026-02-05T12-30-00.000Z",
+    );
+
+    await Promise.all([
+      fs.writeFile(
+        archiveFile,
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-05T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 8,
+              output: 4,
+              totalTokens: 12,
+              cost: { total: 0.012 },
+            },
+          },
+        }),
+        "utf-8",
+      ),
+      fs.writeFile(
+        sessionFile,
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-05T13:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 10,
+              output: 8,
+              totalTokens: 18,
+              cost: { total: 0.018 },
+            },
+          },
+        }),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [sessionFile, archiveFile] });
+      const summary = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-lineage",
+        sessionFile,
+        requestRefresh: false,
+      });
+
+      expect(summary.summary?.sessionFile).toBe(sessionFile);
+      expect(summary.summary?.totalTokens).toBe(30);
+      expect(summary.summary?.totalCost).toBeCloseTo(0.03, 8);
+      expect(summary.cacheStatus.status).toBe("fresh");
+      expect(summary.cacheStatus.cachedFiles).toBe(2);
+    });
+  });
+
+  it("combines active and archived lineage for hidden batch sessions (#46252)", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    // A hidden aggregate session is passed by its active file only; its same-stem
+    // reset archive must still be counted. A second plain session controls that
+    // non-lineage rows are unchanged.
+    const lineageActive = path.join(sessionsDir, "sess-batch-lineage.jsonl");
+    const lineageArchive = path.join(
+      sessionsDir,
+      "sess-batch-lineage.jsonl.reset.2026-02-05T12-30-00.000Z",
+    );
+    const plainFile = path.join(sessionsDir, "sess-batch-plain.jsonl");
+    const assistantMessage = (tokens: number, cost: number, timestamp: string) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: cost } },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(
+        lineageArchive,
+        assistantMessage(12, 0.012, "2026-02-05T12:00:00.000Z"),
+        "utf-8",
+      ),
+      fs.writeFile(lineageActive, assistantMessage(18, 0.018, "2026-02-05T13:00:00.000Z"), "utf-8"),
+      fs.writeFile(plainFile, assistantMessage(5, 0.005, "2026-02-05T14:00:00.000Z"), "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [lineageActive, lineageArchive, plainFile] });
+      const result = await loadSessionCostSummariesFromCache({
+        sessions: [
+          { sessionId: "sess-batch-lineage", sessionFile: lineageActive },
+          { sessionId: "sess-batch-plain", sessionFile: plainFile },
+        ],
+        agentId: "main",
+        requestRefresh: false,
+      });
+
+      expect(result.cacheStatus.status).toBe("fresh");
+      // Active (18) + reset archive (12) = 30, not the active-file-only 18.
+      expect(result.summaries[0]?.totalTokens).toBe(30);
+      expect(result.summaries[0]?.totalCost).toBeCloseTo(0.03, 8);
+      expect(result.summaries[1]?.totalTokens).toBe(5);
+    });
+  });
+
+  it("uses the explicit sessionFile stem for cached lineage readers", async () => {
+    const root = await makeSessionCostRoot("cost-cache-explicit-stem-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const topicFile = path.join(sessionsDir, "sess-topic-topic-456.jsonl");
+    const topicArchive = path.join(
+      sessionsDir,
+      "sess-topic-topic-456.jsonl.reset.2026-02-05T12-30-00.000Z",
+    );
+    const canonicalConflict = path.join(sessionsDir, "sess-topic.jsonl");
+    const assistantMessage = (tokens: number, cost: number, timestamp: string) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: cost } },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(topicArchive, assistantMessage(12, 0.012, "2026-02-05T12:00:00.000Z"), "utf-8"),
+      fs.writeFile(topicFile, assistantMessage(18, 0.018, "2026-02-05T13:00:00.000Z"), "utf-8"),
+      fs.writeFile(
+        canonicalConflict,
+        assistantMessage(999, 0.999, "2026-02-05T14:00:00.000Z"),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [topicArchive, topicFile, canonicalConflict] });
+      const single = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-topic",
+        sessionFile: topicFile,
+        requestRefresh: false,
+      });
+      const batch = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: "sess-topic", sessionFile: topicFile }],
+        agentId: "main",
+        requestRefresh: false,
+      });
+
+      expect(single.summary?.sessionFile).toBe(topicFile);
+      expect(single.summary?.totalTokens).toBe(30);
+      expect(batch.summaries[0]?.sessionFile).toBe(topicFile);
+      expect(batch.summaries[0]?.totalTokens).toBe(30);
+    });
+  });
+
+  it("falls back to the current session id when cached lineage metadata is stale", async () => {
+    const root = await makeSessionCostRoot("cost-cache-stale-session-file-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const staleFile = path.join(sessionsDir, "old-session-id.jsonl");
+    const currentFile = path.join(sessionsDir, "current-session-id.jsonl");
+    const currentArchive = path.join(
+      sessionsDir,
+      "current-session-id.jsonl.reset.2026-02-05T12-30-00.000Z",
+    );
+    const assistantMessage = (tokens: number, cost: number, timestamp: string) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: cost } },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(
+        currentArchive,
+        assistantMessage(12, 0.012, "2026-02-05T12:00:00.000Z"),
+        "utf-8",
+      ),
+      fs.writeFile(currentFile, assistantMessage(18, 0.018, "2026-02-05T13:00:00.000Z"), "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [currentArchive, currentFile] });
+      const single = await loadSessionCostSummaryFromCache({
+        sessionId: "current-session-id",
+        sessionFile: staleFile,
+        requestRefresh: false,
+      });
+      const batch = await loadSessionCostSummariesFromCache({
+        sessions: [{ sessionId: "current-session-id", sessionFile: staleFile }],
+        agentId: "main",
+        requestRefresh: false,
+      });
+
+      expect(single.summary?.sessionFile).toBe(currentFile);
+      expect(single.summary?.totalTokens).toBe(30);
+      expect(batch.summaries[0]?.sessionFile).toBe(currentFile);
+      expect(batch.summaries[0]?.totalTokens).toBe(30);
+    });
+  });
+
+  it("shares one in-flight directory listing for hidden batch lineage readers", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch-lineage-dir-cache");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFiles = ["sess-dir-a", "sess-dir-b", "sess-dir-c"].map((sessionId) =>
+      path.join(sessionsDir, `${sessionId}.jsonl`),
+    );
+    const assistantMessage = (tokens: number) =>
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-02-05T13:00:00.000Z",
+        message: {
+          role: "assistant",
+          usage: { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens / 1000 } },
+        },
+      });
+    await Promise.all(
+      sessionFiles.map((sessionFile, index) =>
+        fs.writeFile(sessionFile, assistantMessage(index + 1), "utf-8"),
+      ),
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles });
+      const readdirSpy = vi.spyOn(nodeFs.promises, "readdir");
+      try {
+        const result = await loadSessionCostSummariesFromCache({
+          sessions: sessionFiles.map((sessionFile, index) => ({
+            sessionId: `sess-dir-${String.fromCharCode(97 + index)}`,
+            sessionFile,
+          })),
+          agentId: "main",
+          requestRefresh: false,
+        });
+        const lineageDirReads = readdirSpy.mock.calls.filter(([dir]) => {
+          return path.resolve(String(dir)) === path.resolve(sessionsDir);
+        });
+
+        expect(result.cacheStatus.status).toBe("fresh");
+        expect(result.summaries.map((summary) => summary?.totalTokens)).toEqual([1, 2, 3]);
+        expect(lineageDirReads).toHaveLength(1);
+      } finally {
+        readdirSpy.mockRestore();
+      }
+    });
+  });
+
+  it("returns a partial summary when a same-stem archive is not yet cached", async () => {
+    const root = await makeSessionCostRoot("cost-cache-lineage-partial");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-partial.jsonl");
+    const archiveFile = path.join(
+      sessionsDir,
+      "sess-cache-partial.jsonl.reset.2026-02-05T12-30-00.000Z",
+    );
+    const message = (timestamp: string, totalTokens: number, cost: number): string =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: totalTokens, output: 0, totalTokens, cost: { total: cost } },
+        },
+      });
+    await Promise.all([
+      fs.writeFile(archiveFile, message("2026-02-05T12:00:00.000Z", 12, 0.012), "utf-8"),
+      fs.writeFile(sessionFile, message("2026-02-05T13:00:00.000Z", 18, 0.018), "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      // Cache only the active transcript; the reset archive stays uncached/stale.
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const result = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-partial",
+        sessionFile,
+        requestRefresh: false,
+      });
+
+      // Regression: a stale lineage member used to blank the whole summary; the
+      // cached active spend is now surfaced as a partial result.
+      expect(result.summary).not.toBeNull();
+      expect(result.summary?.totalTokens).toBe(18);
+      expect(result.summary?.sessionFile).toBe(sessionFile);
+      expect(result.cacheStatus.status).toBe("partial");
+      expect(result.cacheStatus.staleFiles).toBe(1);
+    });
+  });
+
+  it("applies the requested range when rebuilding a merged lineage summary", async () => {
+    const root = await makeSessionCostRoot("cost-cache-lineage-range");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-cache-range.jsonl");
+    const archiveFile = path.join(
+      sessionsDir,
+      "sess-cache-range.jsonl.reset.2026-02-05T12-30-00.000Z",
+    );
+    const message = (timestamp: string, totalTokens: number, cost: number): string =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: { input: totalTokens, output: 0, totalTokens, cost: { total: cost } },
+        },
+      });
+    await Promise.all([
+      fs.writeFile(archiveFile, message("2026-02-05T12:00:00.000Z", 12, 0.012), "utf-8"),
+      fs.writeFile(sessionFile, message("2026-02-05T13:00:00.000Z", 18, 0.018), "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [sessionFile, archiveFile] });
+      // Narrow range excludes the 12:00 archive entry; only the 13:00 active entry counts.
+      const narrow = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-range",
+        sessionFile,
+        requestRefresh: false,
+        startMs: Date.parse("2026-02-05T12:45:00.000Z"),
+        endMs: Date.parse("2026-02-05T23:59:00.000Z"),
+      });
+      expect(narrow.summary?.totalTokens).toBe(18);
+
+      // Wide range includes both lineage transcripts.
+      const wide = await loadSessionCostSummaryFromCache({
+        sessionId: "sess-cache-range",
+        sessionFile,
+        requestRefresh: false,
+        startMs: Date.parse("2026-02-05T00:00:00.000Z"),
+        endMs: Date.parse("2026-02-05T23:59:00.000Z"),
+      });
+      expect(wide.summary?.totalTokens).toBe(30);
+    });
+  });
+
   it("respects live usage cache locks even when they are old", async () => {
     const root = await makeSessionCostRoot("cost-cache-stale-lock");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -2141,6 +2491,269 @@ describe("session cost usage", () => {
       expect(timeseries?.points[0]?.totalTokens).toBe(10);
       expect(logs).toHaveLength(1);
       expect(logs?.[0]?.content).toContain("archived answer");
+    });
+  });
+
+  it("combines active and archived same-stem transcripts for per-session detail queries", async () => {
+    const root = await makeSessionCostRoot("session-active-archive-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionFile = path.join(sessionsDir, "sess-lineage.jsonl");
+    const archiveFile = path.join(sessionsDir, "sess-lineage.jsonl.reset.2026-02-12T10-30-00.000Z");
+
+    await Promise.all([
+      fs.writeFile(
+        archiveFile,
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-12T10:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: "archived answer",
+            usage: { input: 7, output: 5, totalTokens: 12, cost: { total: 0.012 } },
+          },
+        }),
+        "utf-8",
+      ),
+      fs.writeFile(
+        sessionFile,
+        JSON.stringify({
+          type: "message",
+          timestamp: "2026-02-12T11:00:00.000Z",
+          message: {
+            role: "assistant",
+            content: "active answer",
+            usage: { input: 10, output: 8, totalTokens: 18, cost: { total: 0.018 } },
+          },
+        }),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({ sessionId: "sess-lineage" });
+      const timeseries = await loadSessionUsageTimeSeries({ sessionId: "sess-lineage" });
+      const logs = await loadSessionLogs({ sessionId: "sess-lineage" });
+
+      expect(summary?.sessionFile ? await fs.realpath(summary.sessionFile) : undefined).toBe(
+        await fs.realpath(sessionFile),
+      );
+      expect(summary?.totalTokens).toBe(30);
+      expect(summary?.totalCost).toBeCloseTo(0.03, 8);
+      expect(timeseries?.points.map((point) => point.totalTokens)).toEqual([12, 18]);
+      expect(timeseries?.points.map((point) => point.cumulativeTokens)).toEqual([12, 30]);
+      expect(logs?.map((log) => log.content)).toEqual(["archived answer", "active answer"]);
+    });
+  });
+
+  it("uses the explicit sessionFile stem for per-session detail lineage", async () => {
+    const root = await makeSessionCostRoot("session-explicit-stem-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const topicFile = path.join(sessionsDir, "sess-topic-topic-456.jsonl");
+    const topicArchive = path.join(
+      sessionsDir,
+      "sess-topic-topic-456.jsonl.reset.2026-02-12T10-30-00.000Z",
+    );
+    const canonicalConflict = path.join(sessionsDir, "sess-topic.jsonl");
+    const entry = (timestamp: string, totalTokens: number, content: string): string =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          content,
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(topicArchive, entry("2026-02-12T10:00:00.000Z", 12, "topic archive"), "utf-8"),
+      fs.writeFile(topicFile, entry("2026-02-12T11:00:00.000Z", 18, "topic active"), "utf-8"),
+      fs.writeFile(
+        canonicalConflict,
+        entry("2026-02-12T12:00:00.000Z", 999, "canonical conflict"),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({
+        sessionId: "sess-topic",
+        sessionFile: topicFile,
+      });
+      const timeseries = await loadSessionUsageTimeSeries({
+        sessionId: "sess-topic",
+        sessionFile: topicFile,
+      });
+      const logs = await loadSessionLogs({
+        sessionId: "sess-topic",
+        sessionFile: topicFile,
+      });
+
+      expect(summary?.sessionFile).toBe(topicFile);
+      expect(summary?.totalTokens).toBe(30);
+      expect(timeseries?.points.map((point) => point.totalTokens)).toEqual([12, 18]);
+      expect(logs?.map((log) => log.content)).toEqual(["topic archive", "topic active"]);
+    });
+  });
+
+  it("falls back to the current session id when per-session detail metadata is stale", async () => {
+    const root = await makeSessionCostRoot("session-stale-session-file-lineage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const staleFile = path.join(sessionsDir, "old-session-id.jsonl");
+    const currentFile = path.join(sessionsDir, "current-session-id.jsonl");
+    const currentArchive = path.join(
+      sessionsDir,
+      "current-session-id.jsonl.reset.2026-02-12T10-30-00.000Z",
+    );
+    const entry = (timestamp: string, totalTokens: number, content: string): string =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          content,
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(
+        currentArchive,
+        entry("2026-02-12T10:00:00.000Z", 12, "current archive"),
+        "utf-8",
+      ),
+      fs.writeFile(currentFile, entry("2026-02-12T11:00:00.000Z", 18, "current active"), "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({
+        sessionId: "current-session-id",
+        sessionFile: staleFile,
+      });
+      const timeseries = await loadSessionUsageTimeSeries({
+        sessionId: "current-session-id",
+        sessionFile: staleFile,
+      });
+      const logs = await loadSessionLogs({
+        sessionId: "current-session-id",
+        sessionFile: staleFile,
+      });
+
+      expect(summary?.sessionFile).toBe(currentFile);
+      expect(summary?.totalTokens).toBe(30);
+      expect(timeseries?.points.map((point) => point.totalTokens)).toEqual([12, 18]);
+      expect(logs?.map((log) => log.content)).toEqual(["current archive", "current active"]);
+    });
+  });
+
+  it("excludes non-usage same-stem siblings from per-session lineage totals", async () => {
+    const root = await makeSessionCostRoot("session-lineage-excludes-nonusage");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionFile = path.join(sessionsDir, "sess-exclude.jsonl");
+    const archiveFile = path.join(sessionsDir, "sess-exclude.jsonl.reset.2026-02-12T10-30-00.000Z");
+    const backupFile = path.join(sessionsDir, "sess-exclude.jsonl.bak.2026-02-12T10-45-00.000Z");
+    const checkpointFile = path.join(
+      sessionsDir,
+      "sess-exclude.checkpoint.00000000-0000-4000-8000-000000000000.jsonl",
+    );
+
+    const entry = (timestamp: string, totalTokens: number) =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(archiveFile, entry("2026-02-12T10:00:00.000Z", 12), "utf-8"),
+      fs.writeFile(sessionFile, entry("2026-02-12T11:00:00.000Z", 18), "utf-8"),
+      fs.writeFile(backupFile, entry("2026-02-12T11:30:00.000Z", 999), "utf-8"),
+      fs.writeFile(checkpointFile, entry("2026-02-12T12:00:00.000Z", 500), "utf-8"),
+    ]);
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({ sessionId: "sess-exclude" });
+
+      expect(summary?.sessionFile ? await fs.realpath(summary.sessionFile) : undefined).toBe(
+        await fs.realpath(sessionFile),
+      );
+      expect(summary?.totalTokens).toBe(30);
+      expect(summary?.totalCost).toBeCloseTo(0.03, 8);
+    });
+  });
+
+  it("excludes non-usage same-stem siblings from per-session time-series and logs", async () => {
+    const root = await makeSessionCostRoot("session-lineage-excludes-series");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-series.jsonl");
+    const archiveFile = path.join(sessionsDir, "sess-series.jsonl.reset.2026-02-12T10-30-00.000Z");
+    const backupFile = path.join(sessionsDir, "sess-series.jsonl.bak.2026-02-12T10-45-00.000Z");
+    const checkpointFile = path.join(
+      sessionsDir,
+      "sess-series.checkpoint.00000000-0000-4000-8000-000000000000.jsonl",
+    );
+    const entry = (timestamp: string, totalTokens: number, content: string): string =>
+      JSON.stringify({
+        type: "message",
+        timestamp,
+        message: {
+          role: "assistant",
+          content,
+          usage: {
+            input: totalTokens,
+            output: 0,
+            totalTokens,
+            cost: { total: totalTokens / 1000 },
+          },
+        },
+      });
+
+    await Promise.all([
+      fs.writeFile(archiveFile, entry("2026-02-12T10:00:00.000Z", 12, "archived answer"), "utf-8"),
+      fs.writeFile(sessionFile, entry("2026-02-12T11:00:00.000Z", 18, "active answer"), "utf-8"),
+      fs.writeFile(backupFile, entry("2026-02-12T11:30:00.000Z", 999, "backup answer"), "utf-8"),
+      fs.writeFile(
+        checkpointFile,
+        entry("2026-02-12T12:00:00.000Z", 500, "checkpoint answer"),
+        "utf-8",
+      ),
+    ]);
+
+    await withStateDir(root, async () => {
+      const timeseries = await loadSessionUsageTimeSeries({ sessionId: "sess-series" });
+      const logs = await loadSessionLogs({ sessionId: "sess-series" });
+
+      // Only the active + reset transcripts contribute; .bak and checkpoint are ignored.
+      expect(timeseries?.points.map((point) => point.totalTokens)).toEqual([12, 18]);
+      expect(timeseries?.points.map((point) => point.cumulativeTokens)).toEqual([12, 30]);
+      expect(logs?.map((log) => log.content)).toEqual(["archived answer", "active answer"]);
     });
   });
 
