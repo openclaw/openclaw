@@ -197,6 +197,7 @@ export class CodexAppServerEventProjector {
   private reasoningStarted = false;
   private reasoningEnded = false;
   private streamedPartialAssistantItemId: string | undefined;
+  private streamedPartialAssistantItemReplaceable = false;
   private completedTurn: CodexTurn | undefined;
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
@@ -527,7 +528,13 @@ export class CodexAppServerEventProjector {
       const replace =
         this.streamedPartialAssistantItemId !== undefined &&
         this.streamedPartialAssistantItemId !== itemId;
+      if (replace) {
+        this.streamedPartialAssistantItemReplaceable = true;
+      } else if (this.streamedPartialAssistantItemId === undefined) {
+        this.streamedPartialAssistantItemReplaceable = !knownFinalAnswer;
+      }
       this.streamedPartialAssistantItemId = itemId;
+      const replaceable = this.streamedPartialAssistantItemReplaceable;
       const streamPayload = {
         text,
         delta: replace ? "" : delta,
@@ -537,13 +544,13 @@ export class CodexAppServerEventProjector {
         stream: "assistant",
         data: {
           ...streamPayload,
-          ...(!knownFinalAnswer || replace ? { replaceable: true as const } : {}),
+          ...(replaceable ? { replaceable: true as const } : {}),
         },
       });
       // Legacy channel preview callbacks are append-oriented and do not all
       // understand replacement snapshots. Keep them on the known final-answer
       // path; replaceable snapshots stay on the typed agent-event path.
-      if (knownFinalAnswer && !replace) {
+      if (knownFinalAnswer && !replaceable) {
         await this.params.onPartialReply?.(streamPayload);
       }
     }

@@ -400,11 +400,20 @@ describe("CodexAppServerEventProjector", () => {
 
     await projector.handleNotification(agentMessageDelta("coordination ", "msg-intermediate"));
     await projector.handleNotification(agentMessageDelta("draft", "msg-intermediate"));
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { type: "agentMessage", id: "msg-final", phase: "final_answer", text: "" },
+      }),
+    );
     await projector.handleNotification(agentMessageDelta("final ", "msg-final"));
     await projector.handleNotification(agentMessageDelta("answer", "msg-final"));
 
     expect(onPartialReply).not.toHaveBeenCalled();
-    expect(onAgentEvent.mock.calls.map((call) => call[0])).toEqual([
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => event.stream === "assistant"),
+    ).toEqual([
       {
         stream: "assistant",
         data: { text: "coordination ", delta: "coordination ", replaceable: true },
