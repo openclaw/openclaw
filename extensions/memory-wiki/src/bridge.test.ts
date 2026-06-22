@@ -150,6 +150,68 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(logLines).toHaveLength(2);
   });
 
+  it("skips generated artifacts from its own vault sources directory", async () => {
+    const workspaceDir = await createBridgeWorkspace("self-import-workspace");
+    const vaultDir = path.join(workspaceDir, "memory", "wiki");
+    const { config } = await createVault({
+      rootDir: vaultDir,
+      config: {
+        vaultMode: "bridge",
+        bridge: {
+          enabled: true,
+          readMemoryArtifacts: true,
+          indexDailyNotes: true,
+        },
+      },
+    });
+
+    const dailyNotePath = path.join(workspaceDir, "memory", "2026-06-22.md");
+    const generatedSourcePath = path.join(
+      vaultDir,
+      "sources",
+      "bridge-workspace-remote-memory-daily-old.md",
+    );
+    await fs.mkdir(path.dirname(dailyNotePath), { recursive: true });
+    await fs.mkdir(path.dirname(generatedSourcePath), { recursive: true });
+    await fs.writeFile(dailyNotePath, "# Daily Note\n", "utf8");
+    await fs.writeFile(generatedSourcePath, "# Previously Imported Source\n", "utf8");
+
+    registerBridgeArtifacts([
+      {
+        kind: "daily-note",
+        workspaceDir,
+        relativePath: "memory/2026-06-22.md",
+        absolutePath: dailyNotePath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir,
+        relativePath: "memory/wiki/sources/bridge-workspace-remote-memory-daily-old.md",
+        absolutePath: generatedSourcePath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+
+    const appConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", default: true, workspace: workspaceDir }],
+      },
+    };
+
+    const result = await syncMemoryWikiBridgeSources({ config, appConfig });
+
+    expect(result.artifactCount).toBe(1);
+    expect(result.importedCount).toBe(1);
+    expect(result.pagePaths).toHaveLength(1);
+    expect(result.pagePaths[0]).not.toContain("memory-wiki-sources");
+    const sourcePages = await fs.readdir(path.join(vaultDir, "sources"));
+    expect(sourcePages.filter((name) => name.startsWith("bridge-"))).toHaveLength(2);
+    expect(sourcePages.filter((name) => name.includes("memory-wiki-sources-"))).toEqual([]);
+  });
+
   it("imports bridge artifacts from legacy providers without agent ids", async () => {
     const workspaceDir = await createBridgeWorkspace("legacy-agentids-workspace");
     const { rootDir: vaultDir, config } = await createVault({
