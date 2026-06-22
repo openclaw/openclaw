@@ -31,6 +31,16 @@ describe("detectReflectedContent", () => {
     expect(result.matchedLabels).toContain("thinking-tag");
   });
 
+  it("detects namespaced thinking tags", () => {
+    const mm = detectReflectedContent("<mm:think>internal reasoning</mm:think>");
+    const antml = detectReflectedContent("<antml:thinking>internal reasoning</antml:thinking>");
+
+    expect(mm.isReflection).toBe(true);
+    expect(mm.matchedLabels).toContain("thinking-tag");
+    expect(antml.isReflection).toBe(true);
+    expect(antml.matchedLabels).toContain("thinking-tag");
+  });
+
   it("detects <thought> tags", () => {
     const result = detectReflectedContent("<thought>secret</thought>");
     expect(result.isReflection).toBe(true);
