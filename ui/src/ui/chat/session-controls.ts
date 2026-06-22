@@ -3,6 +3,7 @@ import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { pathForRoute, type RouteId } from "../../app-routes.ts";
 import { t } from "../../i18n/index.ts";
+import { refreshVisibleToolsEffectiveForCurrentSession } from "../../pages/agents/data.ts";
 import {
   createChatSessionsLoadOverrides,
   scopedAgentListParamsForSession,
@@ -15,7 +16,6 @@ import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
-import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { formatDateTimeMs, formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";

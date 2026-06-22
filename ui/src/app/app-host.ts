@@ -1,14 +1,14 @@
+import type { AgentsState } from "../pages/agents/data.ts";
+// Shared Control UI host shapes used by app-level route and settings modules.
+import type { AgentFilesState } from "../pages/agents/files.ts";
+import type { AgentIdentityState } from "../pages/agents/identity.ts";
+import type { AgentSkillsState } from "../pages/agents/skills.ts";
 import type { ConfigState } from "../pages/config/data.ts";
 import type { CronState } from "../pages/cron/data.ts";
 import type { DebugState } from "../pages/debug/data.ts";
 import type { LogsState } from "../pages/logs/data.ts";
 import type { SessionsState } from "../pages/sessions/data.ts";
 import type { SkillWorkshopState } from "../pages/skill-workshop/data.ts";
-// Shared Control UI host shapes used by app-level route and settings modules.
-import type { AgentFilesState } from "../ui/controllers/agent-files.ts";
-import type { AgentIdentityState } from "../ui/controllers/agent-identity.ts";
-import type { AgentSkillsState } from "../ui/controllers/agent-skills.ts";
-import type { AgentsState } from "../ui/controllers/agents.ts";
 import type { ChannelsState } from "../ui/controllers/channels.ts";
 import type { DevicesState } from "../ui/controllers/devices.ts";
 import type { DreamingState, DreamingStatus } from "../ui/controllers/dreaming.ts";

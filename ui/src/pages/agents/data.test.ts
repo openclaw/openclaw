@@ -6,8 +6,8 @@ import {
   loadToolsEffective,
   saveAgentsConfig,
   setDefaultAgent,
-} from "./agents.ts";
-import type { AgentsConfigSaveState, AgentsState } from "./agents.ts";
+} from "./data.ts";
+import type { AgentsConfigSaveState, AgentsState } from "./data.ts";
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
 

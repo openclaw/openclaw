@@ -5,24 +5,24 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../format.ts";
-import { icons } from "../icons.ts";
+import { formatRelativeTimestamp } from "../../ui/format.ts";
+import { icons } from "../../ui/icons.ts";
 import {
   formatCronPayload,
   formatCronSchedule,
   formatCronState,
   formatNextRun,
-} from "../presenter.ts";
+} from "../../ui/presenter.ts";
 import type {
   AgentsFilesListResult,
   ChannelAccountSnapshot,
   ChannelsStatusSnapshot,
   CronJob,
   CronStatus,
-} from "../types.ts";
-import { formatBytes, type AgentContext } from "./agents-utils.ts";
-import type { AgentsPanel } from "./agents.types.ts";
-import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "./channel-config-extras.ts";
+} from "../../ui/types.ts";
+import { formatBytes, type AgentContext } from "../../ui/views/agents-utils.ts";
+import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../ui/views/channel-config-extras.ts";
+import type { AgentsPanel } from "./types.ts";
 
 function countWords(text: string) {
   const normalized = text.trim();

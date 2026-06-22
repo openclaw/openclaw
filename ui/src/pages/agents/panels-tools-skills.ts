@@ -2,14 +2,14 @@
 import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../../ui/string-coerce.ts";
 import type {
   SkillStatusEntry,
   SkillStatusReport,
   ToolsCatalogResult,
   ToolsEffectiveEntry,
   ToolsEffectiveResult,
-} from "../types.ts";
+} from "../../ui/types.ts";
 import {
   type AgentToolEntry,
   type AgentToolSection,
@@ -19,14 +19,14 @@ import {
   resolveToolProfileOptions,
   resolveToolProfile,
   resolveToolSections,
-} from "./agents-utils.ts";
-import type { SkillGroup } from "./skills-grouping.ts";
-import { groupSkills } from "./skills-grouping.ts";
+} from "../../ui/views/agents-utils.ts";
+import type { SkillGroup } from "../../ui/views/skills-grouping.ts";
+import { groupSkills } from "../../ui/views/skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
   renderSkillStatusChips,
-} from "./skills-shared.ts";
+} from "../../ui/views/skills-shared.ts";
 
 function renderToolMetaBadges(labels: string[]) {
   if (labels.length === 0) {

@@ -1,9 +1,5 @@
 import type { SettingsAppHost, SettingsHost } from "../app/app-host.ts";
 import { scheduleChatScroll } from "../ui/app-scroll.ts";
-import { loadAgentFiles } from "../ui/controllers/agent-files.ts";
-import { loadAgentIdentities, loadAgentIdentity } from "../ui/controllers/agent-identity.ts";
-import { loadAgentSkills } from "../ui/controllers/agent-skills.ts";
-import { loadAgents } from "../ui/controllers/agents.ts";
 import { loadChannels } from "../ui/controllers/channels.ts";
 import {
   loadDreamDiary,
@@ -15,6 +11,7 @@ import { loadModelAuthStatusState } from "../ui/controllers/model-auth-status.ts
 import { loadSkills, reconcileSkillsAgentId } from "../ui/controllers/skills.ts";
 import { loadUsage } from "../ui/controllers/usage.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../ui/session-key.ts";
+import { loadAgents } from "./agents/data.ts";
 import {
   createChatSessionsLoadOverrides,
   refreshChat,
@@ -37,10 +34,6 @@ export async function loadSkillsPage(app: SettingsAppHost) {
   await loadAgents(app);
   reconcileSkillsAgentId(app, app.agentsList);
   await loadSkills(app);
-}
-
-export async function loadAgentsPage(host: SettingsHost, app: SettingsAppHost) {
-  await refreshAgentsPage(host, app);
 }
 
 export async function loadDreamsPage(host: SettingsHost, app: SettingsAppHost) {
@@ -77,37 +70,6 @@ export async function loadChatPage(host: SettingsHost, app: SettingsAppHost) {
 
 export async function loadChannelsPage(host: SettingsHost) {
   await loadChannelsRoute(host);
-}
-
-async function refreshAgentsPage(host: SettingsHost, app: SettingsAppHost) {
-  await loadAgents(app);
-  await loadConfig(app);
-  const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
-  if (agentIds.length > 0) {
-    void loadAgentIdentities(app, agentIds);
-  }
-  const agentId =
-    host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
-  if (!agentId) {
-    return;
-  }
-  void loadAgentIdentity(app, agentId);
-  switch (host.agentsPanel) {
-    case "files":
-      void loadAgentFiles(app, agentId);
-      return;
-    case "skills":
-      void loadAgentSkills(app, agentId);
-      return;
-    case "channels":
-      void loadChannels(app, false);
-      return;
-    case "cron":
-      void loadCron(host);
-    case "overview":
-    case "tools":
-    case undefined:
-  }
 }
 
 function loadConfigSchemaAfterPrimary(

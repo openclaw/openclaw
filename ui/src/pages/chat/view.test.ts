@@ -187,7 +187,7 @@ vi.mock("../../ui/chat/tool-expansion-state.ts", () => ({
   syncToolCardExpansionState: () => undefined,
 }));
 
-vi.mock("../../ui/controllers/agents.ts", () => ({
+vi.mock("../agents/data.ts", () => ({
   refreshVisibleToolsEffectiveForCurrentSession: refreshVisibleToolsEffectiveForCurrentSessionMock,
 }));
 

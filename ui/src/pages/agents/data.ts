@@ -1,12 +1,16 @@
 // Control UI controller manages agents gateway state.
-import { saveConfig, stageDefaultAgentConfigEntry } from "../../pages/config/data.ts";
-import type { ConfigState } from "../../pages/config/data.ts";
+import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
-} from "../chat-model-ref.ts";
-import type { GatewayBrowserClient } from "../gateway.ts";
-import { resolveAgentIdFromSessionKey } from "../session-key.ts";
+} from "../../ui/chat-model-ref.ts";
+import { loadChannels } from "../../ui/controllers/channels.ts";
+import {
+  formatMissingOperatorReadScopeMessage,
+  isMissingOperatorReadScopeError,
+} from "../../ui/controllers/scope-errors.ts";
+import type { GatewayBrowserClient } from "../../ui/gateway.ts";
+import { resolveAgentIdFromSessionKey } from "../../ui/session-key.ts";
 import type {
   AgentsListResult,
   ChatModelOverride,
@@ -14,11 +18,12 @@ import type {
   SessionsListResult,
   ToolsCatalogResult,
   ToolsEffectiveResult,
-} from "../types.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "./scope-errors.ts";
+} from "../../ui/types.ts";
+import { loadConfig, saveConfig, stageDefaultAgentConfigEntry } from "../config/data.ts";
+import type { ConfigState } from "../config/data.ts";
+import { loadAgentFiles } from "./files.ts";
+import { loadAgentIdentities, loadAgentIdentity } from "./identity.ts";
+import { loadAgentSkills } from "./skills.ts";
 
 export type AgentsState = {
   client: GatewayBrowserClient | null;
@@ -44,6 +49,38 @@ export type AgentsState = {
 };
 
 export type AgentsConfigSaveState = AgentsState & ConfigState;
+
+export async function loadAgentsPage(host: SettingsHost, app: SettingsAppHost) {
+  await loadAgents(app);
+  await loadConfig(app);
+  const agentIds = host.agentsList?.agents?.map((entry) => entry.id) ?? [];
+  if (agentIds.length > 0) {
+    void loadAgentIdentities(app, agentIds);
+  }
+  const agentId =
+    host.agentsSelectedId ?? host.agentsList?.defaultId ?? host.agentsList?.agents?.[0]?.id;
+  if (!agentId) {
+    return;
+  }
+  void loadAgentIdentity(app, agentId);
+  switch (host.agentsPanel) {
+    case "files":
+      void loadAgentFiles(app, agentId);
+      return;
+    case "skills":
+      void loadAgentSkills(app, agentId);
+      return;
+    case "channels":
+      void loadChannels(app, false);
+      return;
+    case "cron":
+      void host.loadCron?.();
+      return;
+    case "overview":
+    case "tools":
+    case undefined:
+  }
+}
 
 function hasSelectedAgentMismatch(state: AgentsState, agentId: string): boolean {
   return Boolean(state.agentsSelectedId && state.agentsSelectedId !== agentId);

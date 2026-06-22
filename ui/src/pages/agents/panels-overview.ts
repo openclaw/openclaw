@@ -6,7 +6,7 @@ import type {
   AgentsFilesListResult,
   AgentsListResult,
   ModelCatalogEntry,
-} from "../types.ts";
+} from "../../ui/types.ts";
 import {
   buildModelOptions,
   normalizeModelValue,
@@ -16,8 +16,8 @@ import {
   resolveModelFallbacks,
   resolveModelLabel,
   resolveModelPrimary,
-} from "./agents-utils.ts";
-import type { AgentsPanel } from "./agents.types.ts";
+} from "../../ui/views/agents-utils.ts";
+import type { AgentsPanel } from "./types.ts";
 
 export function renderAgentOverview(params: {
   agent: AgentsListResult["agents"][number];

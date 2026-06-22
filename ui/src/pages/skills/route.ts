@@ -3,7 +3,6 @@ import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import { loadAgents } from "../../ui/controllers/agents.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -19,6 +18,7 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "../../ui/controllers/skills.ts";
+import { loadAgents } from "../agents/data.ts";
 
 type SkillsLoadContext = { app: SettingsAppHost };
 type SkillsRenderContext = { state: AppViewState };

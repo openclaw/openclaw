@@ -3,22 +3,6 @@ import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
-import {
-  loadAgentFileContent,
-  loadAgentFiles,
-  saveAgentFile,
-} from "../../ui/controllers/agent-files.ts";
-import { loadAgentIdentities, loadAgentIdentity } from "../../ui/controllers/agent-identity.ts";
-import { loadAgentSkills } from "../../ui/controllers/agent-skills.ts";
-import {
-  buildToolsEffectiveRequestKey,
-  loadAgents,
-  loadToolsCatalog,
-  loadToolsEffective,
-  resetToolsEffectiveState,
-  refreshVisibleToolsEffectiveForCurrentSession,
-  saveAgentsConfig,
-} from "../../ui/controllers/agents.ts";
 import { loadChannels } from "../../ui/controllers/channels.ts";
 import { parseAgentSessionKey } from "../../ui/session-key.ts";
 import { normalizeStringEntries } from "../../ui/string-coerce.ts";
@@ -35,7 +19,19 @@ import {
 } from "../config/data.ts";
 import { ensureAgentConfigEntry, findAgentConfigEntryIndex } from "../config/data.ts";
 import { runCronJob } from "../cron/data.ts";
-import { loadAgentsPage } from "../loaders.ts";
+import {
+  buildToolsEffectiveRequestKey,
+  loadAgents,
+  loadToolsCatalog,
+  loadToolsEffective,
+  loadAgentsPage,
+  resetToolsEffectiveState,
+  refreshVisibleToolsEffectiveForCurrentSession,
+  saveAgentsConfig,
+} from "./data.ts";
+import { loadAgentFileContent, loadAgentFiles, saveAgentFile } from "./files.ts";
+import { loadAgentIdentities, loadAgentIdentity } from "./identity.ts";
+import { loadAgentSkills } from "./skills.ts";
 
 type AgentsLoadContext = { host: SettingsHost; app: SettingsAppHost };
 type AgentsRenderContext = { state: AppViewState };
@@ -55,7 +51,7 @@ export const page = definePage({
     await loadAgentsPage(host, app);
   },
   component: () =>
-    import("../../ui/views/agents.ts").then((module) => ({
+    import("./view.ts").then((module) => ({
       shell: "page" as const,
       header: true,
       render: ({ state }: AgentsRenderContext) => {

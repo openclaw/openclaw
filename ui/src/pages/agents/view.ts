@@ -13,17 +13,17 @@ import type {
   SkillStatusReport,
   ToolsCatalogResult,
   ToolsEffectiveResult,
-} from "../types.ts";
-import { renderAgentOverview } from "./agents-panels-overview.ts";
+} from "../../ui/types.ts";
+import { renderAgentOverview } from "./panels-overview.ts";
+import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
+export type { AgentsPanel } from "./types.ts";
 import {
-  renderAgentFiles,
-  renderAgentChannels,
-  renderAgentCron,
-} from "./agents-panels-status-files.ts";
-export type { AgentsPanel } from "./agents.types.ts";
-import { renderAgentTools, renderAgentSkills } from "./agents-panels-tools-skills.ts";
-import { agentBadgeText, buildAgentContext, normalizeAgentLabel } from "./agents-utils.ts";
-import type { AgentsPanel } from "./agents.types.ts";
+  agentBadgeText,
+  buildAgentContext,
+  normalizeAgentLabel,
+} from "../../ui/views/agents-utils.ts";
+import { renderAgentTools, renderAgentSkills } from "./panels-tools-skills.ts";
+import type { AgentsPanel } from "./types.ts";
 
 export type ConfigState = {
   form: Record<string, unknown> | null;

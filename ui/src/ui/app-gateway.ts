@@ -6,6 +6,7 @@ import {
 } from "../../../src/gateway/events.js";
 import { appRouter, getVisibleRouteId, routeLoadContext, type RouteId } from "../app-routes.ts";
 import type { SettingsHost } from "../app/app-host.ts";
+import { loadAgents, type AgentsState } from "../pages/agents/data.ts";
 import {
   clearPendingQueueItemsForRun,
   createChatSessionsLoadOverrides,
@@ -54,7 +55,6 @@ import {
   recordControlUiConnectTiming,
   recordControlUiRpcTiming,
 } from "./control-ui-performance.ts";
-import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
   loadAssistantIdentity,
   type AssistantIdentityState,
