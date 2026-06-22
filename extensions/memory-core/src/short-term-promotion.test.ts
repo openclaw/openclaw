@@ -1555,6 +1555,9 @@ describe("short-term promotion", () => {
       "- -",
       ">",
       "```",
+      "```ts",
+      "``` ts",
+      "~~~ qmd",
       "| --- |",
       "- [ ]",
       "- [x]",
@@ -1676,6 +1679,14 @@ describe("short-term promotion", () => {
     ).toMatchObject({
       promotable: true,
       snippet: "- Decision: Move backups to S3",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet(
+        "~~~ qmd\n- Keep gateway restarts supervised.\n~~~",
+      ),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "- Keep gateway restarts supervised.",
     });
   });
 

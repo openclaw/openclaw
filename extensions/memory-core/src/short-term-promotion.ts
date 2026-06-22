@@ -555,7 +555,7 @@ function stripCollapsedStructuralHeadingPrefix(rawLine: string): string {
 }
 
 function isMarkdownFenceOnly(raw: string): boolean {
-  return /^(?:`{3,}|~{3,})\S*$/u.test(raw.trim());
+  return /^(?:`{3,}|~{3,})(?:\s*\S.*)?$/u.test(raw.trim());
 }
 
 function classifyMarkdownPromotionLine(rawLine: string): MarkdownPromotionLine {
