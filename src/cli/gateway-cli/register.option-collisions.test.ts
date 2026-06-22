@@ -61,6 +61,7 @@ vi.mock("./call.js", () => ({
 vi.mock("./run-command.js", () => ({
   addGatewayRunCommand: (cmd: Command) =>
     cmd
+      .option("--port <port>", "Port for the gateway WebSocket")
       .option("--token <token>", "Gateway token")
       .option("--password <password>", "Gateway password"),
 }));
@@ -186,6 +187,15 @@ describe("gateway register option collisions", () => {
       },
     },
     {
+      name: "inherits parent --port for gateway probe",
+      argv: ["gateway", "--port", "19082", "probe", "--json"],
+      assert: () => {
+        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+        const [opts] = firstGatewayStatusCall();
+        expect((opts as { port?: string } | undefined)?.port).toBe("19082");
+      },
+    },
+    {
       name: "projects gateway health --port into local config",
       argv: ["gateway", "health", "--port", "19081", "--json"],
       assert: () => {
@@ -199,6 +209,23 @@ describe("gateway register option collisions", () => {
         expect(gatewayOpts?.localPortOverride).toBe(19081);
         expect(gatewayOpts?.config).toEqual({
           gateway: { mode: "local", port: 19081 },
+        });
+      },
+    },
+    {
+      name: "inherits parent --port for gateway health",
+      argv: ["gateway", "--port", "19083", "health", "--json"],
+      assert: () => {
+        expect(defaultRuntime.error.mock.calls).toEqual([]);
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, opts] = firstGatewayCall();
+        expect(method).toBe("health");
+        const gatewayOpts = opts as
+          | { config?: { gateway?: { port?: number } }; localPortOverride?: number }
+          | undefined;
+        expect(gatewayOpts?.localPortOverride).toBe(19083);
+        expect(gatewayOpts?.config).toEqual({
+          gateway: { mode: "local", port: 19083 },
         });
       },
     },

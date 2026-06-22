@@ -349,7 +349,7 @@ openclaw gateway probe --port 18789
 ```
 
 <ParamField path="--port <port>" type="number">
-  Use this port for the local loopback probe target and SSH tunnel remote port. Without `--url`, this selects the local loopback target instead of configured gateway environment or remote targets.
+  Use this port for the local loopback probe target and SSH tunnel remote port. Without `--url`, this selects the local loopback target instead of configured gateway environment URL, environment port, or remote targets.
 </ParamField>
 
 <AccordionGroup>
