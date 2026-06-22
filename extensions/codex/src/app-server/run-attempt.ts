@@ -790,7 +790,9 @@ export async function runCodexAppServerAttempt(
     onYieldDetected: () => {
       yieldDetected = true;
     },
-    onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
+    onCodexAppServerEvent: (event) => {
+      void emitCodexAppServerEvent(params, event);
+    },
     onPersistentWebSearchPolicyResolved: (allowed) => {
       persistentWebSearchAllowed = allowed;
     },

@@ -50,6 +50,7 @@ Sources/Gateway/GatewayDiscoveryModel.swift
 Sources/Gateway/GatewayHealthMonitor.swift
 Sources/Gateway/GatewayProblemView.swift
 Sources/Gateway/GatewayQuickSetupSheet.swift
+Sources/Gateway/NotificationPermissionGuidanceDialog.swift
 Sources/Gateway/GatewayServiceResolver.swift
 Sources/Gateway/GatewaySettingsStore.swift
 Sources/Gateway/GatewayTrustPromptAlert.swift
