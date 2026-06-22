@@ -16,7 +16,7 @@ const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
   {
     find: "../logging/redact.js",
-    replacement: path.resolve(here, "src/ui/browser-redact.ts"),
+    replacement: path.resolve(here, "src/lib/browser-redact.ts"),
   },
   {
     find: "openclaw/plugin-sdk/test-fixtures",
