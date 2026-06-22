@@ -4369,6 +4369,79 @@ describe("chat session controls", () => {
     expect(state.chatSessionPickerError).toBeNull();
   });
 
+  it("preserves loaded picker rows after a successful rename", async () => {
+    patchSessionMock.mockClear();
+    patchSessionMock.mockResolvedValueOnce(true);
+    const loadedRows: GatewaySessionRow[] = Array.from({ length: 51 }, (_, index) => ({
+      key: `agent:main:page-${index + 1}`,
+      kind: "direct",
+      label: `Page ${index + 1}`,
+      updatedAt: 100 - index,
+    }));
+    const renamedRows = loadedRows.map((row) =>
+      row.key === "agent:main:page-51" ? { ...row, label: "Renamed page 51" } : row,
+    );
+    const request = vi.fn((method: string, params: Record<string, unknown> = {}) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const limit = typeof params.limit === "number" ? params.limit : 50;
+      const rows = limit >= 51 ? renamedRows : renamedRows.slice(0, 50);
+      return Promise.resolve(
+        createSessionsResultFromRows(rows, {
+          hasMore: limit < 51,
+          nextOffset: limit < 51 ? 50 : null,
+          totalCount: 51,
+        }),
+      );
+    });
+    const { state } = createChatHeaderState();
+    state.client = { request } as unknown as GatewayBrowserClient;
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    state.sessionsResult = createSessionsResultFromRows(loadedRows.slice(0, 50), {
+      hasMore: true,
+      nextOffset: 50,
+      totalCount: 51,
+    });
+    state.chatSessionPickerResult = createSessionsResultFromRows(loadedRows, {
+      hasMore: false,
+      nextOffset: null,
+      totalCount: 51,
+    });
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const option = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ].find((button) => button.dataset.sessionKey === "agent:main:page-51");
+    option
+      ?.closest(".chat-session-picker__row")
+      ?.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')
+      ?.click();
+
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-rename-input="true"]',
+    );
+    input!.value = "Renamed page 51";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushTasks();
+    await waitForTimerTurn();
+
+    expect(request).toHaveBeenCalledWith("sessions.list", expect.objectContaining({ limit: 51 }));
+    expect(state.chatSessionPickerResult?.sessions).toHaveLength(51);
+    expect(
+      state.chatSessionPickerResult?.sessions.find((row) => row.key === "agent:main:page-51")
+        ?.label,
+    ).toBe("Renamed page 51");
+  });
+
   it("ignores an older picker reload that resolves after a successful rename", async () => {
     patchSessionMock.mockClear();
     patchSessionMock.mockResolvedValueOnce(true);

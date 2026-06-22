@@ -4,6 +4,7 @@ import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
 import {
+  CHAT_SESSIONS_REFRESH_LIMIT,
   createChatSessionsLoadOverrides,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
@@ -214,6 +215,7 @@ function finishChatSessionPickerSearchRequest(state: AppViewState, requestId: nu
 
 function createChatSessionPickerRequestSignature(options: {
   append?: boolean;
+  limit?: number;
   offset?: number;
   query: string;
 }) {
@@ -223,6 +225,9 @@ function createChatSessionPickerRequestSignature(options: {
       ? Math.max(0, Math.floor(options.offset))
       : 0,
     options.append === true ? "append" : "replace",
+    typeof options.limit === "number" && Number.isFinite(options.limit)
+      ? Math.max(1, Math.floor(options.limit))
+      : CHAT_SESSIONS_REFRESH_LIMIT,
   ].join("\n");
 }
 
@@ -286,17 +291,21 @@ function toggleChatSessionPicker(state: AppViewState, surface: ChatSessionSelect
 
 function createChatSessionPickerRequestParams(
   state: AppViewState,
-  options: { query?: string; offset?: number } = {},
+  options: { limit?: number; query?: string; offset?: number } = {},
 ): Record<string, unknown> {
   const overrides = createChatSessionsLoadOverrides(state, {
     search: options.query,
     offset: options.offset,
   });
+  const limit =
+    typeof options.limit === "number" && Number.isFinite(options.limit)
+      ? Math.max(1, Math.floor(options.limit))
+      : overrides.limit;
   const params: Record<string, unknown> = {
     includeGlobal: overrides.includeGlobal,
     includeUnknown: overrides.includeUnknown,
     configuredAgentsOnly: overrides.configuredAgentsOnly,
-    limit: overrides.limit,
+    limit,
   };
   const activeAgentSession = parseAgentSessionKey(state.sessionKey);
   const activeSessionRow = state.sessionsResult?.sessions.find(
@@ -364,7 +373,7 @@ function appendChatSessionPickerResult(
 
 async function loadChatSessionPickerPage(
   state: AppViewState,
-  options: { query?: string; offset?: number; append?: boolean } = {},
+  options: { query?: string; offset?: number; append?: boolean; limit?: number } = {},
 ) {
   if (!state.client || !state.connected) {
     return;
@@ -374,6 +383,7 @@ async function loadChatSessionPickerPage(
     state,
     createChatSessionPickerRequestSignature({
       append: options.append,
+      limit: options.limit,
       offset: options.offset,
       query,
     }),
@@ -389,7 +399,11 @@ async function loadChatSessionPickerPage(
       state,
       await state.client.request<SessionsListResult>(
         "sessions.list",
-        createChatSessionPickerRequestParams(state, { query, offset: options.offset }),
+        createChatSessionPickerRequestParams(state, {
+          query,
+          offset: options.offset,
+          limit: options.limit,
+        }),
       ),
     );
     if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
@@ -481,6 +495,10 @@ async function loadMoreChatSessionPickerResults(state: AppViewState) {
     offset,
     append: true,
   });
+}
+
+function resolveChatSessionPickerReloadLimit(result: SessionsListResult | null): number {
+  return Math.max(CHAT_SESSIONS_REFRESH_LIMIT, result?.sessions.length ?? 0);
 }
 
 function resolveChatSessionRow(
@@ -681,8 +699,12 @@ async function commitChatSessionRename(state: AppViewState, key: string) {
     return;
   }
   if (state.chatSessionPickerOpen) {
+    const reloadLimit = resolveChatSessionPickerReloadLimit(state.chatSessionPickerResult);
     invalidateChatSessionPickerSearchRequests(state);
-    await loadChatSessionPickerPage(state);
+    await loadChatSessionPickerPage(state, {
+      query: state.chatSessionPickerAppliedQuery,
+      limit: reloadLimit,
+    });
   } else {
     invalidateChatSessionPickerSearchRequests(state);
     state.chatSessionPickerResult = null;
