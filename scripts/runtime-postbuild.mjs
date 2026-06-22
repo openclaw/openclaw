@@ -57,6 +57,13 @@ const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   ["manager-DzRWrKSA.js", "acp/control-plane/manager.js"],
   ["runtime-CeGN4XUC.js", "web-fetch/runtime.js"],
 ];
+const NESTED_STABLE_ROOT_CHUNK_ALIASES = [
+  {
+    aliasFileName: "plugins/hook-runner-global.js",
+    candidateBaseFileName: "hook-runner-global",
+    sourceIncludes: ["runGlobalGatewayStopSafely", "initializeGlobalHookRunner"],
+  },
+];
 const LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS = [
   "scanPackageInstallSource",
   "scanFileInstallSource",
@@ -288,6 +295,7 @@ export function listCoreRuntimePostBuildOutputs(params = {}) {
     ...listPluginSdkRootAliasOutputs(),
     ...listOfficialChannelCatalogOutputs(),
     ...listStableRootRuntimeAliasOutputs(params),
+    ...listNestedStableRootChunkAliasOutputs(params),
     ...listLegacyRootRuntimeCompatOutputs(params),
     ...listLegacyCliExitCompatOutputs(params),
   ].toSorted((left, right) => left.localeCompare(right));
@@ -423,6 +431,78 @@ function resolveRootRuntimeCandidateByMarkers(params) {
   return candidates.length === 1 ? candidates[0] : null;
 }
 
+function resolveNestedStableRootChunkAliasTarget(params) {
+  if (params.fsImpl.existsSync(path.join(params.distDir, params.aliasFileName))) {
+    return null;
+  }
+  const hashedPattern = new RegExp(
+    `^${escapeRegExp(params.candidateBaseFileName)}-[A-Za-z0-9_-]+\\.js$`,
+    "u",
+  );
+  let entries = [];
+  try {
+    entries = params.fsImpl.readdirSync(params.distDir, { withFileTypes: true });
+  } catch {
+    return null;
+  }
+  const candidates = [];
+  for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isFile() || !hashedPattern.test(entry.name)) {
+      continue;
+    }
+    const candidatePath = path.join(params.distDir, entry.name);
+    let source;
+    try {
+      source = params.fsImpl.readFileSync(candidatePath, "utf8");
+    } catch {
+      continue;
+    }
+    if (params.sourceIncludes.every((marker) => source.includes(marker))) {
+      candidates.push(entry.name);
+    }
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+export function listNestedStableRootChunkAliasOutputs(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const distDir = path.join(rootDir, "dist");
+  const fsImpl = params.fs ?? fs;
+  return NESTED_STABLE_ROOT_CHUNK_ALIASES.filter((entry) =>
+    resolveNestedStableRootChunkAliasTarget({
+      distDir,
+      fsImpl,
+      ...entry,
+    }),
+  )
+    .map((entry) => `dist/${entry.aliasFileName}`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function writeNestedStableRootChunkAliases(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const distDir = path.join(rootDir, "dist");
+  const fsImpl = params.fs ?? fs;
+  for (const entry of NESTED_STABLE_ROOT_CHUNK_ALIASES) {
+    const targetFileName = resolveNestedStableRootChunkAliasTarget({
+      distDir,
+      fsImpl,
+      ...entry,
+    });
+    if (!targetFileName) {
+      continue;
+    }
+    const relativeTarget = path.posix.relative(
+      path.posix.dirname(entry.aliasFileName),
+      targetFileName,
+    );
+    writeTextFileIfChanged(
+      path.join(distDir, entry.aliasFileName),
+      `export * from "./${relativeTarget}";\n`,
+    );
+  }
+}
+
 function resolveLegacyRootRuntimeCompatTarget(params) {
   if (
     params.aliasFileName &&
@@ -524,6 +604,7 @@ export function runRuntimePostBuild(params = {}) {
   });
   runPhase("stable root runtime imports", () => rewriteRootRuntimeImportsToStableAliases(params));
   runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(params));
+  runPhase("nested stable root chunk aliases", () => writeNestedStableRootChunkAliases(params));
   runPhase("legacy root runtime compat aliases", () => writeLegacyRootRuntimeCompatAliases(params));
   runPhase("legacy CLI exit compat chunks", () => writeLegacyCliExitCompatChunks(params));
 }
