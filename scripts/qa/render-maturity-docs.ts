@@ -17,7 +17,6 @@ import {
   parseQaMaturityTaxonomy,
   parseQaMaturityScores,
   validateQaMaturityScoresAgainstTaxonomy,
-  type QaMaturityScoreLastRun,
   type QaMaturityScoreObject,
   type QaMaturityScoreSurface,
   type QaMaturityScoreSurfaceLts,
@@ -165,6 +164,26 @@ function yamlCode(value: RenderScalar): string {
   return `\`${markdownEscape(value)}\``;
 }
 
+function markdownTable(rows: RenderScalar[][]): string[] {
+  if (rows.length === 0) {
+    return [];
+  }
+  const columnCount = Math.max(...rows.map((row) => row.length));
+  const normalizedRows = rows.map((row) =>
+    Array.from({ length: columnCount }, (_, index) => String(row[index] ?? "")),
+  );
+  const widths = Array.from({ length: columnCount }, (_, index) =>
+    Math.max(3, ...normalizedRows.map((row) => row[index]?.length ?? 0)),
+  );
+  const formatRow = (row: string[]) =>
+    `| ${row.map((cell, index) => cell.padEnd(widths[index] ?? 3)).join(" | ")} |`;
+  return [
+    formatRow(normalizedRows[0] ?? []),
+    formatRow(widths.map((width) => "-".repeat(width))),
+    ...normalizedRows.slice(1).map(formatRow),
+  ];
+}
+
 function htmlAttributeEscape(value: RenderScalar): string {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -193,16 +212,6 @@ function levelText(
   return [level?.code, level?.label ?? levelId].filter(Boolean).join(" ");
 }
 
-function lastRunText(surface: { last_score_run?: QaMaturityScoreLastRun }): string {
-  const lastRun = surface.last_score_run;
-  if (!lastRun || typeof lastRun !== "object") {
-    return "";
-  }
-  return [lastRun.status, lastRun.completed_at ? `on ${lastRun.completed_at}` : ""]
-    .filter(Boolean)
-    .join(" ");
-}
-
 function ltsText(lts?: QaMaturityScoreSurfaceLts): string {
   if (!lts || typeof lts !== "object") {
     return "unscored";
@@ -214,11 +223,20 @@ function renderScoreBands(): string[] {
   return [
     "## Score bands",
     "",
-    "| Label | Score range |",
-    "| --- | --- |",
-    ...QA_MATURITY_SCORE_LABEL_BANDS.map(([label, low, high]) => `| ${label} | ${low}-${high}% |`),
+    ...markdownTable([
+      ["Label", "Score range"],
+      ...QA_MATURITY_SCORE_LABEL_BANDS.map(([label, low, high]) => [label, `${low}-${high}%`]),
+    ]),
     "",
   ];
+}
+
+function latestScoreRunDate(scores: QaMaturityScores): string | undefined {
+  const dates = scores.surfaces
+    .map((surface) => surface.last_score_run?.completed_at)
+    .filter((date): date is string => Boolean(date))
+    .toSorted((left, right) => left.localeCompare(right));
+  return dates.at(-1);
 }
 
 function frontmatter(title: string, summary: string): string[] {
@@ -409,7 +427,8 @@ function copyStaticSourceAssets({
 }
 
 function renderEvidenceSection(evidenceSummaries: EvidenceSummary[]): string[] {
-  if (evidenceSummaries.length === 0) {
+  const scorecardSummaries = evidenceSummaries.filter((item) => item.scorecard);
+  if (scorecardSummaries.length === 0) {
     return [];
   }
   const lines = [
@@ -419,35 +438,41 @@ function renderEvidenceSection(evidenceSummaries: EvidenceSummary[]): string[] {
     "",
   ];
 
-  lines.push(
-    "| Check set | Completed | Checks run | Results | Areas reviewed | Capabilities reviewed |",
-    "| --- | --- | --- | --- | --- | --- |",
-  );
-  for (const item of evidenceSummaries) {
+  const summaryRows: RenderScalar[][] = [
+    ["Check set", "Completed", "Checks run", "Results", "Areas reviewed", "Capabilities reviewed"],
+  ];
+  for (const item of scorecardSummaries) {
     const scorecard = item.scorecard;
-    lines.push(
-      `| ${markdownEscape(checkSetTitle(item.profile))} | ${markdownEscape(item.generatedAt)} | ${item.entryCount} | ${markdownEscape(resultCountsText(item.statuses))} | ${markdownEscape(countText(scorecard?.categories))} | ${markdownEscape(countText(scorecard?.features))} |`,
-    );
+    summaryRows.push([
+      markdownEscape(checkSetTitle(item.profile)),
+      markdownEscape(item.generatedAt),
+      item.entryCount,
+      markdownEscape(resultCountsText(item.statuses)),
+      markdownEscape(countText(scorecard?.categories)),
+      markdownEscape(countText(scorecard?.features)),
+    ]);
   }
-  lines.push("");
+  lines.push(...markdownTable(summaryRows), "");
 
-  const categoryRows = evidenceSummaries.flatMap((item) =>
+  const categoryRows = scorecardSummaries.flatMap((item) =>
     (item.scorecard?.categoryReports ?? []).map((category) => ({ item, category })),
   );
   if (categoryRows.length > 0) {
-    lines.push(
-      "### Readiness by area",
-      "",
-      "| Check set | Surface | Area | Status | Capabilities reviewed | Follow-up |",
-      "| --- | --- | --- | --- | --- | --- |",
-    );
+    const readinessRows: RenderScalar[][] = [
+      ["Check set", "Surface", "Area", "Status", "Capabilities reviewed", "Follow-up"],
+    ];
     for (const { item, category } of categoryRows) {
       const features = countText(category.features);
-      lines.push(
-        `| ${markdownEscape(checkSetTitle(item.profile))} | ${markdownEscape(category.surfaceId)} | ${markdownEscape(category.name)} | ${markdownEscape(readinessStatusText(category.status))} | ${markdownEscape(features)} | ${markdownEscape(followUpText(category.missingCoverageIds))} |`,
-      );
+      readinessRows.push([
+        markdownEscape(checkSetTitle(item.profile)),
+        markdownEscape(category.surfaceId),
+        markdownEscape(category.name),
+        markdownEscape(readinessStatusText(category.status)),
+        markdownEscape(features),
+        markdownEscape(followUpText(category.missingCoverageIds)),
+      ]);
     }
-    lines.push("");
+    lines.push("### Readiness by area", "", ...markdownTable(readinessRows), "");
   }
   return lines;
 }
@@ -465,6 +490,7 @@ function renderMaturityScorecard({
   const levels = qaMaturityTaxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
   const surfaces = activeQaMaturityTaxonomySurfaces(taxonomy);
+  const updatedDate = latestScoreRunDate(scores);
   const lines = [
     ...frontmatter(
       "Maturity scorecard",
@@ -488,29 +514,62 @@ function renderMaturityScorecard({
     "",
     "## Overall scores",
     "",
-    "| Basis | Coverage | Quality | Completeness |",
-    "| --- | --- | --- | --- |",
-    `| Surface average | ${scoreText(scores.rollups.surface_average.coverage)} | ${scoreText(scores.rollups.surface_average.quality)} | ${scoreText(scores.rollups.surface_average.completeness)} |`,
-    `| Category average | ${scoreText(scores.rollups.category_average.coverage)} | ${scoreText(scores.rollups.category_average.quality)} | ${scoreText(scores.rollups.category_average.completeness)} |`,
+    ...markdownTable([
+      ["Basis", "Coverage", "Quality", "Completeness"],
+      [
+        "Surface average",
+        scoreText(scores.rollups.surface_average.coverage),
+        scoreText(scores.rollups.surface_average.quality),
+        scoreText(scores.rollups.surface_average.completeness),
+      ],
+      [
+        "Category average",
+        scoreText(scores.rollups.category_average.coverage),
+        scoreText(scores.rollups.category_average.quality),
+        scoreText(scores.rollups.category_average.completeness),
+      ],
+    ]),
     "",
     "Coverage measures how much of the area has release proof. Quality measures reliability and operational confidence. Completeness measures how much of the expected user workflow is available.",
     "",
     ...renderScoreBands(),
   ];
 
+  const surfaceRows: RenderScalar[][] = [
+    [
+      "Surface",
+      "Family",
+      "Level",
+      "Coverage",
+      "Quality",
+      "Completeness",
+      "Long-term support",
+      "Areas",
+    ],
+  ];
+  for (const surface of surfaces) {
+    const scoreSurface = scoreSurfaces.get(surface.id);
+    surfaceRows.push([
+      `[${markdownEscape(surface.name)}](/maturity/taxonomy#${surface.id})`,
+      markdownEscape(familyTitle(surface.family)),
+      markdownEscape(levelText(scoreSurface ?? surface, levels)),
+      scoreText(scoreSurface?.scores?.coverage),
+      scoreText(scoreSurface?.scores?.quality),
+      scoreText(scoreSurface?.scores?.completeness),
+      markdownEscape(ltsText(scoreSurface?.lts)),
+      surface.categories.length,
+    ]);
+  }
   lines.push(
     "## Surface scorecard",
     "",
-    "| Surface | Family | Level | Coverage | Quality | Completeness | Long-term support | Areas | Last reviewed |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ...markdownTable(surfaceRows),
+    "",
+    ...renderEvidenceSection(evidenceSummaries),
   );
-  for (const surface of surfaces) {
-    const scoreSurface = scoreSurfaces.get(surface.id);
-    lines.push(
-      `| [${markdownEscape(surface.name)}](/taxonomy#${surface.id}) | ${markdownEscape(familyTitle(surface.family))} | ${markdownEscape(levelText(scoreSurface ?? surface, levels))} | ${scoreText(scoreSurface?.scores?.coverage)} | ${scoreText(scoreSurface?.scores?.quality)} | ${scoreText(scoreSurface?.scores?.completeness)} | ${markdownEscape(ltsText(scoreSurface?.lts))} | ${surface.categories.length} | ${markdownEscape(lastRunText(scoreSurface ?? surface))} |`,
-    );
+  if (updatedDate) {
+    lines.push(`> Last updated: ${updatedDate}`, "");
   }
-  lines.push("", ...renderEvidenceSection(evidenceSummaries));
   return `${lines.join("\n").trimEnd()}\n`;
 }
 
@@ -527,28 +586,33 @@ function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "s
     "",
     "## Maturity levels",
     "",
-    "| Level | Label | Meaning | Promotion bar |",
-    "| --- | --- | --- | --- |",
+    ...markdownTable([
+      ["Level", "Label", "Meaning", "Promotion bar"],
+      ...taxonomy.levels.map((level) => [
+        yamlCode(level.code ?? level.id),
+        markdownEscape(level.label ?? level.id),
+        markdownEscape(level.meaning ?? ""),
+        markdownEscape(level.promotion_bar ?? ""),
+      ]),
+    ]),
   ];
-  for (const level of taxonomy.levels) {
-    lines.push(
-      `| ${yamlCode(level.code ?? level.id)} | ${markdownEscape(level.label ?? level.id)} | ${markdownEscape(level.meaning ?? "")} | ${markdownEscape(level.promotion_bar ?? "")} |`,
-    );
-  }
 
-  lines.push(
-    "",
-    "## Surface index",
-    "",
-    "| Surface | Family | Level | Categories | Coverage | Quality | Completeness |",
-    "| --- | --- | --- | --- | --- | --- | --- |",
-  );
+  const surfaceIndexRows: RenderScalar[][] = [
+    ["Surface", "Family", "Level", "Categories", "Coverage", "Quality", "Completeness"],
+  ];
   for (const surface of surfaces) {
     const scoreSurface = scoreSurfaces.get(surface.id);
-    lines.push(
-      `| [${markdownEscape(surface.name)}](#${surface.id}) | ${markdownEscape(familyTitle(surface.family))} | ${markdownEscape(levelText(scoreSurface ?? surface, levels))} | ${surface.categories.length} | ${scoreText(scoreSurface?.scores?.coverage)} | ${scoreText(scoreSurface?.scores?.quality)} | ${scoreText(scoreSurface?.scores?.completeness)} |`,
-    );
+    surfaceIndexRows.push([
+      `[${markdownEscape(surface.name)}](#${surface.id})`,
+      markdownEscape(familyTitle(surface.family)),
+      markdownEscape(levelText(scoreSurface ?? surface, levels)),
+      surface.categories.length,
+      scoreText(scoreSurface?.scores?.coverage),
+      scoreText(scoreSurface?.scores?.quality),
+      scoreText(scoreSurface?.scores?.completeness),
+    ]);
   }
+  lines.push("", "## Surface index", "", ...markdownTable(surfaceIndexRows));
 
   lines.push("", "## Surface taxonomy", "");
   for (const family of qaMaturityFamilyOrder(surfaces)) {
@@ -556,17 +620,19 @@ function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "s
     for (const surface of surfaces.filter((candidate) => candidate.family === family)) {
       const scoreSurface = scoreSurfaces.get(surface.id);
       const categoryScores = categoryScoreMap(scoreSurface);
-      lines.push(
-        `#### ${surface.name}`,
-        "",
-        `- Surface id: ${yamlCode(surface.id)}`,
-        `- Level: ${markdownEscape(levelText(scoreSurface ?? surface, levels))}`,
-        `- Rationale: ${surface.rationale ?? ""}`,
-        `- Completeness instructions: ${yamlCode(surface.completeness_instructions ?? "")}`,
-        "",
-        "| Category | Category ID | Features | Coverage IDs | Docs | Coverage | Quality | Completeness | LTS |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-      );
+      const categoryRows: RenderScalar[][] = [
+        [
+          "Category",
+          "Category ID",
+          "Features",
+          "Coverage IDs",
+          "Docs",
+          "Coverage",
+          "Quality",
+          "Completeness",
+          "LTS",
+        ],
+      ];
       for (const category of surface.categories) {
         const categoryId = `${surface.id}.${category.id}`;
         const featureNames = category.features.map((feature) => feature.name).join("<br>");
@@ -576,10 +642,28 @@ function renderTaxonomy({ taxonomy, scores }: Pick<RenderInputs, "taxonomy" | "s
           .join("<br>");
         const docs = (category.docs ?? []).map((doc) => yamlCode(doc)).join("<br>");
         const scoreCategory = categoryScores.get(category.name);
-        lines.push(
-          `| ${markdownEscape(category.name)} | ${yamlCode(categoryId)} | ${markdownEscape(featureNames)} | ${markdownEscape(coverageIds)} | ${docs} | ${scoreText(scoreCategory?.coverage)} | ${scoreText(scoreCategory?.quality)} | ${scoreText(scoreCategory?.completeness)} | ${markdownEscape(scoreCategory?.lts?.supported ? "Yes" : "No")} |`,
-        );
+        categoryRows.push([
+          markdownEscape(category.name),
+          yamlCode(categoryId),
+          markdownEscape(featureNames),
+          markdownEscape(coverageIds),
+          docs,
+          scoreText(scoreCategory?.coverage),
+          scoreText(scoreCategory?.quality),
+          scoreText(scoreCategory?.completeness),
+          markdownEscape(scoreCategory?.lts?.supported ? "Yes" : "No"),
+        ]);
       }
+      lines.push(
+        `#### ${surface.name}`,
+        "",
+        `- Surface id: ${yamlCode(surface.id)}`,
+        `- Level: ${markdownEscape(levelText(scoreSurface ?? surface, levels))}`,
+        `- Rationale: ${surface.rationale ?? ""}`,
+        `- Completeness instructions: ${yamlCode(surface.completeness_instructions ?? "")}`,
+        "",
+        ...markdownTable(categoryRows),
+      );
       lines.push("");
     }
   }
