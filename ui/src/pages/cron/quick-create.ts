@@ -9,7 +9,7 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import type { CronFormState } from "../../ui/ui-types.ts";
+import type { CronFormState } from "./types.ts";
 
 // ── Types ──
 

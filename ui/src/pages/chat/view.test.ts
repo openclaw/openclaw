@@ -24,8 +24,8 @@ import {
 import { renderChatSessionSelect } from "../../ui/chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../ui/types.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../ui/ui-types.ts";
 import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
+import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>

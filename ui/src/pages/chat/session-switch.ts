@@ -12,7 +12,6 @@ import {
   readChatMessagesFromCache,
 } from "../../ui/chat/session-message-cache.ts";
 import { refreshSlashCommands } from "../../ui/chat/slash-commands.ts";
-import type { ChatQueueItem } from "../../ui/ui-types.ts";
 import { loadSessions, syncSelectedSessionMessageSubscription } from "../sessions/data.ts";
 // Chat session switching state transitions shared by chat UI and feature handoffs.
 import {
@@ -22,6 +21,7 @@ import {
   scopedAgentListParamsForSession,
 } from "./data.ts";
 import { loadChatHistory, type ChatState } from "./gateway.ts";
+import type { ChatQueueItem } from "./types.ts";
 
 type SessionSwitchHost = AppViewState & {
   chatStreamStartedAt: number | null;

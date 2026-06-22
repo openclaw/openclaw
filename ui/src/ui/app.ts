@@ -38,8 +38,10 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "../pages/chat/data.ts";
+import type { ChatAttachment, ChatQueueItem } from "../pages/chat/types.ts";
 import { loadCronPage } from "../pages/cron/data.ts";
 import { DEFAULT_CRON_FORM } from "../pages/cron/data.ts";
+import type { CronFormState } from "../pages/cron/types.ts";
 import type { DreamingStatus, WikiImportInsights, WikiMemoryPalace } from "../pages/dreams/data.ts";
 import { DEFAULT_LOG_LEVEL_FILTERS, type LogEntry, type LogLevel } from "../pages/logs/data.ts";
 import type { DevicePairingList } from "../pages/nodes/devices.ts";
@@ -156,7 +158,6 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "./types.ts";
-import type { ChatAttachment, ChatQueueItem, CronFormState } from "./ui-types.ts";
 
 declare global {
   interface Window {
@@ -745,7 +746,10 @@ export class OpenClawApp extends LitElement {
   controlUiResponsivenessObserver: { disconnect: () => void } | null = null;
   toolStreamById = new Map<string, ToolStreamEntry>();
   toolStreamOrder: string[] = [];
-  refreshSessionsAfterChat = new Map<string, import("./ui-types.js").ChatSessionRefreshTarget>();
+  refreshSessionsAfterChat = new Map<
+    string,
+    import("../pages/chat/types.js").ChatSessionRefreshTarget
+  >();
   chatSideResultTerminalRuns = new Set<string>();
   basePath = "";
   topbarObserver: ResizeObserver | null = null;

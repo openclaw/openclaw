@@ -2,7 +2,7 @@
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatQueueItem } from "../ui-types.ts";
+import type { ChatQueueItem } from "../../pages/chat/types.ts";
 
 export type ChatQueueProps = {
   queue: ChatQueueItem[];

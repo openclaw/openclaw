@@ -3,9 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import type { ActivityEntry } from "../pages/activity/data.ts";
+import type { ChatQueueItem } from "../pages/chat/types.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
-import type { ChatQueueItem } from "./ui-types.ts";
 
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
 const loadChatComposerSnapshotMock = vi.hoisted(() =>
@@ -136,8 +136,8 @@ vi.mock("./chat/composer-persistence.ts", async (importOriginal) => {
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatMessages: unknown[];
-  chatQueue: import("./ui-types.ts").ChatQueueItem[];
-  chatQueueBySession: Record<string, import("./ui-types.ts").ChatQueueItem[]>;
+  chatQueue: import("../pages/chat/types.ts").ChatQueueItem[];
+  chatQueueBySession: Record<string, import("../pages/chat/types.ts").ChatQueueItem[]>;
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;

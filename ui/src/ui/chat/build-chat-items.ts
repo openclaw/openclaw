@@ -1,6 +1,6 @@
+import type { ChatQueueItem } from "../../pages/chat/types.ts";
 // Control UI chat module implements build chat items behavior.
 import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "../types/chat-types.ts";
-import type { ChatQueueItem } from "../ui-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,

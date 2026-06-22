@@ -19,7 +19,6 @@ import type {
   CronRunsStatusFilter,
   CronSortDir,
 } from "../../ui/types.ts";
-import type { CronFormState } from "../../ui/ui-types.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
@@ -27,6 +26,7 @@ import type {
   CronJobsScheduleKindFilter,
 } from "./data.ts";
 import { getCronJobPayload } from "./payload.ts";
+import type { CronFormState } from "./types.ts";
 
 export type CronProps = {
   basePath: string;

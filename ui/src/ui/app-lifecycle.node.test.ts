@@ -1,10 +1,10 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatQueueItem } from "../pages/chat/types.ts";
 import { configureWorkboardPolling, getWorkboardState } from "../pages/workboard/data.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { handleDisconnected, handleUpdated } from "./app-lifecycle.ts";
 import { loadChatComposerSnapshot } from "./chat/composer-persistence.ts";
-import type { ChatQueueItem } from "./ui-types.ts";
 
 function createHost() {
   return {

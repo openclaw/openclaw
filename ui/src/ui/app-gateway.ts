@@ -39,6 +39,7 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "../pages/chat/gateway.ts";
+import type { ChatQueueItem, ChatSessionRefreshTarget } from "../pages/chat/types.ts";
 import { loadDevices, type DevicesState } from "../pages/nodes/devices.ts";
 import {
   applySessionsChangedEvent,
@@ -99,7 +100,6 @@ import type {
   StatusSummary,
   UpdateAvailable,
 } from "./types.ts";
-import type { ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 
 function isGenericBrowserFetchFailure(message: string): boolean {
   return /^(?:typeerror:\s*)?(?:fetch failed|failed to fetch)$/i.test(message.trim());

@@ -2,6 +2,7 @@
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "../pages/chat/data.ts";
+import type { ChatAttachment, ChatQueueItem } from "../pages/chat/types.ts";
 import type { CronModelSuggestionsState, CronState } from "../pages/cron/data.ts";
 import type { LogEntry, LogLevel } from "../pages/logs/data.ts";
 import type { DevicePairingList } from "../pages/nodes/devices.ts";
@@ -54,7 +55,6 @@ import type {
   StatusSummary,
   ToolsCatalogResult,
 } from "./types.ts";
-import type { ChatAttachment, ChatQueueItem } from "./ui-types.ts";
 
 export type AppViewState = {
   settings: UiSettings;
@@ -504,7 +504,10 @@ export type AppViewState = {
     overviewLogLines: string[];
     overviewLogCursor: number;
     client: GatewayBrowserClient | null;
-    refreshSessionsAfterChat: Map<string, import("./ui-types.js").ChatSessionRefreshTarget>;
+    refreshSessionsAfterChat: Map<
+      string,
+      import("../pages/chat/types.js").ChatSessionRefreshTarget
+    >;
     connect: () => void;
     setChatMobileControlsOpen: (
       open: boolean,

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatQueueItem } from "../../pages/chat/types.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import type { ChatQueueItem } from "../ui-types.ts";
 import {
   loadChatComposerSnapshot,
   persistChatComposerState,

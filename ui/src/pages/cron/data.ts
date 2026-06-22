@@ -30,10 +30,10 @@ import type {
   CronSortDir,
   CronStatus,
 } from "../../ui/types.ts";
-import { CRON_CHANNEL_LAST } from "../../ui/ui-types.ts";
-import type { CronFormState } from "../../ui/ui-types.ts";
 import { loadChannels } from "../channels/data.ts";
 import { getCronJobPayload, hasCronJobPayload } from "./payload.ts";
+import { CRON_CHANNEL_LAST } from "./types.ts";
+import type { CronFormState } from "./types.ts";
 
 export const DEFAULT_CRON_FORM: CronFormState = {
   name: "",

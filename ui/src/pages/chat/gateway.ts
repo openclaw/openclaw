@@ -57,7 +57,7 @@ import type {
   GatewaySessionsDefaults,
   ModelCatalogEntry,
 } from "../../ui/types.ts";
-import type { ChatAttachment } from "../../ui/ui-types.ts";
+import type { ChatAttachment } from "./types.ts";
 
 export { isGatewayMethodAdvertised } from "../../ui/gateway-methods.ts";
 

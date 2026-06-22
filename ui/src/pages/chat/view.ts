@@ -78,9 +78,9 @@ import type {
   SessionGoal,
   SessionsListResult,
 } from "../../ui/types.ts";
-import type { ChatAttachment, ChatQueueItem } from "../../ui/ui-types.ts";
 import { resolveLocalUserName } from "../../ui/user-identity.ts";
 import { renderMarkdownSidebar } from "../../ui/views/markdown-sidebar.ts";
+import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import "../../ui/components/resizable-divider.ts";
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
