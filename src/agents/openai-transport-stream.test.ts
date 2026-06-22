@@ -5290,7 +5290,7 @@ describe("openai transport stream", () => {
       tool_choice?: unknown;
     };
 
-    expect(params.tools).toEqual([expect.objectContaining({ name: "lookup", strict: false })]);
+    expect(params.tools).toEqual([expect.objectContaining({ name: "lookup", strict: true })]);
     expect(params.tool_choice).toEqual({ type: "function", name: "lookup" });
   });
 
@@ -5732,10 +5732,12 @@ describe("openai transport stream", () => {
         type: "function",
         name: "lookup_weather",
         description: "Get forecast",
-        strict: false,
+        strict: true,
         parameters: {
           type: "object",
           properties: {},
+          required: [],
+          additionalProperties: false,
         },
       },
     ]);
