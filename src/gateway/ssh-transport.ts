@@ -65,7 +65,7 @@ export async function startGatewayRemoteSshTunnel(params: {
   const remote = params.config.gateway?.remote;
   const target = normalizeOptionalString(remote?.sshTarget);
   if (!target) {
-    throw new Error("gateway remote ssh transport requires gateway.remote.sshTarget");
+    return null;
   }
 
   const localPortPreferred = parseExplicitUrlPort(params.url) ?? resolveGatewayPort(params.config);

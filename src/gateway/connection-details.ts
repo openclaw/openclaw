@@ -75,7 +75,10 @@ export function buildGatewayConnectionDetailsWithResolvers(
 
   const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
   const usesConfiguredSshTransport =
-    !urlOverride && Boolean(remoteUrl) && remote?.transport === "ssh";
+    !urlOverride &&
+    Boolean(remoteUrl) &&
+    remote?.transport === "ssh" &&
+    Boolean(normalizeOptionalString(remote?.sshTarget));
   if (!usesConfiguredSshTransport && !isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(
       [
