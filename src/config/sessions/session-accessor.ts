@@ -294,6 +294,20 @@ export type SessionEntryUpdateOptions = {
   requireWriteSuccess?: boolean;
 };
 
+export type SessionAbortTargetCutoff = {
+  messageSid?: string;
+  timestamp?: number;
+};
+
+export type SessionAbortTargetContext = {
+  entry: SessionEntry;
+  sessionKey: string;
+};
+
+export type SessionAbortTargetResult = SessionAbortTargetContext & {
+  sessionId?: string;
+};
+
 export type SessionLifecycleTranscriptInfo = {
   sessionFile?: string;
   transcriptArchived?: boolean;
@@ -624,6 +638,71 @@ export async function updateSessionEntry(
     requireWriteSuccess: options.requireWriteSuccess,
     update,
   });
+}
+
+/**
+ * Resolves, marks, touches, and canonicalizes one abort target entry as a
+ * storage-sized operation. Runtime abort side effects remain with callers.
+ */
+export async function markSessionAbortTarget(params: {
+  resolveAbortCutoff?: (context: SessionAbortTargetContext) => SessionAbortTargetCutoff | undefined;
+  scope: SessionAccessScope;
+  now?: () => number;
+}): Promise<SessionAbortTargetResult | null> {
+  const storePath = resolveAccessStorePath(params.scope);
+  let canPersistSingleEntry = false;
+  return await updateSessionStore(
+    storePath,
+    (store) => {
+      const resolved = resolveSessionStoreEntry({
+        store,
+        sessionKey: params.scope.sessionKey,
+      });
+      if (!resolved.existing) {
+        return null;
+      }
+      const sessionKey = resolved.normalizedKey;
+      const entry = {
+        ...resolved.existing,
+        abortedLastRun: true,
+        updatedAt: params.now?.() ?? Date.now(),
+      };
+      applySessionAbortCutoff(
+        entry,
+        params.resolveAbortCutoff?.({
+          entry: { ...resolved.existing },
+          sessionKey,
+        }),
+      );
+      store[sessionKey] = entry;
+      canPersistSingleEntry = resolved.legacyKeys.length === 0;
+      for (const legacyKey of resolved.legacyKeys) {
+        if (legacyKey !== sessionKey) {
+          delete store[legacyKey];
+        }
+      }
+      return {
+        entry: { ...entry },
+        sessionId: entry.sessionId,
+        sessionKey,
+      };
+    },
+    {
+      resolveSingleEntryPersistence: (result) =>
+        result && result.sessionKey && canPersistSingleEntry
+          ? { sessionKey: result.sessionKey, entry: result.entry }
+          : null,
+      skipSaveWhenResult: (result) => result === null,
+    },
+  );
+}
+
+function applySessionAbortCutoff(
+  entry: Pick<SessionEntry, "abortCutoffMessageSid" | "abortCutoffTimestamp">,
+  cutoff: SessionAbortTargetCutoff | undefined,
+): void {
+  entry.abortCutoffMessageSid = cutoff?.messageSid;
+  entry.abortCutoffTimestamp = cutoff?.timestamp;
 }
 
 /**

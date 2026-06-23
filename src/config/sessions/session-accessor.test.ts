@@ -15,6 +15,7 @@ import {
   createSessionEntryWithTranscript,
   listSessionEntries,
   loadSessionEntry,
+  markSessionAbortTarget,
   patchSessionEntry,
   persistSessionResetLifecycle,
   persistSessionRolloverLifecycle,
@@ -85,6 +86,75 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("marks abort targets while canonicalizing legacy session keys", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:telegram:group:-1001234567890:topic:99": {
+          sessionId: "canonical-session",
+          updatedAt: 10,
+        },
+        "Agent:Main:Telegram:Group:-1001234567890:Topic:99": {
+          sessionId: "legacy-session",
+          updatedAt: 20,
+        },
+      } satisfies Record<string, SessionEntry>),
+      "utf8",
+    );
+    expect(loadSessionStore(storePath)).toHaveProperty(
+      "Agent:Main:Telegram:Group:-1001234567890:Topic:99",
+    );
+
+    const result = await markSessionAbortTarget({
+      scope: {
+        sessionKey: "Agent:Main:Telegram:Group:-1001234567890:Topic:99",
+        storePath,
+      },
+      now: () => 30,
+      resolveAbortCutoff: ({ sessionKey }) => {
+        expect(sessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
+        return {
+          messageSid: "55",
+          timestamp: 1234567890000,
+        };
+      },
+    });
+
+    expect(result).toMatchObject({
+      sessionId: "legacy-session",
+      sessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+      entry: {
+        abortedLastRun: true,
+        abortCutoffMessageSid: "55",
+        abortCutoffTimestamp: 1234567890000,
+        sessionId: "legacy-session",
+        updatedAt: 30,
+      },
+    });
+    expect(loadSessionStore(storePath)).toEqual({
+      "agent:main:telegram:group:-1001234567890:topic:99": expect.objectContaining({
+        abortedLastRun: true,
+        abortCutoffMessageSid: "55",
+        abortCutoffTimestamp: 1234567890000,
+        sessionId: "legacy-session",
+        updatedAt: 30,
+      }),
+    });
+  });
+
+  it("does not persist abort target changes when the entry is absent", async () => {
+    const result = await markSessionAbortTarget({
+      scope: {
+        sessionKey: "agent:main:missing",
+        storePath,
+      },
+      resolveAbortCutoff: () => ({ messageSid: "unused" }),
+    });
+
+    expect(result).toBeNull();
+    expect(fs.existsSync(storePath)).toBe(false);
   });
 
   it("purges deleted-agent entries from the current locked store", async () => {

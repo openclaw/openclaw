@@ -13,7 +13,6 @@ import {
   isAbortTrigger,
   resetAbortMemoryForTest,
   resolveAbortCutoffFromContext,
-  resolveSessionEntryForKey,
   setAbortMemory,
   stopSubagentsForRequester,
   shouldSkipMessageByAbortCutoff,
@@ -380,32 +379,6 @@ describe("abort detection", () => {
         timestamp: 2001,
       }),
     ).toBe(false);
-  });
-
-  it("resolves session entry when key exists in store", () => {
-    const store = {
-      "session-1": { sessionId: "abc", updatedAt: 0 },
-    } as const;
-    expect(resolveSessionEntryForKey(store, "session-1")).toEqual({
-      entry: store["session-1"],
-      key: "session-1",
-    });
-    expect(resolveSessionEntryForKey(store, "session-2")).toStrictEqual({});
-    expect(resolveSessionEntryForKey(undefined, "session-1")).toStrictEqual({});
-  });
-
-  it("resolves Telegram forum topic session when lookup key has different casing than store", () => {
-    // Store normalizes keys to lowercase; caller may pass mixed-case. /stop in topic must find entry.
-    const storeKey = "agent:main:telegram:group:-1001234567890:topic:99";
-    const lookupKey = "Agent:Main:Telegram:Group:-1001234567890:Topic:99";
-    const store = {
-      [storeKey]: { sessionId: "agent-topic-99", updatedAt: 0 },
-    } as Record<string, { sessionId: string; updatedAt: number }>;
-    // Direct lookup fails (store uses lowercase keys); normalization fallback must succeed.
-    expect(store[lookupKey]).toBeUndefined();
-    const result = resolveSessionEntryForKey(store, lookupKey);
-    expect(result.entry?.sessionId).toBe("agent-topic-99");
-    expect(result.key).toBe(storeKey);
   });
 
   it("fast-aborts even when text commands are disabled", async () => {
