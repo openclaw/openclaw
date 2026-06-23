@@ -779,16 +779,21 @@ export async function persistSessionCompactionCheckpoint(
         removed: SessionCompactionCheckpoint[];
       }
     | undefined;
+  let stored = false;
   const updatedEntry = await updateSessionEntry(
     {
       storePath: target.storePath,
       sessionKey: target.canonicalKey,
     },
     async (existing) => {
+      if (!existing.sessionId) {
+        return null;
+      }
       const checkpoints = sessionStoreCheckpoints(existing);
       checkpoints.push(checkpoint);
       const snapshotBytesByPath = await statCheckpointSnapshotBytes(checkpoints);
       trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath);
+      stored = true;
       return {
         updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
         compactionCheckpoints: trimmedCheckpoints.kept,
@@ -796,7 +801,7 @@ export async function persistSessionCompactionCheckpoint(
     },
   );
 
-  if (!updatedEntry) {
+  if (!updatedEntry || !stored) {
     log.warn("skipping compaction checkpoint persist: session not found", {
       sessionKey: params.sessionKey,
     });

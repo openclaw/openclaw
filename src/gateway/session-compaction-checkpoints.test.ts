@@ -930,6 +930,37 @@ describe("session-compaction-checkpoints", () => {
     expect(nextStore[MAIN_SESSION_KEY]?.compactionCheckpoints).toBeUndefined();
   });
 
+  test("persist skips malformed session rows without synthesizing a session id", async () => {
+    const { storePath, sessionId, sessionKey, now } = await makeTempSessionStore(
+      "openclaw-checkpoint-malformed-row-",
+    );
+    await writeSessionStore(storePath, sessionKey, {
+      sessionId: "",
+      updatedAt: now,
+    });
+
+    const stored = await persistMainCheckpoint(storePath, {
+      sessionId,
+      snapshot: {
+        sessionId,
+        leafId: "pre-leaf",
+      },
+      postSessionFile: path.join(path.dirname(storePath), "sess.compacted.jsonl"),
+      postLeafId: "post-leaf",
+      createdAt: now,
+    });
+
+    expect(stored).toBeNull();
+    const nextStore = await readSessionStore<{
+      compactionCheckpoints?: unknown[];
+      sessionId?: string;
+    }>(storePath);
+    expect(nextStore[MAIN_SESSION_KEY]).toEqual({
+      sessionId: "",
+      updatedAt: now,
+    });
+  });
+
   test("persist trims retained checkpoint snapshots by total byte budget", async () => {
     const { dir, storePath, sessionId, sessionKey, now } = await makeTempSessionStore(
       "openclaw-checkpoint-byte-trim-",
