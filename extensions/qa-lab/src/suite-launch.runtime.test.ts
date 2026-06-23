@@ -276,6 +276,32 @@ describe("qa suite runtime launcher", () => {
     );
   });
 
+  it("keeps channel-driver unified flow partitions serial by default", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-crabline-serial-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/crabline-serial",
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      },
+      scenarioIds: ["channel-chat-baseline", "dm-chat-baseline", "control-ui-chat-flow-playwright"],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "crabline-serial");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow"),
+        concurrency: 1,
+        scenarioIds: ["channel-chat-baseline", "dm-chat-baseline"],
+      }),
+    );
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+  });
+
   it("respects serial concurrency across unified suite partitions", async () => {
     const repoRoot = await makeTempRepo("qa-suite-serial-");
     let releaseFlow!: () => void;

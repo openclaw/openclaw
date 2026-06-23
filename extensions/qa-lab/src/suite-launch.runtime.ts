@@ -12,6 +12,10 @@ import {
 } from "./evidence-summary.js";
 import { isQaFastModeEnabled } from "./model-selection.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import {
+  defaultQaSuiteConcurrencyForTransport,
+  normalizeQaTransportId,
+} from "./qa-transport-registry.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
 import {
   readQaBootstrapScenarioCatalog,
@@ -425,9 +429,14 @@ async function runUnifiedQaSuite(params: {
     typeof params.runParams?.fastMode === "boolean"
       ? params.runParams.fastMode
       : isQaFastModeEnabled({ primaryModel, alternateModel });
+  const transportId = normalizeQaTransportId(params.runParams?.transportId);
+  const defaultConcurrency = params.runParams?.channelDriverSelection
+    ? 1
+    : defaultQaSuiteConcurrencyForTransport(transportId);
   const concurrency = normalizeQaSuiteConcurrency(
     params.runParams?.concurrency,
     params.plan.scenarios.length,
+    defaultConcurrency,
   );
   const evidenceSummaries: QaEvidenceSummaryJson[] = [];
   const scenarioResultsById = new Map<string, QaSuiteScenarioResult>();
@@ -485,15 +494,14 @@ async function runUnifiedQaSuite(params: {
             alternateModel,
             fastMode,
             concurrency: partition.concurrency,
-            workerStartStaggerMs:
-              isolatedPartition
-                ? (params.runParams?.workerStartStaggerMs ??
-                  resolveQaSuiteWorkerStartStaggerMs(
-                    partition.concurrency,
-                    process.env,
-                    ISOLATED_FLOW_WORKER_START_STAGGER_MS,
-                  ))
-                : params.runParams?.workerStartStaggerMs,
+            workerStartStaggerMs: isolatedPartition
+              ? (params.runParams?.workerStartStaggerMs ??
+                resolveQaSuiteWorkerStartStaggerMs(
+                  partition.concurrency,
+                  process.env,
+                  ISOLATED_FLOW_WORKER_START_STAGGER_MS,
+                ))
+              : params.runParams?.workerStartStaggerMs,
             scenarioIds: partition.scenarios.map((scenario) => scenario.id),
           });
           const scenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
