@@ -49,6 +49,7 @@ type EvidenceSummary = {
   profile: string;
   entryCount: number;
   statuses: StatusCounts;
+  blockingResults: string[];
   scorecard?: QaEvidenceScorecardJson;
 };
 
@@ -373,6 +374,12 @@ function countStatuses(entries: QaEvidenceSummaryJson["entries"]): StatusCounts 
   return counts;
 }
 
+function blockingResultLabels(entries: QaEvidenceSummaryJson["entries"]): string[] {
+  return entries
+    .filter((entry) => entry.result.status === "fail" || entry.result.status === "blocked")
+    .map((entry) => `${entry.test.id} (${entry.result.status})`);
+}
+
 function numberText(value: unknown): string {
   return Number.isFinite(value) ? String(value) : "";
 }
@@ -406,12 +413,11 @@ function checkSetTitle(profile: string): string {
 }
 
 function resultCountsText(statuses: StatusCounts): string {
-  return [
-    `${statuses.pass} passed`,
-    `${statuses.fail} failed`,
-    `${statuses.blocked} blocked`,
-    `${statuses.skipped} skipped`,
-  ].join(", ");
+  const parts = [`${statuses.pass} passed`];
+  if (statuses.skipped > 0) {
+    parts.push(`${statuses.skipped} skipped`);
+  }
+  return parts.join(", ");
 }
 
 function readinessStatusText(status: string): string {
@@ -444,9 +450,31 @@ function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
       profile: payload.profile ?? "",
       entryCount: payload.entries.length,
       statuses: countStatuses(payload.entries),
+      blockingResults: blockingResultLabels(payload.entries),
       scorecard: payload.scorecard,
     };
   });
+}
+
+function rejectBlockingEvidence(evidenceSummaries: EvidenceSummary[]): void {
+  const blocked = evidenceSummaries.filter((item) => item.blockingResults.length > 0);
+  if (blocked.length === 0) {
+    return;
+  }
+  throw new Error(
+    [
+      "maturity docs require passing QA evidence; failing or blocked QA entries cannot be rendered into the scorecard.",
+      ...blocked.map((item) => {
+        const counts = [
+          item.statuses.fail > 0 ? `${item.statuses.fail} failed` : undefined,
+          item.statuses.blocked > 0 ? `${item.statuses.blocked} blocked` : undefined,
+        ]
+          .filter(Boolean)
+          .join(", ");
+        return `${item.path}: ${counts}; ${item.blockingResults.join(", ")}`;
+      }),
+    ].join("\n"),
+  );
 }
 
 function latestCoverageScorecard(
@@ -902,6 +930,7 @@ function main(): void {
   }
 
   const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
+  rejectBlockingEvidence(evidenceSummaries);
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
