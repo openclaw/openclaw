@@ -24,13 +24,24 @@ function trimOutput(value: string): string | undefined {
   return normalizeOptionalString(value);
 }
 
-function buildCommandSummary(params: { stdout: string; stderr: string }): string | undefined {
+function buildCommandSummary(
+  params: { stdout: string; stderr: string },
+  deliveryStreams?: readonly ("stdout" | "stderr")[],
+): string | undefined {
   const stdout = trimOutput(params.stdout);
   const stderr = trimOutput(params.stderr);
-  if (stdout && stderr) {
-    return `stdout:\n${stdout}\n\nstderr:\n${stderr}`;
+
+  // Apply delivery stream filtering if specified
+  const includeStdout = !deliveryStreams || deliveryStreams.includes("stdout");
+  const includeStderr = !deliveryStreams || deliveryStreams.includes("stderr");
+
+  const filteredStdout = includeStdout ? stdout : undefined;
+  const filteredStderr = includeStderr ? stderr : undefined;
+
+  if (filteredStdout && filteredStderr) {
+    return `stdout:\n${filteredStdout}\n\nstderr:\n${filteredStderr}`;
   }
-  return stdout ?? stderr;
+  return filteredStdout ?? filteredStderr;
 }
 
 function commandErrorMessage(params: {
@@ -125,7 +136,10 @@ export async function runCronCommandJob(params: {
       result.termination !== "no-output-timeout" &&
       result.termination !== "signal";
     const status: CronRunStatus = ok ? "ok" : "error";
-    const summary = buildCommandSummary({ stdout: result.stdout, stderr: result.stderr });
+    const summary = buildCommandSummary(
+      { stdout: result.stdout, stderr: result.stderr },
+      payload.deliveryStreams,
+    );
     const error = ok
       ? undefined
       : commandErrorMessage({

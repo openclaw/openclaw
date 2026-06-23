@@ -25,6 +25,31 @@ import {
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 
+function parseDeliveryStreamsOption(
+  value: unknown,
+): readonly ("stdout" | "stderr")[] | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("--delivery-streams must be a JSON array of strings");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    parsed.length > 2 ||
+    !parsed.every((item) => item === "stdout" || item === "stderr")
+  ) {
+    throw new Error(
+      "--delivery-streams must be a JSON array containing only \"stdout\" and/or \"stderr\"",
+    );
+  }
+  return parsed as ("stdout" | "stderr")[];
+}
+
 const CRON_EDIT_LOOKUP_PAGE_SIZE = 200;
 const CRON_EDIT_LOOKUP_MAX_PAGES = 50;
 
@@ -123,6 +148,10 @@ export function registerCronEditCommand(cron: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
+      .option(
+        "--delivery-streams <json>",
+        'Delivery stream filter for command jobs (e.g., \'["stdout"]\' or \'["stderr"]\')',
+      )
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
@@ -457,6 +486,8 @@ export function registerCronEditCommand(cron: Command) {
               noOutputTimeoutSeconds !== undefined,
             );
             assignIf(payload, "outputMaxBytes", outputMaxBytes, outputMaxBytes !== undefined);
+            const deliveryStreams = parseDeliveryStreamsOption(opts.deliveryStreams);
+            assignIf(payload, "deliveryStreams", deliveryStreams, deliveryStreams !== undefined);
             patch.payload = payload;
           }
 

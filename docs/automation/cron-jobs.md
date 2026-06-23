@@ -145,9 +145,9 @@ openclaw cron create "*/15 * * * *" \
   --to "-1001234567890"
 ```
 
-`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` when you want exact argv execution without shell parsing. Optional `--command-env KEY=VALUE`, `--command-input`, `--timeout-seconds`, `--no-output-timeout-seconds`, and `--output-max-bytes` fields control the process environment, stdin, and output bounds.
+`--command <shell>` stores `argv: ["sh", "-lc", <shell>]`. Use `--command-argv '["node","scripts/report.mjs"]'` when you want exact argv execution without shell parsing. Optional `--command-env KEY=VALUE`, `--command-input`, `--timeout-seconds`, `--no-output-timeout-seconds`, `--output-max-bytes`, and `--delivery-streams` fields control the process environment, stdin, output bounds, and delivery filtering.
 
-If stdout is non-empty, that text is the delivered result. If stdout is empty and stderr is non-empty, stderr is delivered. If both streams are present, cron delivers a small `stdout:` / `stderr:` block. A zero exit code records the run as `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal cron silent-token suppression and posts nothing back to chat.
+By default, if stdout is non-empty, that text is the delivered result. If stdout is empty and stderr is non-empty, stderr is delivered. If both streams are present, cron delivers a small `stdout:` / `stderr:` block. Use `--delivery-streams '["stdout"]'` to deliver only stdout (useful for long-running commands that write heartbeat markers to stderr), or `--delivery-streams '["stderr"]'` to deliver only stderr. The filtered delivery affects announce and webhook outputs; full stdout/stderr are always preserved in `lastDiagnostics` for debugging. A zero exit code records the run as `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger failure alerts. A command that prints only `NO_REPLY` uses the normal cron silent-token suppression and posts nothing back to chat.
 
 ### Payload options for isolated jobs
 

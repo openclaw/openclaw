@@ -44,6 +44,12 @@ function cronCommandPayloadSchema(params: { argv: TSchema }) {
       timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
       noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
       outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
+      deliveryStreams: Type.Optional(
+        Type.Array(Type.Union([Type.Literal("stdout"), Type.Literal("stderr")]), {
+          minItems: 1,
+          maxItems: 2,
+        }),
+      ),
     },
     { additionalProperties: false },
   );

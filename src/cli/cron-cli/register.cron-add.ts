@@ -30,6 +30,31 @@ import {
 } from "./shared.js";
 import { normalizeCronSessionTargetOption, parseCronThreadIdOption } from "./thread-id-shared.js";
 
+function parseDeliveryStreamsOption(
+  value: unknown,
+): readonly ("stdout" | "stderr")[] | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("--delivery-streams must be a JSON array of strings");
+  }
+  if (
+    !Array.isArray(parsed) ||
+    parsed.length === 0 ||
+    parsed.length > 2 ||
+    !parsed.every((item) => item === "stdout" || item === "stderr")
+  ) {
+    throw new Error(
+      "--delivery-streams must be a JSON array containing only \"stdout\" and/or \"stderr\"",
+    );
+  }
+  return parsed as ("stdout" | "stderr")[];
+}
+
 export function registerCronStatusCommand(cron: Command) {
   addGatewayClientOptions(
     cron
@@ -129,6 +154,10 @@ export function registerCronAddCommand(cron: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent or command jobs")
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
+      .option(
+        "--delivery-streams <json>",
+        'Delivery stream filter for command jobs (e.g., \'["stdout"]\' or \'["stderr"]\')',
+      )
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--announce", "Fallback-deliver final text to a chat", false)
@@ -236,6 +265,7 @@ export function registerCronAddCommand(cron: Command) {
                 const noOutputTimeoutSeconds =
                   parsePositiveIntOrUndefined(rawNoOutputTimeoutSeconds);
                 const outputMaxBytes = parsePositiveIntOrUndefined(opts.outputMaxBytes);
+                const deliveryStreams = parseDeliveryStreamsOption(opts.deliveryStreams);
                 return {
                   kind: "command" as const,
                   argv: commandArgv ?? ["sh", "-lc", commandShell ?? ""],
@@ -250,6 +280,7 @@ export function registerCronAddCommand(cron: Command) {
                       : undefined,
                   outputMaxBytes:
                     outputMaxBytes && Number.isFinite(outputMaxBytes) ? outputMaxBytes : undefined,
+                  deliveryStreams,
                 };
               }
               return {

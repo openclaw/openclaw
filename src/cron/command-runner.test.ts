@@ -154,4 +154,102 @@ describe("runCronCommandJob", () => {
     expect(result.error).toBe("command stopped");
     expect(result.summary).toBeUndefined();
   });
+
+  it("delivers only stdout when deliveryStreams is ['stdout']", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [
+          process.execPath,
+          "-e",
+          "process.stdout.write('stdout only'); process.stderr.write('stderr hidden')",
+        ],
+        timeoutSeconds: 5,
+        deliveryStreams: ["stdout"],
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toBe("stdout only");
+    expect(result.summary).not.toContain("stderr hidden");
+  });
+
+  it("delivers only stderr when deliveryStreams is ['stderr']", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [
+          process.execPath,
+          "-e",
+          "process.stdout.write('stdout hidden'); process.stderr.write('stderr only')",
+        ],
+        timeoutSeconds: 5,
+        deliveryStreams: ["stderr"],
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toBe("stderr only");
+    expect(result.summary).not.toContain("stdout hidden");
+  });
+
+  it("delivers both streams when deliveryStreams is ['stdout', 'stderr']", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [
+          process.execPath,
+          "-e",
+          "process.stdout.write('stdout visible'); process.stderr.write('stderr visible')",
+        ],
+        timeoutSeconds: 5,
+        deliveryStreams: ["stdout", "stderr"],
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toContain("stdout visible");
+    expect(result.summary).toContain("stderr visible");
+  });
+
+  it("defaults to delivering both streams when deliveryStreams is undefined", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [
+          process.execPath,
+          "-e",
+          "process.stdout.write('stdout default'); process.stderr.write('stderr default')",
+        ],
+        timeoutSeconds: 5,
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toContain("stdout default");
+    expect(result.summary).toContain("stderr default");
+  });
+
+  it("handles heartbeat markers in stderr with stdout-only delivery", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [
+          process.execPath,
+          "-e",
+          [
+            "console.error('[heartbeat] still running...');",
+            "console.error('[heartbeat] still running...');",
+            "process.stdout.write('Final result summary');",
+          ].join(""),
+        ],
+        timeoutSeconds: 5,
+        deliveryStreams: ["stdout"],
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toBe("Final result summary");
+    expect(result.summary).not.toContain("[heartbeat]");
+  });
 });
