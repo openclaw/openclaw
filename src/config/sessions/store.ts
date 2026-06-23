@@ -1758,21 +1758,29 @@ export async function applySessionStoreEntryPatch(params: {
   });
 }
 
+type SessionEntryPatchParams = SessionEntryWorkflowOptions & {
+  sessionKey: string;
+  fallbackEntry?: SessionEntry;
+  preserveActivity?: boolean;
+  requireWriteSuccess?: boolean;
+  replaceEntry?: boolean;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+  update: (
+    entry: SessionEntry,
+    context: { existingEntry?: SessionEntry },
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+};
+
 export async function patchSessionEntry(
-  params: SessionEntryWorkflowOptions & {
-    sessionKey: string;
-    fallbackEntry?: SessionEntry;
-    preserveActivity?: boolean;
-    requireWriteSuccess?: boolean;
-    replaceEntry?: boolean;
-    skipMaintenance?: boolean;
-    takeCacheOwnership?: boolean;
-    update: (
-      entry: SessionEntry,
-      context: { existingEntry?: SessionEntry },
-    ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
-  },
+  params: SessionEntryPatchParams,
 ): Promise<SessionEntry | null> {
+  return (await patchSessionEntryWithKey(params))?.entry ?? null;
+}
+
+export async function patchSessionEntryWithKey(
+  params: SessionEntryPatchParams,
+): Promise<{ sessionKey: string; entry: SessionEntry } | null> {
   const storePath = resolveSessionWorkflowStorePath(params);
   return await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
@@ -1785,24 +1793,27 @@ export async function patchSessionEntry(
       existingEntry: resolved.existing ? cloneSessionEntry(resolved.existing) : undefined,
     });
     if (!patch) {
-      return existing;
+      return { sessionKey: resolved.normalizedKey, entry: existing };
     }
     const next = params.replaceEntry
       ? cloneSessionEntry(patch as SessionEntry)
       : params.preserveActivity
         ? mergeSessionEntryPreserveActivity(existing, patch)
         : mergeSessionEntry(existing, patch);
-    return await persistResolvedSessionEntry({
-      storePath,
-      store,
-      resolved,
-      next,
-      maintenanceConfig: params.maintenanceConfig,
-      requireWriteSuccess: params.requireWriteSuccess,
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership ?? true,
-      returnDetached: params.takeCacheOwnership !== true,
-    });
+    return {
+      sessionKey: resolved.normalizedKey,
+      entry: await persistResolvedSessionEntry({
+        storePath,
+        store,
+        resolved,
+        next,
+        maintenanceConfig: params.maintenanceConfig,
+        requireWriteSuccess: params.requireWriteSuccess,
+        skipMaintenance: params.skipMaintenance,
+        takeCacheOwnership: params.takeCacheOwnership ?? true,
+        returnDetached: params.takeCacheOwnership !== true,
+      }),
+    };
   });
 }
 

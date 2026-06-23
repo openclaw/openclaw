@@ -44,6 +44,7 @@ import {
   loadSessionStore,
   applySessionEntryPatchProjection as applyFileSessionEntryPatchProjection,
   patchSessionEntry as patchFileSessionEntry,
+  patchSessionEntryWithKey as patchFileSessionEntryWithKey,
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
@@ -340,6 +341,13 @@ export type SessionEntryPatchContext = {
   existingEntry?: SessionEntry;
 };
 
+export type SessionEntryPatchResult = {
+  /** Exact persisted key for the patched entry after alias normalization. */
+  sessionKey: string;
+  /** Persisted entry returned by the backing store. */
+  entry: SessionEntry;
+};
+
 export type RestartRecoveryLifecycleEntry = {
   /** Exact persisted key for the restart recovery candidate row. */
   sessionKey: string;
@@ -511,6 +519,31 @@ export async function patchSessionEntry(
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
   return await patchFileSessionEntry({
+    ...scope,
+    fallbackEntry: options.fallbackEntry,
+    maintenanceConfig: options.maintenanceConfig,
+    preserveActivity: options.preserveActivity,
+    requireWriteSuccess: options.requireWriteSuccess,
+    replaceEntry: options.replaceEntry,
+    skipMaintenance: options.skipMaintenance,
+    takeCacheOwnership: options.takeCacheOwnership,
+    update,
+  });
+}
+
+/**
+ * Applies an atomic patch and returns the persisted key selected by the backing
+ * store. Use when a caller must keep sidecar state keyed to the final row.
+ */
+export async function patchSessionEntryWithKey(
+  scope: SessionAccessScope,
+  update: (
+    entry: SessionEntry,
+    context: SessionEntryPatchContext,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+  options: SessionEntryPatchOptions = {},
+): Promise<SessionEntryPatchResult | null> {
+  return await patchFileSessionEntryWithKey({
     ...scope,
     fallbackEntry: options.fallbackEntry,
     maintenanceConfig: options.maintenanceConfig,
