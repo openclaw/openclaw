@@ -195,13 +195,6 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (hasCommittedOutboundDeliveryEvidence(params.result)) {
     return null;
   }
-  if (
-    typeof params.result.meta.finalAssistantVisibleText === "string" &&
-    params.result.meta.finalAssistantVisibleText.trim().length > 0 &&
-    !isSilentReplyPayloadText(params.result.meta.finalAssistantVisibleText)
-  ) {
-    return null;
-  }
   if (params.result.meta.error?.kind === "hook_block") {
     // Hook blocks intentionally suppress normal agent output. Retrying on another model would
     // bypass a policy decision rather than recover a malformed model result.
@@ -215,6 +208,13 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   });
   if (genericExternalFailureClassification) {
     return genericExternalFailureClassification;
+  }
+  if (
+    typeof params.result.meta.finalAssistantVisibleText === "string" &&
+    params.result.meta.finalAssistantVisibleText.trim().length > 0 &&
+    !isSilentReplyPayloadText(params.result.meta.finalAssistantVisibleText)
+  ) {
+    return null;
   }
   if (
     hasVisibleAgentPayload(params.result, {
