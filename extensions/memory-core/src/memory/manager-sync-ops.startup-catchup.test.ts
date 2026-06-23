@@ -735,4 +735,27 @@ describe("session startup catch-up", () => {
     expect(harness.getPendingSessionTargets()).toEqual([]);
     harness.stopTranscriptListener();
   });
+
+  it.each(["reset", "deleted"] as const)(
+    "schedules a %s archive for live indexing when its update is emitted",
+    async (reason) => {
+      vi.useFakeTimers();
+      const session = await writeSessionFile(`thread.jsonl.${reason}.2026-06-23T10-00-00.000Z`);
+      const harness = new SessionStartupCatchupHarness([]);
+      harness.startTranscriptListener();
+
+      try {
+        emitSessionTranscriptUpdate({ sessionFile: session.filePath });
+
+        expect(harness.getPendingArchiveFiles()).toEqual([session.filePath]);
+
+        await vi.advanceTimersByTimeAsync(6000);
+
+        expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
+        expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
+      } finally {
+        harness.stopTranscriptListener();
+      }
+    },
+  );
 });

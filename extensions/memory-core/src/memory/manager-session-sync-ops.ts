@@ -78,9 +78,6 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
         return;
       }
       const sessionFile = update.sessionFile;
-      if (sessionFile && isSessionArchiveArtifactName(path.basename(sessionFile))) {
-        return;
-      }
       if (sessionFile && this.isSessionFileForAgent(sessionFile)) {
         this.scheduleSessionDirty(sessionFile);
         return;
