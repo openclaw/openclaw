@@ -12,6 +12,40 @@ on:
         required: true
         default: main
         type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
+  workflow_call:
+    inputs:
+      qa_evidence_run_id:
+        description: Optional workflow run id containing qa-evidence.json
+        required: false
+        default: ""
+        type: string
+      ref:
+        description: OpenClaw branch, tag, or SHA containing the maturity score source
+        required: true
+        type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
+        required: false
+        default: ""
+        type: string
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by live QA profile scenarios
+        required: true
+      OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY:
+        description: Optional OpenAI API key used by maturity scorecard agent steps
+        required: false
+      GH_APP_PRIVATE_KEY:
+        description: Optional GitHub App private key for generated docs PR creation
+        required: false
+      GH_APP_PRIVATE_KEY_FALLBACK:
+        description: Optional fallback GitHub App private key for generated docs PR creation
+        required: false
 
 permissions:
   actions: read
@@ -43,13 +77,24 @@ jobs:
       - name: Validate selected ref
         id: validate
         env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
           INPUT_REF: ${{ inputs.ref }}
         shell: bash
         run: |
           set -euo pipefail
 
           selected_revision="$(git rev-parse HEAD)"
+          expected_sha="${EXPECTED_SHA,,}"
           trusted_reason=""
+
+          if [[ -n "${expected_sha// }" && ! "$expected_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "expected_sha must be a full 40-character SHA; got: ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+          if [[ -n "${expected_sha// }" && "${selected_revision,,}" != "$expected_sha" ]]; then
+            echo "Ref '${INPUT_REF}' resolved to ${selected_revision}, expected ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
 
@@ -87,8 +132,9 @@ jobs:
     if: ${{ inputs.qa_evidence_run_id == '' }}
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
-      ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
-      qa_profile: all
+      ref: ${{ inputs.ref }}
+      expected_sha: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      qa_profile: release
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
@@ -192,8 +238,8 @@ jobs:
           }
 
           const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
-          if (evidence.profile !== "all") {
-            throw new Error(`qa-evidence.json profile must be all, got ${JSON.stringify(evidence.profile)}`);
+          if (evidence.profile !== "release") {
+            throw new Error(`qa-evidence.json profile must be release, got ${JSON.stringify(evidence.profile)}`);
           }
 
           const artifactDir = path.dirname(evidencePath);
@@ -210,8 +256,8 @@ jobs:
           const manifestPath = path.join(artifactDir, manifestNames[0]);
           const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
           const manifestProfile = manifest.qaProfile ?? evidence.profile;
-          if (manifestProfile !== "all") {
-            throw new Error(`QA evidence manifest profile must be all, got ${JSON.stringify(manifestProfile)}`);
+          if (manifestProfile !== "release") {
+            throw new Error(`QA evidence manifest profile must be release, got ${JSON.stringify(manifestProfile)}`);
           }
           if (manifest.targetSha !== targetSha) {
             throw new Error(`QA evidence manifest targetSha ${manifest.targetSha} does not match selected ref ${targetSha}`);
@@ -321,6 +367,7 @@ jobs:
             --strict-inputs
 
       - name: Create generated docs PR app token
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         id: app-token
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
@@ -331,7 +378,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Create generated docs PR fallback app token
-        if: ${{ steps.app-token.outcome == 'failure' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.app-token.outcome == 'failure' }}
         id: app-token-fallback
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -341,6 +388,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Open generated docs PR
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           QA_EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id }}

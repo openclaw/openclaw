@@ -29,6 +29,10 @@ function readQaProfileEvidenceWorkflow() {
   return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
 }
 
+function readReleaseChecksWorkflow() {
+  return parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
+}
+
 function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
@@ -608,6 +612,34 @@ describe("ci workflow guards", () => {
     const publishJob = maturityWorkflow.jobs.publish;
     const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
 
+    expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
+      qa_evidence_run_id: {
+        description: "Optional workflow run id containing qa-evidence.json",
+        required: false,
+        default: "",
+        type: "string",
+      },
+      ref: {
+        description: "OpenClaw branch, tag, or SHA containing the maturity score source",
+        required: true,
+        type: "string",
+      },
+      expected_sha: {
+        description: "Optional full SHA that ref must resolve to",
+        required: false,
+        default: "",
+        type: "string",
+      },
+    });
+    expect(maturityWorkflow.on.workflow_call.secrets.OPENAI_API_KEY.required).toBe(true);
+    expect(
+      maturityWorkflow.on.workflow_call.secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY
+        .required,
+    ).toBe(false);
+    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY.required).toBe(false);
+    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY_FALLBACK.required).toBe(
+      false,
+    );
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
@@ -626,10 +658,18 @@ describe("ci workflow guards", () => {
     expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({
-      ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      qa_profile: "all",
+      ref: "${{ inputs.ref }}",
+      expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      qa_profile: "release",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
+
+    const validateRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
+      (step) => step.name === "Validate selected ref",
+    );
+    expect(validateRefStep.env.EXPECTED_SHA).toBe("${{ inputs.expected_sha }}");
+    expect(validateRefStep.run).toContain("expected_sha must be a full 40-character SHA");
+    expect(validateRefStep.run).toContain('"${selected_revision,,}" != "$expected_sha"');
 
     const generatedDownloadStep = publishJob.steps.find(
       (step) => step.name === "Download generated QA evidence artifact",
@@ -671,6 +711,49 @@ describe("ci workflow guards", () => {
 
     const qaFailStep = qaRunJob.steps.find((step) => step.name === "Fail if QA profile failed");
     expect(qaFailStep.if).toBe("always()");
+
+    const createTokenStep = publishJob.steps.find(
+      (step) => step.name === "Create generated docs PR app token",
+    );
+    const createFallbackTokenStep = publishJob.steps.find(
+      (step) => step.name === "Create generated docs PR fallback app token",
+    );
+    const openDocsPrStep = publishJob.steps.find((step) => step.name === "Open generated docs PR");
+    expect(createTokenStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+    expect(createFallbackTokenStep.if).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && steps.app-token.outcome == 'failure' }}",
+    );
+    expect(openDocsPrStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+  });
+
+  it("runs maturity scorecard from release checks", () => {
+    const releaseWorkflow = readReleaseChecksWorkflow();
+    const job = releaseWorkflow.jobs.maturity_scorecard_release_checks;
+    const summaryJob = releaseWorkflow.jobs.summary;
+    const verifyStep = summaryJob.steps.find(
+      (step) => step.name === "Verify release check results",
+    );
+
+    expect(releaseWorkflow.jobs).not.toHaveProperty("qa_profile_release_evidence_release_checks");
+    expect(job.name).toBe("Render maturity scorecard release docs");
+    expect(job.if).toBe(
+      'contains(fromJSON(\'["all","qa"]\'), needs.resolve_target.outputs.rerun_group)',
+    );
+    expect(job.permissions).toMatchObject({
+      actions: "read",
+      contents: "read",
+    });
+    expect(job.uses).toBe("./.github/workflows/maturity-scorecard.yml");
+    expect(job.with).toMatchObject({
+      ref: "${{ needs.resolve_target.outputs.ref }}",
+      expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+    });
+    expect(job.with).not.toHaveProperty("qa_profile");
+    expect(summaryJob.needs).toContain("maturity_scorecard_release_checks");
+    expect(verifyStep.run).toContain(
+      '"maturity_scorecard_release_checks=${{ needs.maturity_scorecard_release_checks.result }}"',
+    );
+    expect(verifyStep.run).not.toContain("qa_profile_release_evidence_release_checks");
   });
 
   it("keeps workflow guards in fast CI-routing checks", () => {

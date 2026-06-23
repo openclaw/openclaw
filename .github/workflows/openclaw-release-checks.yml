@@ -767,6 +767,20 @@ jobs:
       OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
       OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
 
+  maturity_scorecard_release_checks:
+    name: Render maturity scorecard release docs
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa"]'), needs.resolve_target.outputs.rerun_group)
+    permissions:
+      actions: read
+      contents: read
+    uses: ./.github/workflows/maturity-scorecard.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.ref }}
+      expected_sha: ${{ needs.resolve_target.outputs.revision }}
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+
   qa_lab_parity_lane_release_checks:
     name: Run QA Lab parity lane (${{ matrix.lane }})
     needs: [resolve_target]
@@ -1946,6 +1960,7 @@ jobs:
       - docker_e2e_release_checks
       - package_acceptance_release_checks
       - qa_lab_parity_lane_release_checks
+      - maturity_scorecard_release_checks
       - qa_lab_parity_report_release_checks
       - qa_lab_runtime_parity_release_checks
       - runtime_tool_coverage_release_checks
@@ -2031,6 +2046,7 @@ jobs:
             "docker_e2e_release_checks=${{ needs.docker_e2e_release_checks.result }}" \
             "package_acceptance_release_checks=${{ needs.package_acceptance_release_checks.result }}" \
             "qa_lab_parity_lane_release_checks=${{ needs.qa_lab_parity_lane_release_checks.result }}" \
+            "maturity_scorecard_release_checks=${{ needs.maturity_scorecard_release_checks.result }}" \
             "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \
             "qa_lab_runtime_parity_release_checks=${{ needs.qa_lab_runtime_parity_release_checks.result }}" \
             "runtime_tool_coverage_release_checks=${{ needs.runtime_tool_coverage_release_checks.result }}" \

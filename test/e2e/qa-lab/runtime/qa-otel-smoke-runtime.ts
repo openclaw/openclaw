@@ -201,6 +201,10 @@ function readPositiveIntegerEnv(
   return parsed;
 }
 
+function createOtelSmokeRunId(): string {
+  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
 function oversizedBodyError(
   label: string,
   actualBytes: number,
@@ -229,7 +233,7 @@ function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     collectorMode: "local",
     logsExporter: "otlp",
-    outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${Date.now().toString(36)}`),
+    outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${createOtelSmokeRunId()}`),
     providerMode: "mock-openai",
     scenarioId: DEFAULT_SCENARIO_ID,
     help: false,

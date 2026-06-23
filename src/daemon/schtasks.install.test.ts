@@ -251,7 +251,7 @@ describe("installScheduledTask", () => {
   it("uses the hidden launcher for generated Windows gateway service installs", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
-      const callerEnv = {
+      const callerEnv: Record<string, string | undefined> = {
         ...env,
         HOME: env.USERPROFILE,
         USERDOMAIN: "WORKSTATION",

@@ -61,6 +61,27 @@
       "secretInput": {
         "anyOf": [{ "type": "string", "minLength": 1 }, { "$ref": "#/$defs/secretRef" }]
       },
+      "group": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "requireMention": { "type": "boolean" },
+          "commandLevel": {
+            "type": "string",
+            "enum": ["all", "safety", "strict"]
+          },
+          "ignoreOtherMentions": { "type": "boolean" },
+          "historyLimit": { "type": "number" },
+          "name": { "type": "string" },
+          "prompt": { "type": "string" }
+        }
+      },
+      "groups": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/group"
+        }
+      },
       "account": {
         "type": "object",
         "additionalProperties": true,
@@ -108,7 +129,8 @@
                 }
               }
             ]
-          }
+          },
+          "groups": { "$ref": "#/$defs/groups" }
         }
       }
     },
@@ -164,7 +186,8 @@
           "$ref": "#/$defs/account"
         }
       },
-      "defaultAccount": { "type": "string" }
+      "defaultAccount": { "type": "string" },
+      "groups": { "$ref": "#/$defs/groups" }
     }
   }
 }

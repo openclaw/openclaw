@@ -6,7 +6,7 @@ import {
   createOpenClawCrablineChannelReportNotes,
   runOpenClawCrablineChannelDriverSmoke,
   type OpenClawCrablineChannelDriverSelection,
-} from "crabline";
+} from "@openclaw/crabline";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

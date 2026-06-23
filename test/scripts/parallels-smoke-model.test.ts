@@ -58,6 +58,7 @@ import { testing as packageArtifactTesting } from "../../scripts/e2e/parallels/p
 import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
 import {
   posixCodexPlatformPackageRepairFunction,
+  windowsProviderOnlyPluginIsolationScript,
   windowsCodexPlatformPackageRepairFunction,
 } from "../../scripts/e2e/parallels/plugin-isolation.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
@@ -405,6 +406,21 @@ describe("Parallels smoke model selection", () => {
     }
     expect(posixRepair).toContain("repair_missing_codex_platform_package");
     expect(windowsRepair).toContain("Repair-MissingCodexPlatformPackage");
+  });
+
+  it("keeps Windows provider-only plugin isolation temp scripts per run", () => {
+    const script = windowsProviderOnlyPluginIsolationScript({
+      fallbackPluginId: "openai",
+      modelId: "openai/gpt-5.5",
+    });
+
+    expect(script).toContain("[guid]::NewGuid().ToString('N')");
+    expect(script).toContain("openclaw-parallels-plugin-isolation-");
+    expect(script).not.toContain("'openclaw-parallels-plugin-isolation.cjs'");
+    expect(script).toContain("try {");
+    expect(script).toContain("} finally {");
+    expect(script).toContain("Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue");
+    expect(script).toContain("Remove-Item Env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION");
   });
 
   it("writes full model ids as config map keys in provider batches", () => {
