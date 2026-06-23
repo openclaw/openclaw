@@ -184,8 +184,8 @@ export function resolveShellFromPath(
 
   // Windows: use where.exe to resolve App Execution Aliases (reparse points).
   // fs.existsSync returns false for WindowsApps reparse points (EACCES), but
-  // accessSync(F_OK) resolves them correctly — same approach as agent-core's
-  // findBashOnPath() in packages/agent-core/src/harness/env/nodejs.ts.
+  // accessSync(F_OK) resolves them correctly — the same insight powers
+  // agent-core's findBashOnPath() in packages/agent-core/src/harness/env/nodejs.ts.
   if (process.platform === "win32") {
     try {
       const result = spawnSync("where.exe", [name], {
