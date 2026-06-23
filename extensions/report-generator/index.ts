@@ -255,6 +255,11 @@ export default definePluginEntry({
                 onActivity: (message) => {
                   void mercurePusher.pushReportProgress(streamTopic, message, task.id);
                 },
+                // Structured timeline steps for the report card's "工作过程"
+                // panel. Fire-and-forget: never blocks generation.
+                onStep: (step) => {
+                  void mercurePusher.pushReportStep(streamTopic, step, task.id);
+                },
               },
               logger,
             );

@@ -1,4 +1,5 @@
 import { sanitizeInternalRefs } from "./sanitize-output.js";
+import type { ActivityStep } from "./tool-activity.js";
 import type { MercureConfig } from "./types.js";
 
 /**
@@ -76,6 +77,20 @@ export class MercurePusher {
     return this.sendToMercure(topic, {
       type: "progress",
       content,
+      ...(historyId === undefined ? {} : { historyId }),
+    });
+  }
+
+  /**
+   * Push a structured timeline step (start/end) for the frontend's collapsible
+   * "工作过程" panel. Typed `step` so the frontend appends it to the assistant
+   * message's step list instead of the reply body. Carries only the sanitized
+   * label/category from the narrator — never tool args.
+   */
+  async pushStep(topic: string, step: ActivityStep, historyId?: number): Promise<boolean> {
+    return this.sendToMercure(topic, {
+      type: "step",
+      ...step,
       ...(historyId === undefined ? {} : { historyId }),
     });
   }

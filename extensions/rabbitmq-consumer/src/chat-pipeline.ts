@@ -456,6 +456,11 @@ export async function processChatMessage(
       push: (message) => {
         void mercure.pushProgress(mercureTopic, message, chatMsg.historyId);
       },
+      // Structured timeline steps (start/end) for the frontend's "工作过程"
+      // panel. Sanitized label/category only — the narrator never reads args.
+      onStep: (step) => {
+        void mercure.pushStep(mercureTopic, step, chatMsg.historyId);
+      },
     });
 
     // Only forward events from THIS session. The agent runtime attaches

@@ -1,4 +1,5 @@
 import type { PluginLogger } from "../api.js";
+import type { ActivityStep } from "./tool-activity.js";
 import type { MercureConfig } from "./types.js";
 
 interface PushOptions {
@@ -101,6 +102,16 @@ export class MercurePusher {
    */
   async pushReportProgress(topic: string, content: string, taskId: number): Promise<boolean> {
     return this.sendToMercure(topic, { type: "report_progress", content, taskId });
+  }
+
+  /**
+   * Push a structured timeline step (start/end) scoped to taskId for the
+   * frontend's collapsible "工作过程" panel on the report card. Typed
+   * `report_step` so it lands on the card's step list, not the report body.
+   * Carries only sanitized label/category — never tool args.
+   */
+  async pushReportStep(topic: string, step: ActivityStep, taskId: number): Promise<boolean> {
+    return this.sendToMercure(topic, { type: "report_step", ...step, taskId });
   }
 
   /** Signal that the report progress stream for taskId is finished. */

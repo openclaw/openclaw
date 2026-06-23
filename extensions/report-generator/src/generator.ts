@@ -8,7 +8,7 @@ import {
   type CollectedStats,
   type QueryPlan,
 } from "./query-plan.js";
-import { ToolActivityNarrator } from "./tool-activity.js";
+import { ToolActivityNarrator, type ActivityStep, type StepCategory } from "./tool-activity.js";
 import type { GeneratedReport, ReportPeriod } from "./types.js";
 
 interface GenerateOptions {
@@ -43,6 +43,13 @@ interface GenerateOptions {
    * credentials) never reach this callback.
    */
   onActivity?: (message: string) => void;
+  /**
+   * Called with structured timeline steps (start/end) for the frontend's
+   * collapsible "工作过程" panel on the report card. The report-writing run
+   * bans tools, so progress is milestone-based (template analysis → stats →
+   * writing); steps carry only sanitized labels/categories, never raw data.
+   */
+  onStep?: (step: ActivityStep) => void;
 }
 
 /**
@@ -144,18 +151,45 @@ export class ReportGenerator {
       agentId,
       onDelta,
       onActivity,
+      onStep,
     } = options;
 
     logger.info(`[REPORT_GENERATOR] Generating ${period} report for requirement: ${requirement}`);
 
+    // Milestone step emitter for the frontend "工作过程" timeline. The writing
+    // run bans tools, so steps come from these phase milestones rather than
+    // tool events. Each carries only a sanitized label/category.
+    let stepSeq = 0;
+    const beginStep = (label: string, category: StepCategory) => {
+      stepSeq += 1;
+      const stepId = `report-${stepSeq}`;
+      const index = stepSeq;
+      const startedAt = Date.now();
+      onStep?.({ phase: "start", stepId, index, label, category, status: "running" });
+      return (status: "completed" | "failed") =>
+        onStep?.({
+          phase: "end",
+          stepId,
+          index,
+          label,
+          category,
+          status,
+          durationMs: Math.max(0, Date.now() - startedAt),
+        });
+    };
+
     // Step 1: LLM reads the template and proposes WHAT to aggregate
     // (validated against whitelists; falls back to the default plan).
     onActivity?.("正在分析模板数据需求…");
+    const endPlanStep = beginStep("正在分析模板数据需求", "read");
     const plan = await this.planQueries(template, userId, logger);
+    endPlanStep("completed");
 
     // Step 2: code executes the plan — full-set SQL aggregation, real rows.
     onActivity?.("正在统计舆情数据…");
+    const endStatsStep = beginStep("正在统计舆情数据", "query");
     const stats = await collectStats(plan);
+    endStatsStep("completed");
     const dataDigest = buildStatsDigest(stats);
     const totalCount = stats.total;
 
@@ -193,6 +227,8 @@ export class ReportGenerator {
       }
     });
 
+    // Step 3: the LLM writes the report from the pre-queried digest.
+    const endWriteStep = beginStep("正在撰写报告", "write");
     try {
       const reportPrompt = this.buildReportPrompt({
         period,
@@ -294,6 +330,7 @@ export class ReportGenerator {
 
       logger.info(`[REPORT_GENERATOR] Generated report: ${title}`);
 
+      endWriteStep("completed");
       return {
         title,
         content: generatedText,
@@ -301,6 +338,7 @@ export class ReportGenerator {
       };
     } catch (error) {
       logger.error(`[REPORT_GENERATOR] Generation failed: ${String(error)}`);
+      endWriteStep("failed");
       throw error;
     } finally {
       unsubscribe();
