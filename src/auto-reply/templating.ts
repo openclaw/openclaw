@@ -4,7 +4,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
-import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";

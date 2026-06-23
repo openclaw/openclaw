@@ -19,6 +19,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
 import type { PluginHookBeforeToolCallResult } from "./hook-before-tool-call-result.js";
+import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { InputGateDecision } from "./hook-decision-types.js";
 import type {
   PluginHookInboundClaimContext,
@@ -47,6 +48,11 @@ export type {
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
 } from "./hook-before-agent-start.types.js";
+export type {
+  PluginHookChannelChatContext,
+  PluginHookChannelContext,
+  PluginHookChannelSenderContext,
+} from "./hook-channel-context.types.js";
 export {
   PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
   stripPromptMutationFieldsFromLegacyHookResult,
@@ -233,25 +239,6 @@ const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES)
 
 export const isConversationHookName = (hookName: PluginHookName): boolean =>
   conversationHookNameSet.has(hookName);
-
-export interface PluginHookChannelSenderContext {
-  /** Channel-scoped sender ID, matching `ctx.senderId` when both are present. */
-  id?: string;
-  [key: string]: unknown;
-}
-
-export interface PluginHookChannelChatContext {
-  /** Transport-native conversation ID, matching `ctx.chatId` when both are present. */
-  id?: string;
-  [key: string]: unknown;
-}
-
-export interface PluginHookChannelContext {
-  /** Sender metadata supplied by the originating channel. */
-  sender?: PluginHookChannelSenderContext;
-  /** Chat/conversation metadata supplied by the originating channel. */
-  chat?: PluginHookChannelChatContext;
-}
 
 export type PluginHookAgentContext = {
   runId?: string;

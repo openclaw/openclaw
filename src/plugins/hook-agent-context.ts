@@ -1,7 +1,8 @@
 /** Builds plugin hook agent context snapshots from active session and model state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
-import type { PluginHookAgentContext, PluginHookChannelContext } from "./hook-types.js";
+import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
+import type { PluginHookAgentContext } from "./hook-types.js";
 
 const TARGET_PREFIXES = new Set(["channel", "chat", "direct", "dm", "group", "thread", "user"]);
 

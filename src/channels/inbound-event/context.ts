@@ -18,7 +18,7 @@ import {
 } from "../../auto-reply/reply/inbound-text.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
-import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type {
   AccessFacts,
