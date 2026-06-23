@@ -12,6 +12,7 @@ import { tryReadJson } from "../../infra/json-files.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
+import { resolveMcpAuthProfileBundleConfig } from "../mcp-auth-profile.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
 import {
   findClaudeMcpConfigPath,
@@ -181,6 +182,7 @@ export async function prepareCliBundleMcpConfig(params: {
   backend: CliBackendConfig;
   workspaceDir: string;
   config?: OpenClawConfig;
+  agentDir?: string;
   additionalConfig?: BundleMcpConfig;
   /**
    * Serve exactly these servers, skipping user/plugin/additional merges.
@@ -238,12 +240,18 @@ export async function prepareCliBundleMcpConfig(params: {
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
+  const resolvedAuthProfileConfig = await resolveMcpAuthProfileBundleConfig({
+    config: mergedConfig,
+    cfg: params.config,
+    agentDir: params.agentDir,
+    env: params.env,
+  });
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,
     backend: params.backend,
-    mergedConfig,
-    env: params.env,
+    mergedConfig: resolvedAuthProfileConfig.config,
+    env: resolvedAuthProfileConfig.env,
   });
 }
 

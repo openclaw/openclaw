@@ -7,7 +7,7 @@ import {
   SKILL_WORKSHOP_TOOL_NAME,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { buildCodexUserMcpServersThreadConfigPatchForRuntime } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import {
@@ -373,8 +373,9 @@ export async function startOrResumeThread(params: {
     const userMcpServersConfigPatch =
       params.userMcpServersEnabled === false
         ? undefined
-        : buildCodexUserMcpServersThreadConfigPatch(params.params.config, {
+        : await buildCodexUserMcpServersThreadConfigPatchForRuntime(params.params.config, {
             agentId: params.agentId ?? params.params.agentId,
+            agentDir: params.params.agentDir,
           });
     const userMcpServersFingerprint =
       fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
