@@ -37,13 +37,10 @@ const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
 const [CONVERSATION_INFO_SENTINEL, SENDER_INFO_SENTINEL] = INBOUND_META_SENTINELS;
 
-// Per-line `System:` / `System (untrusted):` event prefixes emitted by
-// `session-system-events.ts` (and rewritten by `security/system-tags.ts`).
-// These are AI-facing runtime events (e.g. exec completions carrying the agent's
-// own thinking trace and the echoed user query) and must not surface in
-// user-visible chat. Line-anchored so prose like "Operating System: Linux" is
-// preserved — only a `System:` at the start of a line is stripped.
-const SYSTEM_EVENT_LINE_RE = /^\s*System(?:\s*\(untrusted\))?:(?=\s|$)/;
+// Per-line `System:` event prefixes emitted by `session-system-events.ts` are
+// AI-facing runtime events and must not surface in user-visible chat. Preserve
+// `System (untrusted):`, which marks spoof-neutralized user-authored text.
+const SYSTEM_EVENT_LINE_RE = /^\s*System:(?=\s|$)/;
 
 function isSystemEventLine(line: string): boolean {
   return SYSTEM_EVENT_LINE_RE.test(line);
@@ -56,7 +53,7 @@ const SENTINEL_FAST_RE = new RegExp(
     .join("|")
     // Line-anchored system-event prefixes; trigger the slow parse so the loop
     // can drop them. `m` flag matches the prefix at any line start.
-    .concat("|^[ \\t]*System(?: \\(untrusted\\))?:"),
+    .concat("|^[ \\t]*System:"),
   "m",
 );
 
@@ -315,9 +312,9 @@ export function stripLeadingInboundMetadata(text: string): string {
     return "";
   }
 
-  // Drop leading `System:` / `System (untrusted):` event lines (exec completions
-  // etc.) symmetrically with the main `stripInboundMetadata` loop, so the leading
-  // path is not a fail-open gap. Must run before the sentinel early-return below.
+  // Drop leading `System:` event lines (exec completions etc.) symmetrically with
+  // the main `stripInboundMetadata` loop, so the leading path is not a fail-open
+  // gap. Must run before the sentinel early-return below.
   const strippedSystemEvent = isSystemEventLine(lines[index]);
   while (index < lines.length && isSystemEventLine(lines[index])) {
     index++;
