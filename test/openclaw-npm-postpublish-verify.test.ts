@@ -394,10 +394,16 @@ describe("collectInstalledPackageErrors", () => {
     try {
       writeInstalledFile(packageRoot, "package.json", '{"version":"2026.3.23"}\n');
       writeInstalledFile(packageRoot, "dist/plugin-sdk/zod.js", "export const z = {};\n");
+      writeInstalledFile(packageRoot, "dist/extensions/image-generation-core/package.json", "{}\n");
       writeInstalledFile(
         packageRoot,
         "dist/extensions/image-generation-core/runtime-api.js",
         "export {};\n",
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/media-understanding-core/package.json",
+        "{}\n",
       );
       writeInstalledFile(
         packageRoot,
