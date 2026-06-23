@@ -877,6 +877,7 @@ describe("task-registry", () => {
           timed_out: 1,
           cancelled: 0,
           lost: 0,
+          delivering: 0,
         },
         byRuntime: {
           subagent: 1,

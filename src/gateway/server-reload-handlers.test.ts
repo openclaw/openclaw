@@ -93,6 +93,7 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
         timed_out: 0,
         cancelled: 0,
         lost: 0,
+        delivering: 0,
       },
       byRuntime: {
         subagent: hoisted.activeTaskCount.value,
