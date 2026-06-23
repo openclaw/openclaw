@@ -27,6 +27,7 @@ import {
   persistSessionTranscriptTurn,
   purgeDeletedAgentSessionEntries,
   publishTranscriptUpdate,
+  readTranscriptTailLines,
   readSessionUpdatedAt,
   replaceSessionEntry,
   resolveSessionEntryCandidateTarget,
@@ -2588,6 +2589,21 @@ describe("session accessor file-backed seam", () => {
       sessionFile: explicitSessionFile,
       sessionId: "session-1",
     });
+  });
+
+  it("reads only the requested newest transcript tail lines", async () => {
+    const transcriptLines = Array.from({ length: 500 }, (_, index) =>
+      JSON.stringify({ seq: index + 1 }),
+    );
+    fs.writeFileSync(transcriptPath, `${transcriptLines.join("\n")}\n`, "utf8");
+
+    const result = await readTranscriptTailLines({
+      sessionFile: transcriptPath,
+      sessionId: "session-1",
+      maxLines: 3,
+    });
+
+    expect(result?.lines).toEqual(transcriptLines.slice(-3));
   });
 
   it("keeps read and write runtime targets aligned for new topic sessions", async () => {

@@ -144,6 +144,36 @@ test("sessions.diagnose reports no_sessions when no stored sessions exist", asyn
   });
 });
 
+test("sessions.diagnose marks terminal sessions with partial delivery route as uncertain", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        endedAt: Date.now(),
+        lastChannel: "telegram",
+        status: "done",
+      }),
+    },
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
+    key: "agent:main:main",
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    delivery: {
+      uncertain: true,
+      lastChannel: "telegram",
+    },
+    findings: expect.arrayContaining([
+      expect.objectContaining({
+        code: "delivery_uncertain",
+      }),
+    ]),
+  });
+});
+
 test("sessions.diagnose excludes global and unknown fallback rows unless opted in", async () => {
   await createSessionStoreDir();
   await writeSessionStore({

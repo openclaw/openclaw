@@ -90,7 +90,10 @@ import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { writeJsonlLines } from "./transcript-jsonl.js";
 import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
-import { streamSessionTranscriptLines } from "./transcript-stream.js";
+import {
+  streamSessionTranscriptLines,
+  streamSessionTranscriptLinesReverse,
+} from "./transcript-stream.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -1824,26 +1827,21 @@ export async function commitReplySessionInitialization(params: {
 /** Reads a bounded transcript tail through the session accessor boundary. */
 export async function readTranscriptTailLines(
   scope: SessionTranscriptReadScope & { maxLines: number },
-): Promise<{ lines: string[]; totalLines: number } | null> {
+): Promise<{ lines: string[] } | null> {
   const maxLines = Math.max(1, Math.floor(scope.maxLines));
   const lines: string[] = [];
-  let totalLines = 0;
   try {
     const transcript = resolveSessionTranscriptReadTarget(scope);
-    for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
-      if (!line.trim()) {
-        continue;
-      }
-      totalLines += 1;
+    for await (const line of streamSessionTranscriptLinesReverse(transcript.sessionFile)) {
       lines.push(line);
-      if (lines.length > maxLines) {
-        lines.shift();
+      if (lines.length >= maxLines) {
+        break;
       }
     }
   } catch {
     return null;
   }
-  return { lines, totalLines };
+  return { lines: lines.reverse() };
 }
 
 /**
