@@ -254,6 +254,7 @@ jobs:
           pnpm maturity:render -- \
             --output-dir .artifacts/maturity-docs \
             --static-assets-dir .artifacts/maturity-docs/assets/maturity \
+            --scores qa/maturity-scores.yaml \
             --evidence-dir .artifacts/maturity-evidence \
             --strict-inputs
           {
@@ -270,6 +271,7 @@ jobs:
           set -euo pipefail
           pnpm maturity:render -- \
             --output-dir docs \
+            --scores qa/maturity-scores.yaml \
             --evidence-dir .artifacts/maturity-evidence \
             --strict-inputs
 
