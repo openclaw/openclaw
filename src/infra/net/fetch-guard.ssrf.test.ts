@@ -2203,6 +2203,62 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(lookupFn).toHaveBeenCalledOnce();
     await result.release();
   });
+
+  it("blocks link-local resolved addresses for NO_PROXY-matched hosts (metadata guard)", async () => {
+    clearProxyEnv();
+    vi.stubEnv("http_proxy", "http://proxy.corp:8080");
+    vi.stubEnv("no_proxy", "");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("NO_PROXY", "*.internal");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    // DNS rebinding: hostname matches NO_PROXY but resolves to 169.254.x.x
+    const lookupFn = vi.fn(async () => [
+      { address: "169.254.169.254", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://api.internal:8080/status",
+        fetchImpl,
+        lookupFn,
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      }),
+    ).rejects.toThrow("Blocked");
+  });
+
+  it("blocks cloud metadata resolved addresses for NO_PROXY-matched hosts (metadata guard)", async () => {
+    clearProxyEnv();
+    vi.stubEnv("http_proxy", "http://proxy.corp:8080");
+    vi.stubEnv("no_proxy", "");
+    vi.stubEnv("NO_PROXY", "");
+    vi.stubEnv("NO_PROXY", "*.internal");
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    // DNS rebinding: resolves to cloud metadata IP
+    const lookupFn = vi.fn(async () => [
+      { address: "100.100.100.200", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://api.internal:8080/status",
+        fetchImpl,
+        lookupFn,
+        mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      }),
+    ).rejects.toThrow("Blocked");
+  });
 });
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {

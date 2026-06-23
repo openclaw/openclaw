@@ -169,9 +169,12 @@ pinning. Enable this only when the proxy is operator-controlled and enforces
 outbound policy after DNS resolution.
 
 <Note>
-  If no HTTP(S) proxy env var is configured, or the target host is excluded by
-  `NO_PROXY`, `web_fetch` falls back to the normal strict path with local DNS
-  pinning.
+  If no HTTP(S) proxy env var is configured, `web_fetch` falls back to the
+  normal strict path with local DNS pinning. When a proxy is configured but
+  the target host is excluded by `NO_PROXY`, the request gets exact-host
+  trust — private and local addresses (RFC1918, tailnet, localhost) are
+  allowed directly without going through the proxy, but metadata and
+  link-local addresses (169.254.x.x, cloud metadata IPs) remain blocked.
 </Note>
 
 ## Limits and safety

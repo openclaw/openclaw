@@ -518,14 +518,13 @@ async function fetchWithSsrFGuardInternal(
       // When trusted-env-proxy mode is active but NO_PROXY excludes this URL,
       // the request bypasses the proxy and goes direct through pinned DNS.
       //
-      // Relax SSRF private-network checks for NO_PROXY-matched hosts because:
-      // 1. useTrustedEnvProxy is an explicit operator opt-in — the user already
-      //    trusted the proxy with ALL traffic, including private-network targets.
-      // 2. NO_PROXY is an explicit per-host exclusion — the operator chose to
-      //    bypass the proxy for these specific addresses. Direct access does not
-      //    add risk the proxy would not have already accepted.
-      // 3. SSRF hostname allowlist and DNS pinning still apply; only the
-      //    private-network address block is relaxed, and only for the matched host.
+      // Use exact-host trust via allowedHostnames so NO_PROXY-matched private
+      // and local addresses (RFC1918, tailnet, localhost) can be reached
+      // directly without going through the proxy. This approach intentionally
+      // does NOT set allowPrivateNetwork because that would skip the
+      // metadata/link-local resolved-address guard in
+      // resolvePinnedHostnameWithPolicy — exact-host trust still blocks
+      // 169.254.x.x and cloud metadata IPs after DNS resolution.
       const resolvedProtocol = parsedUrl.protocol === "https:" ? "https" : "http";
       const trustedNoProxyBypass =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY &&
@@ -535,11 +534,7 @@ async function fetchWithSsrFGuardInternal(
       const effectivePolicy = trustedNoProxyBypass
         ? {
             ...policyForUrl,
-            allowPrivateNetwork: true,
-            allowedHostnames: [
-              ...(policyForUrl?.allowedHostnames ?? []),
-              parsedUrl.hostname,
-            ],
+            allowedHostnames: [...(policyForUrl?.allowedHostnames ?? []), parsedUrl.hostname],
           }
         : policyForUrl;
       const canUseMockedFetchWithoutDns =
