@@ -609,36 +609,6 @@ async function readWindowsEstablishedConnections(
   return { connections: result.entries, detail: result.detail, errors: result.errors };
 }
 
-async function tryListenOnHost(port: number, host: string): Promise<PortUsageStatus | "skip"> {
-  try {
-    await tryListenOnPort({ port, host, exclusive: true });
-    return "free";
-  } catch (err) {
-    if (isErrno(err) && err.code === "EADDRINUSE") {
-      return "busy";
-    }
-    if (isErrno(err) && (err.code === "EADDRNOTAVAIL" || err.code === "EAFNOSUPPORT")) {
-      return "skip";
-    }
-    return "unknown";
-  }
-}
-
-export async function checkPortInUse(port: number): Promise<PortUsageStatus> {
-  const hosts = ["127.0.0.1", "0.0.0.0", "::1", "::"];
-  let sawUnknown = false;
-  for (const host of hosts) {
-    const result = await tryListenOnHost(port, host);
-    if (result === "busy") {
-      return "busy";
-    }
-    if (result === "unknown") {
-      sawUnknown = true;
-    }
-  }
-  return sawUnknown ? "unknown" : "free";
-}
-
 export async function inspectPortUsage(port: number): Promise<PortUsage> {
   const errors: string[] = [];
   const result =

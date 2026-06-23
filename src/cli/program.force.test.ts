@@ -13,6 +13,24 @@ const tryListenOnPortMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/ports-probe.js", () => ({
   tryListenOnPort: (...args: unknown[]) => tryListenOnPortMock(...args),
+  probePortUsage: async (port: number) => {
+    let sawUnknown = false;
+    for (const host of ["127.0.0.1", "0.0.0.0", "::1", "::"]) {
+      try {
+        await tryListenOnPortMock({ port, host, exclusive: true });
+      } catch (err: unknown) {
+        const code = (err as { code?: unknown }).code;
+        if (code === "EADDRINUSE") {
+          return "busy";
+        }
+        if (code === "EADDRNOTAVAIL" || code === "EAFNOSUPPORT") {
+          continue;
+        }
+        sawUnknown = true;
+      }
+    }
+    return sawUnknown ? "unknown" : "free";
+  },
 }));
 
 import { execFileSync } from "node:child_process";
@@ -232,7 +250,7 @@ describe("gateway --force helpers", () => {
     });
 
     const busyErr = Object.assign(new Error("in use"), { code: "EADDRINUSE" });
-    // Each checkPortInUse probes up to 4 hosts; the last check needs all
+    // Each probePortUsage call probes up to 4 hosts; the last check needs all
     // hosts free, so use permanent mockResolvedValue instead of once.
     tryListenOnPortMock
       .mockRejectedValueOnce(busyErr)
@@ -260,6 +278,10 @@ describe("gateway --force helpers", () => {
   });
 
   it("throws when lsof is unavailable and fuser is missing", async () => {
+    // An inconclusive four-host probe must continue into the cleanup tools.
+    tryListenOnPortMock.mockRejectedValue(
+      Object.assign(new Error("probe failed"), { code: "EIO" }),
+    );
     (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
       const err = new Error(`spawnSync ${cmd} ENOENT`) as NodeJS.ErrnoException;
       err.code = "ENOENT";
