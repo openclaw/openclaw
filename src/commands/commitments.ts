@@ -24,7 +24,7 @@ const STATUS_VALUES = new Set<CommitmentStatus>([
 ]);
 
 function truncate(value: string, maxChars: number): string {
-  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 1)}...`;
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 3)}...`;
 }
 
 function safe(value: string): string {
