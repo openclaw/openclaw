@@ -346,7 +346,7 @@ describe("evidence summary", () => {
           id: "control-ui.browser-run",
           title: "Control UI browser workflow",
           sourcePath: "ui/control-ui.e2e.test.ts",
-          primaryCoverageIds: ["control-ui.browser"],
+          primaryCoverageIds: ["ui.control"],
           docsRefs: ["docs/concepts/qa-e2e-automation.md"],
           codeRefs: ["ui/"],
         },
@@ -374,7 +374,7 @@ describe("evidence summary", () => {
       },
       coverage: [
         {
-          id: "control-ui.browser",
+          id: "ui.control",
           role: "primary",
         },
       ],

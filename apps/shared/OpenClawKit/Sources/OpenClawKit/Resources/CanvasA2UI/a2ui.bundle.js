@@ -1,4 +1,3 @@
-// Bundled A2UI runtime resource embedded by OpenClawKit.
 var __defProp$1 = Object.defineProperty;
 var __exportAll = (all, no_symbols) => {
 	let target = {};
@@ -11936,6 +11935,10 @@ var __runInitializers = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
+/**
+* Canvas A2UI browser bootstrap that installs theme overrides and native bridge
+* helpers.
+*/
 const modalStyles = i$10`
   dialog {
     position: fixed;

@@ -8,6 +8,7 @@ import type {
   SpeechProviderConfig,
   SpeechProviderOverrides,
   SpeechProviderPlugin,
+  SpeechSynthesisRequest,
   SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
 import {
@@ -89,8 +90,6 @@ function parseBooleanValue(value: string): boolean | undefined {
 function parseNumberValue(value: string): number | undefined {
   return parseStrictFiniteNumber(value);
 }
-
-export const isValidVoiceId = isValidElevenLabsVoiceId;
 
 function normalizeVoiceSetting(value: unknown, min: number, max: number): number | undefined {
   const number = asFiniteNumber(value);
@@ -391,6 +390,40 @@ async function listElevenLabsVoices(params: {
   }
 }
 
+type ElevenLabsSynthesisRequest = Pick<
+  SpeechSynthesisRequest,
+  "providerConfig" | "providerOverrides" | "text" | "timeoutMs"
+>;
+
+function resolveElevenLabsTtsRequest(
+  req: ElevenLabsSynthesisRequest,
+  options: Pick<Parameters<typeof elevenLabsTTS>[0], "outputFormat" | "latencyTier">,
+): Parameters<typeof elevenLabsTTS>[0] {
+  const config = readElevenLabsProviderConfig(req.providerConfig);
+  const overrides = req.providerOverrides ?? {};
+  const apiKey =
+    config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
+  if (!apiKey) {
+    throw new Error("ElevenLabs API key missing");
+  }
+  return {
+    text: req.text,
+    apiKey,
+    baseUrl: config.baseUrl,
+    voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
+    modelId: normalizeElevenLabsTtsModelId(trimToUndefined(overrides.modelId)) ?? config.modelId,
+    outputFormat: options.outputFormat,
+    seed: normalizeElevenLabsSeed(overrides.seed) ?? config.seed,
+    applyTextNormalization:
+      (trimToUndefined(overrides.applyTextNormalization) as "auto" | "on" | "off" | undefined) ??
+      config.applyTextNormalization,
+    languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
+    latencyTier: options.latencyTier,
+    voiceSettings: resolveVoiceSettingsOverride(config.voiceSettings, overrides.voiceSettings),
+    timeoutMs: req.timeoutMs,
+  };
+}
+
 export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "elevenlabs",
@@ -511,37 +544,16 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
         process.env.XI_API_KEY,
       ),
     synthesize: async (req) => {
-      const config = readElevenLabsProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
-      const apiKey =
-        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
-      if (!apiKey) {
-        throw new Error("ElevenLabs API key missing");
-      }
       const outputFormat =
         trimToUndefined(overrides.outputFormat) ??
         (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
-      const latencyTier = normalizeElevenLabsLatencyTier(overrides.latencyTier);
-      const audioBuffer = await elevenLabsTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-        modelId:
-          normalizeElevenLabsTtsModelId(trimToUndefined(overrides.modelId)) ?? config.modelId,
-        outputFormat,
-        seed: normalizeElevenLabsSeed(overrides.seed) ?? config.seed,
-        applyTextNormalization:
-          (trimToUndefined(overrides.applyTextNormalization) as
-            | "auto"
-            | "on"
-            | "off"
-            | undefined) ?? config.applyTextNormalization,
-        languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
-        latencyTier,
-        voiceSettings: resolveVoiceSettingsOverride(config.voiceSettings, overrides.voiceSettings),
-        timeoutMs: req.timeoutMs,
-      });
+      const audioBuffer = await elevenLabsTTS(
+        resolveElevenLabsTtsRequest(req, {
+          outputFormat,
+          latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
+        }),
+      );
       return {
         audioBuffer,
         outputFormat,
@@ -550,37 +562,16 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       };
     },
     streamSynthesize: async (req) => {
-      const config = readElevenLabsProviderConfig(req.providerConfig);
       const overrides = req.providerOverrides ?? {};
-      const apiKey =
-        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
-      if (!apiKey) {
-        throw new Error("ElevenLabs API key missing");
-      }
       const outputFormat =
         trimToUndefined(overrides.outputFormat) ??
         (req.target === "voice-note" ? "opus_48000_64" : "mp3_44100_128");
-      const latencyTier = normalizeElevenLabsLatencyTier(overrides.latencyTier);
-      const stream = await elevenLabsTTSStream({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-        modelId:
-          normalizeElevenLabsTtsModelId(trimToUndefined(overrides.modelId)) ?? config.modelId,
-        outputFormat,
-        seed: normalizeElevenLabsSeed(overrides.seed) ?? config.seed,
-        applyTextNormalization:
-          (trimToUndefined(overrides.applyTextNormalization) as
-            | "auto"
-            | "on"
-            | "off"
-            | undefined) ?? config.applyTextNormalization,
-        languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
-        latencyTier,
-        voiceSettings: resolveVoiceSettingsOverride(config.voiceSettings, overrides.voiceSettings),
-        timeoutMs: req.timeoutMs,
-      });
+      const stream = await elevenLabsTTSStream(
+        resolveElevenLabsTtsRequest(req, {
+          outputFormat,
+          latencyTier: normalizeElevenLabsLatencyTier(overrides.latencyTier),
+        }),
+      );
       return {
         audioStream: stream.audioStream,
         outputFormat,
@@ -590,34 +581,9 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
       };
     },
     synthesizeTelephony: async (req) => {
-      const config = readElevenLabsProviderConfig(req.providerConfig);
-      const overrides = req.providerOverrides ?? {};
-      const apiKey =
-        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
-      if (!apiKey) {
-        throw new Error("ElevenLabs API key missing");
-      }
       const outputFormat = "pcm_22050";
       const sampleRate = 22_050;
-      const audioBuffer = await elevenLabsTTS({
-        text: req.text,
-        apiKey,
-        baseUrl: config.baseUrl,
-        voiceId: trimToUndefined(overrides.voiceId) ?? config.voiceId,
-        modelId:
-          normalizeElevenLabsTtsModelId(trimToUndefined(overrides.modelId)) ?? config.modelId,
-        outputFormat,
-        seed: normalizeElevenLabsSeed(overrides.seed) ?? config.seed,
-        applyTextNormalization:
-          (trimToUndefined(overrides.applyTextNormalization) as
-            | "auto"
-            | "on"
-            | "off"
-            | undefined) ?? config.applyTextNormalization,
-        languageCode: trimToUndefined(overrides.languageCode) ?? config.languageCode,
-        voiceSettings: resolveVoiceSettingsOverride(config.voiceSettings, overrides.voiceSettings),
-        timeoutMs: req.timeoutMs,
-      });
+      const audioBuffer = await elevenLabsTTS(resolveElevenLabsTtsRequest(req, { outputFormat }));
       return { audioBuffer, outputFormat, sampleRate };
     },
   };

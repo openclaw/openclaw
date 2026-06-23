@@ -28,6 +28,9 @@ vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
       cfg: OpenClawConfig;
       env?: NodeJS.ProcessEnv;
     }) => {
+      if (params.channelId === "cache-channel") {
+        return Boolean(params.env?.CACHE_CHANNEL_TOKEN?.trim());
+      }
       if (params.channelId === "irc") {
         return Boolean(params.env?.IRC_HOST?.trim() && params.env?.IRC_NICK?.trim());
       }
@@ -216,6 +219,31 @@ describe("applyPluginAutoEnable core", () => {
         providerId: "google",
       }),
     ).toBe("google auth configured");
+  });
+
+  it("auto-enables external speech providers selected by TTS config", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        messages: { tts: { provider: "gradium" } },
+        plugins: { allow: ["telegram"] },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "gradium",
+          channels: [],
+          contracts: { speechProviders: ["gradium"] },
+          origin: "global",
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["telegram", "gradium"]);
+    expect(result.config.plugins?.entries?.gradium).toEqual({ enabled: true });
+    expect(result.autoEnabledReasons).toEqual({
+      gradium: ["gradium speech provider selected"],
+    });
+    expect(result.changes).toContain("gradium speech provider selected, enabled automatically.");
   });
 
   it("treats an undefined config as empty", () => {
@@ -1173,10 +1201,11 @@ describe("applyPluginAutoEnable core", () => {
   it("does not reuse same-turn auto-enable results after discovery mutates in place", () => {
     const config: OpenClawConfig = {};
     const mutableDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
-    const manifestRegistry = makeRegistry([{ id: "irc-plugin", channels: ["irc"] }]);
+    const manifestRegistry = makeRegistry([
+      { id: "cache-channel-plugin", channels: ["cache-channel"] },
+    ]);
     const configuredEnv = makeIsolatedEnv({
-      IRC_HOST: "irc.libera.chat",
-      IRC_NICK: "openclaw-bot",
+      CACHE_CHANNEL_TOKEN: "configured",
     });
 
     const first = applyPluginAutoEnable({
@@ -1186,7 +1215,10 @@ describe("applyPluginAutoEnable core", () => {
       manifestRegistry,
     });
     mutableDiscovery.candidates.push(
-      makeBundledChannelCandidate({ pluginId: "irc-plugin", channelId: "irc" }),
+      makeBundledChannelCandidate({
+        pluginId: "cache-channel-plugin",
+        channelId: "cache-channel",
+      }),
     );
     const second = applyPluginAutoEnable({
       config,
@@ -1195,8 +1227,8 @@ describe("applyPluginAutoEnable core", () => {
       manifestRegistry,
     });
 
-    expect(first.config.plugins?.entries?.["irc-plugin"]).toBeUndefined();
-    expect(second.config.plugins?.entries?.["irc-plugin"]?.enabled).toBe(true);
+    expect(first.config.plugins?.entries?.["cache-channel-plugin"]).toBeUndefined();
+    expect(second.config.plugins?.entries?.["cache-channel-plugin"]?.enabled).toBe(true);
     expect(second).not.toBe(first);
   });
 

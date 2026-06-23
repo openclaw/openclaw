@@ -30,7 +30,15 @@ function createPrefixOnlyChannelPlugin(
   targetPrefixes: readonly string[],
   aliases?: readonly string[],
 ): ChannelPlugin {
-  const base = createChannelTestPluginBase({ id });
+  const base = createChannelTestPluginBase({
+    id,
+    config: {
+      isConfigured: (_account, cfg) => {
+        const channelConfig = cfg.channels?.[id];
+        return Boolean(channelConfig && channelConfig.enabled !== false);
+      },
+    },
+  });
   return {
     ...base,
     meta: {
@@ -493,6 +501,78 @@ describe("cron method validation", () => {
 
     expect(context.cron.add).not.toHaveBeenCalled();
     expectResponseError(respond, { messageIncludes: "delivery.channel is required" });
+  });
+
+  it("ignores stale ownerless channel config when validating default announce delivery", async () => {
+    setRuntimeConfig({
+      session: { mainKey: "main" },
+      channels: {
+        slack: {
+          botToken: "xoxb-slack-token",
+          appToken: "xapp-slack-token",
+        },
+        clickclack: {
+          token: "stale-token",
+        },
+      },
+      plugins: pluginEntries("slack"),
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "ownerless config is not ambiguous",
+        delivery: { mode: "announce" },
+      }),
+    );
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("rejects explicit announce delivery to stale ownerless channel config", async () => {
+    setRuntimeConfig({
+      channels: {
+        slack: {
+          botToken: "xoxb-slack-token",
+          appToken: "xapp-slack-token",
+        },
+        clickclack: {
+          token: "stale-token",
+        },
+      },
+      plugins: pluginEntries("slack"),
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "ownerless channel is not deliverable",
+        delivery: { mode: "announce", channel: "clickclack" },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, { messageIncludes: "delivery.channel must be one of: slack" });
+  });
+
+  it("rejects explicit announce delivery when only stale ownerless channel config exists", async () => {
+    setRuntimeConfig({
+      channels: {
+        clickclack: {
+          token: "stale-token",
+        },
+      },
+      plugins: pluginEntries(),
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        name: "only ownerless channel is not deliverable",
+        delivery: { mode: "announce", channel: "clickclack" },
+      }),
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, { messageIncludes: "delivery.channel is not configured" });
   });
 
   it("accepts provider-prefixed announce target without delivery.channel when multiple channels are configured", async () => {

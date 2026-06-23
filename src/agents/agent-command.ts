@@ -1428,6 +1428,11 @@ async function agentCommandInternal(
             groupChannel: runContext.groupChannel ?? sessionEntry?.groupChannel,
             groupSubject: sessionEntry?.subject,
             parentSessionKey: sessionEntry?.parentSessionKey ?? sessionKey,
+            directUserIds: [
+              sessionEntry?.origin?.nativeDirectUserId,
+              sessionEntry?.origin?.from,
+              sessionEntry?.origin?.to,
+            ],
           })
         : null;
     const normalizedChannelOverride = channelModelOverride
@@ -1805,6 +1810,7 @@ async function agentCommandInternal(
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
+    const fastModeStartedAtMs = Date.now();
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
       cfg,
       runId,
@@ -1895,6 +1901,14 @@ async function agentCommandInternal(
               provider: providerOverride,
               model: modelOverride,
             });
+            const fastModeState = resolveFastModeState({
+              cfg,
+              provider: providerOverride,
+              model: modelOverride,
+              agentId: sessionAgentId,
+              sessionEntry,
+            });
+            const fastMode = opts.fastMode ?? fastModeState.mode;
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
@@ -1911,13 +1925,13 @@ async function agentCommandInternal(
               body,
               isFallbackRetry,
               resolvedThinkLevel,
-              fastMode: resolveFastModeState({
-                cfg,
-                provider: providerOverride,
-                model: modelOverride,
-                agentId: sessionAgentId,
-                sessionEntry,
-              }).enabled,
+              fastMode,
+              fastModeStartedAtMs,
+              fastModeAutoOnSeconds:
+                fastMode === "auto"
+                  ? (opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
+                  : fastModeState.fastAutoOnSeconds,
+              isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
               timeoutMs,
               runTimeoutOverrideMs,
               runId,

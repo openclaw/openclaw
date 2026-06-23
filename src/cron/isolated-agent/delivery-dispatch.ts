@@ -1,7 +1,6 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
@@ -31,12 +30,14 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
-import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
+import type {
+  SourceDeliveryOutcome,
+  SourceDeliveryVisibleDelivery,
+} from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
-  isCronSessionKey,
   parseThreadSessionSuffix,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
@@ -48,6 +49,7 @@ import type { CronJob, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
+import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
@@ -133,6 +135,7 @@ export type DispatchCronDeliveryState = {
   result?: RunCronAgentTurnResult;
   delivered: boolean;
   deliveryAttempted: boolean;
+  cronRunSessionCleanupAttempted: boolean;
   summary?: string;
   outputText?: string;
   synthesizedText?: string;
@@ -169,9 +172,6 @@ type CompletedDirectCronDelivery = {
   results: OutboundDeliveryResult[];
 };
 
-const gatewayCallRuntimeLoader = createLazyImportLoader(
-  () => import("../../gateway/call.runtime.js"),
-);
 const deliveryOutboundRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-outbound.runtime.js"),
 );
@@ -193,10 +193,6 @@ const subagentFollowupRuntimeLoader = createLazyImportLoader(
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
-
-async function loadGatewayCallRuntime(): Promise<typeof import("../../gateway/call.runtime.js")> {
-  return await gatewayCallRuntimeLoader.load();
-}
 
 async function loadDeliveryOutboundRuntime(): Promise<
   typeof import("./delivery-outbound.runtime.js")
@@ -253,29 +249,12 @@ export async function cleanupDirectCronSession(params: {
   sessionId: string;
   retireReason: string;
 }): Promise<void> {
-  if (!params.job.deleteAfterRun) {
-    return;
-  }
-  if (!isCronSessionKey(params.agentSessionKey)) {
-    return;
-  }
-  try {
-    const { callGateway } = await loadGatewayCallRuntime();
-    await callGateway({
-      method: "sessions.delete",
-      params: {
-        key: params.agentSessionKey,
-        deleteTranscript: true,
-        emitLifecycleHooks: false,
-      },
-      timeoutMs: 10_000,
-    });
-  } catch {
-    await retireSessionMcpRuntime({
-      sessionId: params.sessionId,
-      reason: params.retireReason,
-    });
-  }
+  await cleanupCronRunSessionAfterRun({
+    job: params.job,
+    agentSessionKey: params.agentSessionKey,
+    sessionId: params.sessionId,
+    reason: params.retireReason,
+  });
 }
 
 function logCronDeliveryErrorDeferred(message: string): void {
@@ -455,33 +434,68 @@ function resolveCronAwarenessText(params: {
         normalizeOptionalString(params.synthesizedText));
 }
 
+export function formatTargetCronDeliveryAwarenessText(text: string): string {
+  return `A scheduled cron job delivered this message to this channel:\n${text}`;
+}
+
+function formatTargetCronDeliveryFailureAwarenessText(params: {
+  job: CronJob;
+  channel: string;
+  to: string;
+  threadId?: string;
+  error: unknown;
+  partialDelivered?: boolean;
+}): string {
+  const targetParts = [`${params.channel}:${params.to}`];
+  if (params.threadId) {
+    targetParts.push(`thread ${params.threadId}`);
+  }
+  return [
+    "A scheduled cron job attempted to deliver to this channel, but delivery failed.",
+    `Job: ${params.job.name || params.job.id}`,
+    `Target: ${targetParts.join(" ")}`,
+    `Delivery error: ${formatErrorMessage(params.error)}`,
+    params.partialDelivered
+      ? "One or more scheduled message payloads may already have been delivered."
+      : "No scheduled message was delivered.",
+  ].join("\n");
+}
+
 async function queueCronAwarenessSystemEvent(params: {
   cfg: OpenClawConfig;
   jobId: string;
   agentId: string;
   deliveryIdempotencyKey: string;
-  outputText?: string;
-  synthesizedText?: string;
-  deliveryPayloads?: ReplyPayload[];
-  outboundPayloads?: NormalizedOutboundPayload[];
+  queueMainSession: boolean;
+  targetSessionKey?: string;
+  text: string;
+  targetText?: string;
 }): Promise<void> {
-  const text = resolveCronAwarenessText(params);
-  if (!text) {
-    return;
-  }
-
   try {
     const { enqueueSystemEvent } = await loadDeliveryOutboundRuntime();
-    enqueueSystemEvent(text, {
-      sessionKey: resolveCronAwarenessMainSessionKey({
-        cfg: params.cfg,
-        agentId: params.agentId,
-      }),
-      contextKey: params.deliveryIdempotencyKey,
+    const mainSessionKey = resolveCronAwarenessMainSessionKey({
+      cfg: params.cfg,
+      agentId: params.agentId,
     });
+    if (params.queueMainSession) {
+      enqueueSystemEvent(params.text, {
+        sessionKey: mainSessionKey,
+        contextKey: params.deliveryIdempotencyKey,
+      });
+    }
+    const targetSessionKey = params.targetSessionKey;
+    const shouldQueueTargetSession =
+      targetSessionKey &&
+      (!isSameSessionKey(targetSessionKey, mainSessionKey) || !params.queueMainSession);
+    if (shouldQueueTargetSession) {
+      enqueueSystemEvent(params.targetText ?? formatTargetCronDeliveryAwarenessText(params.text), {
+        sessionKey: targetSessionKey,
+        contextKey: params.deliveryIdempotencyKey,
+      });
+    }
   } catch (err) {
     await logCronDeliveryWarn(
-      `[cron:${params.jobId}] failed to queue isolated cron awareness for the main session: ${formatErrorMessage(err)}`,
+      `[cron:${params.jobId}] failed to queue isolated cron awareness: ${formatErrorMessage(err)}`,
     );
   }
 }
@@ -599,19 +613,16 @@ function canonicalizeDirectCronRouteSessionKey(params: {
   return `${canonicalBase}:thread:${thread.threadId}`;
 }
 
-async function resolveDirectCronDeliverySessionKey(params: {
+// Resolves the session for a concrete visible delivery target and ensures the
+// outbound session exists before cron awareness or transcript code references it.
+async function resolveCronDeliveryRouteSessionKey(params: {
   cfg: OpenClawConfig;
-  job: CronJob;
+  jobId: string;
   agentId: string;
   agentSessionKey: string;
   delivery: SuccessfulDeliveryTarget;
+  warningContext: string;
 }): Promise<string> {
-  if (isCustomCronSessionTarget(params.job.sessionTarget)) {
-    // Custom session targets are already caller-selected; do not remap them
-    // through outbound routing or the explicit session identity would drift.
-    return params.agentSessionKey;
-  }
-
   try {
     const { resolveOutboundSessionRoute, ensureOutboundSessionEntry } =
       await loadOutboundSessionRuntime();
@@ -658,9 +669,136 @@ async function resolveDirectCronDeliverySessionKey(params: {
     return canonicalRouteSessionKey;
   } catch (err) {
     await logCronDeliveryWarn(
-      `[cron:${params.job.id}] failed to resolve destination session for direct delivery mirror: ${formatErrorMessage(err)}`,
+      `[cron:${params.jobId}] failed to resolve destination session for ${params.warningContext}: ${formatErrorMessage(err)}`,
     );
     return params.agentSessionKey;
+  }
+}
+
+/** Resolves the transcript mirror session for direct cron delivery. */
+export async function resolveDirectCronDeliverySessionKey(params: {
+  cfg: OpenClawConfig;
+  job: CronJob;
+  agentId: string;
+  agentSessionKey: string;
+  delivery: SuccessfulDeliveryTarget;
+}): Promise<string> {
+  if (isCustomCronSessionTarget(params.job.sessionTarget)) {
+    // Custom session targets are already caller-selected; do not remap them
+    // through outbound routing or the explicit session identity would drift.
+    return params.agentSessionKey;
+  }
+
+  return await resolveCronDeliveryRouteSessionKey({
+    cfg: params.cfg,
+    jobId: params.job.id,
+    agentId: params.agentId,
+    agentSessionKey: params.agentSessionKey,
+    delivery: params.delivery,
+    warningContext: "direct delivery mirror",
+  });
+}
+
+function resolveCronMessageToolAwarenessTarget(params: {
+  delivery: SourceDeliveryVisibleDelivery;
+  resolvedDelivery: DeliveryTargetResolution;
+}): (SuccessfulDeliveryTarget & { text: string }) | undefined {
+  const { target } = params.delivery;
+  const text =
+    normalizeOptionalString(target.text) ??
+    resolveMirroredTranscriptText({ mediaUrls: target.mediaUrls }) ??
+    undefined;
+  if (!text) {
+    return undefined;
+  }
+  const targetChannel = normalizeOptionalString(target.provider);
+  const channel =
+    targetChannel && targetChannel !== "message"
+      ? targetChannel
+      : params.delivery.verifiedTarget && params.resolvedDelivery.ok
+        ? params.resolvedDelivery.channel
+        : undefined;
+  const to =
+    normalizeOptionalString(target.to) ??
+    (params.delivery.verifiedTarget && params.resolvedDelivery.ok
+      ? params.resolvedDelivery.to
+      : undefined);
+  if (!channel || !to) {
+    return undefined;
+  }
+  const accountId =
+    target.accountId ??
+    (params.delivery.verifiedTarget && params.resolvedDelivery.ok
+      ? params.resolvedDelivery.accountId
+      : undefined);
+  const threadId =
+    target.threadId ??
+    (params.delivery.verifiedTarget && target.threadImplicit === true && params.resolvedDelivery.ok
+      ? params.resolvedDelivery.threadId
+      : undefined);
+  return {
+    ok: true,
+    channel: channel as SuccessfulDeliveryTarget["channel"],
+    to,
+    ...(accountId ? { accountId } : {}),
+    ...(threadId ? { threadId } : {}),
+    mode: "explicit",
+    text,
+  };
+}
+
+/** Queues target-session context awareness for cron deliveries made via message tool. */
+export async function queueCronMessageToolDeliveryAwareness(params: {
+  cfg: OpenClawConfig;
+  job: CronJob;
+  agentId: string;
+  agentSessionKey: string;
+  runStartedAt: number;
+  resolvedDelivery: DeliveryTargetResolution;
+  sourceDeliveryOutcome: SourceDeliveryOutcome;
+}): Promise<void> {
+  const seen = new Set<string>();
+  for (const delivery of params.sourceDeliveryOutcome.visibleDeliveries) {
+    const target = resolveCronMessageToolAwarenessTarget({
+      delivery,
+      resolvedDelivery: params.resolvedDelivery,
+    });
+    if (!target) {
+      continue;
+    }
+    const dedupeKey = [
+      target.channel,
+      normalizeDeliveryTarget(target.channel, target.to),
+      target.accountId ?? "",
+      target.threadId ?? "",
+      target.text,
+    ].join("\0");
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    const targetSessionKey = await resolveCronDeliveryRouteSessionKey({
+      cfg: params.cfg,
+      jobId: params.job.id,
+      agentId: params.agentId,
+      agentSessionKey: params.agentSessionKey,
+      delivery: target,
+      warningContext: "message-tool delivery awareness",
+    });
+    const deliveryIdempotencyKey = buildDirectCronDeliveryIdempotencyKey({
+      jobId: params.job.id,
+      runStartedAt: params.runStartedAt,
+      delivery: target,
+    });
+    await queueCronAwarenessSystemEvent({
+      cfg: params.cfg,
+      jobId: params.job.id,
+      agentId: params.agentId,
+      deliveryIdempotencyKey,
+      queueMainSession: false,
+      targetSessionKey,
+      text: target.text,
+    });
   }
 }
 
@@ -778,7 +916,17 @@ export async function dispatchCronDelivery(
 
   let delivered = verifiedMessageToolDelivery;
   let deliveryAttempted = verifiedMessageToolDelivery;
-  let directCronSessionDeleted = false;
+  let directCronSessionCleanupAttempted = false;
+  const buildDeliveryState = (result?: RunCronAgentTurnResult): DispatchCronDeliveryState => ({
+    ...(result ? { result } : {}),
+    delivered,
+    deliveryAttempted,
+    cronRunSessionCleanupAttempted: directCronSessionCleanupAttempted,
+    summary,
+    outputText,
+    synthesizedText,
+    deliveryPayloads,
+  });
   const formatDeliveryTargetError = (error: string) =>
     params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? `${error}; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target`
@@ -794,16 +942,18 @@ export async function dispatchCronDelivery(
       ...params.telemetry,
     });
   const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-    if (directCronSessionDeleted) {
+    if (directCronSessionCleanupAttempted) {
       return;
     }
-    directCronSessionDeleted = true;
-    await cleanupDirectCronSession({
+    const cleanupAttempted = await cleanupCronRunSessionAfterRun({
       job: params.job,
       agentSessionKey: params.agentSessionKey,
       sessionId: params.sessionId,
-      retireReason: "cron-delete-after-run-fallback",
+      reason: "cron-delete-after-run-fallback",
     });
+    if (cleanupAttempted) {
+      directCronSessionCleanupAttempted = true;
+    }
   };
   const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
     deliveryAttempted = true;
@@ -935,6 +1085,7 @@ export async function dispatchCronDelivery(
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
       let hadPartialFailure = false;
+      let partialDeliverySucceededBeforeFailure = false;
       // `onPayload` fires after send hooks render the outbound payload, but before
       // platform send. The mirror only consumes this array after full delivery succeeds.
       const attemptedPayloadsForMirror: NormalizedOutboundPayload[] = [];
@@ -973,29 +1124,59 @@ export async function dispatchCronDelivery(
           // See: https://github.com/openclaw/openclaw/issues/40545
           skipQueue: true,
         });
-        if (
-          send.status === "failed" ||
-          (!params.deliveryBestEffort && send.status === "partial_failed")
-        ) {
+        if (send.status === "failed") {
           throw send.error;
         }
         if (send.status === "partial_failed") {
+          partialDeliverySucceededBeforeFailure = send.results.length > 0;
+          if (!params.deliveryBestEffort) {
+            throw send.error;
+          }
           hadPartialFailure = true;
         }
         return send.status === "sent" || send.status === "partial_failed" ? send.results : [];
       };
-      const deliveryResults = options?.retryTransient
-        ? await retryTransientDirectCronDelivery({
-            jobId: params.job.id,
-            signal: params.abortSignal,
-            run: runDelivery,
-          })
-        : await runDelivery();
+      let deliveryResults: OutboundDeliveryResult[];
+      try {
+        deliveryResults = options?.retryTransient
+          ? await retryTransientDirectCronDelivery({
+              jobId: params.job.id,
+              signal: params.abortSignal,
+              run: runDelivery,
+            })
+          : await runDelivery();
+      } catch (err) {
+        const failureAwarenessText = formatTargetCronDeliveryFailureAwarenessText({
+          job: params.job,
+          channel: delivery.channel,
+          to: delivery.to,
+          threadId: stringifyRouteThreadId(delivery.threadId),
+          error: err,
+          partialDelivered: partialDeliverySucceededBeforeFailure,
+        });
+        await queueCronAwarenessSystemEvent({
+          cfg: params.cfgWithAgentDefaults,
+          jobId: params.job.id,
+          agentId: params.agentId,
+          deliveryIdempotencyKey: `${deliveryIdempotencyKey}:failure`,
+          queueMainSession: false,
+          targetSessionKey: deliverySessionKey,
+          text: failureAwarenessText,
+          targetText: failureAwarenessText,
+        });
+        throw err;
+      }
       // Only mark delivered when ALL payloads succeeded (no partial failure).
       delivered = deliveryResults.length > 0 && !hadPartialFailure;
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
+      const deliveryAwarenessText = resolveCronAwarenessText({
+        outputText,
+        synthesizedText,
+        deliveryPayloads: payloadsForDelivery,
+        outboundPayloads: attemptedPayloadsForMirror,
+      });
       const shouldQueueAwarenessForDelivery = shouldQueueCronAwareness({
         job: params.job,
         delivery,
@@ -1004,14 +1185,7 @@ export async function dispatchCronDelivery(
       // For explicit isolated deliveries that resolve to the main session, the
       // awareness queue is the intentional main-session record on the next turn;
       // adding an immediate assistant mirror would make the cron text appear twice.
-      const awarenessText = shouldQueueAwarenessForDelivery
-        ? resolveCronAwarenessText({
-            outputText,
-            synthesizedText,
-            deliveryPayloads: payloadsForDelivery,
-            outboundPayloads: attemptedPayloadsForMirror,
-          })
-        : undefined;
+      const awarenessText = shouldQueueAwarenessForDelivery ? deliveryAwarenessText : undefined;
       const deliveryWillReachAwarenessMainSession =
         mirrorTargetsAwarenessMainSession &&
         shouldQueueAwarenessForDelivery &&
@@ -1058,16 +1232,21 @@ export async function dispatchCronDelivery(
           mirror: transcriptMirror,
         });
       }
-      if (delivered && shouldQueueAwarenessForDelivery) {
+      if (
+        delivered &&
+        !params.deliveryBestEffort &&
+        deliveryAwarenessText &&
+        (shouldQueueAwarenessForDelivery ||
+          !isSameSessionKey(deliverySessionKey, awarenessMainSessionKey))
+      ) {
         await queueCronAwarenessSystemEvent({
           cfg: params.cfgWithAgentDefaults,
           jobId: params.job.id,
           agentId: params.agentId,
           deliveryIdempotencyKey,
-          outputText,
-          synthesizedText,
-          deliveryPayloads: payloadsForDelivery,
-          outboundPayloads: attemptedPayloadsForMirror,
+          queueMainSession: shouldQueueAwarenessForDelivery,
+          text: deliveryAwarenessText,
+          targetSessionKey: deliverySessionKey,
         });
       }
       if (delivered) {
@@ -1219,33 +1398,25 @@ export async function dispatchCronDelivery(
 
   if (params.deliveryRequested && !params.skipHeartbeatDelivery && !sourceDeliverySatisfied) {
     if (!params.resolvedDelivery.ok) {
+      // The target could not be resolved (e.g. a keyless implicit cron whose
+      // inherited shared-bucket target was refused). We never send here, so a
+      // deleteAfterRun cron must still retire its session/transcript before
+      // returning — otherwise the one-shot session leaks. Safe no-op for
+      // non-deleteAfterRun / non-cron sessions (see cleanupDirectCronSession).
+      await cleanupDirectCronSessionIfNeeded();
       if (!params.deliveryBestEffort) {
-        return {
-          result: failDeliveryTarget(params.resolvedDelivery.error.message),
-          delivered,
-          deliveryAttempted,
-          summary,
-          outputText,
-          synthesizedText,
-          deliveryPayloads,
-        };
+        return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));
       }
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);
-      return {
-        result: params.withRunSession({
+      return buildDeliveryState(
+        params.withRunSession({
           status: "ok",
           summary,
           outputText,
           deliveryAttempted,
           ...params.telemetry,
         }),
-        delivered,
-        deliveryAttempted,
-        summary,
-        outputText,
-        synthesizedText,
-        deliveryPayloads,
-      };
+      );
     }
 
     // Finalize descendant/subagent output first for text-only cron runs, then
@@ -1256,38 +1427,15 @@ export async function dispatchCronDelivery(
     if (useDirectDelivery) {
       const directResult = await deliverViaDirectAndCleanup(params.resolvedDelivery);
       if (directResult) {
-        return {
-          result: directResult,
-          delivered,
-          deliveryAttempted,
-          summary,
-          outputText,
-          synthesizedText,
-          deliveryPayloads,
-        };
+        return buildDeliveryState(directResult);
       }
     } else {
       const finalizedTextResult = await finalizeTextDelivery(params.resolvedDelivery);
       if (finalizedTextResult) {
-        return {
-          result: finalizedTextResult,
-          delivered,
-          deliveryAttempted,
-          summary,
-          outputText,
-          synthesizedText,
-          deliveryPayloads,
-        };
+        return buildDeliveryState(finalizedTextResult);
       }
     }
   }
 
-  return {
-    delivered,
-    deliveryAttempted,
-    summary,
-    outputText,
-    synthesizedText,
-    deliveryPayloads,
-  };
+  return buildDeliveryState();
 }

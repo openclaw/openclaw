@@ -214,6 +214,9 @@ const DASHBOARD_PAGES: DashboardPageDefinition[] = [
         .filter(
           (page) =>
             page.kind !== "report" &&
+            // concept/synthesis are intentionally durable references
+            page.kind !== "concept" &&
+            page.kind !== "synthesis" &&
             !(
               isUnmanagedRawSourceSummary(page) &&
               !managedImportedSourcePagePaths.has(page.relativePath)

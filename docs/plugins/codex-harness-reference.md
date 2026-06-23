@@ -91,8 +91,8 @@ Supported `appServer` fields:
 | `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                                                                                                          |
 | `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                  |
 | `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                                                       |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                                                           |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                                                                        |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                              |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                               |
 | `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                             |
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
@@ -149,11 +149,15 @@ must report stable version `0.125.0` or newer.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
-`Authorization` header. When native Codex plugins are configured, OpenClaw uses
-the connected app-server's plugin control plane to install or refresh those
-plugins and then refreshes app inventory so plugin-owned apps are visible to the
-Codex thread. Only connect OpenClaw to remote app-servers that are trusted to
-accept OpenClaw-managed plugin installs and app inventory refreshes.
+`Authorization` header. `appServer.authToken` and each `appServer.headers.*`
+value can be a SecretInput; the secrets runtime resolves SecretRefs and env
+shorthand before OpenClaw builds app-server start options, and unresolved
+structured SecretRefs fail before any token or header is sent. When native Codex
+plugins are configured, OpenClaw uses the connected app-server's plugin control
+plane to install or refresh those plugins and then refreshes app inventory so
+plugin-owned apps are visible to the Codex thread. Only connect OpenClaw to
+remote app-servers that are trusted to accept OpenClaw-managed plugin installs
+and app inventory refreshes.
 
 ## Approval and sandbox modes
 

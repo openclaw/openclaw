@@ -191,10 +191,11 @@ release state.
    closeout requires both assets and a matching checksum. A partial manifest
    replays its recorded `main` SHA and rollback drill to regenerate identical
    bytes, then attaches the missing checksum; an invalid pair, or a checksum
-   without a manifest, stays blocking. A missing or more-than-90-day-old drill
-   record blocks a new evidence-backed closeout; private recovery commands
-   remain in the maintainer-only runbook. Use manual dispatch only to repair or
-   replay an evidence-backed stable closeout.
+   without a manifest, stays blocking. A push-triggered run without rollback
+   drill repository variables skips without completing closeout; a missing or
+   more-than-90-day-old drill record still blocks manual evidence-backed
+   closeout. Private recovery commands remain in the maintainer-only runbook.
+   Use manual dispatch only to repair or replay an evidence-backed stable closeout.
    A legacy fallback correction tag may reuse base-package evidence only when
    the correction tag resolves to the same source commit as the base stable tag.
    A correction with different source must publish and verify its own package
@@ -228,9 +229,9 @@ release state.
   `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS
   package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full
   runs always include exhaustive live/E2E and Docker release-path soak;
-  `run_release_soak=true` is retained for an explicit beta soak. With
-  `release_profile=full` and `rerun_group=all`, it also runs package Telegram
-  E2E against the `release-package-under-test` artifact from release checks.
+  `run_release_soak=true` is retained for an explicit beta soak. Package
+  Acceptance provides the canonical package Telegram E2E during candidate
+  validation, avoiding a second concurrent live poller.
   Provide `release_package_spec` after publishing a beta to reuse the shipped
   npm package across release checks, Package Acceptance, and package Telegram
   E2E without rebuilding the release tarball. Provide
@@ -460,20 +461,16 @@ gh workflow run full-release-validation.yml \
 ```
 
 The workflow resolves the target ref, dispatches manual `CI` with
-`target_ref=<release-ref>`, dispatches `OpenClaw Release Checks`, prepares a
-parent `release-package-under-test` artifact for package-facing checks, and
-dispatches standalone package Telegram E2E when `release_profile=full` with
-`rerun_group=all` or when `release_package_spec` or
-`npm_telegram_package_spec` is set. `OpenClaw Release
-Checks` then fans out install smoke, cross-OS release checks, live/E2E Docker
-release-path coverage when soak is enabled, Package Acceptance with Telegram
-package QA, QA Lab parity, live Matrix, and live Telegram. A full/all run is
-only acceptable when the `Full Release Validation` summary shows `normal_ci`,
-`plugin_prerelease`, and `release_checks` as successful, unless a focused rerun
-intentionally skipped the separate `Plugin Prerelease` child. In full/all mode,
-the `npm_telegram` child must also be successful; outside full/all it is skipped
-unless a published `release_package_spec` or `npm_telegram_package_spec` was
-provided. The final
+`target_ref=<release-ref>`, then dispatches `OpenClaw Release Checks`.
+`OpenClaw Release Checks` fans out install smoke, cross-OS release checks,
+live/E2E Docker release-path coverage when soak is enabled, Package Acceptance
+with the canonical Telegram package E2E, QA Lab parity, live Matrix, and live
+Telegram. A full/all run is only acceptable when the `Full Release Validation`
+summary shows `normal_ci`, `plugin_prerelease`, and `release_checks` as
+successful, unless a focused rerun intentionally skipped the separate `Plugin
+Prerelease` child. Use the standalone `npm-telegram` child only for a focused
+published-package rerun with `release_package_spec` or
+`npm_telegram_package_spec`. The final
 verifier summary includes slowest-job tables for each child run, so the release
 manager can see the current critical path without downloading logs.
 See [Full release validation](/reference/full-release-validation) for the
@@ -558,8 +555,8 @@ runs only the release-only plugin child, `release-checks` runs every release
 box, and the narrower release groups are `install-smoke`, `cross-os`,
 `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram`.
 Focused `npm-telegram` reruns require `release_package_spec` or
-`npm_telegram_package_spec`; full/all runs with `release_profile=full` use the
-release-checks package artifact. Focused
+`npm_telegram_package_spec`; full/all runs use the canonical package Telegram
+E2E inside Package Acceptance. Focused
 cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or
 another OS/suite filter. QA release-check failures block normal release
 validation, including required OpenClaw dynamic tool drift in the standard tier.

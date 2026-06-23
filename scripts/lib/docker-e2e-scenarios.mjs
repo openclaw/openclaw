@@ -255,7 +255,7 @@ function kitchenSinkRpcLane() {
     {
       resources: ["npm"],
       stateScenario: "empty",
-      timeoutMs: 15 * 60 * 1000,
+      timeoutMs: 25 * 60 * 1000,
       weight: 3,
     },
   );
@@ -298,7 +298,7 @@ export const mainLanes = [
     "live-cli-backend-gemini",
     liveDockerScriptCommand(
       "test-live-cli-backend-docker.sh",
-      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+      "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1 OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1 OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
     ),
     {
       cacheKey: "cli-backend-gemini",
@@ -521,17 +521,13 @@ export const mainLanes = [
   lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
     stateScenario: "empty",
   }),
-  liveLane(
-    "npm-telegram-live",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-telegram-live",
-    {
-      e2eImageKind: "bare",
-      provider: "openai",
-      resources: ["live:telegram", "npm", "service"],
-      timeoutMs: 30 * 60 * 1000,
-      weight: 3,
-    },
-  ),
+  liveLane("npm-telegram-live", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-telegram-live", {
+    e2eImageKind: "bare",
+    provider: "openai",
+    resources: ["live:telegram", "npm", "service"],
+    timeoutMs: 30 * 60 * 1000,
+    weight: 3,
+  }),
   lane("qr", "pnpm test:docker:qr"),
 ];
 

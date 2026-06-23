@@ -6,7 +6,6 @@ import {
   approveNodePairing,
   beginNodePairingConnect,
   finalizeNodePairingCleanupClaim,
-  getPairedNode,
   listNodePairing,
   releaseNodePairingCleanupClaim,
   removePairedNode,
@@ -31,7 +30,7 @@ async function setupPairedNode(baseDir: string): Promise<string> {
     { callerScopes: ["operator.pairing", "operator.admin"] },
     baseDir,
   );
-  const paired = await getPairedNode("node-1", baseDir);
+  const paired = await findPairedNode("node-1", baseDir);
   expect(typeof paired?.token).toBe("string");
   expect(paired?.token.length).toBeGreaterThan(0);
   return paired!.token;
@@ -41,6 +40,11 @@ const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" }
 
 async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
   return await run(await tempDirs.make("case"));
+}
+
+async function findPairedNode(nodeId: string, baseDir: string) {
+  const pairing = await listNodePairing(baseDir);
+  return pairing.paired.find((node) => node.nodeId === nodeId) ?? null;
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -325,7 +329,7 @@ describe("node pairing tokens", () => {
 
       await expect(removePairedNode("node-1", baseDir)).resolves.toEqual({ nodeId: "node-1" });
       await expect(removePairedNode("node-1", baseDir)).resolves.toBeNull();
-      await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+      await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
       const pairing = await listNodePairing(baseDir);
       expect(pairing.pending).toHaveLength(1);
       expect(pairing.pending[0]?.requestId).toBe(pending.request.requestId);
@@ -357,7 +361,7 @@ describe("node pairing tokens", () => {
       expect(pairing.pending).toEqual([]);
       expect(pairing.paired).toHaveLength(1);
       expect(pairing.paired[0]?.nodeId).toBe("node-1");
-      await expect(getPairedNode("node-1", baseDir)).resolves.toMatchObject({
+      await expect(findPairedNode("node-1", baseDir)).resolves.toMatchObject({
         commands: ["system.run"],
       });
     });
@@ -592,7 +596,7 @@ describe("node pairing tokens", () => {
         status: "forbidden",
         missingScope: "operator.admin",
       });
-      await expect(getPairedNode("node-1", baseDir)).resolves.toBeNull();
+      await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
 
       const commandlessRequest = await requestNodePairing(
         {
@@ -658,7 +662,7 @@ describe("node pairing tokens", () => {
         false,
       );
 
-      const pairedNode = await getPairedNode("node-1", baseDir);
+      const pairedNode = await findPairedNode("node-1", baseDir);
       expect(pairedNode?.lastSeenAtMs).toBe(1234);
       expect(pairedNode?.lastSeenReason).toBe("silent_push");
     });

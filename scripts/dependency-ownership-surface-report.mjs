@@ -399,7 +399,7 @@ function printTextReport(report) {
 
 function readArtifactPath(argv, index, optionName) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;
@@ -423,7 +423,7 @@ export function parseArgs(argv) {
     }
     if (arg === "--json") {
       options.asJson = true;
-      if (argv[index + 1] && !argv[index + 1].startsWith("--")) {
+      if (argv[index + 1] && !argv[index + 1].startsWith("-")) {
         options.jsonPath = argv[++index];
       }
       continue;

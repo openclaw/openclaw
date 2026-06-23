@@ -65,7 +65,7 @@ pnpm ios:release:signing:check
 pnpm ios:release:signing:setup
 ```
 
-`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. If Fastlane does not already have a valid Apple Developer Portal session, run `fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
+`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
 
 Shared encrypted signing storage:
 
@@ -104,7 +104,7 @@ Generate deterministic App Store screenshots:
 pnpm ios:screenshots
 ```
 
-The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it captures the tab set on `iPhone 16 Pro Max` and `iPad Pro 13-inch (M4)`; override devices with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
+The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses one available large iPhone simulator and one available 13-inch iPad simulator from the installed Xcode runtime; override devices with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
 
 Upload to App Store Connect:
 
@@ -112,12 +112,9 @@ Upload to App Store Connect:
 pnpm ios:release:upload
 ```
 
-Direct Fastlane entry point:
-
-```bash
-cd apps/ios
-fastlane ios release_upload
-```
+Direct Fastlane TestFlight upload is disabled. Use the package script so the
+release wrapper, App Store push mode, and exported-IPA validation gate all run
+in the same path.
 
 Maintainer recovery path for a fresh clone on the same Mac:
 
@@ -144,13 +141,7 @@ fastlane ios auth_check
 pnpm ios:version:pin -- --from-gateway
 ```
 
-5. Set the official relay URL before release:
-
-```bash
-export OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com
-```
-
-6. Upload:
+5. Upload:
 
 ```bash
 pnpm ios:release:upload
@@ -159,6 +150,7 @@ pnpm ios:release:upload
 Quick verification after upload:
 
 - confirm `apps/ios/build/app-store/OpenClaw-<version>.ipa` exists
+- confirm Fastlane validates the exported IPA before upload
 - confirm Fastlane prints `Uploaded iOS App Store build: version=<version> short=<short> build=<build>`
 - remember that App Store Connect/TestFlight processing can take a few minutes after the upload succeeds
 
@@ -175,5 +167,7 @@ Versioning rules:
 - `pnpm ios:version:check` validates that checked-in iOS version artifacts are in sync
 - The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
 - Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched
+- App Store release uses `OpenClawPushMode=appStore`, which derives the canonical production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
+- The exported IPA is validated before upload by inspecting its push mode, signed entitlements, and embedded App Store profile.
 - `pnpm ios:release:upload` generates and uploads screenshots and release notes before archiving, then uploads the IPA without submitting it for App Review
 - See `apps/ios/VERSIONING.md` for the detailed workflow

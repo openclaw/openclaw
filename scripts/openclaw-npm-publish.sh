@@ -2,11 +2,33 @@
 
 set -euo pipefail
 
-mode="${1:-}"
-publish_target="${2:-}"
+usage() {
+  echo "usage: bash scripts/openclaw-npm-publish.sh --publish [package.tgz]"
+}
 
-if [[ "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/openclaw-npm-publish.sh --publish [package.tgz]" >&2
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "${1:-}" != "--publish" ]]; then
+  usage >&2
+  exit 2
+fi
+shift
+
+publish_target=""
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+if [[ "$#" -gt 0 ]]; then
+  case "$1" in
+    -*) echo "error: unexpected npm publish target option: $1" >&2; exit 2 ;;
+    *) publish_target="$1"; shift ;;
+  esac
+fi
+if [[ "$#" -gt 0 ]]; then
+  echo "error: unexpected npm publish argument: $1" >&2
   exit 2
 fi
 
