@@ -50,7 +50,7 @@ describe("getShellConfig", () => {
   });
 
   if (isWin) {
-    it("uses PowerShell on Windows", () => {
+    it("uses PowerShell on Windows with UTF-8 encoding init", () => {
       const { shell, args } = getShellConfig();
       const normalized = shell.toLowerCase();
       if (normalized.includes("powershell")) {
@@ -58,7 +58,13 @@ describe("getShellConfig", () => {
       } else {
         expect(normalized).toContain("pwsh");
       }
-      expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command"]);
+      expect(args[0]).toBe("-NoProfile");
+      expect(args[1]).toBe("-NonInteractive");
+      expect(args[2]).toBe("-Command");
+      // 4th arg is the UTF-8 + error-suppression init script
+      expect(args[3]).toContain("OutputEncoding");
+      expect(args[3]).toContain("UTF8");
+      expect(args[3]).toContain("SilentlyContinue");
     });
     return;
   }

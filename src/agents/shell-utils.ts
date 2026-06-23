@@ -106,9 +106,19 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
     // directly to the console via WriteConsole API, bypassing stdout pipes.
     // When Node.js spawns cmd.exe with piped stdio, these utilities produce no output.
     // PowerShell properly captures and redirects their output to stdout.
+    //
+    // Force UTF-8 output encoding so accented characters (áéíóúñ), CJK, and other
+    // non-ASCII text renders correctly regardless of the system locale.
+    // SilentlyContinue prevents PowerShell from wrapping stderr in noisy ErrorRecord objects.
+    const poweshellInit = [
+      "[Console]::OutputEncoding=[Text.Encoding]::UTF8",
+      "[Console]::InputEncoding=[Text.Encoding]::UTF8",
+      "$OutputEncoding=[Text.Encoding]::UTF8",
+      "$ErrorActionPreference='SilentlyContinue'"
+    ].join(";") + ";";
     return {
       shell: resolvePowerShellPath(),
-      args: ["-NoProfile", "-NonInteractive", "-Command"],
+      args: ["-NoProfile", "-NonInteractive", "-Command", poweshellInit],
     };
   }
 
