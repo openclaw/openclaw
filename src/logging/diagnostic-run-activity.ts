@@ -276,14 +276,14 @@ function isPassiveRunProgressReason(reason: string): boolean {
 }
 
 export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
-  const passiveProgress = isPassiveRunProgressReason(params.reason);
-  const activity = resolveSessionActivity({ ...params, create: !passiveProgress });
-  if (!activity) {
+  // Claude live active-tool heartbeats are observability ticks, not work progress.
+  // Refreshing the session clock (or even creating activity) here can hide wedged
+  // CLI tools from stall detection.
+  if (isPassiveRunProgressReason(params.reason)) {
     return;
   }
-  if (passiveProgress) {
-    // Claude live active-tool heartbeats are observability ticks, not work progress.
-    // Refreshing the session clock here can hide wedged CLI tools from stall detection.
+  const activity = resolveSessionActivity({ ...params, create: true });
+  if (!activity) {
     return;
   }
   touchSessionActivity(activity, params.reason);
