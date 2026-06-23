@@ -446,7 +446,7 @@ describe("models-config runtime source snapshot", () => {
       config: createOpenAiApiKeyRuntimeConfig(),
       sourceConfigForSecrets: mixedCaseSourceConfig,
     });
-    expect(Object.keys(providers).sort()).toEqual(["openai"]);
+    expect(Object.keys(providers).toSorted()).toEqual(["openai"]);
     expect(providers.OpenAI).toBeUndefined();
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
   });
@@ -480,7 +480,7 @@ describe("models-config runtime source snapshot", () => {
       config: createOpenAiRuntimeConfigWithHeadersAndApiKey(),
       sourceConfigForSecrets: sourceConfig,
     });
-    expect(Object.keys(providers).sort()).toEqual(["openai"]);
+    expect(Object.keys(providers).toSorted()).toEqual(["openai"]);
     expect(providers.OpenAI).toBeUndefined();
     expect(providers.openai?.apiKey).toBe("OPENAI_API_KEY"); // pragma: allowlist secret
     expectOpenAiHeaderMarkers(providers);
