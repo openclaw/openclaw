@@ -150,7 +150,7 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(logLines).toHaveLength(2);
   });
 
-  it("skips generated artifacts from its own vault sources directory", async () => {
+  it("skips generated artifacts from its own vault", async () => {
     const workspaceDir = await createBridgeWorkspace("self-import-workspace");
     const vaultDir = path.join(workspaceDir, "memory", "wiki");
     const { config } = await createVault({
@@ -171,10 +171,12 @@ describe("syncMemoryWikiBridgeSources", () => {
       "sources",
       "bridge-workspace-remote-memory-daily-old.md",
     );
+    const generatedIndexPath = path.join(vaultDir, "index.md");
     await fs.mkdir(path.dirname(dailyNotePath), { recursive: true });
     await fs.mkdir(path.dirname(generatedSourcePath), { recursive: true });
     await fs.writeFile(dailyNotePath, "# Daily Note\n", "utf8");
     await fs.writeFile(generatedSourcePath, "# Previously Imported Source\n", "utf8");
+    await fs.writeFile(generatedIndexPath, "# Generated Index\n", "utf8");
 
     registerBridgeArtifacts([
       {
@@ -190,6 +192,14 @@ describe("syncMemoryWikiBridgeSources", () => {
         workspaceDir,
         relativePath: "memory/wiki/sources/bridge-workspace-remote-memory-daily-old.md",
         absolutePath: generatedSourcePath,
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir,
+        relativePath: "memory/wiki/index.md",
+        absolutePath: generatedIndexPath,
         agentIds: ["main"],
         contentType: "markdown",
       },

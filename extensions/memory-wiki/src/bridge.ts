@@ -68,13 +68,13 @@ async function collectBridgeArtifacts(
   artifacts: MemoryPluginPublicArtifact[],
 ): Promise<BridgeArtifact[]> {
   const collected: BridgeArtifact[] = [];
-  const vaultSourcesKey = await resolveArtifactKey(path.join(vaultRoot, "sources"));
+  const vaultRootKey = await resolveArtifactKey(vaultRoot);
   for (const artifact of artifacts) {
     if (!shouldImportArtifact(artifact, bridgeConfig)) {
       continue;
     }
     const syncKey = await resolveArtifactKey(artifact.absolutePath);
-    if (isPathInsideOrEqual(vaultSourcesKey, syncKey)) {
+    if (isPathInsideOrEqual(vaultRootKey, syncKey)) {
       continue;
     }
     collected.push({
