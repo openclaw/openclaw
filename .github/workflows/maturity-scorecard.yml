@@ -1,0 +1,242 @@
+name: Maturity scorecard
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Optional workflow run id containing qa-evidence.json artifacts
+        required: false
+        type: string
+      artifact_pattern:
+        description: Artifact name pattern to download from source_run_id
+        required: false
+        default: "*qa*"
+        type: string
+      strict_inputs:
+        description: Fail when score or QA evidence inputs have non-fatal drift
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: ${{ format('{0}-{1}', github.workflow, github.ref) }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.x"
+
+jobs:
+  validate:
+    name: Validate maturity score sources
+    # Disabled until the initial generated docs and refreshed score snapshot land together.
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Validate maturity score sources
+        run: |
+          node --import tsx --input-type=module <<'NODE'
+          import { readValidatedQaMaturityScoreSources } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
+
+          const { warnings } = readValidatedQaMaturityScoreSources({
+            scoresPath: "qa/maturity-scores.yaml",
+            taxonomyPath: "taxonomy.yaml",
+          });
+          for (const warning of warnings) {
+            console.error(`warning: ${warning}`);
+          }
+          NODE
+
+  publish:
+    name: Publish maturity docs PR
+    # Disabled until the initial generated docs and refreshed score snapshot land together.
+    if: ${{ false }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Download QA evidence artifacts
+        if: ${{ inputs.source_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          ARTIFACT_PATTERN: ${{ inputs.artifact_pattern }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/maturity-evidence
+          gh run download "$SOURCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$ARTIFACT_PATTERN" \
+            --dir .artifacts/maturity-evidence
+          find .artifacts/maturity-evidence -name qa-evidence.json -print
+
+      - name: Check QA evidence artifacts
+        id: evidence
+        run: |
+          set -euo pipefail
+          if find .artifacts/maturity-evidence -name qa-evidence.json -print -quit 2>/dev/null | grep -q .; then
+            echo "has_evidence=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_evidence=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Require QA evidence for manual scorecard render
+        if: ${{ github.event_name == 'workflow_dispatch' && steps.evidence.outputs.has_evidence != 'true' }}
+        run: |
+          echo "Maturity scorecard rendering requires release QA evidence artifacts." >&2
+          exit 1
+
+      - name: Render artifact docs
+        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
+        env:
+          STRICT_INPUTS: ${{ github.event_name == 'workflow_dispatch' && inputs.strict_inputs }}
+        run: |
+          set -euo pipefail
+          args=(--output-dir .artifacts/maturity-docs --static-assets-dir .artifacts/maturity-docs/assets/maturity --evidence-dir .artifacts/maturity-evidence)
+          if [[ "$STRICT_INPUTS" == "true" ]]; then
+            args+=(--strict-inputs)
+          fi
+          pnpm maturity:render -- "${args[@]}"
+          {
+            echo "### Maturity scorecard docs"
+            echo
+            echo "- Source validation: passed"
+            echo "- Artifact docs: \`.artifacts/maturity-docs\`"
+            echo "- Strict inputs: \`${STRICT_INPUTS:-false}\`"
+            echo "- QA evidence: included"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Render committed docs preview
+        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
+        run: |
+          set -euo pipefail
+          pnpm maturity:render -- \
+            --output-dir docs \
+            --evidence-dir .artifacts/maturity-evidence
+
+      - name: Create generated docs PR app token
+        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Create generated docs PR fallback app token
+        if: ${{ steps.evidence.outputs.has_evidence == 'true' && steps.app-token.outcome == 'failure' }}
+        id: app-token-fallback
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Open generated docs PR
+        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "Maturity scorecard PR creation requires the OpenClaw GitHub App token secrets." >&2
+            exit 1
+          fi
+
+          if [[ -z "$(git status --porcelain -- docs/maturity/scorecard.md docs/maturity/taxonomy.md)" ]]; then
+            {
+              echo
+              echo "- Pull request: skipped; generated docs match current branch"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          branch="automation/maturity-scorecard-${SOURCE_RUN_ID:-$GITHUB_RUN_ID}"
+          base_branch="${GITHUB_REF_NAME:-main}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          gh auth setup-git
+          git fetch --no-tags --depth=1 origin "refs/heads/${branch}:refs/remotes/origin/${branch}" || true
+          git switch -C "$branch"
+          git add docs/maturity/scorecard.md docs/maturity/taxonomy.md
+          git commit -m "docs: update maturity scorecard"
+          git push --force-with-lease origin "$branch"
+
+          body_file=".artifacts/maturity-scorecard-pr-body.md"
+          mkdir -p "$(dirname "$body_file")"
+          cat > "$body_file" <<BODY
+          ## Summary
+
+          - refresh generated maturity scorecard docs from release QA evidence
+          - source workflow run: ${SOURCE_RUN_ID}
+
+          ## Verification
+
+          - Maturity scorecard workflow rendered docs from release profile qa-evidence.json artifacts
+          BODY
+
+          pr_url="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // ""')"
+          if [[ -n "$pr_url" ]]; then
+            gh pr edit "$pr_url" \
+              --title "docs: update maturity scorecard" \
+              --body-file "$body_file"
+          else
+            pr_url="$(gh pr create \
+              --base "$base_branch" \
+              --head "$branch" \
+              --title "docs: update maturity scorecard" \
+              --body-file "$body_file")"
+          fi
+          {
+            echo
+            echo "- Pull request: ${pr_url}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload maturity docs artifact
+        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: maturity-scorecard-docs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .artifacts/maturity-docs/
+          retention-days: 30
+          if-no-files-found: error
