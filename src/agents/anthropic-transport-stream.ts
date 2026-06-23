@@ -12,7 +12,7 @@ import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   findActiveAnthropicToolTurnAssistantIndex,
 } from "../llm/providers/anthropic-thinking-replay.js";
-import type { AnthropicOptions } from "../llm/providers/anthropic.js";
+import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/providers/anthropic.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -1004,9 +1004,13 @@ function buildAnthropicParams(
   if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
     if (fable5 || options?.thinkingEnabled) {
       if (supportsAdaptiveThinking(model)) {
-        params.thinking = fable5
-          ? { type: "adaptive", display: "summarized" }
-          : { type: "adaptive" };
+        // Default display to "summarized" so Opus 4.7+/Fable 5 return a thinking
+        // summary like older Claude 4 models — mirrors the provider path
+        // (llm/providers/anthropic.ts). Without it the adaptive request omits the
+        // summary and only an encrypted signature comes back, so the 🧠 lane is
+        // blank (the live agent transport previously sent this for opus-4-8).
+        const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
+        params.thinking = { type: "adaptive", display };
         const effort = options?.effort ?? (fable5 ? "high" : undefined);
         if (effort) {
           params.output_config = { effort };

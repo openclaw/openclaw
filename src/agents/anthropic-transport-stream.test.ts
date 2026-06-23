@@ -2595,7 +2595,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "high" });
     expect(payload.tool_choice).toBeUndefined();
   });
@@ -2672,7 +2672,7 @@ describe("anthropic transport stream", () => {
 
     const payload = latestAnthropicRequest().payload;
     expect(payload.model).toBe("production-claude");
-    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "xhigh" });
     expect(payload).not.toHaveProperty("temperature");
   });
@@ -2775,7 +2775,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "high" });
   });
 
@@ -2802,7 +2802,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "high" });
   });
 
@@ -2907,7 +2907,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "xhigh" });
   });
 
@@ -2931,7 +2931,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "max" });
   });
 
@@ -2956,7 +2956,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "high" });
   });
 
