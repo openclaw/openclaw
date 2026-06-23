@@ -7,22 +7,41 @@ snapshot:
   source_ref: origin/main@41eef4a7965
 profiles:
   - id: smoke-ci
-    description: Deterministic PR and merge proof with mock model providers, synthetic qa-channel,
-      and local SDK-backed channel upstreams; no live external service required.
+    description: Deterministic PR and merge proof with mock model providers and the
+      Crabline-backed channel driver; no live external service required.
     evidenceMode: slim
+    channelDriver: crabline
     categoryIds:
       - agent-runtime-and-provider-execution.agent-turn-execution
+      - agent-runtime-and-provider-execution.model-and-runtime-selection
+      - agent-runtime-and-provider-execution.provider-auth
+      - agent-runtime-and-provider-execution.streaming-and-progress
+      - agent-runtime-and-provider-execution.tool-calls-and-response-handling
+      - agent-runtime-and-provider-execution.tool-execution-controls
       - session-memory-and-context-engine.token-management
+      - session-memory-and-context-engine.context-engine
+      - session-memory-and-context-engine.cross-client-history-and-session-parity
+      - session-memory-and-context-engine.core-prompts-and-context
+      - session-memory-and-context-engine.session-routing
       - browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
       - security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
+      - telemetry-diagnostics-and-observability.health-and-repair
+      - telemetry-diagnostics-and-observability.diagnostic-collection
       - telemetry-diagnostics-and-observability.telemetry-export
+      - gateway-runtime.gateway-rpc-apis-and-events
+      - gateway-runtime.websocket-connection
+      - channel-framework.channel-actions-commands-and-approvals
+      - channel-framework.channel-setup
       - channel-framework.conversation-routing-and-delivery
       - channel-framework.outbound-delivery-and-reply-pipeline
       - channel-framework.group-thread-and-ambient-room-behavior
+      - channel-framework.status-health-and-operator-controls
       - session-memory-and-context-engine.memory
       - session-memory-and-context-engine.diagnostics-maintenance-and-recovery
       - automation-cron-hooks-tasks-polling.cron-jobs
       - plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins
+      - plugin-sdk-and-bundled-plugin-architecture.provider-and-tool-plugins
+      - plugin-sdk-and-bundled-plugin-architecture.testing-plugins
       - media-understanding-and-media-generation.media-understanding
       - media-understanding-and-media-generation.media-generation
       - browser-control-ui-and-webchat.browser-ui
@@ -31,6 +50,180 @@ profiles:
     description: Stable/LTS proof selector for live providers, live channels, package artifacts,
       upgrade paths, and platform proof where the claim depends on real upstreams or release
       artifacts.
+    channelDriver: live
+    categoryIds:
+      - gateway-runtime.approvals-and-remote-execution
+      - gateway-runtime.http-apis
+      - gateway-runtime.hosted-web-surface
+      - gateway-runtime.gateway-rpc-apis-and-events
+      - gateway-runtime.device-auth-and-pairing
+      - gateway-runtime.network-access-and-discovery
+      - gateway-runtime.nodes-and-remote-capabilities
+      - gateway-runtime.health-diagnostics-and-repair
+      - gateway-runtime.protocol-compatibility
+      - gateway-runtime.roles-and-permissions
+      - gateway-runtime.gateway-lifecycle
+      - gateway-runtime.security-controls
+      - gateway-runtime.websocket-connection
+      - cli-install-update-onboard-doctor.cli-setup
+      - cli-install-update-onboard-doctor.onboarding-and-auth-setup
+      - cli-install-update-onboard-doctor.plugin-and-channel-setup
+      - cli-install-update-onboard-doctor.gateway-service-management
+      - cli-install-update-onboard-doctor.cli-observability
+      - cli-install-update-onboard-doctor.doctor
+      - cli-install-update-onboard-doctor.updates-and-upgrades
+      - plugin-sdk-and-bundled-plugin-architecture.authoring-and-packaging-plugins
+      - plugin-sdk-and-bundled-plugin-architecture.bundled-plugins
+      - plugin-sdk-and-bundled-plugin-architecture.canvas-plugin
+      - plugin-sdk-and-bundled-plugin-architecture.installing-and-running-plugins
+      - plugin-sdk-and-bundled-plugin-architecture.channel-plugins
+      - plugin-sdk-and-bundled-plugin-architecture.provider-and-tool-plugins
+      - plugin-sdk-and-bundled-plugin-architecture.plugin-approvals
+      - plugin-sdk-and-bundled-plugin-architecture.publishing-plugins
+      - plugin-sdk-and-bundled-plugin-architecture.testing-plugins
+      - agent-runtime-and-provider-execution.agent-turn-execution
+      - agent-runtime-and-provider-execution.external-runtimes-and-subagents
+      - agent-runtime-and-provider-execution.hosted-provider-execution
+      - agent-runtime-and-provider-execution.local-and-self-hosted-providers
+      - agent-runtime-and-provider-execution.model-and-runtime-selection
+      - agent-runtime-and-provider-execution.provider-auth
+      - agent-runtime-and-provider-execution.streaming-and-progress
+      - agent-runtime-and-provider-execution.tool-calls-and-response-handling
+      - agent-runtime-and-provider-execution.tool-execution-controls
+      - session-memory-and-context-engine.cli-session-and-transcript-management
+      - session-memory-and-context-engine.token-management
+      - session-memory-and-context-engine.context-engine
+      - session-memory-and-context-engine.cross-client-history-and-session-parity
+      - session-memory-and-context-engine.diagnostics-maintenance-and-recovery
+      - session-memory-and-context-engine.core-prompts-and-context
+      - session-memory-and-context-engine.memory
+      - session-memory-and-context-engine.session-routing
+      - session-memory-and-context-engine.transcript-persistence
+      - channel-framework.channel-actions-commands-and-approvals
+      - channel-framework.channel-setup
+      - channel-framework.group-thread-and-ambient-room-behavior
+      - channel-framework.inbound-access-and-identity-gates
+      - channel-framework.media-attachments-and-rich-channel-data
+      - channel-framework.outbound-delivery-and-reply-pipeline
+      - channel-framework.conversation-routing-and-delivery
+      - channel-framework.status-health-and-operator-controls
+      - security-auth-pairing-and-secrets.approval-policy-and-tool-safeguards
+      - security-auth-pairing-and-secrets.gateway-auth-and-remote-access
+      - security-auth-pairing-and-secrets.channel-access-control
+      - security-auth-pairing-and-secrets.device-and-node-pairing
+      - security-auth-pairing-and-secrets.plugin-trust
+      - security-auth-pairing-and-secrets.credential-and-secret-hygiene
+      - telemetry-diagnostics-and-observability.health-and-repair
+      - telemetry-diagnostics-and-observability.logging
+      - telemetry-diagnostics-and-observability.diagnostic-collection
+      - telemetry-diagnostics-and-observability.telemetry-export
+      - telemetry-diagnostics-and-observability.session-diagnostics
+      - automation-cron-hooks-tasks-polling.cron-jobs
+      - automation-cron-hooks-tasks-polling.event-ingress
+      - automation-cron-hooks-tasks-polling.automation-hooks
+      - automation-cron-hooks-tasks-polling.background-tasks-and-flows
+      - automation-cron-hooks-tasks-polling.heartbeat
+      - automation-cron-hooks-tasks-polling.polling-controls
+      - media-understanding-and-media-generation.media-understanding
+      - media-understanding-and-media-generation.media-generation
+      - browser-control-ui-and-webchat.browser-realtime-talk
+      - browser-control-ui-and-webchat.browser-access-and-trust
+      - browser-control-ui-and-webchat.configuration
+      - browser-control-ui-and-webchat.browser-ui
+      - browser-control-ui-and-webchat.webchat-conversations
+      - browser-control-ui-and-webchat.operator-console
+      - macos-gateway-host.cli-setup
+      - macos-gateway-host.local-gateway-integration
+      - macos-gateway-host.remote-gateway-mode
+      - macos-gateway-host.gateway-service-lifecycle
+      - macos-gateway-host.diagnostics-and-observability
+      - macos-gateway-host.permissions-and-native-capabilities
+      - macos-gateway-host.profiles-and-isolation
+      - macos-companion-app.canvas
+      - macos-companion-app.local-setup
+      - macos-companion-app.status-and-settings
+      - macos-companion-app.native-capabilities
+      - macos-companion-app.remote-connections
+      - macos-companion-app.voice-and-talk
+      - macos-companion-app.webchat
+      - macos-companion-app.remote-webchat
+      - linux-gateway-host.host-setup-and-updates
+      - linux-gateway-host.gateway-runtime-and-service-control
+      - linux-gateway-host.remote-access-and-security
+      - linux-gateway-host.diagnostics-and-repair
+      - linux-gateway-host.deployment-targets
+      - windows-via-wsl2.wsl-setup
+      - windows-via-wsl2.cli
+      - windows-via-wsl2.gateway-service-lifecycle
+      - windows-via-wsl2.gateway-access-and-exposure
+      - windows-via-wsl2.diagnostics-and-repair
+      - windows-via-wsl2.browser-and-control-ui
+      - native-windows-cli-and-gateway.cli
+      - raspberry-pi-small-linux-devices.setup-and-compatibility
+      - raspberry-pi-small-linux-devices.remote-access-and-auth
+      - raspberry-pi-small-linux-devices.gateway-runtime
+      - raspberry-pi-small-linux-devices.performance-and-diagnostics
+      - docker-podman-hosting.container-setup
+      - docker-podman-hosting.container-operations
+      - docker-podman-hosting.image-release-and-validation
+      - docker-podman-hosting.agent-sandbox-and-tooling
+      - discord.channel-setup-and-operations
+      - discord.access-and-identity
+      - discord.conversation-routing-and-delivery
+      - discord.media-and-rich-content
+      - discord.native-controls-and-approvals
+      - discord.realtime-voice-and-calls
+      - telegram.channel-setup-and-operations
+      - telegram.access-and-identity
+      - telegram.conversation-routing-and-delivery
+      - telegram.media-and-rich-content
+      - telegram.native-controls-and-approvals
+      - whatsapp.channel-setup-and-operations
+      - whatsapp.access-and-identity
+      - whatsapp.conversation-routing-and-delivery
+      - whatsapp.media-and-rich-content
+      - whatsapp.native-controls-and-approvals
+      - slack.channel-setup-and-operations
+      - slack.access-and-identity
+      - slack.conversation-routing-and-delivery
+      - slack.media-and-rich-content
+      - slack.native-controls-and-approvals
+      - imessage-bluebubbles.channel-setup-and-operations
+      - imessage-bluebubbles.access-and-identity
+      - imessage-bluebubbles.conversation-routing-and-delivery
+      - imessage-bluebubbles.media-and-rich-content
+      - imessage-bluebubbles.native-controls-and-approvals
+      - openai-codex-provider-path.model-and-auth
+      - openai-codex-provider-path.responses-and-tool-compatibility
+      - openai-codex-provider-path.native-codex-harness
+      - openai-codex-provider-path.image-and-multimodal-input
+      - openai-codex-provider-path.voice-and-realtime-audio
+      - anthropic-provider-path.provider-auth-and-recovery
+      - anthropic-provider-path.model-and-runtime-selection
+      - anthropic-provider-path.request-transport-and-turn-semantics
+      - anthropic-provider-path.prompt-cache-and-context
+      - anthropic-provider-path.media-inputs
+      - google-provider-path.provider-setup-and-credentials
+      - google-provider-path.model-routing-and-endpoints
+      - google-provider-path.direct-gemini-runtime
+      - google-provider-path.media-search-and-realtime
+      - google-provider-path.prompt-caching
+      - openrouter-provider-path.provider-setup-and-auth
+      - openrouter-provider-path.chat-runtime-and-normalization
+      - openrouter-provider-path.provider-recovery-and-diagnostics
+      - openrouter-provider-path.media-generation-and-speech
+      - web-search-tools.search-providers
+      - web-search-tools.setup-and-diagnostics
+      - web-search-tools.network-safety
+      - web-search-tools.tool-availability-and-fetch
+      - browser-automation-and-exec-sandbox-tools.browser-automation
+      - browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
+      - browser-automation-and-exec-sandbox-tools.sandbox-and-tool-policy
+  - id: all
+    description: Full taxonomy scorecard selector for generated maturity coverage evidence across
+      every active category. Intended for explicit QA evidence workflow dispatches rather than the
+      default release gate.
+    channelDriver: live
     includeAllCategories: true
 levels:
   - id: planned
@@ -58,9 +251,9 @@ levels:
     label: Stable
     meaning: Recommended path for normal users. Failures are treated as regressions.
     promotion_bar: Release gate, doctor/troubleshooting path, broad docs, and repeated real-world proof.
-  - id: lovable
+  - id: clawesome
     code: M5
-    label: Lovable
+    label: Clawesome
     meaning: Polished, delightful, well-instrumented, and competitive with the best comparable workflow.
     promotion_bar: Stable plus user scorecard pass across representative users.
 surfaces:
@@ -5925,7 +6118,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: raspberry-pi-small-linux-devices
-    name: Raspberry Pi / small Linux devices
+    name: Raspberry Pi and small Linux devices
     family: platform-app
     level: beta
     level_code: M3
@@ -6148,7 +6341,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: docker-podman-hosting
-    name: Docker / Podman hosting
+    name: Docker and Podman hosting
     family: platform-app
     level: beta
     level_code: M3
@@ -7347,7 +7540,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: imessage-bluebubbles
-    name: iMessage / BlueBubbles
+    name: iMessage and BlueBubbles
     family: channel
     level: beta
     level_code: M3
@@ -8581,7 +8774,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: openai-codex-provider-path
-    name: OpenAI / Codex provider path
+    name: OpenAI and Codex provider path
     family: provider-tool
     level: beta
     level_code: M3
@@ -10062,7 +10255,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: browser-automation-and-exec-sandbox-tools
-    name: Browser automation and exec/sandbox tools
+    name: Browser automation, exec, and sandbox tools
     family: provider-tool
     level: beta
     level_code: M3
@@ -10213,7 +10406,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: image-video-music-generation-tools
-    name: Image/video/music generation tools
+    name: Image, video, and music generation tools
     family: provider-tool
     level: alpha
     level_code: M2

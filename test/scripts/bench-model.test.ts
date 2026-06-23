@@ -47,6 +47,18 @@ describe("scripts/bench-model", () => {
     expect(result.stderr).not.toContain("Missing ANTHROPIC_API_KEY");
   });
 
+  it("rejects short flag values before checking provider credentials", () => {
+    expect(() => testing.parseArgs(["--prompt", "-h"])).toThrow("--prompt requires a value");
+    expect(() => testing.parseArgs(["--runs", "-h"])).toThrow("--runs requires a value");
+
+    const result = runBenchModel(["--prompt", "-h"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("--prompt requires a value");
+    expect(result.stderr).not.toContain("Missing ANTHROPIC_API_KEY");
+  });
+
   it("prints help without checking provider credentials", () => {
     const result = runBenchModel(["--help"]);
 

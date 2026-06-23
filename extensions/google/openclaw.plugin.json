@@ -1,5 +1,6 @@
 {
   "id": "google",
+  "icon": "https://cdn.simpleicons.org/google/111111",
   "activation": {
     "onStartup": false
   },

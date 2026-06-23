@@ -15,6 +15,7 @@ import type {
   SessionEntry,
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
+import { readFileRangeAsync } from "../config/sessions/file-range.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -158,29 +159,10 @@ export function resolveSessionCompactionCheckpointReason(params: {
 const SESSION_HEADER_READ_MAX_BYTES = 64 * 1024;
 const SESSION_TAIL_READ_INITIAL_BYTES = 64 * 1024;
 
-type AsyncTranscriptFileHandle = Awaited<ReturnType<typeof fs.open>>;
-
-async function readFileRangeAsync(
-  fileHandle: AsyncTranscriptFileHandle,
-  position: number,
-  length: number,
-): Promise<Buffer> {
-  const buffer = Buffer.alloc(length);
-  let offset = 0;
-  while (offset < length) {
-    const { bytesRead } = await fileHandle.read(buffer, offset, length - offset, position + offset);
-    if (bytesRead <= 0) {
-      break;
-    }
-    offset += bytesRead;
-  }
-  return offset === length ? buffer : buffer.subarray(0, offset);
-}
-
 async function readSessionHeaderFromTranscriptAsync(
   sessionFile: string,
 ): Promise<{ id: string; cwd?: string } | null> {
-  let fileHandle: AsyncTranscriptFileHandle | undefined;
+  let fileHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     fileHandle = await fs.open(sessionFile, "r");
     const buffer = await readFileRangeAsync(fileHandle, 0, SESSION_HEADER_READ_MAX_BYTES);
@@ -289,7 +271,7 @@ export async function readSessionLeafStateFromTranscriptAsync(
   sessionFile: string,
   maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
 ): Promise<{ entryId: string; leafId: string | null } | null> {
-  let fileHandle: AsyncTranscriptFileHandle | undefined;
+  let fileHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     fileHandle = await fs.open(sessionFile, "r");
     const stat = await fileHandle.stat();

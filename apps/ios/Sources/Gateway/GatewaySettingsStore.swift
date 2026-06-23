@@ -443,12 +443,54 @@ enum GatewaySettingsStore {
 }
 
 enum GatewayDiagnostics {
+    struct ScopedLogger {
+        private let prefix: String
+
+        fileprivate init(prefix: String) {
+            self.prefix = prefix
+        }
+
+        func stage(_ message: String) {
+            GatewayDiagnostics.log("\(self.prefix): \(GatewayDiagnostics.sanitizeScopedMessage(message))")
+        }
+
+        func skipped(_ reason: String) {
+            self.stage("registration skipped reason=\(reason)")
+        }
+
+        func failed(_ stage: String, error: Error) {
+            let nsError = error as NSError
+            self
+                .stage(
+                    "\(stage) failed errorType=\(String(reflecting: type(of: error))) domain=\(nsError.domain) code=\(nsError.code)")
+        }
+    }
+
     private static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "GatewayDiag")
     private static let queue = DispatchQueue(label: "ai.openclawfoundation.app.gateway.diagnostics")
     private static let maxLogBytes: Int64 = 512 * 1024
     private static let keepLogBytes: Int64 = 256 * 1024
     private static let logSizeCheckEveryWrites = 50
     private static let logWritesSinceCheck = OSAllocatedUnfairLock(initialState: 0)
+    private static let maxScopedMessageCharacters = 320
+
+    /// Keep relay diagnostics stage-based. Push tokens, relay grants, proofs,
+    /// receipts, signed payloads, and handles must never enter this cache log.
+    static let pushRelay = ScopedLogger(prefix: "push relay")
+
+    private static func sanitizeScopedMessage(_ value: String) -> String {
+        let collapsed = value
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard collapsed.count > self.maxScopedMessageCharacters else {
+            return collapsed
+        }
+        let end = collapsed.index(collapsed.startIndex, offsetBy: self.maxScopedMessageCharacters)
+        return String(collapsed[..<end]) + "..."
+    }
+
     private static func isoTimestamp() -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

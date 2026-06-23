@@ -10,7 +10,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { stripLeadingPackageManagerSeparator } from "../../../../scripts/lib/arg-utils.mjs";
+import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 
 type CollectorMode = "local" | "docker";
 type OtelLogsExporter = "otlp" | "stdout" | "both";
@@ -159,6 +161,25 @@ const MAX_STDOUT_DIAGNOSTIC_LINE_BYTES = readPositiveIntegerEnv(
   512 * 1024,
 );
 const GATEWAY_STDOUT_ARTIFACT_READ_CHUNK_BYTES = 64 * 1024;
+const QA_OTEL_ENV_TO_CLEAR = [
+  "OTEL_SDK_DISABLED",
+  "OTEL_TRACES_EXPORTER",
+  "OTEL_METRICS_EXPORTER",
+  "OTEL_LOGS_EXPORTER",
+  "OTEL_EXPORTER_OTLP_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+  "OTEL_EXPORTER_OTLP_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_TRACES_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_METRICS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_LOGS_PROTOCOL",
+  "OTEL_EXPORTER_OTLP_HEADERS",
+  "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+  "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+  "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+  "OTEL_RESOURCE_ATTRIBUTES",
+] as const;
 
 function readPositiveIntegerEnv(
   name: string,
@@ -178,6 +199,10 @@ function readPositiveIntegerEnv(
     throw new Error(`${name} must be a safe integer`);
   }
   return parsed;
+}
+
+function createOtelSmokeRunId(): string {
+  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
 }
 
 function oversizedBodyError(
@@ -208,7 +233,7 @@ function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     collectorMode: "local",
     logsExporter: "otlp",
-    outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${Date.now().toString(36)}`),
+    outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${createOtelSmokeRunId()}`),
     providerMode: "mock-openai",
     scenarioId: DEFAULT_SCENARIO_ID,
     help: false,
@@ -222,7 +247,7 @@ function parseArgs(argv: string[]): CliOptions {
     }
     const readValue = () => {
       const value = args[index + 1]?.trim();
-      if (!value) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a value`);
       }
       index += 1;
@@ -1255,12 +1280,13 @@ async function waitForChild(
   timeoutMs = QA_SUITE_TIMEOUT_MS,
   killGraceMs = QA_SUITE_KILL_GRACE_MS,
 ): Promise<number> {
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, QA_SUITE_TIMEOUT_MS);
   const childExit = new Promise<number>((resolve) => {
     child.once("close", (code) => resolve(code ?? 1));
   });
   let timeoutHandle: NodeJS.Timeout | undefined;
   const timeout = new Promise<"timeout">((resolve) => {
-    timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+    timeoutHandle = setTimeout(() => resolve("timeout"), resolvedTimeoutMs);
     timeoutHandle.unref();
   });
   const result = await Promise.race([childExit, timeout]).finally(() => {
@@ -1278,7 +1304,7 @@ async function waitForChild(
     terminateChildTree(child, "SIGKILL", cleanupPids);
     await waitForProcessTreeExit(child, 1000, cleanupPids);
   }
-  throw new Error(`openclaw qa suite timed out after ${timeoutMs}ms`);
+  throw new Error(`openclaw qa suite timed out after ${resolvedTimeoutMs}ms`);
 }
 
 function collectChildProcessTreePids(child: ChildProcess): number[] {
@@ -1319,9 +1345,13 @@ function terminateChildTree(
 ): void {
   if (platform === "win32") {
     if (typeof child.pid === "number") {
-      const result = runTaskkill("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-        stdio: "ignore",
-      });
+      const result = runTaskkill(
+        resolveWindowsTaskkillPath(),
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          stdio: "ignore",
+        },
+      );
       if (result.status === 0) {
         return;
       }
@@ -1426,9 +1456,9 @@ function relayParentSignalsToChild(child: ChildProcess): () => void {
 
 function buildQaEnv(port: number): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  delete env.OTEL_SDK_DISABLED;
-  delete env.OTEL_TRACES_EXPORTER;
-  delete env.OTEL_EXPORTER_OTLP_ENDPOINT;
+  for (const key of QA_OTEL_ENV_TO_CLEAR) {
+    delete env[key];
+  }
   env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `http://127.0.0.1:${port}/v1/traces`;
   env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = `http://127.0.0.1:${port}/v1/metrics`;
   env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `http://127.0.0.1:${port}/v1/logs`;
@@ -1910,6 +1940,7 @@ export const testing = {
   appendGatewayStdoutArtifactLogs,
   appendCapturedBodyText,
   assertSmoke,
+  buildQaEnv,
   createBoundedTextAccumulator,
   createStdoutDiagnosticLogCapture,
   decodeRequestBody,

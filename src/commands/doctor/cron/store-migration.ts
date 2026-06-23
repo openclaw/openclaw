@@ -14,7 +14,7 @@ import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 import {
-  hasUnresolvedAgentTurnShellToolPrompt,
+  classifyUnresolvedAgentTurnShellToolPrompt,
   hasLegacyOpenAICodexCronModelRef,
   migrateLegacyAgentTurnCommandPayload,
   migrateLegacyCronPayload,
@@ -41,6 +41,7 @@ type CronStoreIssues = Partial<Record<CronStoreIssueKey, number>>;
 
 type NormalizeCronStoreJobsResult = {
   issues: CronStoreIssues;
+  unresolvedAgentTurnCommandPromptJobs: string[];
   unresolvedAgentTurnShellToolPromptJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
@@ -246,7 +247,12 @@ export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
 ): NormalizeCronStoreJobsResult {
   const issues: CronStoreIssues = {};
+  const unresolvedAgentTurnCommandPromptJobs: string[] = [];
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
+  const unresolvedAgentTurnPromptJobsByKind = {
+    commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
+    shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
+  };
   let mutated = false;
   const keptJobs: Array<Record<string, unknown>> = [];
   const removedJobs: NormalizeCronStoreJobsResult["removedJobs"] = [];
@@ -421,11 +427,14 @@ export function normalizeStoredCronJobs(
       if (migrateLegacyAgentTurnCommandPayload(payloadRecord)) {
         mutated = true;
         trackIssue("legacyAgentTurnCommandPayload");
-      } else if (hasUnresolvedAgentTurnShellToolPrompt(payloadRecord)) {
-        trackIssue("unresolvedAgentTurnShellToolPrompt");
-        const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
-        if (name) {
-          unresolvedAgentTurnShellToolPromptJobs.push(name);
+      } else {
+        const unresolvedPromptKind = classifyUnresolvedAgentTurnShellToolPrompt(payloadRecord);
+        if (unresolvedPromptKind) {
+          trackIssue("unresolvedAgentTurnShellToolPrompt");
+          const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+          if (name) {
+            unresolvedAgentTurnPromptJobsByKind[unresolvedPromptKind].push(name);
+          }
         }
       }
     }
@@ -626,5 +635,12 @@ export function normalizeStoredCronJobs(
     jobs.splice(0, jobs.length, ...keptJobs);
   }
 
-  return { issues, unresolvedAgentTurnShellToolPromptJobs, jobs, mutated, removedJobs };
+  return {
+    issues,
+    unresolvedAgentTurnCommandPromptJobs,
+    unresolvedAgentTurnShellToolPromptJobs,
+    jobs,
+    mutated,
+    removedJobs,
+  };
 }

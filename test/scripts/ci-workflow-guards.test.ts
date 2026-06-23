@@ -6,6 +6,8 @@ import { parse } from "yaml";
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
+const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -15,8 +17,32 @@ function readWorkflowSanityWorkflow() {
   return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
 }
 
+function readRealBehaviorProofWorkflow() {
+  return parse(readFileSync(".github/workflows/real-behavior-proof.yml", "utf8"));
+}
+
+function readMaturityScorecardWorkflow() {
+  return parse(readFileSync(".github/workflows/maturity-scorecard.yml", "utf8"));
+}
+
+function readQaProfileEvidenceWorkflow() {
+  return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
+}
+
+function readReleaseChecksWorkflow() {
+  return parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
+}
+
 function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
+}
+
+function readAndroidCompileSdk(path: string): number {
+  const match = readFileSync(path, "utf8").match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
+  if (!match) {
+    throw new Error(`Missing compileSdk in ${path}`);
+  }
+  return Number(match[1]);
 }
 
 function findYamlFiles(directory: string): string[] {
@@ -84,6 +110,136 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
+  it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
+    const cases = [
+      {
+        workflowPath: OPENGREP_PR_DIFF_WORKFLOW,
+        artifactName: "opengrep-pr-diff-sarif",
+      },
+      {
+        workflowPath: OPENGREP_FULL_WORKFLOW,
+        artifactName: "opengrep-full-sarif",
+      },
+    ];
+
+    for (const item of cases) {
+      const workflow = parse(readFileSync(item.workflowPath, "utf8"));
+      const uploadStep = workflow.jobs.scan.steps.find(
+        (step) => step.name === "Upload SARIF as workflow artifact",
+      );
+
+      expect(uploadStep.if, item.workflowPath).toBe("always()");
+      expect(uploadStep.uses, item.workflowPath).toBe(UPLOAD_ARTIFACT_V7);
+      expect(uploadStep.with, item.workflowPath).toMatchObject({
+        name: item.artifactName,
+        path: ".opengrep-out/precise.sarif",
+        "if-no-files-found": "error",
+      });
+    }
+  });
+
+  it("runs real behavior proof from the trusted workflow revision", () => {
+    const workflow = readRealBehaviorProofWorkflow();
+    const source = readFileSync(".github/workflows/real-behavior-proof.yml", "utf8");
+    const checkout = workflow.jobs["real-behavior-proof"].steps.find(
+      (step) => step.uses === CHECKOUT_V6,
+    );
+
+    expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkout.with.ref).not.toBe("${{ github.event.pull_request.base.sha }}");
+    expect(source).toContain("Old PR events can carry a stale base SHA");
+  });
+
+  it("keeps docs-change detection fail-safe and fixture-aware", () => {
+    const action = readFileSync(".github/actions/detect-docs-changes/action.yml", "utf8");
+
+    expect(action).toContain("docs_only:");
+    expect(action).toContain("docs_changed:");
+    expect(action).toContain('BASE="${{ github.event.before }}"');
+    expect(action).toContain('BASE="${{ github.event.pull_request.base.sha }}"');
+    expect(action).toContain(
+      'CHANGED=$(git diff --name-only "$BASE" HEAD 2>/dev/null || echo "UNKNOWN")',
+    );
+    expect(action).toContain('if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then');
+    expect(action).toContain("docs_only=false");
+    expect(action).toContain("docs_changed=false");
+    expect(action).toContain("test/fixtures/*)");
+    expect(action).toContain("docs/* | *.md | *.mdx)");
+  });
+
+  it("bounds matrix fan-out for runner-registration pressure", () => {
+    const workflow = readCiWorkflow();
+
+    expect(workflow.concurrency.group).toContain("github.event.pull_request.number");
+    expect(workflow.concurrency["cancel-in-progress"]).toContain(
+      "github.event_name == 'pull_request'",
+    );
+    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(16);
+    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
+    expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
+  });
+
+  it("installs the Android SDK platform used by Gradle", () => {
+    const workflow = readCiWorkflow();
+    const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
+    const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
+    const cacheStep = workflow.jobs.android.steps.find((step) => step.name === "Cache Android SDK");
+    const installStep = workflow.jobs.android.steps.find(
+      (step) => step.name === "Install Android SDK packages",
+    );
+    const packageId = `platforms;android-${appCompileSdk}`;
+
+    expect(appCompileSdk).toBe(benchmarkCompileSdk);
+    expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}-`);
+    expect(installStep.run).toContain(`"${packageId}"`);
+    expect(installStep.run).not.toContain(`${packageId}.0`);
+  });
+
+  it("debounces canonical main pushes before Blacksmith admission", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+    const admission = workflow.jobs["runner-admission"];
+
+    expect(admission["runs-on"]).toBe("ubuntu-24.04");
+    expect(admission.steps[0].if).toContain("github.ref == 'refs/heads/main'");
+    expect(admission.steps[0].run).toContain('sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"');
+    expect(admission.env.OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS).toBe("90");
+    expect(workflow.jobs.preflight.needs).toContain("runner-admission");
+    expect(workflow.jobs["security-fast"].needs).toContain("runner-admission");
+    expect(source).toContain(
+      "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}",
+    );
+  });
+
+  it("uses bundled Node shards and telemetry-backed runner sizes", () => {
+    const workflow = readCiWorkflow();
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
+
+    expect(source).toContain("createNodeTestShardBundles");
+    expect(workflow.jobs["build-artifacts"]["runs-on"]).toContain("blacksmith-16vcpu-ubuntu-2404");
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"]["runs-on"]).toContain(
+      "blacksmith-4vcpu-ubuntu-2404",
+    );
+    expect(workflow.jobs["check-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-dependencies",
+      task: "dependencies",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+    expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
+    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+      check_name: "check-session-accessor-boundary",
+      group: "session-accessor-boundary",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+    expect(workflow.jobs["checks-windows"]["runs-on"]).toContain("matrix.runner");
+    expect(source).toContain("blacksmith-8vcpu-windows-2025");
+  });
+
   it("runs the session accessor ratchet as a visible additional check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -91,6 +247,7 @@ describe("ci workflow guards", () => {
     expect(matrixRows).toContainEqual({
       check_name: "check-session-accessor-boundary",
       group: "session-accessor-boundary",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
 
     const runStep = additionalJob.steps.find((step) => step.name === "Run additional check shard");
@@ -107,6 +264,7 @@ describe("ci workflow guards", () => {
     expect(matrixRows).toContainEqual({
       check_name: "check-session-transcript-reader-boundary",
       group: "session-transcript-reader-boundary",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
 
     const runStep = additionalJob.steps.find((step) => step.name === "Run additional check shard");
@@ -380,13 +538,19 @@ describe("ci workflow guards", () => {
 
   it("fails and retries quiet Node test shard stalls quickly", () => {
     const workflow = readCiWorkflow();
+    const preflightJob = workflow.jobs.preflight;
     const nodeTestJob = workflow.jobs["checks-node-core-test-nondist-shard"];
     const runStep = nodeTestJob.steps.find((step) => step.name === "Run Node test shard");
 
-    expect(nodeTestJob["timeout-minutes"]).toBe(60);
+    expect(JSON.stringify(preflightJob.steps)).toContain("timeout_minutes: shard.timeoutMinutes");
+    expect(nodeTestJob["timeout-minutes"]).toBe("${{ matrix.timeout_minutes || 60 }}");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
+    expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
+    expect(runStep.run).toContain("env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON");
+    expect(runStep.run).toContain('if (plan.env && typeof plan.env === "object"');
+    expect(runStep.run).toContain("childEnv[key] = value");
   });
 
   it("uploads a CI timing summary after the run lanes finish", () => {
@@ -439,6 +603,157 @@ describe("ci workflow guards", () => {
       path: "ci-timings-summary.txt",
       "retention-days": 14,
     });
+  });
+
+  it("keeps maturity scorecard generated QA evidence handoff strict", () => {
+    const maturityWorkflow = readMaturityScorecardWorkflow();
+    const qaEvidenceWorkflow = readQaProfileEvidenceWorkflow();
+    const generateJob = maturityWorkflow.jobs.generate_qa_evidence;
+    const publishJob = maturityWorkflow.jobs.publish;
+    const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
+
+    expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
+      qa_evidence_run_id: {
+        description: "Optional workflow run id containing qa-evidence.json",
+        required: false,
+        default: "",
+        type: "string",
+      },
+      ref: {
+        description: "OpenClaw branch, tag, or SHA containing the maturity score source",
+        required: true,
+        type: "string",
+      },
+      expected_sha: {
+        description: "Optional full SHA that ref must resolve to",
+        required: false,
+        default: "",
+        type: "string",
+      },
+    });
+    expect(maturityWorkflow.on.workflow_call.secrets.OPENAI_API_KEY.required).toBe(true);
+    expect(
+      maturityWorkflow.on.workflow_call.secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY
+        .required,
+    ).toBe(false);
+    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY.required).toBe(false);
+    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY_FALLBACK.required).toBe(
+      false,
+    );
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
+    expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
+    expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
+    const validateProfileStep = qaRunJob.steps.find(
+      (step) => step.name === "Validate QA profile input",
+    );
+    expect(validateProfileStep.run).toContain(
+      "taxonomy.profiles.find((entry) => entry.id === requested)",
+    );
+    expect(validateProfileStep.run).toContain("profile=${profile.id}");
+    const ensurePlaywrightStep = qaRunJob.steps.find(
+      (step) => step.name === "Ensure Playwright Chromium",
+    );
+    expect(ensurePlaywrightStep.run).toBe("node scripts/ensure-playwright-chromium.mjs");
+    expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
+    expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
+    expect(generateJob.with).toMatchObject({
+      ref: "${{ inputs.ref }}",
+      expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      qa_profile: "release",
+    });
+    expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
+
+    const validateRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
+      (step) => step.name === "Validate selected ref",
+    );
+    expect(validateRefStep.env.EXPECTED_SHA).toBe("${{ inputs.expected_sha }}");
+    expect(validateRefStep.run).toContain("expected_sha must be a full 40-character SHA");
+    expect(validateRefStep.run).toContain('"${selected_revision,,}" != "$expected_sha"');
+
+    const generatedDownloadStep = publishJob.steps.find(
+      (step) => step.name === "Download generated QA evidence artifact",
+    );
+    expect(generatedDownloadStep.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
+    expect(generatedDownloadStep.env.GENERATED_ARTIFACT_NAME).toBe(
+      "${{ needs.generate_qa_evidence.outputs.artifact_name }}",
+    );
+    expect(generatedDownloadStep.run).toContain('gh run download "$GITHUB_RUN_ID"');
+    expect(generatedDownloadStep.run).toContain('--name "$GENERATED_ARTIFACT_NAME"');
+    expect(generatedDownloadStep.run).not.toContain("--pattern");
+
+    const requireEvidenceStep = publishJob.steps.find(
+      (step) => step.name === "Require one QA evidence file",
+    );
+    expect(requireEvidenceStep.run).toContain("Expected exactly one qa-evidence.json file");
+
+    const validateManifestStep = publishJob.steps.find(
+      (step) => step.name === "Validate QA evidence manifest",
+    );
+    expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
+
+    expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
+    const qaEvidenceStep = qaRunJob.steps.find(
+      (step) => step.name === "Validate QA profile evidence",
+    );
+    expect(qaEvidenceStep.env.ARTIFACT_NAME).toBe(
+      "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+    );
+    expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
+
+    const qaUploadStep = qaRunJob.steps.find((step) => step.name === "Upload QA profile evidence");
+    expect(qaUploadStep.with).toMatchObject({
+      name: "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: "${{ steps.run_profile.outputs.output_dir }}",
+      "if-no-files-found": "error",
+    });
+
+    const qaFailStep = qaRunJob.steps.find((step) => step.name === "Fail if QA profile failed");
+    expect(qaFailStep.if).toBe("always()");
+
+    const createTokenStep = publishJob.steps.find(
+      (step) => step.name === "Create generated docs PR app token",
+    );
+    const createFallbackTokenStep = publishJob.steps.find(
+      (step) => step.name === "Create generated docs PR fallback app token",
+    );
+    const openDocsPrStep = publishJob.steps.find((step) => step.name === "Open generated docs PR");
+    expect(createTokenStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+    expect(createFallbackTokenStep.if).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && steps.app-token.outcome == 'failure' }}",
+    );
+    expect(openDocsPrStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+  });
+
+  it("runs maturity scorecard from release checks", () => {
+    const releaseWorkflow = readReleaseChecksWorkflow();
+    const job = releaseWorkflow.jobs.maturity_scorecard_release_checks;
+    const summaryJob = releaseWorkflow.jobs.summary;
+    const verifyStep = summaryJob.steps.find(
+      (step) => step.name === "Verify release check results",
+    );
+
+    expect(releaseWorkflow.jobs).not.toHaveProperty("qa_profile_release_evidence_release_checks");
+    expect(job.name).toBe("Render maturity scorecard release docs");
+    expect(job.if).toBe(
+      'contains(fromJSON(\'["all","qa"]\'), needs.resolve_target.outputs.rerun_group)',
+    );
+    expect(job.permissions).toMatchObject({
+      actions: "read",
+      contents: "read",
+    });
+    expect(job.uses).toBe("./.github/workflows/maturity-scorecard.yml");
+    expect(job.with).toMatchObject({
+      ref: "${{ needs.resolve_target.outputs.ref }}",
+      expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+    });
+    expect(job.with).not.toHaveProperty("qa_profile");
+    expect(summaryJob.needs).toContain("maturity_scorecard_release_checks");
+    expect(verifyStep.run).toContain(
+      '"maturity_scorecard_release_checks=${{ needs.maturity_scorecard_release_checks.result }}"',
+    );
+    expect(verifyStep.run).not.toContain("qa_profile_release_evidence_release_checks");
   });
 
   it("keeps workflow guards in fast CI-routing checks", () => {

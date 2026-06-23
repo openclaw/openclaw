@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;

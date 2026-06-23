@@ -26,12 +26,20 @@ describe("provider request error classifier", () => {
       "alternating role ordering mismatch",
       "messages: roles must alternate between user and assistant",
     ],
+    [
+      "local replay invariant guard",
+      "invalid_replay_transcript: OpenAI Responses replay contains dangling_tool_call toolCallId=call_1 at message index 4",
+    ],
   ])("classifies %s as provider conversation-state errors", (_label, message) => {
     expect(classifyProviderRequestError(new Error(message))).toEqual({
       code: "provider_conversation_state_error",
       userMessage: PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
       technicalMessage: message,
     });
+  });
+
+  it("leaves bare no-body 400 provider failures unclassified", () => {
+    expect(classifyProviderRequestError(new Error("400 status code (no body)"))).toBeUndefined();
   });
 
   it("leaves explicit HTTP 429 rate-limit failures on the existing rate-limit path", () => {

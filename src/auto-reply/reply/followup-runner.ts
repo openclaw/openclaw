@@ -13,6 +13,7 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
@@ -67,6 +68,7 @@ import {
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
+  resolveRunFastModeForFallbackCandidate,
   resolveRunAuthProfile,
 } from "./agent-runner-utils.js";
 import {
@@ -844,6 +846,11 @@ export function createFollowupRunner(params: {
         | undefined;
       let queuedUserMessagePersistedAcrossFallback = false;
       let assistantErrorPersistedAcrossFallback = false;
+      const fastModeStartedAtMs = Date.now();
+      const fastModeAutoProgressState: FastModeAutoProgressState = {
+        offAnnounced: false,
+        resetAnnounced: false,
+      };
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
@@ -879,6 +886,13 @@ export function createFollowupRunner(params: {
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateFastMode = resolveRunFastModeForFallbackCandidate({
+              run: candidateRun,
+              config: runtimeConfig,
+              provider,
+              model,
+              sessionEntry: activeSessionEntry,
+            });
             const activeProbe = run.autoFallbackPrimaryProbe;
             if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
               markAutoFallbackPrimaryProbe({
@@ -995,6 +1009,19 @@ export function createFollowupRunner(params: {
                           });
                         }
                       : undefined,
+                  onFastModeAutoProgress: async (payload) => {
+                    await enqueueProgressDelivery(async () => {
+                      await sendFollowupPayloads(
+                        [payload],
+                        effectiveQueued,
+                        {
+                          provider,
+                          modelId: model,
+                        },
+                        { kind: "tool", mirror: false, runId },
+                      );
+                    });
+                  },
                   transformResult:
                     queued.currentInboundEventKind === "room_event"
                       ? (resultLocal) =>
@@ -1035,6 +1062,11 @@ export function createFollowupRunner(params: {
                       config: runtimeConfig,
                     }),
                     thinkLevel: run.thinkLevel,
+                    fastMode: candidateFastMode.fastMode,
+                    fastModeStartedAtMs,
+                    fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
+                    fastModeAutoProgressState,
+                    isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
                     timeoutMs: run.timeoutMs,
                     runTimeoutOverrideMs: run.runTimeoutOverrideMs,
                     runId,
@@ -1060,13 +1092,15 @@ export function createFollowupRunner(params: {
                       provider: run.messageProvider,
                     }),
                     currentChannelId: queued.originatingTo,
+                    senderId: run.senderId,
+                    chatId: queued.originatingChatId,
+                    channelContext: run.channelContext,
                     currentThreadTs:
                       queued.originatingThreadId != null
                         ? String(queued.originatingThreadId)
                         : undefined,
                     currentMessageId: followupCurrentMessageId,
                     agentAccountId: run.agentAccountId,
-                    senderId: run.senderId,
                     senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
@@ -1110,6 +1144,7 @@ export function createFollowupRunner(params: {
                 messageTo: queued.originatingTo,
                 messageThreadId: queued.originatingThreadId,
                 currentChannelId: queued.originatingTo,
+                chatId: queued.originatingChatId,
                 currentThreadTs:
                   queued.originatingThreadId != null
                     ? String(queued.originatingThreadId)
@@ -1122,6 +1157,7 @@ export function createFollowupRunner(params: {
                 senderName: run.senderName,
                 senderUsername: run.senderUsername,
                 senderE164: run.senderE164,
+                channelContext: run.channelContext,
                 sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,
@@ -1153,6 +1189,10 @@ export function createFollowupRunner(params: {
                 model,
                 ...selectedAuthProfile,
                 thinkLevel: run.thinkLevel,
+                fastMode: candidateFastMode.fastMode,
+                fastModeStartedAtMs,
+                fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
+                fastModeAutoProgressState,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
                 suppressToolErrorWarnings: shouldSuppressToolErrorWarnings,

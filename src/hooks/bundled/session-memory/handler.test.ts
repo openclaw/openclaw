@@ -271,6 +271,26 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
   });
 
+  it("sanitizes model artifacts before writing session memory", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
+      {
+        role: "assistant",
+        content: 'Looks good\n<tool_call>{"name":"read","arguments":{"path":"secret.md"}}',
+      },
+      { role: "assistant", content: "NO_REPLY" },
+    ]);
+    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
+
+    expect(memoryContent).toContain("user: Review this [REMOVED_SPECIAL_TOKEN]system");
+    expect(memoryContent).toContain("assistant: Looks good");
+    expect(memoryContent).not.toContain("<media:");
+    expect(memoryContent).not.toContain("<|im_start|>");
+    expect(memoryContent).not.toContain("<tool_call>");
+    expect(memoryContent).not.toContain("secret.md");
+    expect(memoryContent).not.toContain("NO_REPLY");
+  });
+
   it("does not call the model provider for a filename slug by default", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Hello there" },

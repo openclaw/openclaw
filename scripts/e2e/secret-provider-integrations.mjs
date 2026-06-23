@@ -8,6 +8,7 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 const PLUGIN_ID = "secret-provider-proof";
 const INTEGRATION_ID = "vault";
@@ -20,23 +21,24 @@ const MANUAL_EXEC_TOKEN = "proof-manual-exec-token";
 const PLUGIN_EXEC_TOKEN = "proof-plugin-exec-token";
 const OPENAI_PROFILE = "openai:secretref-proof";
 const OPENAI_LIVE_PROOF_MODEL = "openai/gpt-5.5";
-const COMMAND_TIMEOUT_MS = readPositiveInt(
+const MAX_SECRET_PROOF_TIMER_TIMEOUT_MS = 2_147_000_000;
+const COMMAND_TIMEOUT_MS = readPositiveTimerMs(
   process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS,
   120000,
   "OPENCLAW_SECRET_PROOF_COMMAND_MS",
 );
 const COMMAND_TIMEOUT_KILL_GRACE_MS = 1000;
-const READY_TIMEOUT_MS = readPositiveInt(
+const READY_TIMEOUT_MS = readPositiveTimerMs(
   process.env.OPENCLAW_SECRET_PROOF_READY_MS,
   120000,
   "OPENCLAW_SECRET_PROOF_READY_MS",
 );
-const RPC_TIMEOUT_MS = readPositiveInt(
+const RPC_TIMEOUT_MS = readPositiveTimerMs(
   process.env.OPENCLAW_SECRET_PROOF_RPC_MS,
   15000,
   "OPENCLAW_SECRET_PROOF_RPC_MS",
 );
-const TEARDOWN_GRACE_MS = readPositiveInt(
+const TEARDOWN_GRACE_MS = readPositiveTimerMs(
   process.env.OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS,
   5000,
   "OPENCLAW_SECRET_PROOF_TEARDOWN_GRACE_MS",
@@ -98,6 +100,18 @@ function readPositiveInt(raw, fallback, label) {
     throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
   }
   return parsed;
+}
+
+function clampSecretProofTimerTimeoutMs(valueMs) {
+  const value = Number.isFinite(valueMs) ? valueMs : 1;
+  return Math.min(
+    Math.max(1, Math.floor(value)),
+    MAX_SECRET_PROOF_TIMER_TIMEOUT_MS,
+  );
+}
+
+function readPositiveTimerMs(raw, fallback, label) {
+  return clampSecretProofTimerTimeoutMs(readPositiveInt(raw, fallback, label));
 }
 
 function remainingDeadlineMs(started, timeoutMs) {
@@ -190,12 +204,76 @@ function parseJsonOutput(stdout) {
   if (!text) {
     throw new Error("expected JSON output, got empty stdout");
   }
-  const first = text.indexOf("{");
-  const last = text.lastIndexOf("}");
-  if (first < 0 || last < first) {
+  const parsed = parseJsonObjectsFromMixedOutput(text).at(-1);
+  if (parsed === undefined) {
     throw new Error(`expected JSON object output, got: ${scrub(text.slice(0, 500))}`);
   }
-  return JSON.parse(text.slice(first, last + 1));
+  return parsed;
+}
+
+function isJsonRecordStart(text, index) {
+  for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+    const char = text[cursor];
+    if (char === "\n" || char === "\r") {
+      return true;
+    }
+    if (char !== " " && char !== "\t") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function parseJsonObjectsFromMixedOutput(text) {
+  const objects = [];
+  let start = -1;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (start === -1) {
+      if (char === "{" && isJsonRecordStart(text, index)) {
+        start = index;
+        depth = 1;
+        inString = false;
+        escaped = false;
+      }
+      continue;
+    }
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char !== "}") {
+      continue;
+    }
+
+    depth -= 1;
+    if (depth === 0) {
+      try {
+        objects.push(JSON.parse(text.slice(start, index + 1)));
+      } catch {}
+      start = -1;
+    }
+  }
+  return objects;
 }
 
 function resolveOpenClawRunner() {
@@ -282,7 +360,7 @@ async function cleanupEnv(root, options = {}) {
 }
 
 function runCommand(command, args, options = {}) {
-  const timeoutMs = options.timeoutMs ?? COMMAND_TIMEOUT_MS;
+  const timeoutMs = clampSecretProofTimerTimeoutMs(options.timeoutMs ?? COMMAND_TIMEOUT_MS);
   return new Promise((resolve, reject) => {
     const usesProcessGroup = options.detached ?? process.platform !== "win32";
     const child = childProcess.spawn(command, args, {
@@ -964,17 +1042,42 @@ async function waitForProcessTreeExit(child, timeoutMs) {
   return !processTreeIsAlive(child);
 }
 
-function terminateProcessTree(child, signal) {
-  if (process.platform === "win32") {
-    try {
-      childProcess.spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
-        stdio: "ignore",
-      });
-      return;
-    } catch {
-      child.kill(signal);
+function signalWindowsProcessTree(pid, signal, runTaskkill = childProcess.spawnSync) {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  try {
+    const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
+    return !result?.error && result?.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = childProcess.spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+function terminateProcessTree(child, signal, options = {}) {
+  const {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = options;
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
       return;
     }
+    child.kill(signal);
+    return;
+  }
+  if (!useProcessGroup) {
+    child.kill(signal);
+    return;
   }
   try {
     process.kill(-child.pid, signal);
@@ -1735,8 +1838,10 @@ async function runPtySecretsConfigurePreset(envCtx, options = {}) {
     let timedOut = false;
     let forceKillAt;
     let forceKillTimer;
-    const timeoutMs = options.timeoutMs ?? 60000;
-    const timeoutKillGraceMs = options.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS;
+    const timeoutMs = clampSecretProofTimerTimeoutMs(options.timeoutMs ?? 60000);
+    const timeoutKillGraceMs = clampSecretProofTimerTimeoutMs(
+      options.timeoutKillGraceMs ?? COMMAND_TIMEOUT_KILL_GRACE_MS,
+    );
     const timer = setTimeout(() => {
       timedOut = true;
       signalPtyProcessTree(child, "SIGHUP");
@@ -1833,12 +1938,22 @@ async function waitForPtyProcessTreeExit(child, timeoutMs) {
   return !ptyProcessTreeIsAlive(child);
 }
 
-function signalPtyProcessTree(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function signalPtyProcessTree(child, signal, options = {}) {
+  const {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = options;
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {}
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
   }
   child.kill(signal);
 }
@@ -2052,15 +2167,20 @@ async function main() {
 
 export {
   assertAllowedFailureCommandSucceeded,
+  clampSecretProofTimerTimeoutMs,
   collectBlockingProofResults,
   cleanupEnv,
   expectGatewayStartupFails,
   gatewayCall,
+  parseJsonOutput,
+  readPositiveTimerMs,
   runPtySecretsConfigurePreset,
   runWithProof,
   runCommand,
+  signalPtyProcessTree,
   skipProof,
   startGateway,
+  terminateProcessTree,
   waitForManagedGatewayStatus,
   writeProofPlugin,
 };

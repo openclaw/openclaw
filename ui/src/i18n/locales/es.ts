@@ -63,7 +63,6 @@ export const es: TranslationMap = {
     docs: "Documentación",
     theme: "Tema",
     colorMode: "Modo de color",
-    colorModeOption: "Modo de color: {mode}",
     resources: "Recursos",
     search: "Buscar",
     save: "Guardar",
@@ -201,6 +200,7 @@ export const es: TranslationMap = {
     inherit: "heredar",
     defaultOption: "Predeterminado ({value})",
     offExplicit: "desactivado (explícito)",
+    auto: "auto",
     on: "activado",
     off: "apagado",
     full: "completo",
@@ -1630,6 +1630,7 @@ export const es: TranslationMap = {
       nextHeartbeat: "Próximo latido",
       wakeModeHelp: "Ahora se activa inmediatamente. Próximo latido espera el siguiente ciclo.",
       payloadKind: "¿Qué debe ejecutarse?",
+      command: "Command",
       systemEvent: "Publicar mensaje en la línea de tiempo principal",
       agentTurn: "Ejecutar tarea del asistente (aislada)",
       systemEventHelp:
