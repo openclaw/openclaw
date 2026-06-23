@@ -75,14 +75,14 @@ describe("resolveEnvHttpProxyUrl", () => {
       expectedConfigured: true,
     },
     {
-      name: "does not use ALL_PROXY for EnvHttpProxyAgent-style resolution",
+      name: "does not use ALL_PROXY for resolveEnvHttpProxyUrl but hasEnvHttpProxyConfigured detects it",
       protocol: "https" as const,
       env: {
         ALL_PROXY: "http://all-proxy.test:8080",
         all_proxy: "http://lower-all-proxy.test:8080",
       } as NodeJS.ProcessEnv,
       expectedUrl: undefined,
-      expectedConfigured: false,
+      expectedConfigured: true,
     },
     {
       name: "returns only HTTP proxies for http requests",
@@ -363,10 +363,10 @@ describe("shouldUseEnvHttpProxyForUrl", () => {
       expected: true,
     },
     {
-      name: "ignores ALL_PROXY-only environments",
+      name: "uses ALL_PROXY as fallback",
       url: "https://api.example.com/v1",
       env: { ALL_PROXY: "http://proxy.test:8080" } as NodeJS.ProcessEnv,
-      expected: false,
+      expected: true,
     },
     {
       name: "keeps strict mode for NO_PROXY matches",
