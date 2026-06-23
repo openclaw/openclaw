@@ -398,7 +398,7 @@ Paths can be absolute or workspace-relative. Directories are scanned recursively
 
 Patterns are matched against workspace-relative paths inside `memory/` and `extraPaths` using minimatch glob syntax. Exclusions run after built-in auxiliary-path filtering (which skips paths such as `.openclaw-repair`), so `excludePaths` only needs to match the content files you want to suppress.
 
-> **Backend scope:** `excludePaths` applies to the builtin memory search backend only. QMD-based indexing does not yet consume this setting; QMD collections continue to index their configured paths without exclusion filtering. If you rely on QMD for memory search, excludePaths will not affect your QMD results. See the [QMD extra collections](#agent-scoped-cross-agent-search) section for configuring per-agent collections.
+> **Backend scope:** `excludePaths` applies to the builtin memory search backend only. QMD-based indexing does not yet consume this setting; QMD collections continue to index their configured paths without exclusion filtering. If you rely on QMD for memory search, excludePaths will not affect your QMD results. See the [QMD backend config](#qmd-backend-config) section for configuring per-agent collections.
 
 For agent-scoped cross-agent transcript search, use `agents.list[].memorySearch.qmd.extraCollections` instead of `memory.qmd.paths`. Those extra collections follow the same `{ path, name, pattern? }` shape, but they are merged per agent and can preserve explicit shared names when the path points outside the current workspace. If the same resolved path appears in both `memory.qmd.paths` and `memorySearch.qmd.extraCollections`, QMD keeps the first entry and skips the duplicate.
 
