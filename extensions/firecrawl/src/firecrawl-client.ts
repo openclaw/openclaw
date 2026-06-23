@@ -87,6 +87,7 @@ export type FirecrawlScrapeParams = {
   cfg?: OpenClawConfig;
   url: string;
   extractMode: "markdown" | "text";
+  access?: "credential" | "keyless";
   maxChars?: number;
   onlyMainContent?: boolean;
   maxAgeMs?: number;
@@ -184,7 +185,7 @@ async function postFirecrawlJson<T>(
     url: string;
     mode?: FirecrawlEndpointMode;
     timeoutSeconds: number;
-    apiKey: string;
+    apiKey?: string;
     body: Record<string, unknown>;
     errorLabel: string;
   },
@@ -201,8 +202,10 @@ async function postFirecrawlJson<T>(
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
+          // Hosted Firecrawl accepts starter scrape requests without a token.
+          // Send one only when configured so higher-limit accounts still apply.
+          ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         },
         body: JSON.stringify(params.body),
       },
@@ -522,7 +525,9 @@ export async function runFirecrawlScrape(
   assertFirecrawlScrapeTargetAllowed(params.url);
 
   const apiKey = resolveFirecrawlApiKey(params.cfg);
-  if (!apiKey) {
+  // Hosted v2/scrape accepts starter requests without a bearer token.
+  // Only the selected web_fetch provider opts into that access mode.
+  if (!apiKey && params.access !== "keyless") {
     throw new Error(
       "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
     );

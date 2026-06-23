@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { QaSuiteInfraError, toQaErrorObject } from "./errors.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaConfigSnapshot, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -50,7 +51,7 @@ async function waitForGatewayHealthy(env: Pick<QaSuiteRuntimeEnv, "gateway">, ti
     }
     await sleep(250);
   }
-  throw new Error(`timed out after ${timeoutMs}ms`);
+  throw new QaSuiteInfraError("gateway_ready_timeout", `timed out after ${timeoutMs}ms`);
 }
 
 async function waitForTransportReady(
@@ -94,7 +95,8 @@ async function waitForConfigRestartSettle(
     await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
   }
 
-  throw new Error(
+  throw new QaSuiteInfraError(
+    "transport_ready_timeout",
     `timed out after ${timeoutMs}ms waiting for config restart readiness${
       lastHealthError ? `: ${formatErrorMessage(lastHealthError)}` : ""
     }`,
@@ -300,7 +302,7 @@ async function runConfigMutation(params: {
       continue;
     }
   }
-  throw toLintErrorObject(
+  throw toQaErrorObject(
     lastConflict ?? new Error(`${params.action} failed after retrying config hash conflicts`),
     "Non-Error thrown",
   );
@@ -370,17 +372,3 @@ export {
   waitForQaChannelReady,
   waitForTransportReady,
 };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

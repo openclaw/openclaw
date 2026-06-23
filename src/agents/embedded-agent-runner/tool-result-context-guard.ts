@@ -1,12 +1,13 @@
 /**
  * Installs context guards for oversized tool-result histories.
  */
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type {
+  ContextEngine,
+  ContextEngineRuntimeContext,
+  ContextEngineRuntimeSettings,
+} from "../../context-engine/types.js";
 import type { AgentMessage } from "../runtime/index.js";
-import {
-  CONTEXT_LIMIT_TRUNCATION_NOTICE,
-  formatContextLimitTruncationNotice,
-} from "./context-truncation-notice.js";
+import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import { shouldPreemptivelyCompactBeforePrompt } from "./run/preemptive-compaction.js";
@@ -51,7 +52,10 @@ type MidTurnPrecheckOptions = {
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
 
-export { CONTEXT_LIMIT_TRUNCATION_NOTICE, formatContextLimitTruncationNotice };
+export {
+  CONTEXT_LIMIT_TRUNCATION_NOTICE,
+  formatContextLimitTruncationNotice,
+} from "./context-truncation-notice.js";
 
 export function markTranscriptPromptText(message: AgentMessage, text: string): void {
   Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {
@@ -334,6 +338,7 @@ export function installContextEngineLoopHook(params: {
     messages: AgentMessage[];
     prePromptMessageCount: number;
   }) => ContextEngineRuntimeContext | undefined;
+  runtimeSettings?: ContextEngineRuntimeSettings;
   /** True when this turn belongs to a heartbeat run. */
   isHeartbeat?: boolean;
 }): () => void {
@@ -400,6 +405,7 @@ export function installContextEngineLoopHook(params: {
             messages: transcriptMessages,
             prePromptMessageCount,
           }),
+          runtimeSettings: params.runtimeSettings,
           isHeartbeat: params.isHeartbeat,
         });
       } else {
@@ -433,6 +439,7 @@ export function installContextEngineLoopHook(params: {
         messages: providerMessages,
         tokenBudget,
         model: modelId,
+        runtimeSettings: params.runtimeSettings,
       });
       if (assembled && Array.isArray(assembled.messages)) {
         const repairedMessages =

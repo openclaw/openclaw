@@ -35,11 +35,18 @@ export function assertCronFinishedOk(finished: CronFinishedPayload | undefined):
   }
 }
 
+function parseProbePid(raw: string): number | undefined {
+  const text = raw.trim();
+  if (!/^[1-9]\d*$/u.test(text)) {
+    return undefined;
+  }
+  const pid = Number(text);
+  return Number.isSafeInteger(pid) ? pid : undefined;
+}
+
 async function readProbePid(pidPath: string): Promise<number | undefined> {
   try {
-    const raw = (await fs.readFile(pidPath, "utf-8")).trim();
-    const pid = Number.parseInt(raw, 10);
-    return Number.isInteger(pid) && pid > 0 ? pid : undefined;
+    return parseProbePid(await fs.readFile(pidPath, "utf-8"));
   } catch {
     return undefined;
   }
@@ -51,8 +58,8 @@ async function readProbePids(pidsPath: string): Promise<number[]> {
     const pids: number[] = [];
     const seen = new Set<number>();
     for (const line of raw.split(/\r?\n/)) {
-      const pid = Number.parseInt(line.trim(), 10);
-      if (!Number.isInteger(pid) || pid <= 0 || seen.has(pid)) {
+      const pid = parseProbePid(line);
+      if (pid === undefined || seen.has(pid)) {
         continue;
       }
       seen.add(pid);

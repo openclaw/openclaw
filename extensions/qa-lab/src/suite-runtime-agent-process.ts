@@ -1,7 +1,9 @@
 // Qa Lab plugin module implements suite runtime agent process behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   appendQaChildOutput,
@@ -12,11 +14,14 @@ import {
   QA_CHILD_STDOUT_MAX_BYTES,
   readQaChildOutput,
 } from "./child-output.js";
+import { QaSuiteInfraError } from "./errors.js";
+import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import type { QaDreamingStatus, QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 import { resolveQaGatewayTimeoutWithGraceMs } from "./timer-timeouts.js";
+import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
 
 type QaMemorySearchResult = {
   results?: Array<{ snippet?: string; text?: string; path?: string }>;
@@ -32,35 +37,170 @@ type QaCronJob = {
   state?: { nextRunAtMs?: number };
 };
 
+type QaChatHistoryResponse = {
+  messages?: unknown[];
+};
+
+type QaAgentWaitResult = {
+  status?: string;
+  error?: string;
+};
+
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
 const MANAGED_DREAMING_CRON_MARKER = "[managed-by=memory-core.short-term-promotion]";
 const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dream__";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function stripAnsiCodes(text: string) {
   return text.replace(ANSI_ESCAPE_PATTERN, "");
 }
 
-function parseQaCliJsonOutput(text: string) {
+function findBalancedJsonEnd(text: string, startIndex: number) {
+  const opening = text[startIndex];
+  const firstClosing = opening === "{" ? "}" : opening === "[" ? "]" : "";
+  if (!firstClosing) {
+    return -1;
+  }
+
+  const stack = [firstClosing];
+  let inString = false;
+  let escaping = false;
+  for (let index = startIndex + 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (char === "\\") {
+        escaping = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "{" || char === "[") {
+      stack.push(char === "{" ? "}" : "]");
+    } else if (char === "}" || char === "]") {
+      if (stack.at(-1) !== char) {
+        return -1;
+      }
+      stack.pop();
+      if (stack.length === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function parseBalancedJsonPayloadStart(text: string) {
+  const trimmedStart = text.search(/\S/u);
+  if (trimmedStart < 0) {
+    return undefined;
+  }
+  const char = text[trimmedStart];
+  if (char !== "{" && char !== "[") {
+    return undefined;
+  }
+  const end = findBalancedJsonEnd(text, trimmedStart);
+  if (end <= trimmedStart) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text.slice(trimmedStart, end + 1)) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isStructuredDiagnosticJson(value: unknown) {
+  if (!isJsonRecord(value)) {
+    return false;
+  }
+  const level = value.level ?? value.logLevel ?? value.severity;
+  if (typeof level !== "string") {
+    return false;
+  }
+  return (
+    typeof value.message === "string" ||
+    typeof value.msg === "string" ||
+    typeof value.time === "string" ||
+    typeof value.timestamp === "string"
+  );
+}
+
+function isMemorySearchJsonPayload(value: unknown) {
+  return isJsonRecord(value) && Array.isArray(value.results);
+}
+
+function isMemoryStatusJsonPayload(value: unknown) {
+  if (Array.isArray(value)) {
+    return true;
+  }
+  return isJsonRecord(value) && value.command === "memory" && value.subcommand === "status";
+}
+
+function resolveQaCliJsonPayloadMatcher(args: readonly string[]) {
+  if (!args.includes("--json")) {
+    return undefined;
+  }
+  if (args[0] === "memory" && args[1] === "search") {
+    return isMemorySearchJsonPayload;
+  }
+  if (args[0] === "memory" && args[1] === "status") {
+    return isMemoryStatusJsonPayload;
+  }
+  return undefined;
+}
+
+function parseQaCliJsonOutput(text: string, args: readonly string[]) {
   const cleaned = stripAnsiCodes(text).trim();
   if (!cleaned) {
     return {};
   }
+  const matchesExpectedPayload = resolveQaCliJsonPayloadMatcher(args);
   try {
     return JSON.parse(cleaned) as unknown;
   } catch {
     // Some startup repair logs are emitted on stdout before command JSON.
     const lines = cleaned.split(/\r?\n/);
+    const candidates: unknown[] = [];
     for (let index = 0; index < lines.length; index += 1) {
-      const candidate = lines[index].trim();
-      if (!candidate.startsWith("{") && !candidate.startsWith("[")) {
+      const line = lines[index];
+      const candidate = line.trimStart();
+      if (candidate !== line || (!candidate.startsWith("{") && !candidate.startsWith("["))) {
         continue;
       }
+      const jsonTail = lines.slice(index).join("\n");
       try {
-        return JSON.parse(lines.slice(index).join("\n")) as unknown;
+        candidates.push(JSON.parse(jsonTail) as unknown);
       } catch {
-        // Keep looking for the actual payload start.
+        const balanced = parseBalancedJsonPayloadStart(jsonTail);
+        if (balanced !== undefined) {
+          candidates.push(balanced);
+        }
       }
+    }
+    const expectedPayload = candidates.find((value) => matchesExpectedPayload?.(value) === true);
+    if (expectedPayload !== undefined) {
+      return expectedPayload;
+    }
+    const payload = candidates.toReversed().find((value) => !isStructuredDiagnosticJson(value));
+    if (payload !== undefined) {
+      return payload;
+    }
+    const diagnosticOnly = candidates.at(-1);
+    if (diagnosticOnly !== undefined) {
+      return diagnosticOnly;
     }
 
     // Keep a line-oriented fallback for compact payloads followed by diagnostics.
@@ -77,6 +217,38 @@ function parseQaCliJsonOutput(text: string) {
     }
     throw new Error(`qa cli returned non-JSON stdout: ${cleaned.slice(0, 240)}`);
   }
+}
+
+function signalQaCliProcessTree(
+  child: Pick<ChildProcessWithoutNullStreams, "kill" | "pid">,
+  signal: NodeJS.Signals,
+) {
+  if (process.platform === "win32") {
+    if (typeof child.pid === "number") {
+      const result = spawnSync(
+        resolveQaWindowsSystem32ExePath("taskkill.exe"),
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
+      if (!result.error && result.status === 0) {
+        return;
+      }
+    }
+    child.kill(signal);
+    return;
+  }
+  if (typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The detached process group may already be gone; fall back to the child handle.
+    }
+  }
+  child.kill(signal);
 }
 
 async function runQaCli(
@@ -98,12 +270,15 @@ async function runQaCli(
         ...env.gateway.runtimeEnv,
         ...opts?.env,
       },
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timeoutMs = resolveTimerTimeoutMs(opts?.timeoutMs, 60_000);
     const timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`qa cli timed out: openclaw ${args.join(" ")}`));
+      signalQaCliProcessTree(child, "SIGKILL");
+      reject(
+        new QaSuiteInfraError("qa_cli_timeout", `qa cli timed out: openclaw ${args.join(" ")}`),
+      );
     }, timeoutMs);
     child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
     child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
@@ -111,7 +286,7 @@ async function runQaCli(
       clearTimeout(timeout);
       reject(error);
     });
-    child.once("exit", (code) => {
+    child.once("close", (code) => {
       clearTimeout(timeout);
       if (code === 0) {
         if (stdout.exceeded) {
@@ -133,7 +308,7 @@ async function runQaCli(
   if (!opts?.json) {
     return text;
   }
-  return parseQaCliJsonOutput(text);
+  return parseQaCliJsonOutput(text, args);
 }
 
 async function startAgentRun(
@@ -164,7 +339,7 @@ async function startAgentRun(
       message: params.message,
       deliver: true,
       channel: delivery.channel,
-      to: target,
+      to: delivery.to ?? target,
       replyChannel: delivery.replyChannel,
       replyTo: delivery.replyTo,
       ...(params.threadId ? { threadId: params.threadId } : {}),
@@ -187,16 +362,84 @@ async function waitForAgentRun(
   runId: string,
   timeoutMs = 30_000,
 ) {
-  return (await env.gateway.call(
-    "agent.wait",
+  const waitTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 30_000);
+  try {
+    return (await env.gateway.call(
+      "agent.wait",
+      {
+        runId,
+        timeoutMs: waitTimeoutMs,
+      },
+      {
+        timeoutMs: resolveQaGatewayTimeoutWithGraceMs(waitTimeoutMs),
+      },
+    )) as QaAgentWaitResult;
+  } catch (error) {
+    throw new QaSuiteInfraError(
+      "agent_wait_failed",
+      `agent.wait failed: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
+function isSuccessfulAgentWaitResult(waited: QaAgentWaitResult) {
+  if (waited.status === "ok" || waited.status === "completed" || waited.status === "succeeded") {
+    return true;
+  }
+  return waited.status === "error" && waited.error?.trim().toLowerCase() === "completed";
+}
+
+function readLatestAssistantTextFromHistory(history: QaChatHistoryResponse | undefined) {
+  for (const message of (history?.messages ?? []).toReversed()) {
+    if (!isRecord(message) || message.role !== "assistant") {
+      continue;
+    }
+    const text = extractGatewayMessageText(message);
+    if (text) {
+      return text;
+    }
+  }
+  return undefined;
+}
+
+async function readLatestAgentHistoryReply(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  sessionKey: string,
+) {
+  const history = (await env.gateway.call(
+    "chat.history",
     {
-      runId,
-      timeoutMs,
+      sessionKey,
+      limit: 12,
     },
     {
-      timeoutMs: resolveQaGatewayTimeoutWithGraceMs(timeoutMs),
+      timeoutMs: 10_000,
     },
-  )) as { status?: string; error?: string };
+  )) as QaChatHistoryResponse | undefined;
+  return readLatestAssistantTextFromHistory(history);
+}
+
+async function waitForAgentHistoryReply(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  sessionKey: string,
+  predicate: (text: string) => boolean | Promise<boolean>,
+  timeoutMs = 30_000,
+  intervalMs = 250,
+) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const text = await readLatestAgentHistoryReply(env, sessionKey);
+    if (text && (await predicate(text))) {
+      return { text };
+    }
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    if (remainingMs <= 0) {
+      break;
+    }
+    await sleep(Math.min(intervalMs, remainingMs));
+  }
+  throw new Error(`timed out after ${timeoutMs}ms`);
 }
 
 async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
@@ -312,7 +555,7 @@ async function runAgentPrompt(
 ) {
   const started = await startAgentRun(env, params);
   const waited = await waitForAgentRun(env, started.runId!, params.timeoutMs ?? 30_000);
-  if (waited.status !== "ok") {
+  if (!isSuccessfulAgentWaitResult(waited)) {
     throw new Error(
       `agent.wait returned ${waited.status ?? "unknown"}: ${waited.error ?? "no error"}`,
     );
@@ -332,6 +575,7 @@ export {
   runAgentPrompt,
   runQaCli,
   startAgentRun,
+  waitForAgentHistoryReply,
   waitForMemorySearchMatch,
   waitForAgentRun,
 };

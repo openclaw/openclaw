@@ -369,6 +369,23 @@ describe("startPluginServices", () => {
     expect(prometheusContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
     expect(prometheusContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
 
+    const officialDiagnosticsOtelContexts: OpenClawPluginServiceContext[] = [];
+    const officialDiagnosticsOtelService = createTrackingService("diagnostics-otel", {
+      contexts: officialDiagnosticsOtelContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry(
+        [officialDiagnosticsOtelService],
+        "diagnostics-otel",
+        "config",
+        true,
+      ),
+      config: createServiceConfig(),
+    });
+
+    expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(officialDiagnosticsOtelContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
     const officialInstallContexts: OpenClawPluginServiceContext[] = [];
     const officialInstallService = createTrackingService("diagnostics-prometheus", {
       contexts: officialInstallContexts,

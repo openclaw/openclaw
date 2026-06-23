@@ -1,8 +1,10 @@
 {
   "id": "opencode-go",
+  "icon": "https://cdn.simpleicons.org/opencode/111111",
   "activation": {
     "onStartup": false
   },
+  "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
   "providers": ["opencode-go"],
   "providerEndpoints": [

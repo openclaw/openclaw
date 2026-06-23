@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { emitSessionTranscriptUpdate } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
@@ -10,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type {
   MemorySource,
+  MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,9 +29,29 @@ type MemoryIndexEntry = {
 type SyncParams = {
   reason?: string;
   force?: boolean;
+  sessions?: MemorySyncParams["sessions"];
   sessionFiles?: string[];
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
+
+type MemorySessionTranscriptUpdate = {
+  agentId?: string;
+  sessionFile?: string;
+  sessionKey?: string;
+  target?: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+  };
+};
+
+type MemoryTranscriptUpdateSubscriber = (
+  listener: (update: MemorySessionTranscriptUpdate) => void,
+) => () => void;
+
+const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
+  "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
+);
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
 
@@ -38,6 +60,25 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected readonly agentId = "main";
   protected readonly workspaceDir = "/tmp/openclaw-test-workspace";
   protected readonly settings = {
+    chunking: {
+      overlap: 0,
+      tokens: 256,
+    },
+    extraPaths: [],
+    multimodal: {
+      enabled: false,
+      modalities: [],
+      maxFileBytes: 0,
+    },
+    provider: "none",
+    store: {
+      fts: {
+        tokenizer: "unicode61",
+      },
+      vector: {
+        enabled: false,
+      },
+    },
     sync: {
       sessions: {
         deltaBytes: 100_000,
@@ -45,7 +86,7 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
         postCompactionForce: true,
       },
     },
-  } as ResolvedMemorySearchConfig;
+  } as unknown as ResolvedMemorySearchConfig;
   protected readonly batch = {
     enabled: false,
     wait: false,
@@ -60,6 +101,7 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected db: DatabaseSync;
 
   readonly syncCalls: SyncParams[] = [];
+  readonly indexedPaths: string[] = [];
 
   constructor(sourceRows: SourceStateRow[]) {
     super();
@@ -81,19 +123,44 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return await this.markSessionStartupCatchupDirtyFiles();
   }
 
+  async runSyncForTest(params?: MemorySyncParams): Promise<void> {
+    await this.runSync(params);
+  }
+
   getDirtySessionFiles(): string[] {
     return Array.from(this.sessionsDirtyFiles);
+  }
+
+  getPendingSessionTargets(): MemorySyncParams["sessions"] {
+    return Array.from(this.sessionPendingTargets.values());
+  }
+
+  getPendingSessionFiles(): string[] {
+    return Array.from(this.sessionPendingFiles);
   }
 
   isSessionsDirty(): boolean {
     return this.sessionsDirty;
   }
 
+  startTranscriptListener(): void {
+    this.ensureSessionListener();
+  }
+
+  stopTranscriptListener(): void {
+    this.sessionUnsubscribe?.();
+    this.sessionUnsubscribe = null;
+  }
+
   protected computeProviderKey(): string {
     return "test";
   }
 
-  protected async sync(params?: SyncParams): Promise<void> {
+  protected resolveProviderIndexIdentities() {
+    return [];
+  }
+
+  protected async sync(params?: MemorySyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
   }
 
@@ -116,9 +183,11 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
   protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
-    _entry: MemoryIndexEntry,
+    entry: MemoryIndexEntry,
     _options: { source: MemorySource; content?: string },
-  ): Promise<void> {}
+  ): Promise<void> {
+    this.indexedPaths.push(entry.path);
+  }
 }
 
 describe("session startup catch-up", () => {
@@ -130,6 +199,8 @@ describe("session startup catch-up", () => {
   });
 
   afterEach(async () => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -299,5 +370,109 @@ describe("session startup catch-up", () => {
     } finally {
       openSpy.mockRestore();
     }
+  });
+
+  it("does not fall back to full session sync when identity targets normalize away", async () => {
+    await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+
+    await harness.runSyncForTest({
+      reason: "queued-sessions",
+      sessions: [{ agentId: "other", sessionId: "thread" }],
+    });
+
+    expect(harness.indexedPaths).toEqual([]);
+  });
+
+  it("does not fall back to full session sync for malformed identity session ids", async () => {
+    await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+
+    await harness.runSyncForTest({
+      reason: "queued-sessions",
+      sessions: [{ agentId: "main", sessionId: "bad/nested" }],
+    });
+
+    expect(harness.indexedPaths).toEqual([]);
+  });
+
+  it("queues transcript update identity without requiring a session file", async () => {
+    vi.useFakeTimers();
+    const harness = new SessionStartupCatchupHarness([]);
+    const originalSubscriber = (globalThis as Record<symbol, unknown>)[
+      MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
+    ];
+    let transcriptListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
+    (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] = ((
+      listener,
+    ) => {
+      transcriptListener = listener;
+      return () => {
+        if (transcriptListener === listener) {
+          transcriptListener = undefined;
+        }
+      };
+    }) satisfies MemoryTranscriptUpdateSubscriber;
+    harness.startTranscriptListener();
+
+    try {
+      transcriptListener?.({
+        target: {
+          agentId: "main",
+          sessionId: "thread",
+          sessionKey: "agent:main:thread",
+        },
+      });
+
+      expect(harness.getPendingSessionTargets()).toEqual([
+        { agentId: "main", sessionId: "thread", sessionKey: "agent:main:thread" },
+      ]);
+    } finally {
+      harness.stopTranscriptListener();
+      if (originalSubscriber === undefined) {
+        delete (globalThis as Record<symbol, unknown>)[
+          MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
+        ];
+      } else {
+        (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] =
+          originalSubscriber;
+      }
+    }
+  });
+
+  it("keeps canonical path transcript update compatibility", async () => {
+    vi.useFakeTimers();
+    const session = await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+    harness.startTranscriptListener();
+
+    emitSessionTranscriptUpdate({
+      sessionFile: session.filePath,
+      sessionKey: "agent:main:thread",
+    });
+
+    expect(harness.getPendingSessionFiles()).toEqual([session.filePath]);
+    expect(harness.getPendingSessionTargets()).toEqual([]);
+    harness.stopTranscriptListener();
+  });
+
+  it("prefers transcript update path compatibility before identity", async () => {
+    vi.useFakeTimers();
+    const session = await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+    harness.startTranscriptListener();
+
+    emitSessionTranscriptUpdate({
+      sessionFile: session.filePath,
+      target: {
+        agentId: "main",
+        sessionId: "identity-target",
+        sessionKey: "agent:main:identity-target",
+      },
+    });
+
+    expect(harness.getPendingSessionFiles()).toEqual([session.filePath]);
+    expect(harness.getPendingSessionTargets()).toEqual([]);
+    harness.stopTranscriptListener();
   });
 });

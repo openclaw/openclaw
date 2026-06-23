@@ -13,6 +13,8 @@ import {
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
+import { modelKey } from "../shared/model-key.js";
+export { modelKey } from "../shared/model-key.js";
 
 type StaticModelRef = {
   provider: string;
@@ -24,7 +26,7 @@ export type ProviderModelIdNormalizationOptions = {
   manifestPlugins?: readonly ManifestModelIdNormalizationRecord[];
 };
 
-export type ManifestModelIdNormalizationProvider = {
+type ManifestModelIdNormalizationProvider = {
   aliases?: Record<string, string>;
   stripPrefixes?: string[];
   prefixWhenBare?: string;
@@ -34,28 +36,11 @@ export type ManifestModelIdNormalizationProvider = {
   }[];
 };
 
-export type ManifestModelIdNormalizationRecord = {
+type ManifestModelIdNormalizationRecord = {
   modelIdNormalization?: {
     providers?: Record<string, ManifestModelIdNormalizationProvider>;
   };
 };
-
-/** Join provider and model into the canonical provider/model key. */
-export function modelKey(provider: string, model: string): string {
-  const providerId = provider.trim();
-  const modelId = model.trim();
-  if (!providerId) {
-    return modelId;
-  }
-  if (!modelId) {
-    return providerId;
-  }
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
-    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
-  )
-    ? modelId
-    : `${providerId}/${modelId}`;
-}
 
 /** Normalize a static provider model ID with built-in and optional manifest policy. */
 export function normalizeStaticProviderModelId(

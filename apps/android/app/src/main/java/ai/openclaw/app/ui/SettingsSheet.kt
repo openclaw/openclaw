@@ -1253,16 +1253,6 @@ private fun settingsPrimaryButtonColors() =
     disabledContentColor = Color.White.copy(alpha = 0.9f),
   )
 
-/** Destructive button colors for permission and capability settings actions. */
-@Composable
-private fun settingsDangerButtonColors() =
-  ButtonDefaults.buttonColors(
-    containerColor = mobileDanger,
-    contentColor = Color.White,
-    disabledContainerColor = mobileDanger.copy(alpha = 0.45f),
-    disabledContentColor = Color.White.copy(alpha = 0.9f),
-  )
-
 /** Opens this app's Android settings page for permissions that require system UI. */
 private fun openAppSettings(context: Context) {
   val intent =

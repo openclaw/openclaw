@@ -29,7 +29,7 @@ vi.mock("../config/sessions.js", () => ({
 }));
 
 vi.mock("../sessions/transcript-events.js", () => ({
-  onSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
+  onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
     transcriptUpdateHandler = cb;
     return () => {
       if (transcriptUpdateHandler === cb) {
@@ -93,8 +93,13 @@ vi.mock("./session-utils.js", () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),
-  readSessionMessagesAsync: async () => [],
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
+}));
+
+vi.mock("./session-transcript-readers.js", () => ({
+  readRecentSessionMessagesWithStatsAsync: async () => ({ messages: [], totalMessages: 0 }),
+  readSessionMessagesAsync: async () => [],
+  readSessionMessagesWithSourceAsync: async () => ({ messages: [] }),
 }));
 
 vi.mock("./session-history-state.js", () => ({
@@ -109,6 +114,7 @@ vi.mock("./session-history-state.js", () => ({
         messageSeq: 1,
         messageId,
       }),
+      shouldRefreshForTranscriptPath: () => false,
       refreshAsync: async () => ({ items: [], nextCursor: null, messages: [] }),
     }),
   },

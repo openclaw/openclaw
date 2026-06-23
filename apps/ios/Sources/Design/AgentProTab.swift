@@ -1,12 +1,10 @@
 import OpenClawKit
-import OpenClawProtocol
 import SwiftUI
 
 struct AgentProTab: View {
     @Environment(NodeAppModel.self) var appModel
     @Environment(\.colorScheme) var colorScheme
     @Environment(\.scenePhase) var scenePhase
-    let initialRoute: AgentRoute?
     let directRoute: AgentRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
     let headerTitle: String
@@ -107,7 +105,7 @@ struct AgentProTab: View {
         var color: Color {
             switch self {
             case .online: OpenClawBrand.ok
-            case .ready: Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0)
+            case .ready: OpenClawBrand.info
             }
         }
     }
@@ -127,13 +125,11 @@ struct AgentProTab: View {
     }
 
     init(
-        initialRoute: AgentRoute? = nil,
         directRoute: AgentRoute? = nil,
         headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
         headerTitle: String = "Agents",
         openSettings: (() -> Void)? = nil)
     {
-        self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.headerLeadingAction = headerLeadingAction
         self.headerTitle = headerTitle
@@ -184,9 +180,6 @@ struct AgentProTab: View {
                 self.destination(for: route)
             }
         }
-        .onAppear {
-            self.applyInitialRouteIfNeeded()
-        }
     }
 
     private func directDestination(for route: AgentRoute) -> some View {
@@ -194,12 +187,5 @@ struct AgentProTab: View {
             .toolbar(
                 self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden,
                 for: .navigationBar)
-    }
-
-    private func applyInitialRouteIfNeeded() {
-        guard self.directRoute == nil else { return }
-        guard let initialRoute else { return }
-        guard self.navigationPath != [initialRoute] else { return }
-        self.navigationPath = [initialRoute]
     }
 }

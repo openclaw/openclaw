@@ -8,6 +8,7 @@ import {
 import { FsSafeError, pathExists, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
+import { WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 
 export const WIKI_VAULT_DIRECTORIES = [
@@ -19,7 +20,6 @@ export const WIKI_VAULT_DIRECTORIES = [
   "_attachments",
   "_views",
   ".openclaw-wiki",
-  ".openclaw-wiki/locks",
   ".openclaw-wiki/cache",
 ] as const;
 
@@ -66,6 +66,7 @@ This vault is maintained by the OpenClaw memory-wiki plugin.
 
 ## Architecture
 - Raw sources remain the evidence layer.
+- To keep unmanaged raw Markdown in \`sources/\`, add \`${WIKI_RAW_SOURCE_MARKER}\` near the top of the page.
 - Wiki pages are the human-readable synthesis layer.
 - \`.openclaw-wiki/cache/agent-digest.json\` is the agent-facing compiled digest.
 
@@ -121,22 +122,6 @@ export async function initializeMemoryWikiVault(
     rootDir,
     "inbox.md",
     withTrailingNewline("# Inbox\n\nDrop raw ideas, questions, and source links here.\n"),
-    createdFiles,
-  );
-  await writeFileIfMissing(
-    rootDir,
-    ".openclaw-wiki/state.json",
-    withTrailingNewline(
-      JSON.stringify(
-        {
-          version: 1,
-          createdAt: resolveMemoryWikiTimestamp(options?.nowMs),
-          renderMode: config.vault.renderMode,
-        },
-        null,
-        2,
-      ),
-    ),
     createdFiles,
   );
   await writeFileIfMissing(rootDir, ".openclaw-wiki/log.jsonl", "", createdFiles);

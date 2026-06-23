@@ -1,4 +1,5 @@
 /** Resolves the effective reply route from current context and persisted session route. */
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -8,13 +9,19 @@ import type { FinalizedMsgContext } from "../templating.js";
 /** Current finalized context fields used for reply route resolution. */
 export type EffectiveReplyRouteContext = Pick<
   FinalizedMsgContext,
-  "Provider" | "Surface" | "OriginatingChannel" | "OriginatingTo" | "AccountId" | "InputProvenance"
+  | "Provider"
+  | "Surface"
+  | "OriginatingChannel"
+  | "OriginatingTo"
+  | "AccountId"
+  | "InputProvenance"
+  | "ChatType"
 >;
 
 /** Persisted session fields used as route fallback/inheritance. */
 export type EffectiveReplyRouteEntry = Pick<
   SessionEntry,
-  "deliveryContext" | "lastChannel" | "lastTo" | "lastAccountId" | "route"
+  "deliveryContext" | "lastChannel" | "lastTo" | "lastAccountId" | "route" | "chatType" | "origin"
 >;
 
 /** Effective channel target selected for source reply delivery. */
@@ -23,6 +30,7 @@ export type EffectiveReplyRoute = {
   to?: string;
   accountId?: string;
   threadId?: string | number;
+  chatType?: ChatType;
   inheritedExternalRoute?: boolean;
 };
 
@@ -69,6 +77,11 @@ export function resolveEffectiveReplyRoute(params: {
     normalizeMessageChannel(params.ctx.OriginatingChannel);
   const persistedDeliveryContext = params.entry?.deliveryContext;
   const persistedDeliveryChannel = normalizeMessageChannel(persistedDeliveryContext?.channel);
+  const liveChatType = normalizeChatType(params.ctx.ChatType);
+  const persistedChatType =
+    params.entry?.route?.target?.chatType ??
+    params.entry?.chatType ??
+    normalizeChatType(params.entry?.origin?.chatType);
   if (
     isSessionsSendInterSessionHandoff(params.ctx.InputProvenance) &&
     currentSurface === INTERNAL_MESSAGE_CHANNEL &&
@@ -82,6 +95,7 @@ export function resolveEffectiveReplyRoute(params: {
       to: persistedDeliveryContext.to,
       accountId: persistedDeliveryContext.accountId,
       ...(inheritedThreadId !== undefined ? { threadId: inheritedThreadId } : {}),
+      ...(persistedChatType ? { chatType: persistedChatType } : {}),
       inheritedExternalRoute: true,
     };
   }
@@ -90,15 +104,27 @@ export function resolveEffectiveReplyRoute(params: {
       channel: params.ctx.OriginatingChannel,
       to: params.ctx.OriginatingTo,
       accountId: params.ctx.AccountId,
+      ...(liveChatType ? { chatType: liveChatType } : {}),
     };
   }
+  const persistedChannel = persistedDeliveryContext?.channel ?? params.entry?.lastChannel;
+  const liveChannel = params.ctx.OriginatingChannel;
+  const canInheritPersistedTuple =
+    !liveChannel ||
+    normalizeMessageChannel(liveChannel) === normalizeMessageChannel(persistedChannel);
+  const chatType = liveChatType ?? (canInheritPersistedTuple ? persistedChatType : undefined);
   return {
-    channel:
-      params.ctx.OriginatingChannel ??
-      persistedDeliveryContext?.channel ??
-      params.entry?.lastChannel,
-    to: params.ctx.OriginatingTo ?? persistedDeliveryContext?.to ?? params.entry?.lastTo,
+    channel: liveChannel ?? persistedChannel,
+    to:
+      params.ctx.OriginatingTo ??
+      (canInheritPersistedTuple
+        ? (persistedDeliveryContext?.to ?? params.entry?.lastTo)
+        : undefined),
     accountId:
-      params.ctx.AccountId ?? persistedDeliveryContext?.accountId ?? params.entry?.lastAccountId,
+      params.ctx.AccountId ??
+      (canInheritPersistedTuple
+        ? (persistedDeliveryContext?.accountId ?? params.entry?.lastAccountId)
+        : undefined),
+    ...(chatType ? { chatType } : {}),
   };
 }

@@ -1,5 +1,5 @@
 /** Risk level returned by exec auto-reviewers for approval routing decisions. */
-export type ExecAutoReviewRisk = "unknown" | "low" | "medium" | "high";
+type ExecAutoReviewRisk = "unknown" | "low" | "medium" | "high";
 
 /** Auto-review outcome: either approve once or send the command to normal approval. */
 export type ExecAutoReviewDecision =

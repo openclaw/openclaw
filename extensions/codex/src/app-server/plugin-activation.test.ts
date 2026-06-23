@@ -303,6 +303,7 @@ function identity(pluginName: string): ResolvedCodexPluginPolicy {
     pluginName,
     enabled: true,
     allowDestructiveActions: false,
+    destructiveApprovalMode: "deny",
   };
 }
 

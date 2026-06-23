@@ -13,7 +13,7 @@ type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
 
-export type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
+type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
 export type GatewayEventLoopHealth = {
   degraded: boolean;
@@ -25,7 +25,7 @@ export type GatewayEventLoopHealth = {
   cpuCoreRatio: number;
 };
 
-export type GatewayEventLoopHealthMonitor = {
+type GatewayEventLoopHealthMonitor = {
   snapshot: () => GatewayEventLoopHealth | undefined;
   stop: () => void;
 };

@@ -1,4 +1,5 @@
 // Policy plugin module implements register behavior.
+import os from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import {
@@ -7,7 +8,6 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
-import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -18,6 +18,7 @@ import {
   type PolicyAgentWorkspaceEvidence,
   type PolicyDataHandlingEvidence,
   type PolicyEvidence,
+  type PolicyExecApprovalEvidence,
   type PolicyIngressEvidence,
   type PolicySandboxPostureEvidence,
   type PolicyToolPostureEvidence,
@@ -31,491 +32,41 @@ const loadFsPromisesModule = async () => {
   return await fsPromisesModulePromise;
 };
 
-const CHECK_IDS = {
-  policyAttestationMismatch: "policy/attestation-hash-mismatch",
-  policyDeniedChannelProvider: "policy/channels-denied-provider",
-  policyHashMismatch: "policy/policy-hash-mismatch",
-  policyInvalidFile: "policy/policy-jsonc-invalid",
-  policyMissingFile: "policy/policy-jsonc-missing",
-  policyDeniedMcpServer: "policy/mcp-denied-server",
-  policyUnapprovedMcpServer: "policy/mcp-unapproved-server",
-  policyDeniedModelProvider: "policy/models-denied-provider",
-  policyUnapprovedModelProvider: "policy/models-unapproved-provider",
-  policyPrivateNetworkAccess: "policy/network-private-access-enabled",
-  policyIngressDmPolicyUnapproved: "policy/ingress-dm-policy-unapproved",
-  policyIngressDmScopeUnapproved: "policy/ingress-dm-scope-unapproved",
-  policyIngressOpenGroupsDenied: "policy/ingress-open-groups-denied",
-  policyIngressGroupMentionRequired: "policy/ingress-group-mention-required",
-  policyGatewayNonLoopbackBind: "policy/gateway-non-loopback-bind",
-  policyGatewayAuthDisabled: "policy/gateway-auth-disabled",
-  policyGatewayRateLimitMissing: "policy/gateway-rate-limit-missing",
-  policyGatewayControlUiInsecure: "policy/gateway-control-ui-insecure",
-  policyGatewayTailscaleFunnel: "policy/gateway-tailscale-funnel",
-  policyGatewayRemoteEnabled: "policy/gateway-remote-enabled",
-  policyGatewayHttpEndpointEnabled: "policy/gateway-http-endpoint-enabled",
-  policyGatewayHttpUrlFetchUnrestricted: "policy/gateway-http-url-fetch-unrestricted",
-  policyAgentsWorkspaceAccessDenied: "policy/agents-workspace-access-denied",
-  policyAgentsToolNotDenied: "policy/agents-tool-not-denied",
-  policyToolsElevatedEnabled: "policy/tools-elevated-enabled",
-  policyToolsAlsoAllowMissing: "policy/tools-also-allow-missing",
-  policyToolsAlsoAllowUnexpected: "policy/tools-also-allow-unexpected",
-  policyToolsExecAskUnapproved: "policy/tools-exec-ask-unapproved",
-  policyToolsExecHostUnapproved: "policy/tools-exec-host-unapproved",
-  policyToolsExecSecurityUnapproved: "policy/tools-exec-security-unapproved",
-  policyToolsFsWorkspaceOnlyRequired: "policy/tools-fs-workspace-only-required",
-  policyToolsProfileUnapproved: "policy/tools-profile-unapproved",
-  policyToolsRequiredDenyMissing: "policy/tools-required-deny-missing",
-  policySandboxModeUnapproved: "policy/sandbox-mode-unapproved",
-  policySandboxBackendUnapproved: "policy/sandbox-backend-unapproved",
-  policySandboxContainerPostureUnobservable: "policy/sandbox-container-posture-unobservable",
-  policySandboxContainerHostNetworkDenied: "policy/sandbox-container-host-network-denied",
-  policySandboxContainerNamespaceJoinDenied: "policy/sandbox-container-namespace-join-denied",
-  policySandboxContainerMountModeRequired: "policy/sandbox-container-mount-mode-required",
-  policySandboxContainerRuntimeSocketMount: "policy/sandbox-container-runtime-socket-mount",
-  policySandboxContainerUnconfinedProfile: "policy/sandbox-container-unconfined-profile",
-  policySandboxBrowserCdpSourceRangeMissing: "policy/sandbox-browser-cdp-source-range-missing",
-  policyDataHandlingRedactionDisabled: "policy/data-handling-redaction-disabled",
-  policyDataHandlingTelemetryContentCapture: "policy/data-handling-telemetry-content-capture",
-  policyDataHandlingSessionRetentionNotEnforced:
-    "policy/data-handling-session-retention-not-enforced",
-  policyDataHandlingSessionTranscriptMemory:
-    "policy/data-handling-session-transcript-memory-enabled",
-  policySecretsUnmanagedProvider: "policy/secrets-unmanaged-provider",
-  policySecretsDeniedProviderSource: "policy/secrets-denied-provider-source",
-  policySecretsInsecureProvider: "policy/secrets-insecure-provider",
-  policyAuthProfileInvalidMetadata: "policy/auth-profile-invalid-metadata",
-  policyAuthProfileUnapprovedMode: "policy/auth-profile-unapproved-mode",
-  policyMissingToolOwner: "policy/tools-missing-owner",
-  policyMissingToolRisk: "policy/tools-missing-risk-level",
-  policyMissingToolSensitivity: "policy/tools-missing-sensitivity-token",
-  policyUnknownToolRisk: "policy/tools-unknown-risk-level",
-  policyUnknownToolSensitivity: "policy/tools-unknown-sensitivity-token",
-} as const;
-
-export const POLICY_CHECK_IDS = [
-  CHECK_IDS.policyMissingFile,
-  CHECK_IDS.policyInvalidFile,
-  CHECK_IDS.policyHashMismatch,
-  CHECK_IDS.policyAttestationMismatch,
-  CHECK_IDS.policyDeniedChannelProvider,
-  CHECK_IDS.policyDeniedMcpServer,
-  CHECK_IDS.policyUnapprovedMcpServer,
-  CHECK_IDS.policyDeniedModelProvider,
-  CHECK_IDS.policyUnapprovedModelProvider,
-  CHECK_IDS.policyPrivateNetworkAccess,
-  CHECK_IDS.policyIngressDmPolicyUnapproved,
-  CHECK_IDS.policyIngressDmScopeUnapproved,
-  CHECK_IDS.policyIngressOpenGroupsDenied,
-  CHECK_IDS.policyIngressGroupMentionRequired,
-  CHECK_IDS.policyGatewayNonLoopbackBind,
-  CHECK_IDS.policyGatewayAuthDisabled,
-  CHECK_IDS.policyGatewayRateLimitMissing,
-  CHECK_IDS.policyGatewayControlUiInsecure,
-  CHECK_IDS.policyGatewayTailscaleFunnel,
-  CHECK_IDS.policyGatewayRemoteEnabled,
-  CHECK_IDS.policyGatewayHttpEndpointEnabled,
-  CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
-  CHECK_IDS.policyAgentsWorkspaceAccessDenied,
-  CHECK_IDS.policyAgentsToolNotDenied,
-  CHECK_IDS.policyToolsProfileUnapproved,
-  CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
-  CHECK_IDS.policyToolsExecSecurityUnapproved,
-  CHECK_IDS.policyToolsExecAskUnapproved,
-  CHECK_IDS.policyToolsExecHostUnapproved,
-  CHECK_IDS.policyToolsElevatedEnabled,
-  CHECK_IDS.policyToolsAlsoAllowMissing,
-  CHECK_IDS.policyToolsAlsoAllowUnexpected,
-  CHECK_IDS.policyToolsRequiredDenyMissing,
-  CHECK_IDS.policySandboxModeUnapproved,
-  CHECK_IDS.policySandboxBackendUnapproved,
-  CHECK_IDS.policySandboxContainerPostureUnobservable,
-  CHECK_IDS.policySandboxContainerHostNetworkDenied,
-  CHECK_IDS.policySandboxContainerNamespaceJoinDenied,
-  CHECK_IDS.policySandboxContainerMountModeRequired,
-  CHECK_IDS.policySandboxContainerRuntimeSocketMount,
-  CHECK_IDS.policySandboxContainerUnconfinedProfile,
-  CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
-  CHECK_IDS.policyDataHandlingRedactionDisabled,
-  CHECK_IDS.policyDataHandlingTelemetryContentCapture,
-  CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
-  CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
-  CHECK_IDS.policySecretsUnmanagedProvider,
-  CHECK_IDS.policySecretsDeniedProviderSource,
-  CHECK_IDS.policySecretsInsecureProvider,
-  CHECK_IDS.policyAuthProfileInvalidMetadata,
-  CHECK_IDS.policyAuthProfileUnapprovedMode,
-  CHECK_IDS.policyMissingToolRisk,
-  CHECK_IDS.policyUnknownToolRisk,
-  CHECK_IDS.policyMissingToolSensitivity,
-  CHECK_IDS.policyMissingToolOwner,
-  CHECK_IDS.policyUnknownToolSensitivity,
-] as const;
-
-export type PolicyStrictnessKind =
-  | "allowlist-subset"
-  | "denylist-superset"
-  | "ordered-string"
-  | "requires-true"
-  | "requires-false"
-  | "exact-list";
-
-export type PolicyEmptyListSemantics = "disabled" | "meaningful";
-
-export type PolicyScopeSelectorKind = "agentIds" | "channelIds";
-
-export type PolicyRuleMetadata = {
-  readonly policyPath: readonly string[];
-  readonly strictness: PolicyStrictnessKind;
-  readonly valueType: "boolean" | "channel-provider-deny-rules" | "string" | "string-list";
-  readonly checkIds: readonly (typeof POLICY_CHECK_IDS)[number][];
-  readonly emptyList?: PolicyEmptyListSemantics;
-  readonly allowedValues?: readonly string[];
-  readonly caseSensitive?: boolean;
-  readonly normalizeValues?: "model-provider";
-  readonly orderedValues?: readonly string[];
-  readonly scopeSelectors?: readonly PolicyScopeSelectorKind[];
-};
-
-const SANDBOX_CONTAINER_POLICY_RULES = [
-  {
-    key: "denyHostNetwork",
-    label: "host network posture",
-    checkIds: [CHECK_IDS.policySandboxContainerHostNetworkDenied],
-  },
-  {
-    key: "denyContainerNamespaceJoin",
-    label: "container namespace posture",
-    checkIds: [CHECK_IDS.policySandboxContainerNamespaceJoinDenied],
-  },
-  {
-    key: "requireReadOnlyMounts",
-    label: "container mount mode posture",
-    checkIds: [CHECK_IDS.policySandboxContainerMountModeRequired],
-  },
-  {
-    key: "denyContainerRuntimeSocketMounts",
-    label: "container runtime socket mount posture",
-    checkIds: [CHECK_IDS.policySandboxContainerRuntimeSocketMount],
-  },
-  {
-    key: "denyUnconfinedProfiles",
-    label: "container security profile posture",
-    checkIds: [CHECK_IDS.policySandboxContainerUnconfinedProfile],
-  },
-] as const;
-
-const SANDBOX_POLICY_RULE_METADATA = [
-  {
-    policyPath: ["sandbox", "requireMode"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policySandboxModeUnapproved],
-    emptyList: "disabled",
-    allowedValues: ["off", "non-main", "all"],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["sandbox", "allowBackends"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policySandboxBackendUnapproved],
-    emptyList: "disabled",
-    scopeSelectors: ["agentIds"],
-  },
-  ...SANDBOX_CONTAINER_POLICY_RULES.map((rule) => ({
-    policyPath: ["sandbox", "containers", rule.key] as const,
-    strictness: "requires-true" as const,
-    valueType: "boolean" as const,
-    checkIds: rule.checkIds,
-    scopeSelectors: ["agentIds"] as const,
-  })),
-  {
-    policyPath: ["sandbox", "browser", "requireCdpSourceRange"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing],
-    scopeSelectors: ["agentIds"],
-  },
-] as const satisfies readonly PolicyRuleMetadata[];
-
-export const POLICY_RULE_METADATA = [
-  {
-    policyPath: ["channels", "denyRules"],
-    strictness: "denylist-superset",
-    valueType: "channel-provider-deny-rules",
-    checkIds: [CHECK_IDS.policyDeniedChannelProvider],
-    emptyList: "meaningful",
-    caseSensitive: true,
-  },
-  {
-    policyPath: ["mcp", "servers", "allow"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyUnapprovedMcpServer],
-    emptyList: "disabled",
-    caseSensitive: true,
-  },
-  {
-    policyPath: ["mcp", "servers", "deny"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyDeniedMcpServer],
-    caseSensitive: true,
-  },
-  {
-    policyPath: ["models", "providers", "allow"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyUnapprovedModelProvider],
-    emptyList: "disabled",
-    normalizeValues: "model-provider",
-  },
-  {
-    policyPath: ["models", "providers", "deny"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyDeniedModelProvider],
-    normalizeValues: "model-provider",
-  },
-  {
-    policyPath: ["network", "privateNetwork", "allow"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyPrivateNetworkAccess],
-  },
-  {
-    policyPath: ["ingress", "session", "requireDmScope"],
-    strictness: "ordered-string",
-    valueType: "string",
-    orderedValues: ["main", "per-peer", "per-channel-peer", "per-account-channel-peer"],
-    checkIds: [CHECK_IDS.policyIngressDmScopeUnapproved],
-  },
-  {
-    policyPath: ["gateway", "exposure", "allowNonLoopbackBind"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayNonLoopbackBind],
-  },
-  {
-    policyPath: ["gateway", "exposure", "allowTailscaleFunnel"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayTailscaleFunnel],
-  },
-  {
-    policyPath: ["gateway", "auth", "requireAuth"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayAuthDisabled],
-  },
-  {
-    policyPath: ["gateway", "auth", "requireExplicitRateLimit"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayRateLimitMissing],
-  },
-  {
-    policyPath: ["gateway", "controlUi", "allowInsecure"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayControlUiInsecure],
-  },
-  {
-    policyPath: ["gateway", "remote", "allow"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayRemoteEnabled],
-  },
-  {
-    policyPath: ["gateway", "http", "denyEndpoints"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyGatewayHttpEndpointEnabled],
-    allowedValues: ["chatCompletions", "responses"],
-    caseSensitive: true,
-  },
-  {
-    policyPath: ["gateway", "http", "requireUrlAllowlists"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted],
-  },
-  {
-    policyPath: ["agents", "workspace", "allowedAccess"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyAgentsWorkspaceAccessDenied],
-    emptyList: "disabled",
-    allowedValues: ["none", "ro", "rw"],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["agents", "workspace", "denyTools"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyAgentsToolNotDenied],
-    allowedValues: ["exec", "process", "write", "edit", "apply_patch"],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "profiles", "allow"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsProfileUnapproved],
-    emptyList: "disabled",
-    allowedValues: ["minimal", "coding", "messaging", "full"],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "fs", "requireWorkspaceOnly"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyToolsFsWorkspaceOnlyRequired],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "exec", "allowSecurity"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsExecSecurityUnapproved],
-    emptyList: "disabled",
-    allowedValues: ["deny", "allowlist", "full"],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "exec", "requireAsk"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsExecAskUnapproved],
-    emptyList: "disabled",
-    allowedValues: ["off", "on-miss", "always"],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "exec", "allowHosts"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsExecHostUnapproved],
-    emptyList: "disabled",
-    allowedValues: ["auto", "sandbox", "gateway", "node"],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "elevated", "allow"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyToolsElevatedEnabled],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "alsoAllow", "expected"],
-    strictness: "exact-list",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsAlsoAllowMissing, CHECK_IDS.policyToolsAlsoAllowUnexpected],
-    emptyList: "meaningful",
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "denyTools"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyToolsRequiredDenyMissing],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["tools", "requireMetadata"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [
-      CHECK_IDS.policyMissingToolRisk,
-      CHECK_IDS.policyMissingToolSensitivity,
-      CHECK_IDS.policyMissingToolOwner,
-    ],
-    allowedValues: ["risk", "sensitivity", "owner"],
-  },
-  ...SANDBOX_POLICY_RULE_METADATA,
-  {
-    policyPath: ["ingress", "channels", "allowDmPolicies"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyIngressDmPolicyUnapproved],
-    emptyList: "disabled",
-    allowedValues: ["pairing", "allowlist", "open", "disabled"],
-    scopeSelectors: ["channelIds"],
-  },
-  {
-    policyPath: ["ingress", "channels", "denyOpenGroups"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyIngressOpenGroupsDenied],
-    scopeSelectors: ["channelIds"],
-  },
-  {
-    policyPath: ["ingress", "channels", "requireMentionInGroups"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyIngressGroupMentionRequired],
-    scopeSelectors: ["channelIds"],
-  },
-  {
-    policyPath: ["dataHandling", "sensitiveLogging", "requireRedaction"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyDataHandlingRedactionDisabled],
-  },
-  {
-    policyPath: ["dataHandling", "telemetry", "denyContentCapture"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyDataHandlingTelemetryContentCapture],
-  },
-  {
-    policyPath: ["dataHandling", "retention", "requireSessionMaintenance"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced],
-  },
-  {
-    policyPath: ["dataHandling", "memory", "denySessionTranscriptIndexing"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policyDataHandlingSessionTranscriptMemory],
-    scopeSelectors: ["agentIds"],
-  },
-  {
-    policyPath: ["secrets", "requireManagedProviders"],
-    strictness: "requires-true",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policySecretsUnmanagedProvider],
-  },
-  {
-    policyPath: ["secrets", "denySources"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policySecretsDeniedProviderSource],
-  },
-  {
-    policyPath: ["secrets", "allowInsecureProviders"],
-    strictness: "requires-false",
-    valueType: "boolean",
-    checkIds: [CHECK_IDS.policySecretsInsecureProvider],
-  },
-  {
-    policyPath: ["auth", "profiles", "requireMetadata"],
-    strictness: "denylist-superset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyAuthProfileInvalidMetadata],
-    allowedValues: ["provider", "mode"],
-  },
-  {
-    policyPath: ["auth", "profiles", "allowModes"],
-    strictness: "allowlist-subset",
-    valueType: "string-list",
-    checkIds: [CHECK_IDS.policyAuthProfileUnapprovedMode],
-    emptyList: "disabled",
-    allowedValues: ["api_key", "aws-sdk", "oauth", "token"],
-  },
-] as const satisfies readonly PolicyRuleMetadata[];
+import { createPolicyDoctorChecks } from "./checks.js";
+import {
+  CHECK_IDS,
+  POLICY_CHECK_IDS,
+  POLICY_RULE_METADATA,
+  SANDBOX_CONTAINER_POLICY_RULES,
+  type PolicyRuleMetadata,
+  type PolicyScopeSelectorKind,
+} from "./metadata.js";
+import { gatewayExposureFindings } from "./scopes/gateway.js";
+import {
+  mcpServerFindings,
+  modelProviderFindings,
+  networkFindings,
+} from "./scopes/model-network.js";
+import { isPolicyValueAtLeastAsStrict } from "./strictness.js";
+import type { PolicyEvaluation } from "./types.js";
+import {
+  ocPathSegment,
+  readPolicyBoolean,
+  readPolicyStringArray,
+  readString,
+  readStringList,
+} from "./utils.js";
+export {
+  POLICY_CHECK_IDS,
+  POLICY_RULE_METADATA,
+  SANDBOX_CONTAINER_POLICY_RULES,
+  type PolicyEmptyListSemantics,
+  type PolicyRuleMetadata,
+  type PolicyScopeSelectorKind,
+  type PolicyStrictnessKind,
+} from "./metadata.js";
+export { isPolicyValueAtLeastAsStrict } from "./strictness.js";
+export type { PolicyEvaluation } from "./types.js";
 
 const POLICY_RULES: readonly PolicyRuleMetadata[] = POLICY_RULE_METADATA;
 
@@ -529,6 +80,7 @@ const SUPPORTED_POLICY_SECTIONS = [
   "agents",
   "channels",
   "dataHandling",
+  "execApprovals",
   "gateway",
   "ingress",
   "mcp",
@@ -565,6 +117,7 @@ const SUPPORTED_TOOL_PROFILES = ["minimal", "coding", "messaging", "full"] as co
 const SUPPORTED_TOOL_EXEC_SECURITY = ["deny", "allowlist", "full"] as const;
 const SUPPORTED_TOOL_EXEC_ASK = ["off", "on-miss", "always"] as const;
 const SUPPORTED_TOOL_EXEC_HOST = ["auto", "sandbox", "gateway", "node"] as const;
+const SUPPORTED_EXEC_APPROVAL_SECURITY = ["deny", "allowlist", "full"] as const;
 const SUPPORTED_SANDBOX_MODES = ["off", "non-main", "all"] as const;
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -573,79 +126,21 @@ export type PolicyDoctorRegistrationHost = {
   readonly registerHealthCheck: (check: HealthCheck) => void;
 };
 
-export type PolicyEvaluation = {
-  readonly policyPath: string;
-  readonly policy?: {
-    readonly value: unknown;
-    readonly hash: string;
-  };
-  readonly evidence: PolicyEvidence;
-  readonly expectedAttestationHash?: string;
-  readonly findings: readonly HealthFinding[];
-  readonly attestedFindings: readonly HealthFinding[];
-};
-
 export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost): void {
   if (registered) {
     return;
   }
   const registerHealthCheck = host?.registerHealthCheck ?? registerPluginHealthCheck;
-  registerHealthCheck(policyMissingFileCheck);
-  registerHealthCheck(policyInvalidFileCheck);
-  registerHealthCheck(policyHashMismatchCheck);
-  registerHealthCheck(policyAttestationMismatchCheck);
-  registerHealthCheck(policyChannelsDeniedProviderCheck);
-  registerHealthCheck(policyMcpDeniedServerCheck);
-  registerHealthCheck(policyMcpUnapprovedServerCheck);
-  registerHealthCheck(policyModelsDeniedProviderCheck);
-  registerHealthCheck(policyModelsUnapprovedProviderCheck);
-  registerHealthCheck(policyNetworkPrivateAccessCheck);
-  registerHealthCheck(policyIngressDmPolicyUnapprovedCheck);
-  registerHealthCheck(policyIngressDmScopeUnapprovedCheck);
-  registerHealthCheck(policyIngressOpenGroupsDeniedCheck);
-  registerHealthCheck(policyIngressGroupMentionRequiredCheck);
-  registerHealthCheck(policyGatewayNonLoopbackBindCheck);
-  registerHealthCheck(policyGatewayAuthDisabledCheck);
-  registerHealthCheck(policyGatewayRateLimitMissingCheck);
-  registerHealthCheck(policyGatewayControlUiInsecureCheck);
-  registerHealthCheck(policyGatewayTailscaleFunnelCheck);
-  registerHealthCheck(policyGatewayRemoteEnabledCheck);
-  registerHealthCheck(policyGatewayHttpEndpointEnabledCheck);
-  registerHealthCheck(policyGatewayHttpUrlFetchUnrestrictedCheck);
-  registerHealthCheck(policyAgentsWorkspaceAccessDeniedCheck);
-  registerHealthCheck(policyAgentsToolNotDeniedCheck);
-  registerHealthCheck(policyToolsProfileUnapprovedCheck);
-  registerHealthCheck(policyToolsFsWorkspaceOnlyRequiredCheck);
-  registerHealthCheck(policyToolsExecSecurityUnapprovedCheck);
-  registerHealthCheck(policyToolsExecAskUnapprovedCheck);
-  registerHealthCheck(policyToolsExecHostUnapprovedCheck);
-  registerHealthCheck(policyToolsElevatedEnabledCheck);
-  registerHealthCheck(policyToolsAlsoAllowMissingCheck);
-  registerHealthCheck(policyToolsAlsoAllowUnexpectedCheck);
-  registerHealthCheck(policyToolsRequiredDenyMissingCheck);
-  registerHealthCheck(policySandboxModeUnapprovedCheck);
-  registerHealthCheck(policySandboxBackendUnapprovedCheck);
-  registerHealthCheck(policySandboxContainerPostureUnobservableCheck);
-  registerHealthCheck(policySandboxContainerHostNetworkDeniedCheck);
-  registerHealthCheck(policySandboxContainerNamespaceJoinDeniedCheck);
-  registerHealthCheck(policySandboxContainerMountModeRequiredCheck);
-  registerHealthCheck(policySandboxContainerRuntimeSocketMountCheck);
-  registerHealthCheck(policySandboxContainerUnconfinedProfileCheck);
-  registerHealthCheck(policySandboxBrowserCdpSourceRangeMissingCheck);
-  registerHealthCheck(policyDataHandlingRedactionDisabledCheck);
-  registerHealthCheck(policyDataHandlingTelemetryContentCaptureCheck);
-  registerHealthCheck(policyDataHandlingSessionRetentionNotEnforcedCheck);
-  registerHealthCheck(policyDataHandlingSessionTranscriptMemoryCheck);
-  registerHealthCheck(policySecretsUnmanagedProviderCheck);
-  registerHealthCheck(policySecretsDeniedProviderSourceCheck);
-  registerHealthCheck(policySecretsInsecureProviderCheck);
-  registerHealthCheck(policyAuthProfileInvalidMetadataCheck);
-  registerHealthCheck(policyAuthProfileUnapprovedModeCheck);
-  registerHealthCheck(policyToolsMissingRiskCheck);
-  registerHealthCheck(policyToolsUnknownRiskCheck);
-  registerHealthCheck(policyToolsMissingSensitivityCheck);
-  registerHealthCheck(policyToolsMissingOwnerCheck);
-  registerHealthCheck(policyToolsUnknownSensitivityCheck);
+  for (const check of createPolicyDoctorChecks({
+    channelIdsFromFindings,
+    disableChannels,
+    evaluatePolicy,
+    findingsForCheck,
+    workspaceRepairsDisabledResult,
+    workspaceRepairsEnabled,
+  })) {
+    registerHealthCheck(check);
+  }
   registered = true;
 }
 
@@ -663,633 +158,6 @@ export function evaluatePolicy(ctx: HealthCheckContext): Promise<PolicyEvaluatio
   return next;
 }
 
-const policyMissingFileCheck: HealthCheck = {
-  id: CHECK_IDS.policyMissingFile,
-  kind: "plugin",
-  description: "The enabled Policy plugin has a policy file to verify.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingFile);
-  },
-};
-
-const policyHashMismatchCheck: HealthCheck = {
-  id: CHECK_IDS.policyHashMismatch,
-  kind: "plugin",
-  description: "The policy file matches the configured expected hash.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyHashMismatch);
-  },
-};
-
-const policyAttestationMismatchCheck: HealthCheck = {
-  id: CHECK_IDS.policyAttestationMismatch,
-  kind: "plugin",
-  description: "The current policy check matches the accepted attestation.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAttestationMismatch);
-  },
-};
-
-const policyInvalidFileCheck: HealthCheck = {
-  id: CHECK_IDS.policyInvalidFile,
-  kind: "plugin",
-  description: "The enabled policy file parses before policy checks run.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyInvalidFile);
-  },
-};
-
-const policyChannelsDeniedProviderCheck: HealthCheck = {
-  id: CHECK_IDS.policyDeniedChannelProvider,
-  kind: "plugin",
-  description: "Configured channels satisfy policy deny rules.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedChannelProvider);
-  },
-  async repair(ctx, findings) {
-    if (!workspaceRepairsEnabled(ctx)) {
-      return workspaceRepairsDisabledResult("channel config");
-    }
-    const channelIds = channelIdsFromFindings(findings);
-    if (channelIds.length === 0) {
-      return {
-        status: "skipped",
-        reason: "no channel findings matched a configurable channel",
-        changes: [],
-      };
-    }
-    const next = disableChannels(ctx.cfg, channelIds);
-    if (next.changed.length === 0) {
-      return {
-        status: "skipped",
-        reason: "matching channels were already disabled or missing",
-        changes: [],
-      };
-    }
-    return {
-      config: next.config,
-      changes: next.changed.map((id) => `Disabled channels.${id}.enabled for policy conformance.`),
-    };
-  },
-};
-
-const policyMcpDeniedServerCheck: HealthCheck = {
-  id: CHECK_IDS.policyDeniedMcpServer,
-  kind: "plugin",
-  description: "Configured MCP servers do not match policy deny rules.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedMcpServer);
-  },
-};
-
-const policyMcpUnapprovedServerCheck: HealthCheck = {
-  id: CHECK_IDS.policyUnapprovedMcpServer,
-  kind: "plugin",
-  description: "Configured MCP servers do not match policy allow rules.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedMcpServer);
-  },
-};
-
-const policyModelsDeniedProviderCheck: HealthCheck = {
-  id: CHECK_IDS.policyDeniedModelProvider,
-  kind: "plugin",
-  description: "Configured model providers do not match policy deny rules.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedModelProvider);
-  },
-};
-
-const policyModelsUnapprovedProviderCheck: HealthCheck = {
-  id: CHECK_IDS.policyUnapprovedModelProvider,
-  kind: "plugin",
-  description: "Configured model providers do not match policy allow rules.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedModelProvider);
-  },
-};
-
-const policyNetworkPrivateAccessCheck: HealthCheck = {
-  id: CHECK_IDS.policyPrivateNetworkAccess,
-  kind: "plugin",
-  description: "Network SSRF policy settings match private-network requirements.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyPrivateNetworkAccess);
-  },
-};
-
-const policyIngressDmPolicyUnapprovedCheck: HealthCheck = {
-  id: CHECK_IDS.policyIngressDmPolicyUnapproved,
-  kind: "plugin",
-  description: "Channel direct-message access policy matches ingress requirements.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyIngressDmPolicyUnapproved);
-  },
-};
-
-const policyIngressDmScopeUnapprovedCheck: HealthCheck = {
-  id: CHECK_IDS.policyIngressDmScopeUnapproved,
-  kind: "plugin",
-  description: "Direct-message sessions use the policy-required isolation scope.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyIngressDmScopeUnapproved);
-  },
-};
-
-const policyIngressOpenGroupsDeniedCheck: HealthCheck = {
-  id: CHECK_IDS.policyIngressOpenGroupsDenied,
-  kind: "plugin",
-  description: "Channel group access does not use open group policy when denied.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyIngressOpenGroupsDenied);
-  },
-};
-
-const policyIngressGroupMentionRequiredCheck: HealthCheck = {
-  id: CHECK_IDS.policyIngressGroupMentionRequired,
-  kind: "plugin",
-  description: "Channel group access keeps mention gates enabled when required.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyIngressGroupMentionRequired);
-  },
-};
-
-const policyGatewayNonLoopbackBindCheck: HealthCheck = {
-  id: CHECK_IDS.policyGatewayNonLoopbackBind,
-  kind: "plugin",
-  description: "Gateway bind posture matches policy exposure requirements.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayNonLoopbackBind);
-  },
-};
-
-const policyGatewayAuthDisabledCheck: HealthCheck = {
-  id: CHECK_IDS.policyGatewayAuthDisabled,
-  kind: "plugin",
-  description: "Gateway authentication remains enabled when required by policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayAuthDisabled);
-  },
-};
-
-const policyGatewayRateLimitMissingCheck: HealthCheck = {
-  id: CHECK_IDS.policyGatewayRateLimitMissing,
-  kind: "plugin",
-  description: "Gateway authentication rate-limit posture is explicit when required by policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayRateLimitMissing);
-  },
-};
-
-const policyGatewayControlUiInsecureCheck: HealthCheck = {
-  id: CHECK_IDS.policyGatewayControlUiInsecure,
-  kind: "plugin",
-  description: "Gateway Control UI insecure exposure toggles remain disabled by policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayControlUiInsecure);
-  },
-};
-
-const policyGatewayTailscaleFunnelCheck: HealthCheck = {
-  id: CHECK_IDS.policyGatewayTailscaleFunnel,
-  kind: "plugin",
-  description: "Gateway Tailscale Funnel exposure matches policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayTailscaleFunnel);
-  },
-};
-
-const policyGatewayRemoteEnabledCheck: HealthCheck = {
-  id: CHECK_IDS.policyGatewayRemoteEnabled,
-  kind: "plugin",
-  description: "Remote gateway mode matches policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayRemoteEnabled);
-  },
-};
-
-const policyGatewayHttpEndpointEnabledCheck: HealthCheck = {
-  id: CHECK_IDS.policyGatewayHttpEndpointEnabled,
-  kind: "plugin",
-  description: "Gateway HTTP API endpoints match policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyGatewayHttpEndpointEnabled);
-  },
-};
-
-const policyGatewayHttpUrlFetchUnrestrictedCheck: HealthCheck = {
-  id: CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
-  kind: "plugin",
-  description: "Gateway HTTP URL-fetch inputs have allowlists when required by policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
-    );
-  },
-};
-
-const policyAgentsWorkspaceAccessDeniedCheck: HealthCheck = {
-  id: CHECK_IDS.policyAgentsWorkspaceAccessDenied,
-  kind: "plugin",
-  description: "Agent sandbox workspace access matches policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAgentsWorkspaceAccessDenied);
-  },
-};
-
-const policyAgentsToolNotDeniedCheck: HealthCheck = {
-  id: CHECK_IDS.policyAgentsToolNotDenied,
-  kind: "plugin",
-  description: "Agent workspace mutation/runtime tools are denied when policy requires it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAgentsToolNotDenied);
-  },
-};
-
-const policyToolsProfileUnapprovedCheck: HealthCheck = {
-  id: CHECK_IDS.policyToolsProfileUnapproved,
-  kind: "plugin",
-  description: "Configured tool profiles match policy allow rules.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsProfileUnapproved);
-  },
-};
-
-const policyToolsFsWorkspaceOnlyRequiredCheck: HealthCheck = {
-  id: CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
-  kind: "plugin",
-  description: "Filesystem tools use workspace-only posture when policy requires it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policyToolsFsWorkspaceOnlyRequired,
-    );
-  },
-};
-
-const policyToolsExecSecurityUnapprovedCheck: HealthCheck = {
-  id: CHECK_IDS.policyToolsExecSecurityUnapproved,
-  kind: "plugin",
-  description: "Exec tool security mode matches policy allow rules.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsExecSecurityUnapproved);
-  },
-};
-
-const policyToolsExecAskUnapprovedCheck: HealthCheck = {
-  id: CHECK_IDS.policyToolsExecAskUnapproved,
-  kind: "plugin",
-  description: "Exec tool ask mode matches policy allow rules.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsExecAskUnapproved);
-  },
-};
-
-const policyToolsExecHostUnapprovedCheck: HealthCheck = {
-  id: CHECK_IDS.policyToolsExecHostUnapproved,
-  kind: "plugin",
-  description: "Exec tool host routing matches policy allow rules.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsExecHostUnapproved);
-  },
-};
-
-const policyToolsElevatedEnabledCheck: HealthCheck = {
-  id: CHECK_IDS.policyToolsElevatedEnabled,
-  kind: "plugin",
-  description: "Elevated tool mode remains disabled when policy requires it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsElevatedEnabled);
-  },
-};
-
-const policyToolsAlsoAllowMissingCheck: HealthCheck = {
-  id: CHECK_IDS.policyToolsAlsoAllowMissing,
-  kind: "plugin",
-  description: "Configured tools.alsoAllow entries include policy expected lists.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsAlsoAllowMissing);
-  },
-};
-
-const policyToolsAlsoAllowUnexpectedCheck: HealthCheck = {
-  id: CHECK_IDS.policyToolsAlsoAllowUnexpected,
-  kind: "plugin",
-  description: "Configured tools.alsoAllow entries match policy expected lists.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsAlsoAllowUnexpected);
-  },
-};
-
-const policyToolsRequiredDenyMissingCheck: HealthCheck = {
-  id: CHECK_IDS.policyToolsRequiredDenyMissing,
-  kind: "plugin",
-  description: "Configured tool deny lists include tools required by policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyToolsRequiredDenyMissing);
-  },
-};
-
-const policySandboxModeUnapprovedCheck: HealthCheck = {
-  id: CHECK_IDS.policySandboxModeUnapproved,
-  kind: "plugin",
-  description: "Sandbox mode config satisfies policy requirements.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySandboxModeUnapproved);
-  },
-};
-
-const policySandboxBackendUnapprovedCheck: HealthCheck = {
-  id: CHECK_IDS.policySandboxBackendUnapproved,
-  kind: "plugin",
-  description: "Sandbox backend config satisfies policy requirements.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySandboxBackendUnapproved);
-  },
-};
-
-const policySandboxContainerPostureUnobservableCheck: HealthCheck = {
-  id: CHECK_IDS.policySandboxContainerPostureUnobservable,
-  kind: "plugin",
-  description: "Sandbox container posture policy only targets observable container backends.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policySandboxContainerPostureUnobservable,
-    );
-  },
-};
-
-const policySandboxContainerHostNetworkDeniedCheck: HealthCheck = {
-  id: CHECK_IDS.policySandboxContainerHostNetworkDenied,
-  kind: "plugin",
-  description: "Sandbox container config avoids host network mode.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policySandboxContainerHostNetworkDenied,
-    );
-  },
-};
-
-const policySandboxContainerNamespaceJoinDeniedCheck: HealthCheck = {
-  id: CHECK_IDS.policySandboxContainerNamespaceJoinDenied,
-  kind: "plugin",
-  description: "Sandbox container config avoids joining another container network namespace.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policySandboxContainerNamespaceJoinDenied,
-    );
-  },
-};
-
-const policySandboxContainerMountModeRequiredCheck: HealthCheck = {
-  id: CHECK_IDS.policySandboxContainerMountModeRequired,
-  kind: "plugin",
-  description: "Sandbox container mounts are read-only when policy requires it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policySandboxContainerMountModeRequired,
-    );
-  },
-};
-
-const policySandboxContainerRuntimeSocketMountCheck: HealthCheck = {
-  id: CHECK_IDS.policySandboxContainerRuntimeSocketMount,
-  kind: "plugin",
-  description: "Sandbox container mounts avoid host container runtime sockets.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policySandboxContainerRuntimeSocketMount,
-    );
-  },
-};
-
-const policySandboxContainerUnconfinedProfileCheck: HealthCheck = {
-  id: CHECK_IDS.policySandboxContainerUnconfinedProfile,
-  kind: "plugin",
-  description: "Sandbox container profile config avoids unconfined profiles.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policySandboxContainerUnconfinedProfile,
-    );
-  },
-};
-
-const policySandboxBrowserCdpSourceRangeMissingCheck: HealthCheck = {
-  id: CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
-  kind: "plugin",
-  description: "Sandbox browser CDP config includes a source range when policy requires it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policySandboxBrowserCdpSourceRangeMissing,
-    );
-  },
-};
-
-const policyDataHandlingRedactionDisabledCheck: HealthCheck = {
-  id: CHECK_IDS.policyDataHandlingRedactionDisabled,
-  kind: "plugin",
-  description: "Sensitive logging redaction remains enabled when policy requires it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policyDataHandlingRedactionDisabled,
-    );
-  },
-};
-
-const policyDataHandlingTelemetryContentCaptureCheck: HealthCheck = {
-  id: CHECK_IDS.policyDataHandlingTelemetryContentCapture,
-  kind: "plugin",
-  description: "Telemetry content capture remains disabled when policy denies it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policyDataHandlingTelemetryContentCapture,
-    );
-  },
-};
-
-const policyDataHandlingSessionRetentionNotEnforcedCheck: HealthCheck = {
-  id: CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
-  kind: "plugin",
-  description: "Session retention maintenance is enforced when policy requires it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policyDataHandlingSessionRetentionNotEnforced,
-    );
-  },
-};
-
-const policyDataHandlingSessionTranscriptMemoryCheck: HealthCheck = {
-  id: CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
-  kind: "plugin",
-  description: "Session transcript memory indexing remains disabled when policy denies it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(
-      await evaluatePolicy(ctx),
-      CHECK_IDS.policyDataHandlingSessionTranscriptMemory,
-    );
-  },
-};
-
-const policySecretsUnmanagedProviderCheck: HealthCheck = {
-  id: CHECK_IDS.policySecretsUnmanagedProvider,
-  kind: "plugin",
-  description:
-    "OpenClaw config SecretRefs use configured secret providers when policy requires managed providers.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySecretsUnmanagedProvider);
-  },
-};
-
-const policySecretsDeniedProviderSourceCheck: HealthCheck = {
-  id: CHECK_IDS.policySecretsDeniedProviderSource,
-  kind: "plugin",
-  description:
-    "OpenClaw config secret providers and SecretRefs do not use sources denied by policy.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySecretsDeniedProviderSource);
-  },
-};
-
-const policySecretsInsecureProviderCheck: HealthCheck = {
-  id: CHECK_IDS.policySecretsInsecureProvider,
-  kind: "plugin",
-  description:
-    "Configured secret providers do not opt into insecure posture unless policy allows it.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policySecretsInsecureProvider);
-  },
-};
-
-const policyAuthProfileInvalidMetadataCheck: HealthCheck = {
-  id: CHECK_IDS.policyAuthProfileInvalidMetadata,
-  kind: "plugin",
-  description: "OpenClaw config auth profiles declare required provider and mode metadata.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAuthProfileInvalidMetadata);
-  },
-};
-
-const policyAuthProfileUnapprovedModeCheck: HealthCheck = {
-  id: CHECK_IDS.policyAuthProfileUnapprovedMode,
-  kind: "plugin",
-  description: "OpenClaw config auth profile modes stay within the policy allowlist.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAuthProfileUnapprovedMode);
-  },
-};
-
-const policyToolsMissingRiskCheck: HealthCheck = {
-  id: CHECK_IDS.policyMissingToolRisk,
-  kind: "plugin",
-  description: "TOOLS.md policy entries declare explicit risk levels.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolRisk);
-  },
-};
-
-const policyToolsUnknownRiskCheck: HealthCheck = {
-  id: CHECK_IDS.policyUnknownToolRisk,
-  kind: "plugin",
-  description: "TOOLS.md policy entries use known risk levels.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolRisk);
-  },
-};
-
-const policyToolsMissingSensitivityCheck: HealthCheck = {
-  id: CHECK_IDS.policyMissingToolSensitivity,
-  kind: "plugin",
-  description: "TOOLS.md policy entries declare default artifact sensitivity.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolSensitivity);
-  },
-};
-
-const policyToolsUnknownSensitivityCheck: HealthCheck = {
-  id: CHECK_IDS.policyUnknownToolSensitivity,
-  kind: "plugin",
-  description: "TOOLS.md policy entries use known sensitivity levels.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolSensitivity);
-  },
-};
-
-const policyToolsMissingOwnerCheck: HealthCheck = {
-  id: CHECK_IDS.policyMissingToolOwner,
-  kind: "plugin",
-  description: "TOOLS.md policy entries declare an accountable owner.",
-  source: "policy",
-  async detect(ctx) {
-    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolOwner);
-  },
-};
-
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
@@ -1301,6 +169,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     includeSandboxPosture: false,
     includeSecrets: false,
     includeAuthProfiles: false,
+    includeExecApprovals: false,
   });
   const findings: HealthFinding[] = [];
 
@@ -1392,6 +261,8 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const includeAgentWorkspace = policyHasAgentWorkspaceRules(policy);
   const includeDataHandling = policyHasDataHandlingRules(policy);
   const includeSandboxPosture = policyHasSandboxPostureRules(policy);
+  const includeExecApprovals = policyHasExecApprovalsRules(policy);
+  const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile(ctx) : undefined;
   if (requiredMetadata.size > 0) {
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
@@ -1404,6 +275,8 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       includeSandboxPosture,
       includeSecrets,
       includeAuthProfiles,
+      includeExecApprovals,
+      execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
     });
   } else {
     evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
@@ -1415,6 +288,8 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       includeSandboxPosture,
       includeSecrets,
       includeAuthProfiles,
+      includeExecApprovals,
+      execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
     });
   }
   const policyFindings: HealthFinding[] = [
@@ -1430,6 +305,14 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...sandboxPostureFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...dataHandlingFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...secretAuthProvenanceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
+    ...execApprovalsFindings(
+      policy,
+      policyFile.displayName,
+      policyFile.ocDocName,
+      evidence,
+      execApprovalsFile,
+      execApprovalsDisplayName(),
+    ),
     ...authMetadataRequirementFindings,
     ...metadataRequirementFindings,
   ];
@@ -1921,6 +804,14 @@ export function policyContainerShapeFindings(
       ];
     }
   }
+
+  const execApprovalsFinding = execApprovalsPolicyShapeFinding(policy.execApprovals, {
+    policyDocName,
+    policyPath,
+  });
+  if (execApprovalsFinding !== undefined) {
+    return [execApprovalsFinding];
+  }
   const sandboxFinding = sandboxPolicyShapeFinding(policy.sandbox, {
     policyDocName,
     policyPath,
@@ -2070,6 +961,146 @@ function ingressPolicyShapeFinding(
   return undefined;
 }
 
+function execApprovalsPolicyShapeFinding(
+  value: unknown,
+  params: {
+    readonly policyDocName: string;
+    readonly policyPath: string;
+    readonly targetPrefix?: string;
+    readonly propertyPrefix?: string;
+    readonly allowDefaults?: boolean;
+  },
+): HealthFinding | undefined {
+  const targetPrefix = params.targetPrefix ?? "execApprovals";
+  const propertyPrefix = params.propertyPrefix ?? "execApprovals";
+  const allowDefaults = params.allowDefaults ?? true;
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}`,
+      `${params.policyPath} ${propertyPrefix} must be an object.`,
+      `Fix ${params.policyPath} so ${propertyPrefix} is an object.`,
+    );
+  }
+  const unsupportedTopLevel = unsupportedPolicyKey(
+    value,
+    allowDefaults ? ["agents", "defaults", "requireFile"] : ["agents"],
+  );
+  if (unsupportedTopLevel !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/${ocPathSegment(unsupportedTopLevel)}`,
+      `${params.policyPath} ${propertyPrefix}.${unsupportedTopLevel} is not supported in exec approvals policy.`,
+      `Remove ${propertyPrefix}.${unsupportedTopLevel} or use a supported execApprovals rule.`,
+    );
+  }
+  if (value.requireFile !== undefined && typeof value.requireFile !== "boolean") {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/requireFile`,
+      `${params.policyPath} ${propertyPrefix}.requireFile must be a boolean.`,
+      `Set execApprovals.requireFile to true or false.`,
+    );
+  }
+  for (const section of (allowDefaults ? ["defaults", "agents"] : ["agents"]) as readonly (
+    | "agents"
+    | "defaults"
+  )[]) {
+    if (value[section] !== undefined && !isRecord(value[section])) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/${targetPrefix}/${section}`,
+        `${params.policyPath} ${propertyPrefix}.${section} must be an object.`,
+        `Fix ${params.policyPath} so ${propertyPrefix}.${section} is an object.`,
+      );
+    }
+  }
+  const defaults = allowDefaults && isRecord(value.defaults) ? value.defaults : {};
+  const unsupportedDefaultsKey = unsupportedPolicyKey(defaults, ["allowSecurity"]);
+  if (unsupportedDefaultsKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/defaults/${ocPathSegment(unsupportedDefaultsKey)}`,
+      `${params.policyPath} ${propertyPrefix}.defaults.${unsupportedDefaultsKey} is not supported in exec approvals policy.`,
+      `Use execApprovals.defaults.allowSecurity or remove the unsupported rule.`,
+    );
+  }
+  const defaultsSecurityFinding = policyStringArrayPropertyShapeFinding(defaults.allowSecurity, {
+    allowed: SUPPORTED_EXEC_APPROVAL_SECURITY,
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: `${propertyPrefix}.defaults.allowSecurity`,
+    target: `${targetPrefix}/defaults/allowSecurity`,
+    valueName: "exec approval security mode",
+  });
+  if (defaultsSecurityFinding !== undefined) {
+    return defaultsSecurityFinding;
+  }
+  const agents = isRecord(value.agents) ? value.agents : {};
+  const unsupportedAgentsKey = unsupportedPolicyKey(agents, [
+    "allowAutoAllowSkills",
+    "allowSecurity",
+    "allowlist",
+  ]);
+  if (unsupportedAgentsKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/agents/${ocPathSegment(unsupportedAgentsKey)}`,
+      `${params.policyPath} ${propertyPrefix}.agents.${unsupportedAgentsKey} is not supported in exec approvals policy.`,
+      `Use execApprovals.agents.allowSecurity, execApprovals.agents.allowAutoAllowSkills, or execApprovals.agents.allowlist.expected.`,
+    );
+  }
+  const agentSecurityFinding = policyStringArrayPropertyShapeFinding(agents.allowSecurity, {
+    allowed: SUPPORTED_EXEC_APPROVAL_SECURITY,
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: `${propertyPrefix}.agents.allowSecurity`,
+    target: `${targetPrefix}/agents/allowSecurity`,
+    valueName: "exec approval security mode",
+  });
+  if (agentSecurityFinding !== undefined) {
+    return agentSecurityFinding;
+  }
+  if (
+    agents.allowAutoAllowSkills !== undefined &&
+    typeof agents.allowAutoAllowSkills !== "boolean"
+  ) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/agents/allowAutoAllowSkills`,
+      `${params.policyPath} ${propertyPrefix}.agents.allowAutoAllowSkills must be a boolean.`,
+      `Set execApprovals.agents.allowAutoAllowSkills to true or false.`,
+    );
+  }
+  if (agents.allowlist !== undefined && !isRecord(agents.allowlist)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/agents/allowlist`,
+      `${params.policyPath} ${propertyPrefix}.agents.allowlist must be an object.`,
+      `Fix ${params.policyPath} so ${propertyPrefix}.agents.allowlist is an object.`,
+    );
+  }
+  const allowlist = isRecord(agents.allowlist) ? agents.allowlist : {};
+  const unsupportedAllowlistKey = unsupportedPolicyKey(allowlist, ["expected"]);
+  if (unsupportedAllowlistKey !== undefined) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${targetPrefix}/agents/allowlist/${ocPathSegment(unsupportedAllowlistKey)}`,
+      `${params.policyPath} ${propertyPrefix}.agents.allowlist.${unsupportedAllowlistKey} is not supported in exec approvals policy.`,
+      `Use execApprovals.agents.allowlist.expected or remove the unsupported rule.`,
+    );
+  }
+  return execApprovalAllowlistExpectedShapeFinding(allowlist.expected, {
+    policyDocName: params.policyDocName,
+    policyPath: params.policyPath,
+    property: `${propertyPrefix}.agents.allowlist.expected`,
+    target: `${targetPrefix}/agents/allowlist/expected`,
+  });
+}
+
 function agentsPolicyShapeFinding(
   value: unknown,
   params: {
@@ -2181,6 +1212,7 @@ function scopedPolicyShapeFinding(
     if (
       (overlay.agents !== undefined ||
         overlay.dataHandling !== undefined ||
+        overlay.execApprovals !== undefined ||
         overlay.tools !== undefined ||
         overlay.sandbox !== undefined) &&
       !hasAgentIds
@@ -2198,6 +1230,7 @@ function scopedPolicyShapeFinding(
         key !== "channelIds" &&
         key !== "agents" &&
         key !== "dataHandling" &&
+        key !== "execApprovals" &&
         key !== "tools" &&
         key !== "sandbox" &&
         key !== "ingress",
@@ -2207,7 +1240,7 @@ function scopedPolicyShapeFinding(
         params.policyPath,
         `oc://${params.policyDocName}/${targetPrefix}/${ocPathSegment(unsupportedKey)}`,
         `${params.policyPath} scopes.${scopeName}.${unsupportedKey} is not a supported scoped policy section.`,
-        `Use agentIds with agents.workspace, dataHandling.memory, tools, or sandbox, and channelIds with ingress.channels.`,
+        `Use agentIds with agents.workspace, dataHandling.memory, execApprovals, tools, or sandbox, and channelIds with ingress.channels.`,
       );
     }
     if (overlay.dataHandling !== undefined && !isRecord(overlay.dataHandling)) {
@@ -2255,6 +1288,17 @@ function scopedPolicyShapeFinding(
     });
     if (workspaceFinding !== undefined) {
       return workspaceFinding;
+    }
+
+    const scopedExecApprovalsFinding = execApprovalsPolicyShapeFinding(overlay.execApprovals, {
+      policyDocName: params.policyDocName,
+      policyPath: params.policyPath,
+      targetPrefix: `${targetPrefix}/execApprovals`,
+      propertyPrefix: `scopes.${scopeName}.execApprovals`,
+      allowDefaults: false,
+    });
+    if (scopedExecApprovalsFinding !== undefined) {
+      return scopedExecApprovalsFinding;
     }
     if (overlay.tools !== undefined && !isRecord(overlay.tools)) {
       return policyShapeFinding(
@@ -3005,6 +2049,40 @@ function policyStringArrayShapeFinding(
   return undefined;
 }
 
+function execApprovalAllowlistExpectedShapeFinding(
+  value: unknown,
+  params: {
+    readonly property: string;
+    readonly policyDocName: string;
+    readonly policyPath: string;
+    readonly target: string;
+  },
+): HealthFinding | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${params.target}`,
+      `${params.policyPath} ${params.property} must be an array.`,
+      `Fix ${params.policyPath} so ${params.property} is an array of exec approval allowlist entries.`,
+    );
+  }
+  const invalidIndex = value.findIndex(
+    (entry) => execApprovalAllowlistRequirement(entry) === undefined,
+  );
+  if (invalidIndex < 0) {
+    return undefined;
+  }
+  return policyShapeFinding(
+    params.policyPath,
+    `oc://${params.policyDocName}/${params.target}/#${invalidIndex}`,
+    `${params.policyPath} ${params.property}[${invalidIndex}] must be a non-empty string or an object with pattern and optional argPattern strings.`,
+    `Use entries such as "deploy" or { "pattern": "deploy", "argPattern": "^--prod$" }.`,
+  );
+}
+
 function policyStringArrayPropertyShapeFinding(
   value: unknown,
   params: {
@@ -3183,171 +2261,6 @@ function invalidChannelDenyRuleFindings(
       fixHint: `Fix ${policyPath} so each channel deny rule has a provider match.`,
     },
   ];
-}
-
-function mcpServerFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  const denied = new Set(readStringList(policy, ["mcp", "servers", "deny"], { lowercase: false }));
-  const allowed = readStringList(policy, ["mcp", "servers", "allow"], { lowercase: false });
-  const allowedSet = new Set(allowed);
-  const findings: HealthFinding[] = [];
-
-  for (const server of evidence.mcpServers) {
-    if (denied.has(server.id)) {
-      findings.push({
-        checkId: CHECK_IDS.policyDeniedMcpServer,
-        severity: "error",
-        message: `MCP server '${server.id}' is denied by policy.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: server.source,
-        target: server.source,
-        requirement: `oc://${policyDocName}/mcp/servers/deny`,
-        fixHint: "Remove this configured MCP server or update the policy after review.",
-      });
-      continue;
-    }
-    if (allowedSet.size > 0 && !allowedSet.has(server.id)) {
-      findings.push({
-        checkId: CHECK_IDS.policyUnapprovedMcpServer,
-        severity: "error",
-        message: `MCP server '${server.id}' is not in the policy allowlist.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: server.source,
-        target: server.source,
-        requirement: `oc://${policyDocName}/mcp/servers/allow`,
-        fixHint: "Use an approved MCP server or update the policy after review.",
-      });
-    }
-  }
-
-  return findings;
-}
-
-function modelProviderFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  const denied = new Set(readModelProviderPolicyList(policy, ["models", "providers", "deny"]));
-  const allowed = readModelProviderPolicyList(policy, ["models", "providers", "allow"]);
-  const allowedSet = new Set(allowed);
-  const findings: HealthFinding[] = [];
-
-  for (const provider of evidence.modelProviders) {
-    findings.push(...modelProviderConformanceFindings(provider, denied, allowedSet, policyDocName));
-  }
-  for (const modelRef of evidence.modelRefs) {
-    findings.push(...modelRefConformanceFindings(modelRef, denied, allowedSet, policyDocName));
-  }
-
-  return findings;
-}
-
-function readModelProviderPolicyList(policy: unknown, path: readonly string[]): readonly string[] {
-  return readStringList(policy, path).map((provider) => normalizeProviderId(provider));
-}
-
-function modelProviderConformanceFindings(
-  provider: PolicyEvidence["modelProviders"][number],
-  denied: ReadonlySet<string>,
-  allowed: ReadonlySet<string>,
-  policyDocName: string,
-): readonly HealthFinding[] {
-  const findings: HealthFinding[] = [];
-  if (denied.has(provider.id)) {
-    findings.push({
-      checkId: CHECK_IDS.policyDeniedModelProvider,
-      severity: "error",
-      message: `Model provider '${provider.id}' is denied by policy.`,
-      source: "policy",
-      path: "openclaw config",
-      ocPath: provider.source,
-      target: provider.source,
-      requirement: `oc://${policyDocName}/models/providers/deny`,
-      fixHint: "Remove this configured provider or update the policy after review.",
-    });
-  }
-  if (!denied.has(provider.id) && allowed.size > 0 && !allowed.has(provider.id)) {
-    findings.push({
-      checkId: CHECK_IDS.policyUnapprovedModelProvider,
-      severity: "error",
-      message: `Model provider '${provider.id}' is not in the policy allowlist.`,
-      source: "policy",
-      path: "openclaw config",
-      ocPath: provider.source,
-      target: provider.source,
-      requirement: `oc://${policyDocName}/models/providers/allow`,
-      fixHint: "Use an approved model provider or update the policy after review.",
-    });
-  }
-  return findings;
-}
-
-function modelRefConformanceFindings(
-  modelRef: PolicyEvidence["modelRefs"][number],
-  denied: ReadonlySet<string>,
-  allowed: ReadonlySet<string>,
-  policyDocName: string,
-): readonly HealthFinding[] {
-  const findings: HealthFinding[] = [];
-  if (denied.has(modelRef.provider)) {
-    findings.push({
-      checkId: CHECK_IDS.policyDeniedModelProvider,
-      severity: "error",
-      message: `Model ref '${modelRef.ref}' uses denied provider '${modelRef.provider}'.`,
-      source: "policy",
-      path: "openclaw config",
-      ocPath: modelRef.source,
-      target: modelRef.source,
-      requirement: `oc://${policyDocName}/models/providers/deny`,
-      fixHint: "Select an approved model provider or update the policy after review.",
-    });
-  }
-  if (!denied.has(modelRef.provider) && allowed.size > 0 && !allowed.has(modelRef.provider)) {
-    findings.push({
-      checkId: CHECK_IDS.policyUnapprovedModelProvider,
-      severity: "error",
-      message: `Model ref '${modelRef.ref}' uses unapproved provider '${modelRef.provider}'.`,
-      source: "policy",
-      path: "openclaw config",
-      ocPath: modelRef.source,
-      target: modelRef.source,
-      requirement: `oc://${policyDocName}/models/providers/allow`,
-      fixHint: "Select an approved model provider or update the policy after review.",
-    });
-  }
-  return findings;
-}
-
-function networkFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  const allowPrivateNetwork = readPolicyBoolean(policy, ["network", "privateNetwork", "allow"]);
-  if (allowPrivateNetwork !== false) {
-    return [];
-  }
-  return evidence.network
-    .filter((setting) => setting.value)
-    .map((setting): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyPrivateNetworkAccess,
-        severity: "error",
-        message: `Network setting '${setting.id}' allows private-network access.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: setting.source,
-        target: setting.source,
-        requirement: `oc://${policyDocName}/network/privateNetwork/allow`,
-        fixHint: "Disable this private-network access setting or update policy after review.",
-      };
-    });
 }
 
 function ingressFindings(
@@ -3606,239 +2519,6 @@ function ingressLabel(entry: PolicyIngressEvidence): string {
   return `channel '${entry.channel ?? "unknown"}'${account}${group}`;
 }
 
-function gatewayExposureFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  return [
-    ...gatewayNonLoopbackBindFindings(policy, policyDocName, evidence),
-    ...gatewayAuthFindings(policy, policyDocName, evidence),
-    ...gatewayControlUiFindings(policy, policyDocName, evidence),
-    ...gatewayTailscaleFindings(policy, policyDocName, evidence),
-    ...gatewayRemoteFindings(policy, policyDocName, evidence),
-    ...gatewayHttpEndpointFindings(policy, policyDocName, evidence),
-    ...gatewayHttpUrlFetchFindings(policy, policyDocName, evidence),
-  ];
-}
-
-function gatewayNonLoopbackBindFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["gateway", "exposure", "allowNonLoopbackBind"]) !== false) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter((entry) => entry.kind === "bind" && entry.nonLoopback === true)
-    .map((entry): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyGatewayNonLoopbackBind,
-        severity: "error",
-        message:
-          entry.explicit === false
-            ? "Gateway bind is omitted while the runtime default can permit non-loopback exposure."
-            : `Gateway bind setting '${entry.id}' permits non-loopback exposure.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: entry.source,
-        target: entry.source,
-        requirement: `oc://${policyDocName}/gateway/exposure/allowNonLoopbackBind`,
-        fixHint: "Use gateway.bind=loopback or update policy after review.",
-      };
-    });
-}
-
-function gatewayAuthFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  const findings: HealthFinding[] = [];
-  if (readPolicyBoolean(policy, ["gateway", "auth", "requireAuth"]) === true) {
-    findings.push(
-      ...(evidence.gatewayExposure ?? [])
-        .filter((entry) => entry.kind === "auth" && entry.value === "none")
-        .map((entry): HealthFinding => {
-          return {
-            checkId: CHECK_IDS.policyGatewayAuthDisabled,
-            severity: "error",
-            message: "Gateway authentication is disabled.",
-            source: "policy",
-            path: "openclaw config",
-            ocPath: entry.source,
-            target: entry.source,
-            requirement: `oc://${policyDocName}/gateway/auth/requireAuth`,
-            fixHint: "Set gateway.auth.mode to token, password, or trusted-proxy.",
-          };
-        }),
-    );
-  }
-  if (readPolicyBoolean(policy, ["gateway", "auth", "requireExplicitRateLimit"]) === true) {
-    findings.push(
-      ...(evidence.gatewayExposure ?? [])
-        .filter((entry) => entry.kind === "authRateLimit" && entry.explicit !== true)
-        .map((entry): HealthFinding => {
-          return {
-            checkId: CHECK_IDS.policyGatewayRateLimitMissing,
-            severity: "error",
-            message: "Gateway authentication rate-limit posture is not explicit.",
-            source: "policy",
-            path: "openclaw config",
-            ocPath: entry.source,
-            target: entry.source,
-            requirement: `oc://${policyDocName}/gateway/auth/requireExplicitRateLimit`,
-            fixHint: "Configure gateway.auth.rateLimit or update policy after review.",
-          };
-        }),
-    );
-  }
-  return findings;
-}
-
-function gatewayControlUiFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["gateway", "controlUi", "allowInsecure"]) !== false) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter(
-      (entry) =>
-        entry.kind === "controlUi" &&
-        entry.value === true &&
-        (entry.id === "gateway-control-ui-insecure-auth" ||
-          entry.id === "gateway-control-ui-device-auth-disabled" ||
-          entry.id === "gateway-control-ui-host-origin-fallback"),
-    )
-    .map((entry): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyGatewayControlUiInsecure,
-        severity: "error",
-        message: `Gateway Control UI insecure toggle '${entry.id}' is enabled.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: entry.source,
-        target: entry.source,
-        requirement: `oc://${policyDocName}/gateway/controlUi/allowInsecure`,
-        fixHint: "Disable the insecure Control UI toggle or update policy after review.",
-      };
-    });
-}
-
-function gatewayTailscaleFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["gateway", "exposure", "allowTailscaleFunnel"]) !== false) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter((entry) => entry.kind === "tailscale" && entry.value === "funnel")
-    .map((entry): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyGatewayTailscaleFunnel,
-        severity: "error",
-        message: "Gateway Tailscale Funnel exposure is enabled.",
-        source: "policy",
-        path: "openclaw config",
-        ocPath: entry.source,
-        target: entry.source,
-        requirement: `oc://${policyDocName}/gateway/exposure/allowTailscaleFunnel`,
-        fixHint: "Use tailscale serve/off or update policy after review.",
-      };
-    });
-}
-
-function gatewayRemoteFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["gateway", "remote", "allow"]) !== false) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter((entry) => entry.kind === "remote")
-    .map((entry): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyGatewayRemoteEnabled,
-        severity: "error",
-        message: `Gateway remote posture '${entry.id}' is enabled.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: entry.source,
-        target: entry.source,
-        requirement: `oc://${policyDocName}/gateway/remote/allow`,
-        fixHint: "Disable remote gateway mode/config or update policy after review.",
-      };
-    });
-}
-
-function gatewayHttpEndpointFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  const denied = new Set(
-    readStringList(policy, ["gateway", "http", "denyEndpoints"]).map((endpoint) =>
-      endpoint.toLowerCase(),
-    ),
-  );
-  if (denied.size === 0) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter(
-      (entry) =>
-        entry.kind === "httpEndpoint" &&
-        entry.endpoint !== undefined &&
-        denied.has(entry.endpoint.toLowerCase()),
-    )
-    .map((entry): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyGatewayHttpEndpointEnabled,
-        severity: "error",
-        message: `Gateway HTTP endpoint '${entry.endpoint ?? entry.id}' is denied by policy.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: entry.source,
-        target: entry.source,
-        requirement: `oc://${policyDocName}/gateway/http/denyEndpoints`,
-        fixHint: "Disable the HTTP endpoint or update policy after review.",
-      };
-    });
-}
-
-function gatewayHttpUrlFetchFindings(
-  policy: unknown,
-  policyDocName: string,
-  evidence: PolicyEvidence,
-): readonly HealthFinding[] {
-  if (readPolicyBoolean(policy, ["gateway", "http", "requireUrlAllowlists"]) !== true) {
-    return [];
-  }
-  return (evidence.gatewayExposure ?? [])
-    .filter((entry) => entry.kind === "httpUrlFetch" && entry.hasAllowlist !== true)
-    .map((entry): HealthFinding => {
-      return {
-        checkId: CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
-        severity: "error",
-        message: `Gateway HTTP URL-fetch input '${entry.id}' has no URL allowlist.`,
-        source: "policy",
-        path: "openclaw config",
-        ocPath: entry.source,
-        target: entry.source,
-        requirement: `oc://${policyDocName}/gateway/http/requireUrlAllowlists`,
-        fixHint: "Add a urlAllowlist for this URL-fetch input or update policy after review.",
-      };
-    });
-}
-
 function agentWorkspaceFindings(
   policy: unknown,
   policyPath: string,
@@ -3989,6 +2669,502 @@ function agentScopedWorkspaceFindings(
     );
   }
   return findings;
+}
+
+function execApprovalsFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+  file:
+    | { readonly raw: string; readonly displayName: string; readonly ocDocName: string }
+    | null
+    | undefined,
+  displayName: string,
+): readonly HealthFinding[] {
+  if (!isRecord(policy)) {
+    return [];
+  }
+  const findings: HealthFinding[] = [];
+  const entries = evidence.execApprovals ?? [];
+  const defaults = entries.find((entry) => entry.kind === "defaults");
+  const defaultSecurity = defaults?.security ?? "full";
+
+  if (isRecord(policy.execApprovals)) {
+    const shapeFinding = execApprovalsPolicyShapeFinding(policy.execApprovals, {
+      policyDocName,
+      policyPath,
+    });
+    if (shapeFinding !== undefined) {
+      return [shapeFinding];
+    }
+    const fileFindings = execApprovalsFileFindings(policy.execApprovals, {
+      policyDocName,
+      file,
+      displayName,
+      requirementBase: "execApprovals",
+    });
+    findings.push(...fileFindings);
+    if (fileFindings.length > 0) {
+      return findings;
+    }
+    findings.push(
+      ...execApprovalsRuleFindings(policy.execApprovals, {
+        entries,
+        defaultSecurity,
+        defaults,
+        displayName,
+        fileDisplayName: file?.displayName,
+        policyDocName,
+        requirementBase: "execApprovals",
+      }),
+    );
+  }
+
+  if (!hasValidScopedPolicy(policy, policyPath, policyDocName)) {
+    return findings;
+  }
+  const scopedFileFindingScopes = new Set<string>();
+  for (const target of agentScopedPolicyTargets(policy)) {
+    if (!isRecord(target.overlay.execApprovals)) {
+      continue;
+    }
+    const requirementBase = `scopes/${ocPathSegment(target.scopeName)}/execApprovals`;
+    const shapeFinding = execApprovalsPolicyShapeFinding(target.overlay.execApprovals, {
+      policyDocName,
+      policyPath,
+      targetPrefix: requirementBase,
+      propertyPrefix: `scopes.${target.scopeName}.execApprovals`,
+      allowDefaults: false,
+    });
+    if (shapeFinding !== undefined) {
+      findings.push(shapeFinding);
+      continue;
+    }
+    const fileFindings = execApprovalsFileFindings(target.overlay.execApprovals, {
+      policyDocName,
+      file,
+      displayName,
+      requirementBase,
+    });
+    if (fileFindings.length > 0) {
+      if (!scopedFileFindingScopes.has(target.scopeName)) {
+        findings.push(...fileFindings);
+        scopedFileFindingScopes.add(target.scopeName);
+      }
+      continue;
+    }
+    findings.push(
+      ...execApprovalsRuleFindings(target.overlay.execApprovals, {
+        entries,
+        defaultSecurity,
+        defaults,
+        displayName,
+        fileDisplayName: file?.displayName,
+        policyDocName,
+        requirementBase,
+        targetAgentId: target.agentId,
+      }),
+    );
+  }
+  return findings;
+}
+
+function execApprovalsFileFindings(
+  execApprovalsPolicy: Record<string, unknown>,
+  params: {
+    readonly policyDocName: string;
+    readonly file:
+      | { readonly raw: string; readonly displayName: string; readonly ocDocName: string }
+      | null
+      | undefined;
+    readonly displayName: string;
+    readonly requirementBase: string;
+  },
+): readonly HealthFinding[] {
+  const requireFile = readPolicyBoolean(execApprovalsPolicy, ["requireFile"]) === true;
+  const needsArtifactEvidence =
+    requireFile || execApprovalsPolicyNeedsArtifactEvidence(execApprovalsPolicy);
+  if (needsArtifactEvidence && params.file === null) {
+    return [
+      {
+        checkId: CHECK_IDS.policyExecApprovalsMissing,
+        severity: "error",
+        message: "exec-approvals.json evidence is required by policy but was not found.",
+        source: "policy",
+        path: params.displayName,
+        target: "oc://exec-approvals.json",
+        requirement: `oc://${params.policyDocName}/${
+          requireFile ? `${params.requirementBase}/requireFile` : params.requirementBase
+        }`,
+        fixHint: "Restore the approved exec approvals artifact or update policy after review.",
+      },
+    ];
+  }
+  if (params.file === null || params.file === undefined) {
+    return [];
+  }
+  const parsed = parseExecApprovalsFile(params.file.raw);
+  if (parsed.ok || !needsArtifactEvidence) {
+    return [];
+  }
+  return [
+    {
+      checkId: CHECK_IDS.policyExecApprovalsInvalid,
+      severity: "error",
+      message: `${params.file.displayName} could not be parsed: ${parsed.message}`,
+      source: "policy",
+      path: params.file.displayName,
+      target: `oc://${params.file.ocDocName}`,
+      requirement: `oc://${params.policyDocName}/${params.requirementBase}`,
+      fixHint: "Fix exec-approvals.json so it is valid JSON.",
+    },
+  ];
+}
+
+function execApprovalsPolicyNeedsArtifactEvidence(
+  execApprovalsPolicy: Record<string, unknown>,
+): boolean {
+  return isRecord(execApprovalsPolicy.defaults) || isRecord(execApprovalsPolicy.agents);
+}
+
+function execApprovalsRuleFindings(
+  execApprovalsPolicy: Record<string, unknown>,
+  params: {
+    readonly entries: readonly PolicyExecApprovalEvidence[];
+    readonly defaultSecurity: string;
+    readonly defaults?: PolicyExecApprovalEvidence;
+    readonly displayName: string;
+    readonly fileDisplayName?: string;
+    readonly policyDocName: string;
+    readonly requirementBase: string;
+    readonly targetAgentId?: string;
+  },
+): readonly HealthFinding[] {
+  const findings: HealthFinding[] = [];
+  const allowedDefaults = new Set(
+    readStringList(execApprovalsPolicy, ["defaults", "allowSecurity"]),
+  );
+  if (
+    params.targetAgentId === undefined &&
+    allowedDefaults.size > 0 &&
+    !allowedDefaults.has(params.defaultSecurity.toLowerCase())
+  ) {
+    findings.push(
+      execApprovalFinding(params.defaults, {
+        checkId: CHECK_IDS.policyExecApprovalsDefaultSecurityUnapproved,
+        message: `exec approvals defaults use unapproved security mode '${params.defaultSecurity}'.`,
+        requirement: `oc://${params.policyDocName}/${params.requirementBase}/defaults/allowSecurity`,
+        fixHint: "Set defaults.security to an approved mode or update policy after review.",
+      }),
+    );
+  }
+
+  const allowedAgents = new Set(readStringList(execApprovalsPolicy, ["agents", "allowSecurity"]));
+  if (allowedAgents.size > 0) {
+    const agentEntries =
+      params.targetAgentId === undefined
+        ? globalExecApprovalAgentSecurityEntries(params.entries, params.defaults)
+        : [
+            effectiveExecApprovalAgentSecurityEntry(params.entries, params.targetAgentId) ??
+              params.defaults ??
+              syntheticExecApprovalAgentEntry(params.targetAgentId),
+          ];
+    for (const entry of agentEntries) {
+      const security = entry.security ?? params.defaultSecurity;
+      if (allowedAgents.has(security.toLowerCase())) {
+        continue;
+      }
+      findings.push(
+        execApprovalFinding(entry, {
+          checkId: CHECK_IDS.policyExecApprovalsAgentSecurityUnapproved,
+          message: `exec approvals agent '${entry.agentId ?? params.targetAgentId ?? "inherited defaults"}' uses unapproved security mode '${security}'.`,
+          requirement: `oc://${params.policyDocName}/${params.requirementBase}/agents/allowSecurity`,
+          fixHint:
+            "Set the agent approval security mode to an approved value or update policy after review.",
+        }),
+      );
+    }
+  }
+
+  const allowAutoAllowSkills = readPolicyBoolean(execApprovalsPolicy, [
+    "agents",
+    "allowAutoAllowSkills",
+  ]);
+  if (allowAutoAllowSkills === false) {
+    const autoAllowEntries =
+      params.targetAgentId === undefined
+        ? globalExecApprovalAgentAutoAllowSkillsEntries(params.entries, params.defaults)
+        : [
+            effectiveExecApprovalAgentAutoAllowSkillsEntry(params.entries, params.targetAgentId) ??
+              params.defaults ??
+              syntheticExecApprovalAgentEntry(params.targetAgentId),
+          ];
+    for (const entry of autoAllowEntries) {
+      if (entry.autoAllowSkills !== true) {
+        continue;
+      }
+      findings.push(
+        execApprovalFinding(entry, {
+          checkId: CHECK_IDS.policyExecApprovalsAutoAllowSkillsEnabled,
+          message: `exec approvals agent '${entry.agentId ?? params.targetAgentId ?? "inherited defaults"}' enables autoAllowSkills outside policy.`,
+          requirement: `oc://${params.policyDocName}/${params.requirementBase}/agents/allowAutoAllowSkills`,
+          fixHint:
+            "Set autoAllowSkills to false or update policy after reviewing implicit skill CLI trust.",
+        }),
+      );
+    }
+  }
+
+  const expected = readExecApprovalAllowlistRequirements(execApprovalsPolicy, [
+    "agents",
+    "allowlist",
+    "expected",
+  ]);
+  if (expected !== undefined) {
+    const expectedSet = new Set(expected.map((entry) => entry.key));
+    const actualEntries = execApprovalAllowlistEntries(params.entries, params.targetAgentId).filter(
+      (entry) => entry.pattern !== undefined,
+    );
+    const actual = actualEntries
+      .map((entry) =>
+        execApprovalAllowlistRequirementKey(entry.pattern as string, entry.argPattern),
+      )
+      .toSorted();
+    const actualSet = new Set(actual);
+    for (const entry of expected.toSorted((a, b) => a.key.localeCompare(b.key))) {
+      if (!actualSet.has(entry.key)) {
+        const requirement = `oc://${params.policyDocName}/${params.requirementBase}/agents/allowlist/expected`;
+        const target = execApprovalAllowlistMissingTarget(params.targetAgentId);
+        findings.push({
+          checkId: CHECK_IDS.policyExecApprovalsAllowlistMissing,
+          severity: "error",
+          message: `exec approvals allowlist is missing expected pattern '${formatExecApprovalAllowlistRequirement(entry)}'.`,
+          source: "policy",
+          path: params.fileDisplayName ?? params.displayName,
+          target,
+          requirement,
+          fixHint: "Add the expected approval pattern or update policy after review.",
+        });
+      }
+    }
+    for (const key of actualSet) {
+      if (expectedSet.has(key)) {
+        continue;
+      }
+      const entry = actualEntries.find(
+        (candidate) =>
+          candidate.pattern !== undefined &&
+          execApprovalAllowlistRequirementKey(candidate.pattern, candidate.argPattern) === key,
+      );
+      findings.push(
+        execApprovalFinding(entry, {
+          checkId: CHECK_IDS.policyExecApprovalsAllowlistUnexpected,
+          message: `exec approvals allowlist has unexpected pattern '${formatExecApprovalAllowlistEntry(entry)}'.`,
+          requirement: `oc://${params.policyDocName}/${params.requirementBase}/agents/allowlist/expected`,
+          fixHint: "Remove the unexpected approval pattern or update policy after review.",
+        }),
+      );
+    }
+  }
+  return findings;
+}
+
+function globalExecApprovalAgentSecurityEntries(
+  entries: readonly PolicyExecApprovalEvidence[],
+  defaults: PolicyExecApprovalEvidence | undefined,
+): readonly PolicyExecApprovalEvidence[] {
+  const agentEntries = entries.filter((candidate) => candidate.kind === "agent");
+  const wildcard = agentEntries.find((entry) => entry.agentId === "*");
+  const securityEntries = agentEntries.filter(
+    (entry) =>
+      entry.agentId === "*" || entry.security !== undefined || entry.securityConfigured === true,
+  );
+  return wildcard === undefined
+    ? [...securityEntries, defaults ?? syntheticExecApprovalAgentEntry("*")]
+    : securityEntries;
+}
+
+function globalExecApprovalAgentAutoAllowSkillsEntries(
+  entries: readonly PolicyExecApprovalEvidence[],
+  defaults: PolicyExecApprovalEvidence | undefined,
+): readonly PolicyExecApprovalEvidence[] {
+  const agentEntries = entries.filter((candidate) => candidate.kind === "agent");
+  const wildcard = agentEntries.find((entry) => entry.agentId === "*");
+  const explicitEntries = agentEntries.filter((entry) => entry.autoAllowSkills !== undefined);
+  return wildcard?.autoAllowSkills === undefined
+    ? [...explicitEntries, defaults ?? syntheticExecApprovalAgentEntry("*")]
+    : explicitEntries;
+}
+
+type ExecApprovalAllowlistRequirement = {
+  readonly key: string;
+  readonly pattern: string;
+  readonly argPattern?: string;
+};
+
+function readExecApprovalAllowlistRequirements(
+  policy: unknown,
+  path: readonly string[],
+): readonly ExecApprovalAllowlistRequirement[] | undefined {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  if (!Array.isArray(current)) {
+    return undefined;
+  }
+  const entries = current.map(execApprovalAllowlistRequirement);
+  return entries.every((entry): entry is ExecApprovalAllowlistRequirement => entry !== undefined)
+    ? entries
+    : undefined;
+}
+
+function execApprovalAllowlistRequirement(
+  value: unknown,
+): ExecApprovalAllowlistRequirement | undefined {
+  if (typeof value === "string") {
+    const pattern = value.trim();
+    return pattern === "" ? undefined : execApprovalAllowlistRequirementFromParts(pattern);
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (unsupportedPolicyKey(value, ["argPattern", "pattern"]) !== undefined) {
+    return undefined;
+  }
+  const pattern = typeof value.pattern === "string" ? value.pattern.trim() : "";
+  if (pattern === "") {
+    return undefined;
+  }
+  const argPattern = typeof value.argPattern === "string" ? value.argPattern.trim() : undefined;
+  if (value.argPattern !== undefined && argPattern === undefined) {
+    return undefined;
+  }
+  return execApprovalAllowlistRequirementFromParts(
+    pattern,
+    argPattern === "" ? undefined : argPattern,
+  );
+}
+
+function execApprovalAllowlistRequirementFromParts(
+  pattern: string,
+  argPattern?: string,
+): ExecApprovalAllowlistRequirement {
+  return {
+    key: execApprovalAllowlistRequirementKey(pattern, argPattern),
+    pattern,
+    ...(argPattern === undefined ? {} : { argPattern }),
+  };
+}
+
+function execApprovalAllowlistRequirementKey(
+  pattern: string,
+  argPattern: string | undefined,
+): string {
+  return `${pattern}\0${argPattern ?? ""}`;
+}
+
+function execApprovalAllowlistMissingTarget(agentId: string | undefined): string {
+  return agentId === undefined
+    ? "oc://exec-approvals.json"
+    : `oc://exec-approvals.json/agents/${ocPathSegment(agentId)}/allowlist`;
+}
+
+function formatExecApprovalAllowlistRequirement(entry: ExecApprovalAllowlistRequirement): string {
+  return formatExecApprovalAllowlistParts(entry.pattern, entry.argPattern);
+}
+
+function formatExecApprovalAllowlistEntry(entry: PolicyExecApprovalEvidence | undefined): string {
+  return formatExecApprovalAllowlistParts(entry?.pattern ?? "", entry?.argPattern);
+}
+
+function formatExecApprovalAllowlistParts(pattern: string, argPattern: string | undefined): string {
+  return argPattern === undefined ? pattern : `${pattern} argPattern=${argPattern}`;
+}
+
+function effectiveExecApprovalAgentSecurityEntry(
+  entries: readonly PolicyExecApprovalEvidence[],
+  agentId: string,
+): PolicyExecApprovalEvidence | undefined {
+  const exact = entries.find(
+    (entry) =>
+      entry.kind === "agent" &&
+      entry.agentId !== undefined &&
+      normalizeAgentId(entry.agentId) === normalizeAgentId(agentId),
+  );
+  const wildcard = entries.find((entry) => entry.kind === "agent" && entry.agentId === "*");
+  if (exact?.security !== undefined || exact?.securityConfigured === true) {
+    return exact;
+  }
+  return wildcard?.security === undefined ? (exact ?? wildcard) : wildcard;
+}
+
+function effectiveExecApprovalAgentAutoAllowSkillsEntry(
+  entries: readonly PolicyExecApprovalEvidence[],
+  agentId: string,
+): PolicyExecApprovalEvidence | undefined {
+  const exact = entries.find(
+    (entry) =>
+      entry.kind === "agent" &&
+      entry.agentId !== undefined &&
+      normalizeAgentId(entry.agentId) === normalizeAgentId(agentId),
+  );
+  if (exact?.autoAllowSkills !== undefined) {
+    return exact;
+  }
+  const wildcard = entries.find((entry) => entry.kind === "agent" && entry.agentId === "*");
+  return wildcard?.autoAllowSkills === undefined ? undefined : wildcard;
+}
+
+function syntheticExecApprovalAgentEntry(agentId: string): PolicyExecApprovalEvidence {
+  return {
+    id: `agent:${agentId}:runtime-defaults`,
+    kind: "agent",
+    source: "oc://exec-approvals.json",
+    agentId,
+  };
+}
+
+function execApprovalAllowlistEntries(
+  entries: readonly PolicyExecApprovalEvidence[],
+  agentId: string | undefined,
+): readonly PolicyExecApprovalEvidence[] {
+  if (agentId === undefined) {
+    return entries.filter((entry) => entry.kind === "allowlist");
+  }
+  return entries.filter(
+    (entry) =>
+      entry.kind === "allowlist" &&
+      entry.agentId !== undefined &&
+      (normalizeAgentId(entry.agentId) === normalizeAgentId(agentId) || entry.agentId === "*"),
+  );
+}
+
+function execApprovalFinding(
+  entry: PolicyExecApprovalEvidence | undefined,
+  params: {
+    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
+    readonly message: string;
+    readonly requirement: string;
+    readonly fixHint: string;
+  },
+): HealthFinding {
+  const target = entry?.source ?? "oc://exec-approvals.json";
+  return {
+    checkId: params.checkId,
+    severity: "error",
+    message: params.message,
+    source: "policy",
+    path: "exec-approvals.json",
+    ocPath: target,
+    target,
+    requirement: params.requirement,
+    fixHint: params.fixHint,
+  };
 }
 
 function toolPostureFindings(
@@ -5238,6 +4414,25 @@ function dataHandlingLabel(entry: PolicyDataHandlingEvidence): string {
   return entry.agentId === undefined ? "Global data handling config" : `agent '${entry.agentId}'`;
 }
 
+function policyHasExecApprovalsRules(policy: unknown): boolean {
+  if (!isRecord(policy)) {
+    return false;
+  }
+  if (execApprovalsPolicyHasRules(policy.execApprovals)) {
+    return true;
+  }
+  return agentScopedPolicyOverlays(policy).some(([, overlay]) =>
+    execApprovalsPolicyHasRules(overlay.execApprovals),
+  );
+}
+
+function execApprovalsPolicyHasRules(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value.requireFile !== undefined || isRecord(value.defaults) || isRecord(value.agents))
+  );
+}
+
 function policyHasSecretRules(policy: unknown): boolean {
   if (!isRecord(policy) || !isRecord(policy.secrets)) {
     return false;
@@ -5585,158 +4780,6 @@ function scopedPolicyFields(
       metadata: rule,
       value,
     }));
-}
-
-export function isPolicyValueAtLeastAsStrict(
-  metadata: PolicyRuleMetadata,
-  candidate: unknown,
-  baseline: unknown,
-): boolean {
-  switch (metadata.strictness) {
-    case "allowlist-subset":
-      return isPolicyAllowlistSubset(metadata, candidate, baseline);
-    case "denylist-superset":
-      return isPolicyDenylistSuperset(metadata, candidate, baseline);
-    case "ordered-string":
-      return isPolicyOrderedStringAtLeastAsStrict(metadata, candidate, baseline);
-    case "requires-true":
-      return baseline !== true || candidate === true;
-    case "requires-false":
-      return baseline !== false || candidate === false;
-    case "exact-list":
-      return samePolicyStringList(candidate, baseline, metadata);
-  }
-  return false;
-}
-
-function isPolicyOrderedStringAtLeastAsStrict(
-  metadata: PolicyRuleMetadata,
-  candidate: unknown,
-  baseline: unknown,
-): boolean {
-  const candidateValue = policyString(candidate, metadata);
-  const baselineValue = policyString(baseline, metadata);
-  if (
-    candidateValue === undefined ||
-    baselineValue === undefined ||
-    metadata.orderedValues === undefined
-  ) {
-    return false;
-  }
-  const orderedValues = metadata.orderedValues.map((entry) =>
-    metadata.caseSensitive === true ? entry : entry.toLowerCase(),
-  );
-  const candidateIndex = orderedValues.indexOf(candidateValue);
-  const baselineIndex = orderedValues.indexOf(baselineValue);
-  return candidateIndex >= 0 && baselineIndex >= 0 && candidateIndex >= baselineIndex;
-}
-
-function isPolicyAllowlistSubset(
-  metadata: PolicyRuleMetadata,
-  candidate: unknown,
-  baseline: unknown,
-): boolean {
-  const candidateList = policyStringList(candidate, metadata);
-  const baselineList = policyStringList(baseline, metadata);
-  if (candidateList === undefined || baselineList === undefined) {
-    return false;
-  }
-  if (metadata.emptyList === "disabled" && baselineList.length === 0) {
-    return true;
-  }
-  if (metadata.emptyList === "disabled" && baselineList.length > 0 && candidateList.length === 0) {
-    return false;
-  }
-  const allowed = new Set(baselineList);
-  return candidateList.every((entry) => allowed.has(entry));
-}
-
-function isPolicyDenylistSuperset(
-  metadata: PolicyRuleMetadata,
-  candidate: unknown,
-  baseline: unknown,
-): boolean {
-  const candidateList = policyStringList(candidate, metadata);
-  const baselineList = policyStringList(baseline, metadata);
-  if (candidateList === undefined || baselineList === undefined) {
-    return false;
-  }
-  if (metadata.policyPath.join(".") === "tools.denyTools") {
-    return baselineList
-      .flatMap(expandPolicyToolRequirement)
-      .every((tool) => toolListCoversTool(candidateList, tool));
-  }
-  const denied = new Set(candidateList);
-  return baselineList.every((entry) => denied.has(entry));
-}
-
-function samePolicyStringList(
-  candidate: unknown,
-  baseline: unknown,
-  metadata: PolicyRuleMetadata,
-): boolean {
-  const candidateList = policyStringList(candidate, metadata);
-  const baselineList = policyStringList(baseline, metadata);
-  if (candidateList === undefined || baselineList === undefined) {
-    return false;
-  }
-  const candidateSorted = candidateList.toSorted();
-  const baselineSorted = baselineList.toSorted();
-  return (
-    candidateSorted.length === baselineSorted.length &&
-    candidateSorted.every((entry, index) => entry === baselineSorted[index])
-  );
-}
-
-function policyStringList(
-  value: unknown,
-  metadata: PolicyRuleMetadata,
-): readonly string[] | undefined {
-  if (metadata.valueType === "channel-provider-deny-rules") {
-    return channelProviderDenyRuleList(value, metadata);
-  }
-  if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
-    return undefined;
-  }
-  return value
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => normalizePolicyStringListEntry(entry, metadata));
-}
-
-function normalizePolicyStringListEntry(entry: string, metadata: PolicyRuleMetadata): string {
-  if (metadata.normalizeValues === "model-provider") {
-    return normalizeProviderId(entry);
-  }
-  return metadata.caseSensitive === true ? entry : entry.toLowerCase();
-}
-
-function channelProviderDenyRuleList(
-  value: unknown,
-  metadata: PolicyRuleMetadata,
-): readonly string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const providers: string[] = [];
-  for (const entry of value) {
-    if (!isChannelDenyRule(entry)) {
-      return undefined;
-    }
-    const provider = entry.when?.provider?.trim();
-    if (provider !== undefined && provider !== "") {
-      providers.push(metadata.caseSensitive === true ? provider : provider.toLowerCase());
-    }
-  }
-  return providers;
-}
-
-function policyString(value: unknown, metadata: PolicyRuleMetadata): string | undefined {
-  if (typeof value !== "string" || value.trim() === "") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return metadata.caseSensitive === true ? trimmed : trimmed.toLowerCase();
 }
 
 function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
@@ -6138,6 +5181,26 @@ async function readPolicyFile(
   }
 }
 
+async function readExecApprovalsFile(
+  ctx: HealthCheckContext,
+): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
+  const artifact = execApprovalsArtifactLocation(ctx);
+  try {
+    const fs = await loadFsPromisesModule();
+    return {
+      raw: await fs.readFile(artifact.path, "utf-8"),
+      path: artifact.path,
+      displayName: artifact.displayName,
+      ocDocName: "exec-approvals.json",
+    };
+  } catch (err) {
+    if (isNotFound(err)) {
+      return null;
+    }
+    throw err;
+  }
+}
+
 async function readWorkspaceFile(
   ctx: HealthCheckContext,
   fileName: string,
@@ -6154,6 +5217,57 @@ async function readWorkspaceFile(
   }
 }
 
+function resolvePolicyArtifactPath(ctx: HealthCheckContext, fileName: string): string {
+  if (fileName.startsWith("~/") || fileName.startsWith("~\\")) {
+    const home = resolvePolicyArtifactHomeDir();
+    if (home !== undefined) {
+      return resolve(home, fileName.slice(2));
+    }
+  }
+  return resolveWorkspacePath(ctx, fileName);
+}
+
+function resolvePolicyArtifactHomeDir(): string | undefined {
+  const explicitHome = normalizedEnvValue(process.env.OPENCLAW_HOME);
+  if (explicitHome !== undefined) {
+    if (explicitHome === "~" || explicitHome.startsWith("~/") || explicitHome.startsWith("~\\")) {
+      return resolvePolicyHomeRelativePath(explicitHome);
+    }
+    return resolve(explicitHome);
+  }
+  return resolveOsPolicyHomeDir();
+}
+
+function resolvePolicyHomeRelativePath(value: string): string {
+  const fallbackHome = resolveOsPolicyHomeDir();
+  return fallbackHome === undefined
+    ? resolve(value)
+    : resolve(value.replace(/^~(?=$|[\\/])/, fallbackHome));
+}
+
+function resolveOsPolicyHomeDir(): string | undefined {
+  return (
+    normalizedEnvValue(process.env.HOME) ??
+    normalizedEnvValue(process.env.USERPROFILE) ??
+    safeOsHomeDir()
+  );
+}
+
+function safeOsHomeDir(): string | undefined {
+  try {
+    return normalizedEnvValue(os.homedir());
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedEnvValue(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed === undefined || trimmed === "" || trimmed === "undefined" || trimmed === "null"
+    ? undefined
+    : trimmed;
+}
+
 function resolveWorkspacePath(ctx: HealthCheckContext, fileName: string): string {
   if (isAbsolute(fileName)) {
     return fileName;
@@ -6163,6 +5277,25 @@ function resolveWorkspacePath(ctx: HealthCheckContext, fileName: string): string
 
 function isNotFound(err: unknown): boolean {
   return typeof err === "object" && err !== null && "code" in err && err.code === "ENOENT";
+}
+
+function parseExecApprovalsFile(
+  raw: string,
+):
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly message: string } {
+  try {
+    const value = JSON.parse(raw);
+    if (!isRecord(value) || value.version !== 1) {
+      return { ok: false, message: "unsupported exec approvals version" };
+    }
+    return { ok: true, value };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
 }
 
 function parsePolicyFile(
@@ -6352,67 +5485,6 @@ function authProfileHasMetadata(
   );
 }
 
-function readPolicyStringArray(
-  policy: unknown,
-  path: readonly string[],
-  options: { readonly lowercase?: boolean } = {},
-): readonly string[] | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  if (!Array.isArray(current) || !current.every((entry) => typeof entry === "string")) {
-    return undefined;
-  }
-  const lowercase = options.lowercase ?? true;
-  return current
-    .map((entry) => {
-      const trimmed = entry.trim();
-      return lowercase ? trimmed.toLowerCase() : trimmed;
-    })
-    .filter(Boolean);
-}
-
-function readStringList(
-  policy: unknown,
-  path: readonly string[],
-  options?: { readonly lowercase?: boolean },
-): readonly string[] {
-  return readPolicyStringArray(policy, path, options) ?? [];
-}
-
-function readString(policy: unknown, path: readonly string[]): string | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return typeof current === "string" ? current.trim().toLowerCase() : undefined;
-}
-
-function ocPathSegment(value: string): string {
-  if (/^(?:[A-Za-z0-9_-]+|#\d+)$/.test(value)) {
-    return value;
-  }
-  return JSON.stringify(value);
-}
-
-function readPolicyBoolean(policy: unknown, path: readonly string[]): boolean | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return typeof current === "boolean" ? current : undefined;
-}
-
 function policyToolGlobMatches(tool: string, pattern: string): boolean {
   const escaped = pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`).test(tool);
@@ -6452,6 +5524,37 @@ function normalizePolicyToolName(value: string): string {
 
 function normalizePolicyChannelId(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function canonicalExecApprovalsPath(): string {
+  return "~/.openclaw/exec-approvals.json";
+}
+
+function execApprovalsArtifactLocation(ctx: HealthCheckContext): {
+  readonly path: string;
+  readonly displayName: string;
+} {
+  const stateDir = normalizedEnvValue(process.env.OPENCLAW_STATE_DIR);
+  if (stateDir !== undefined) {
+    const path = resolve(resolvePolicyStateDir(stateDir), "exec-approvals.json");
+    return { path, displayName: path };
+  }
+  return {
+    path: resolvePolicyArtifactPath(ctx, canonicalExecApprovalsPath()),
+    displayName: canonicalExecApprovalsPath(),
+  };
+}
+
+function execApprovalsDisplayName(): string {
+  const stateDir = normalizedEnvValue(process.env.OPENCLAW_STATE_DIR);
+  if (stateDir === undefined) {
+    return canonicalExecApprovalsPath();
+  }
+  return resolve(resolvePolicyStateDir(stateDir), "exec-approvals.json");
+}
+
+function resolvePolicyStateDir(stateDir: string): string {
+  return stateDir.startsWith("~") ? resolvePolicyHomeRelativePath(stateDir) : resolve(stateDir);
 }
 
 function policyPathSetting(ctx: HealthCheckContext): string {

@@ -36,4 +36,21 @@ describe("readLastGatewayErrorLine", () => {
       "gateway stdout current",
     );
   });
+
+  it("prefers the current stderr error over a stale stdout match on linux", async () => {
+    const stateDir = makeTempStateDir();
+    const homeDir = makeTempStateDir();
+    const env = { HOME: homeDir, OPENCLAW_STATE_DIR: stateDir };
+    const stateLogs = resolveGatewayLogPaths(env);
+    fs.mkdirSync(stateLogs.logDir, { recursive: true });
+    // stderr carries the real, current failure; stdout carries an older matching
+    // line. On non-darwin platforms stderr is the strongest failure signal, so
+    // it must win instead of the stale stdout match.
+    fs.writeFileSync(stateLogs.stderrPath, "failed to bind gateway socket EADDRINUSE\n", "utf8");
+    fs.writeFileSync(stateLogs.stdoutPath, "gateway start blocked: stale prior reason\n", "utf8");
+
+    await expect(readLastGatewayErrorLine(env, { platform: "linux" })).resolves.toBe(
+      "failed to bind gateway socket EADDRINUSE",
+    );
+  });
 });

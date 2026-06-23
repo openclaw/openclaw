@@ -677,6 +677,17 @@ function isNonRootUser(user: string | null): user is string {
   return Boolean(user && user !== "root");
 }
 
+function hasRootUserManagerEnvironment(env: GatewayServiceEnv): boolean {
+  const home = env.HOME?.trim();
+  const runtimeDir = env.XDG_RUNTIME_DIR?.trim();
+  const dbusAddress = env.DBUS_SESSION_BUS_ADDRESS?.trim();
+  return (
+    home === "/root" &&
+    runtimeDir === "/run/user/0" &&
+    Boolean(dbusAddress?.includes("/run/user/0/bus"))
+  );
+}
+
 function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   machineUser: string | null;
   preferMachineScope: boolean;
@@ -686,14 +697,17 @@ function resolveSystemctlUserScope(env: GatewayServiceEnv): {
   const effectiveUid = readSystemctlEffectiveUid();
   const effectiveUser = readSystemctlEffectiveUser();
   const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
-  const isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
-  const machineUser = isSudoToRoot
-    ? sudoUser
-    : isNonRootUser(envUser)
-      ? envUser
-      : isNonRootUser(sudoUser)
-        ? sudoUser
-        : effectiveUser || envUser || sudoUser || null;
+  const hasRootUserManager = isEffectiveRoot && hasRootUserManagerEnvironment(env);
+  const isSudoToRoot = isEffectiveRoot && !hasRootUserManager && isNonRootUser(sudoUser);
+  const machineUser = hasRootUserManager
+    ? null
+    : isSudoToRoot
+      ? sudoUser
+      : isNonRootUser(envUser)
+        ? envUser
+        : isNonRootUser(sudoUser)
+          ? sudoUser
+          : effectiveUser || envUser || sudoUser || null;
   return {
     machineUser,
     preferMachineScope: isSudoToRoot,

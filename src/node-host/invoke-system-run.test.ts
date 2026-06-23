@@ -967,7 +967,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(requireFirstRunCommandArgs(runCommand)).toEqual([
           "/bin/sh",
           "-lc",
-          `'${expectedHeadPath}' '-c' '16'`,
+          `${expectedHeadPath} -c 16`,
         ]);
         expectInvokeOk(sendInvokeResult);
       } finally {

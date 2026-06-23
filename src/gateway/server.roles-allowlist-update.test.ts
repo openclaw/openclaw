@@ -10,7 +10,7 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
 import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
-import { resolveRestartSentinelPath } from "../infra/restart-sentinel.js";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import {
@@ -417,13 +417,9 @@ describe("gateway update.run", () => {
         }, FAST_WAIT_OPTS);
         expect(sigusr1).toHaveBeenCalled();
 
-        const sentinelPath = resolveRestartSentinelPath();
-        const raw = await fs.readFile(sentinelPath, "utf-8");
-        const parsed = JSON.parse(raw) as {
-          payload?: { kind?: string; stats?: { mode?: string } };
-        };
-        expect(parsed.payload?.kind).toBe("update");
-        expect(parsed.payload?.stats?.mode).toBe("git");
+        const sentinel = await readRestartSentinel();
+        expect(sentinel?.payload.kind).toBe("update");
+        expect(sentinel?.payload.stats?.mode).toBe("git");
       } finally {
         process.off("SIGUSR1", sigusr1);
       }

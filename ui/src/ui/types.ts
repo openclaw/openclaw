@@ -1,8 +1,10 @@
 // Control UI type declarations define types contracts.
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
   GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
@@ -11,6 +13,7 @@ import type {
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 export type { SessionGoal } from "../../../src/config/sessions/types.js";
+export type { FastMode } from "@openclaw/normalization-core/string-coerce";
 
 export type ChannelsStatusSnapshot = {
   ts: number;
@@ -32,8 +35,6 @@ export type ChannelUiMetaEntry = {
   detailLabel: string;
   systemImage?: string;
 };
-
-export const CRON_CHANNEL_LAST = "last";
 
 export type ChannelAccountSnapshot = {
   accountId: string;
@@ -264,23 +265,6 @@ export type NostrStatus = {
   profile?: NostrProfile | null;
 };
 
-export type MSTeamsProbe = {
-  ok: boolean;
-  error?: string | null;
-  appId?: string | null;
-};
-
-export type MSTeamsStatus = {
-  configured: boolean;
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-  port?: number | null;
-  probe?: MSTeamsProbe | null;
-  lastProbeAt?: number | null;
-};
-
 export type ConfigSnapshotIssue = {
   path: string;
   message: string;
@@ -387,6 +371,66 @@ export type AgentsFilesSetResult = {
   file: AgentFileEntry;
 };
 
+export type SessionWorkspaceFileEntry = {
+  path: string;
+  name: string;
+  kind: "modified" | "read";
+  missing: boolean;
+  size?: number;
+  updatedAtMs?: number;
+  content?: string;
+};
+
+export type SessionWorkspaceBrowserEntry = {
+  path: string;
+  name: string;
+  kind: "file" | "directory";
+  sessionKind?: "modified" | "read" | "mixed";
+  size?: number;
+  updatedAtMs?: number;
+};
+
+export type SessionWorkspaceBrowserResult = {
+  path: string;
+  parentPath?: string;
+  search?: string;
+  entries: SessionWorkspaceBrowserEntry[];
+  truncated?: boolean;
+};
+
+export type SessionWorkspaceArtifactEntry = {
+  id: string;
+  type: string;
+  title: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  source?: string;
+  download: {
+    mode: "bytes" | "url" | "unsupported";
+  };
+};
+
+export type SessionWorkspaceListResult = {
+  sessionKey: string;
+  root?: string;
+  files: SessionWorkspaceFileEntry[];
+  browser?: SessionWorkspaceBrowserResult;
+  artifacts?: SessionWorkspaceArtifactEntry[];
+};
+
+export type SessionWorkspaceGetResult = {
+  sessionKey: string;
+  root?: string;
+  file: SessionWorkspaceFileEntry;
+};
+
+export type ArtifactDownloadResult = {
+  artifact: SessionWorkspaceArtifactEntry;
+  encoding?: "base64";
+  data?: string;
+  url?: string;
+};
+
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 export type SubagentRunState = "active" | "interrupted" | "historical";
 
@@ -440,7 +484,10 @@ export type GatewaySessionRow = {
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  effectiveFastMode?: FastMode;
+  effectiveFastModeSource?: FastModeSource;
+  fastAutoOnSeconds?: number;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -507,7 +554,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
   thinkingLevel?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;

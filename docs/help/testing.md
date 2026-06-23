@@ -42,6 +42,45 @@ When you touch tests or want extra confidence:
 - Coverage gate: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
 
+## Test Temp Directories
+
+Prefer the shared helpers in `test/helpers/temp-dir.ts` for test-owned
+temporary directories. They make ownership explicit and keep cleanup in the same
+test lifecycle:
+
+```ts
+import { afterEach } from "vitest";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = createTempDirTracker();
+
+afterEach(tempDirs.cleanup);
+
+it("uses a temp workspace", () => {
+  const workspace = tempDirs.make("openclaw-example-");
+  // use workspace
+});
+```
+
+Use `makeTempDir(tempDirs, prefix)` and `cleanupTempDirs(tempDirs)` when a test
+already owns an array or set of paths. Avoid new bare `fs.mkdtemp*` calls in
+tests unless a case is explicitly verifying raw temp-dir behavior. Add an
+auditable allow comment with a concrete reason when a test intentionally needs a
+bare temp directory:
+
+```ts
+// openclaw-temp-dir: allow verifies raw fs cleanup behavior
+const workspace = fs.mkdtempSync(prefix);
+```
+
+For migration visibility, `node scripts/report-test-temp-creations.mjs` reports
+new bare temp-dir creation in added diff lines without blocking existing cleanup
+styles. Its file scope intentionally follows the same test-path classification
+used by `scripts/changed-lanes.mjs` instead of maintaining a separate test-helper
+filename heuristic, while skipping the shared helper implementation itself.
+`check:changed` runs this report for changed test paths as a warning-only CI
+signal; findings are GitHub warning annotations, not failures.
+
 When debugging real providers/models (requires real creds):
 
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
@@ -145,6 +184,16 @@ inside every shard.
 
 - `pnpm openclaw qa suite`
   - Runs repo-backed QA scenarios directly on the host.
+  - Writes top-level `qa-evidence.json`, `qa-suite-summary.json`, and
+    `qa-suite-report.md` artifacts for the selected scenario set, including
+    mixed flow, Vitest, and Playwright scenario selections.
+  - When dispatched by `pnpm openclaw qa run --qa-profile <profile>`, embeds the
+    selected taxonomy profile scorecard in the same `qa-evidence.json`.
+    `smoke-ci` writes slim evidence, which sets `evidenceMode: "slim"` and omits
+    per-entry `execution`. `release` covers the curated release-readiness slice;
+    `all` selects every active maturity category and is intended for explicit QA
+    Profile Evidence workflow dispatches when a full scorecard artifact is
+    needed.
   - Runs multiple selected scenarios in parallel by default with isolated
     gateway workers. `qa-channel` defaults to concurrency 4 (bounded by the
     selected scenario count). Use `--concurrency <count>` to tune the worker
@@ -218,17 +267,27 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ=/path/to/openclaw-current.tgz` or
     `OPENCLAW_CURRENT_PACKAGE_TGZ` to test a resolved local tarball instead of
     installing from the registry.
+  - Emits repeated RTT timing in `qa-evidence.json` by default with
+    `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES=20`. Override
+    `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
+    `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
+    `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the RTT run.
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts a comma-separated list of
+    Telegram QA check IDs to sample; when unset, the default RTT-capable check
+    is `telegram-mentioned-message-reply`.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
-    `OPENCLAW_QA_CONVEX_SITE_URL` and the role secret. If
+    `OPENCLAW_QA_CONVEX_SITE_URL` and a role secret. If
     `OPENCLAW_QA_CONVEX_SITE_URL` and a Convex role secret are present in CI,
     the Docker wrapper selects Convex automatically.
   - The wrapper validates Telegram or Convex credential env on the host before
     Docker build/install work. Set `OPENCLAW_NPM_TELEGRAM_SKIP_CREDENTIAL_PREFLIGHT=1`
     only when deliberately debugging pre-credential setup.
   - `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci|maintainer` overrides the shared
-    `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only.
+    `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only. When Convex credentials
+    are selected and no role is set, the wrapper uses `ci` in CI and
+    `maintainer` outside CI.
   - GitHub Actions exposes this lane as the manual maintainer workflow
     `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
     `qa-live-shared` environment and Convex CI credential leases.
@@ -344,11 +403,11 @@ gh workflow run package-acceptance.yml --ref main \
     want artifacts without a failing exit code.
   - Requires two distinct bots in the same private group, with the SUT bot exposing a Telegram username.
   - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
-  - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
+  - Writes a Telegram QA report, summary, and `qa-evidence.json` under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
 
 `Mantis Telegram Live` is the PR-evidence wrapper around this lane. It runs the
-candidate ref with Convex-leased Telegram credentials, renders the redacted
-observed-message transcript in a Crabbox desktop browser, records MP4 evidence,
+candidate ref with Convex-leased Telegram credentials, renders the redacted QA
+report/evidence bundle in a Crabbox desktop browser, records MP4 evidence,
 generates a motion-trimmed GIF, uploads the artifact bundle, and posts inline PR
 evidence through the Mantis GitHub App when `pr_number` is set. Maintainers can
 start it from the Actions UI through `Mantis Scenario` (`scenario_id:
@@ -768,7 +827,7 @@ The live-model Docker runners also bind-mount only the needed CLI auth homes (or
 - Release user journey smoke: `pnpm test:docker:release-user-journey` installs the packed OpenClaw tarball globally in a clean Docker home, runs onboarding, configures a mocked OpenAI provider, runs an agent turn, installs/uninstalls external plugins, configures ClickClack against a local fixture, verifies outbound/inbound messaging, restarts Gateway, and runs doctor.
 - Release typed onboarding smoke: `pnpm test:docker:release-typed-onboarding` installs the packed tarball, drives `openclaw onboard` through a real TTY, configures OpenAI as an env-ref provider, verifies no raw key persistence, and runs a mocked agent turn.
 - Release media/memory smoke: `pnpm test:docker:release-media-memory` installs the packed tarball, verifies image understanding from a PNG attachment, OpenAI-compatible image generation output, memory search recall, and recall survival across Gateway restart.
-- Release upgrade user journey smoke: `pnpm test:docker:release-upgrade-user-journey` installs `openclaw@latest` by default, configures provider/plugin/ClickClack state on the published package, upgrades to the candidate tarball, then reruns the core agent/plugin/channel journey. Override the baseline with `OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=openclaw@<version>`.
+- Release upgrade user journey smoke: `pnpm test:docker:release-upgrade-user-journey` installs the newest published baseline older than the candidate tarball by default, configures provider/plugin/ClickClack state on the published package, upgrades to the candidate tarball, then reruns the core agent/plugin/channel journey. If no older published baseline exists, it reuses the candidate version. Override the baseline with `OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC=openclaw@<version>`.
 - Release plugin marketplace smoke: `pnpm test:docker:release-plugin-marketplace` installs from a local fixture marketplace, updates the installed plugin, uninstalls it, and verifies the plugin CLI disappears with install metadata pruned.
 - Skill install smoke: `pnpm test:docker:skill-install` installs the packed OpenClaw tarball globally in Docker, disables uploaded archive installs in config, resolves the current live ClawHub skill slug from search, installs it with `openclaw skills install`, and verifies the installed skill plus `.clawhub` origin/lock metadata.
 - Update channel switch smoke: `pnpm test:docker:update-channel-switch` installs the packed OpenClaw tarball globally in Docker, switches from package `stable` to git `dev`, verifies the persisted channel and plugin post-update work, then switches back to package `stable` and checks update status.

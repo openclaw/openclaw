@@ -849,6 +849,7 @@ export interface TaskRuns {
   parent_flow_id: string | null;
   parent_task_id: string | null;
   progress_summary: string | null;
+  requester_agent_id: string | null;
   requester_session_key: string | null;
   run_id: string | null;
   runtime: string;

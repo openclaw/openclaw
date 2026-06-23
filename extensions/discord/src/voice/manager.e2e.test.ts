@@ -2390,6 +2390,49 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("rejects malformed realtime consult tool calls without crashing Discord voice", async () => {
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onToolCall?: (
+            event: {
+              itemId: string;
+              callId: string;
+              name: string;
+              args: unknown;
+            },
+            session: typeof realtimeSessionMock,
+          ) => void;
+        }
+      | undefined;
+
+    expect(() =>
+      bridgeParams?.onToolCall?.(
+        {
+          itemId: "item-empty-consult",
+          callId: "call-empty-consult",
+          name: "openclaw_agent_consult",
+          args: {},
+        },
+        realtimeSessionMock,
+      ),
+    ).not.toThrow();
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(realtimeSessionMock.submitToolResult).toHaveBeenCalledWith("call-empty-consult", {
+      error: "question required",
+    });
+  });
+
   it("does not require speaker context for internal exact-speech consults", async () => {
     const manager = createManager({
       groupPolicy: "open",
@@ -2584,7 +2627,8 @@ describe("DiscordVoiceManager", () => {
     try {
       agentCommandMock
         .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
-        .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+        .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] })
+        .mockResolvedValueOnce({ payloads: [{ text: "third answer" }] });
       const manager = createManager({
         groupPolicy: "open",
         voice: {
@@ -2595,6 +2639,7 @@ describe("DiscordVoiceManager", () => {
       });
 
       await manager.join({ guildId: "g1", channelId: "1001" });
+      const player = getLastAudioPlayer();
       const entry = getSessionEntry(manager) as {
         realtime?: {
           beginSpeakerTurn: (
@@ -2636,6 +2681,19 @@ describe("DiscordVoiceManager", () => {
 
       await vi.advanceTimersByTimeAsync(1_510);
       expectUserMessageIncludes("second answer");
+
+      const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
+        | (() => void)
+        | undefined;
+      idleHandler?.();
+      const thirdTurn = entry.realtime?.beginSpeakerTurn(
+        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+        "u-owner",
+      );
+      thirdTurn?.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onTranscript?.("user", "third question", true);
+      await vi.advanceTimersByTimeAsync(260);
+      expectUserMessageNotIncludes("third answer");
     } finally {
       vi.useRealTimers();
     }

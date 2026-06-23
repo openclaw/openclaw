@@ -21,6 +21,13 @@ export type FollowupQueueState = {
   droppedCount: number;
   summaryLines: string[];
   summarySources: FollowupRun[];
+  summaryElisions: Array<{
+    contextKey: string;
+    count: number;
+    source: FollowupRun;
+    sourceRefs: WeakSet<FollowupRun>;
+  }>;
+  evictedSummaryCount: number;
   lastRun?: FollowupRun["run"];
 };
 
@@ -44,6 +51,17 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   return FOLLOWUP_QUEUES.get(cleaned);
 }
 
+function trimSummaryElisionsToCap(queue: FollowupQueueState): void {
+  while (queue.summaryElisions.length > queue.cap) {
+    const evicted = queue.summaryElisions.shift();
+    if (!evicted) {
+      return;
+    }
+    queue.evictedSummaryCount += evicted.count;
+    completeFollowupRunLifecycle(evicted.source);
+  }
+}
+
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
@@ -51,6 +69,7 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
       target: existing,
       settings,
     });
+    trimSummaryElisionsToCap(existing);
     return existing;
   }
 
@@ -71,6 +90,8 @@ export function getFollowupQueue(key: string, settings: QueueSettings): Followup
     droppedCount: 0,
     summaryLines: [],
     summarySources: [],
+    summaryElisions: [],
+    evictedSummaryCount: 0,
   };
   applyQueueRuntimeSettings({
     target: created,
@@ -93,10 +114,15 @@ export function clearFollowupQueue(key: string): number {
   for (const item of queue.summarySources) {
     completeFollowupRunLifecycle(item);
   }
+  for (const entry of queue.summaryElisions) {
+    completeFollowupRunLifecycle(entry.source);
+  }
   queue.items.length = 0;
   queue.droppedCount = 0;
   queue.summaryLines = [];
   queue.summarySources = [];
+  queue.summaryElisions = [];
+  queue.evictedSummaryCount = 0;
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
@@ -175,5 +201,11 @@ export function refreshQueuedFollowupSession(params: {
   rewriteRun(queue.lastRun);
   for (const item of queue.items) {
     rewriteRun(item.run);
+  }
+  for (const item of queue.summarySources) {
+    rewriteRun(item.run);
+  }
+  for (const entry of queue.summaryElisions) {
+    rewriteRun(entry.source.run);
   }
 }

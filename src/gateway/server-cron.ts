@@ -32,7 +32,11 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import { requestSafeGatewayRestart } from "../infra/restart-coordinator.js";
+import {
+  consumeSelectedSystemEventEntries,
+  enqueueSystemEventEntry,
+} from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type {
@@ -323,11 +327,17 @@ export function buildGatewayCronService(params: {
       if (!sessionKey) {
         throw new Error("Cron system event target did not resolve a session key.");
       }
-      enqueueSystemEvent(text, {
+      const event = enqueueSystemEventEntry(text, {
         sessionKey,
         contextKey: opts?.contextKey,
         deliveryContext: opts?.deliveryContext,
       });
+      return event
+        ? {
+            accepted: true,
+            remove: () => consumeSelectedSystemEventEntries(sessionKey, [event]).length > 0,
+          }
+        : { accepted: false };
     },
     resolveOriginDeliveryContext: (opts) => {
       // Resolve the wake target the same way the enqueue/heartbeat deps do,
@@ -379,6 +389,7 @@ export function buildGatewayCronService(params: {
       abortSignal,
       onExecutionStarted,
       onExecutionPhase,
+      onLaneWait,
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
       const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
@@ -391,6 +402,7 @@ export function buildGatewayCronService(params: {
           abortSignal,
           onExecutionStarted,
           onExecutionPhase,
+          onLaneWait,
           agentId,
           sessionKey,
           lane: "cron",
@@ -533,6 +545,26 @@ export function buildGatewayCronService(params: {
           );
         },
       }).catch(() => {});
+    },
+    onIsolatedAgentSetupTimeout: ({ job, error, timeoutMs }) => {
+      const restart = requestSafeGatewayRestart({
+        reason: "cron.isolated_agent_setup_timeout",
+        delayMs: 0,
+        preservePendingEmitHooks: true,
+      });
+      cronLogger.warn(
+        {
+          jobId: job.id,
+          jobName: job.name,
+          timeoutMs,
+          error,
+          restartStatus: restart.status,
+          restartCoalesced: restart.restart.coalesced,
+          restartSummary: restart.preflight.summary,
+          restartDelayMs: restart.restart.delayMs,
+        },
+        "cron: isolated agent setup timed out before runner start; requested safe gateway restart",
+      );
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
       await sendGatewayCronFailureAlert({

@@ -165,16 +165,6 @@ export async function writeMemoryCoreWorkspaceEntry(
   );
 }
 
-export async function deleteMemoryCoreWorkspaceEntry(params: {
-  namespace: string;
-  workspaceDir: string;
-  key: string;
-}): Promise<boolean> {
-  return await openWorkspaceStore(params.namespace).delete(
-    memoryCoreWorkspaceEntryKey(params.workspaceDir, params.key),
-  );
-}
-
 export async function clearMemoryCoreWorkspaceNamespace(params: {
   namespace: string;
   workspaceDir: string;

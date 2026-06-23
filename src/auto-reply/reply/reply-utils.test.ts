@@ -1,15 +1,14 @@
 // Tests reply utility helpers for response normalization and send decisions.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { parseAudioTag } from "../../media/audio-tags.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import { parseAudioTag } from "./audio-tags.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-reference.js";
 import {
   extractShortModelName,
-  hasTemplateVariables,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
 import {
@@ -248,6 +247,16 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses quoted NO_REPLY string payloads", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      { text: '"NO_REPLY"' },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
   it("suppresses leaked reasoning when the final answer is NO_REPLY (#66701)", () => {
     const reasons: string[] = [];
     const result = normalizeReplyPayload(
@@ -299,6 +308,16 @@ describe("normalizeReplyPayload", () => {
   it("strips JSON NO_REPLY action text but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: '{"action":"NO_REPLY"}',
+      mediaUrl: "https://example.com/img.png",
+    });
+    const reply = expectNormalizedReply(result);
+    expect(reply.text).toBe("");
+    expect(reply.mediaUrl).toBe("https://example.com/img.png");
+  });
+
+  it("strips quoted NO_REPLY string text but keeps media payload", () => {
+    const result = normalizeReplyPayload({
+      text: '"NO_REPLY"',
       mediaUrl: "https://example.com/img.png",
     });
     const reply = expectNormalizedReply(result);
@@ -755,7 +774,7 @@ describe("createTypingSignaler", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
-  it("starts typing and refreshes ttl on text for thinking mode", async () => {
+  it("starts typing on reasoning delta and refreshes ttl on text for thinking mode", async () => {
     const typing = createMockTypingController();
     const signaler = createTypingSignaler({
       typing,
@@ -763,8 +782,15 @@ describe("createTypingSignaler", () => {
       isHeartbeat: false,
     });
 
+    // Reasoning delta starts the typing loop and refreshes TTL,
+    // even before any renderable assistant text has arrived.
     await signaler.signalReasoningDelta();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
+    expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
+
+    // Once typing is active, text delta only refreshes TTL.
+    (typing.isActive as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (typing.refreshTypingTtl as ReturnType<typeof vi.fn>).mockClear();
     await signaler.signalTextDelta("hi");
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
@@ -1430,14 +1456,5 @@ describe("extractShortModelName", () => {
     for (const [input, expected] of cases) {
       expect(extractShortModelName(input), input).toBe(expected);
     }
-  });
-});
-
-describe("hasTemplateVariables", () => {
-  it("handles empty, static, and repeated variable checks", () => {
-    expect(hasTemplateVariables("")).toBe(false);
-    expect(hasTemplateVariables("[{model}]")).toBe(true);
-    expect(hasTemplateVariables("[{model}]")).toBe(true);
-    expect(hasTemplateVariables("[Claude]")).toBe(false);
   });
 });

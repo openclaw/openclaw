@@ -13,6 +13,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   detectChangedLanesForPaths,
+  isChangedLaneTestPath,
   listChangedPathsFromGit,
   listStagedChangedPaths,
   normalizeChangedPath,
@@ -39,11 +40,27 @@ const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
 ];
 const SHRINKWRAP_POLICY_PATH_RE =
   /^(?:npm-shrinkwrap\.json|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-shrinkwrap\.mjs|extensions\/[^/]+\/(?:package\.json|npm-shrinkwrap\.json))$/u;
+const PROMPT_SNAPSHOT_CHECK_PATH_RE =
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
+const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
+const RUNTIME_SIDECAR_BASELINE_PATH_RE =
+  /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
+const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
+  /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const TARGETED_CORE_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
+const ANDROID_VERSION_SYNC_PATHS = new Set([
+  "apps/android/CHANGELOG.md",
+  "apps/android/Config/Version.properties",
+  "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
+  "apps/android/version.json",
+]);
+const MACOS_APP_CI_PATH_RE =
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/plistbuddy\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
 
@@ -62,6 +79,16 @@ function isTruthyEnvFlag(value) {
     .trim()
     .toLowerCase();
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+function hasAndroidVersionSyncPath(paths) {
+  return paths.some((changedPath) =>
+    ANDROID_VERSION_SYNC_PATHS.has(normalizeChangedPath(changedPath)),
+  );
+}
+
+function hasMacosAppCiPath(paths) {
+  return paths.some((changedPath) => MACOS_APP_CI_PATH_RE.test(normalizeChangedPath(changedPath)));
 }
 
 function executableExistsOnPath(command, env = process.env) {
@@ -160,6 +187,32 @@ export function shouldRunShrinkwrapGuard(paths) {
   return paths.some((changedPath) => SHRINKWRAP_POLICY_PATH_RE.test(changedPath));
 }
 
+export function shouldRunPromptSnapshotCheck(paths) {
+  return paths.some((changedPath) => PROMPT_SNAPSHOT_CHECK_PATH_RE.test(changedPath));
+}
+
+export function shouldRunPromptSnapshotOwnerTest(paths) {
+  return paths.some((changedPath) => PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE.test(changedPath));
+}
+
+export function shouldRunRuntimeSidecarBaselineCheck(paths) {
+  return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
+}
+
+export function shouldRunCanvasA2uiNativeResourceCheck(paths) {
+  return paths.some((changedPath) =>
+    CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
+export function shouldRunAppcastOwnerTest(paths) {
+  return paths.some((changedPath) => normalizeChangedPath(changedPath) === "appcast.xml");
+}
+
+export function shouldRunTestTempCreationReport(paths) {
+  return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
+}
+
 export function createShrinkwrapGuardCommand(paths) {
   if (!shouldRunShrinkwrapGuard(paths)) {
     return null;
@@ -210,6 +263,22 @@ export function createChangedCheckPlan(result, options = {}) {
   };
   const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
   const addLint = (name, args) => add(name, args, baseEnv);
+  const addTestTempCreationReport = () => {
+    if (!shouldRunTestTempCreationReport(result.paths)) {
+      return;
+    }
+    addCommand(
+      "test temp creation report (warning-only)",
+      "node",
+      [
+        "scripts/report-test-temp-creations.mjs",
+        ...(options.staged
+          ? ["--staged"]
+          : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
+      ],
+      baseEnv,
+    );
+  };
 
   add("conflict markers", ["check:no-conflict-markers"]);
   add("changelog attributions", ["check:changelog-attributions"]);
@@ -226,6 +295,39 @@ export function createChangedCheckPlan(result, options = {}) {
       baseEnv,
     );
   }
+  if (shouldRunPromptSnapshotCheck(result.paths)) {
+    add("prompt snapshot drift", ["prompt:snapshots:check"]);
+  }
+  if (shouldRunPromptSnapshotOwnerTest(result.paths)) {
+    add(
+      "prompt snapshot owner test",
+      ["test:serial", "test/scripts/prompt-snapshots.test.ts"],
+      baseEnv,
+    );
+  }
+  if (shouldRunRuntimeSidecarBaselineCheck(result.paths)) {
+    add("runtime sidecar baseline", ["runtime-sidecars:check"]);
+    add(
+      "runtime sidecar owner test",
+      ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
+      baseEnv,
+    );
+  }
+  if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
+    addCommand(
+      "Canvas A2UI native resource sync",
+      "node",
+      ["scripts/sync-native-a2ui.mjs", "--check"],
+      baseEnv,
+    );
+  }
+  if (shouldRunAppcastOwnerTest(result.paths)) {
+    add(
+      "appcast owner tests",
+      ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
+      baseEnv,
+    );
+  }
   add("package patch guard", ["deps:patches:check"]);
 
   if (result.docsOnly) {
@@ -235,8 +337,11 @@ export function createChangedCheckPlan(result, options = {}) {
     };
   }
 
+  addTestTempCreationReport();
+
   const lanes = result.lanes;
   const runAll = lanes.all;
+  const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   if (lanes.releaseMetadata) {
     add("release metadata guard", [
@@ -246,6 +351,7 @@ export function createChangedCheckPlan(result, options = {}) {
         ? ["--staged"]
         : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
     ]);
+    add("Android version sync", ["android:version:check"]);
     add("iOS version sync", ["ios:version:check"]);
     add("config schema baseline", ["config:schema:check"]);
     add("config docs baseline", ["config:docs:check"]);
@@ -256,7 +362,12 @@ export function createChangedCheckPlan(result, options = {}) {
     };
   }
 
+  if (shouldRunAndroidVersionSync) {
+    add("Android version sync", ["android:version:check"]);
+  }
+
   if (runAll) {
+    add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     addTypecheck("typecheck all", ["tsgo:all"]);
@@ -320,8 +431,12 @@ export function createChangedCheckPlan(result, options = {}) {
   } else if (lanes.apps) {
     addLint("lint apps", ["lint:apps"]);
   }
+  if (hasMacosAppCiPath(result.paths)) {
+    add("macOS app CI tests", ["test:macos:ci"], baseEnv);
+  }
 
   if (lanes.core || lanes.extensions) {
+    add("database-first legacy-store guard", ["check:database-first-legacy-stores"]);
     add("media download helper guard", ["check:media-download-helpers"]);
     add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);
@@ -522,6 +637,10 @@ function printSummary(timings, options) {
 }
 
 function parseArgs(argv) {
+  const separatorIndex = argv.indexOf("--");
+  const flagArgv = separatorIndex === -1 ? argv : argv.slice(0, separatorIndex);
+  const explicitPaths =
+    separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizeChangedPath);
   const args = {
     base: "origin/main",
     head: "HEAD",
@@ -532,8 +651,8 @@ function parseArgs(argv) {
     help: false,
     paths: [],
   };
-  return parseFlagArgs(
-    argv,
+  const parsed = parseFlagArgs(
+    flagArgv,
     args,
     [
       stringFlag("--base", "base"),
@@ -547,14 +666,16 @@ function parseArgs(argv) {
     ],
     {
       onUnhandledArg(arg, target) {
-        if (arg === "--") {
-          return "handled";
+        if (arg.startsWith("-")) {
+          throw new Error(`Unknown option: ${arg}`);
         }
         target.paths.push(normalizeChangedPath(arg));
         return "handled";
       },
     },
   );
+  parsed.paths.push(...explicitPaths);
+  return parsed;
 }
 
 function printUsage() {
@@ -581,7 +702,13 @@ function isDirectRun() {
 
 if (isDirectRun()) {
   const argv = process.argv.slice(2);
-  const args = parseArgs(argv);
+  let args;
+  try {
+    args = parseArgs(argv);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
   if (args.help) {
     printUsage();
     process.exitCode = 0;

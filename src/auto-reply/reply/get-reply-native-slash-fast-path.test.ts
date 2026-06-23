@@ -89,4 +89,107 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
+
+  it("handles authorized text slash commands before model dispatch", async () => {
+    handleCommandsMock.mockResolvedValueOnce({
+      shouldContinue: false,
+      reply: { text: "Trajectory exports can include prompts." },
+    });
+
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "/export-trajectory bundle",
+      BodyForCommands: "/export-trajectory bundle",
+      CommandBody: "/export-trajectory bundle",
+      CommandSource: "text",
+      CommandAuthorized: true,
+      SessionKey: "agent:dev:webchat",
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "webchat",
+      ChatType: "direct",
+      CommandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        commandName: "export-trajectory",
+        body: "/export-trajectory bundle",
+      },
+    });
+
+    const result = await maybeResolveNativeSlashCommandFastReply({
+      ctx,
+      cfg: markCompleteReplyConfig({
+        session: { store: "/tmp/openclaw-text-slash-sessions.json" },
+      } as OpenClawConfig),
+      agentId: "dev",
+      agentDir: "/tmp/agent",
+      agentCfg: undefined,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byKey: new Map(), byAlias: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      workspaceDir: "/tmp/workspace",
+      typing,
+    });
+
+    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      handled: true,
+      reply: expect.objectContaining({
+        text: "Trajectory exports can include prompts.",
+      }),
+    });
+    if (!result.handled || !result.reply || Array.isArray(result.reply)) {
+      throw new Error("expected single handled reply");
+    }
+    expect(getReplyPayloadMetadata(result.reply)?.deliverDespiteSourceReplySuppression).toBe(true);
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves external text slash commands on the canonical session path", async () => {
+    const typing = createTypingController();
+    const ctx = buildTestCtx({
+      Body: "/export-trajectory bundle",
+      BodyForCommands: "/export-trajectory bundle",
+      CommandBody: "/export-trajectory bundle",
+      CommandSource: "text",
+      CommandAuthorized: true,
+      SessionKey: "agent:dev:telegram:group:123",
+      Provider: "telegram",
+      Surface: "telegram",
+      ChatType: "group",
+      CommandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        commandName: "export-trajectory",
+        body: "/export-trajectory bundle",
+      },
+    });
+
+    const result = await maybeResolveNativeSlashCommandFastReply({
+      ctx,
+      cfg: markCompleteReplyConfig({
+        session: { store: "/tmp/openclaw-external-text-slash-sessions.json" },
+      } as OpenClawConfig),
+      agentId: "dev",
+      agentDir: "/tmp/agent",
+      agentCfg: undefined,
+      commandAuthorized: true,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: { byKey: new Map(), byAlias: new Map() },
+      provider: "openai",
+      model: "gpt-5.5",
+      workspaceDir: "/tmp/workspace",
+      typing,
+    });
+
+    expect(result).toEqual({ handled: false });
+    expect(handleCommandsMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).not.toHaveBeenCalled();
+  });
 });

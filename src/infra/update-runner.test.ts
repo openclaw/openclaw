@@ -553,7 +553,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `${upstreamSha}\n${selectedSha}\n`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -582,7 +582,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -663,7 +663,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `${selectedSha}\n`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${selectedSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -671,7 +671,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${selectedSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         key.endsWith(selectedSha)
@@ -685,7 +685,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -939,7 +939,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -947,7 +947,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         key.endsWith(upstreamSha)
@@ -962,7 +962,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -1033,7 +1033,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -1041,7 +1041,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         key.endsWith(upstreamSha)
@@ -1058,7 +1058,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -1120,7 +1120,7 @@ describe("runGatewayUpdate", () => {
         return toCommandResult(response);
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -1128,7 +1128,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         (key.endsWith(upstreamSha) || key.endsWith(selectedSha))
@@ -1149,7 +1149,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -1211,7 +1211,7 @@ describe("runGatewayUpdate", () => {
         return toCommandResult(response);
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -1219,7 +1219,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         (key.endsWith(upstreamSha) || key.endsWith(olderSha))
@@ -1243,7 +1243,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "build failed", code: 1 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -1473,7 +1473,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "added 1 package", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -1481,7 +1481,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         key.endsWith(upstreamSha)
@@ -1494,7 +1494,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -1575,7 +1575,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -1583,7 +1583,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         key.endsWith(upstreamSha)
@@ -1598,7 +1598,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -1673,7 +1673,7 @@ describe("runGatewayUpdate", () => {
           return { stdout: "10.0.0", stderr: "", code: 0 };
         }
         if (
-          key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+          key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
           key.endsWith(` ${upstreamSha}`) &&
           preflightPrefixPattern.test(key)
         ) {
@@ -1681,7 +1681,7 @@ describe("runGatewayUpdate", () => {
           return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
         }
         if (
-          key.startsWith("git -C /tmp/") &&
+          key.startsWith("git -C ") &&
           preflightPrefixPattern.test(key) &&
           key.includes(" checkout --detach ") &&
           key.endsWith(upstreamSha)
@@ -1712,7 +1712,7 @@ describe("runGatewayUpdate", () => {
           return { stdout: "", stderr: "", code: 0 };
         }
         if (
-          key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+          key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
           preflightPrefixPattern.test(key)
         ) {
           return { stdout: "", stderr: "", code: 0 };
@@ -1788,7 +1788,7 @@ describe("runGatewayUpdate", () => {
           return { stdout: "10.0.0", stderr: "", code: 0 };
         }
         if (
-          key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+          key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
           key.endsWith(` ${upstreamSha}`) &&
           preflightPrefixPattern.test(key)
         ) {
@@ -1796,7 +1796,7 @@ describe("runGatewayUpdate", () => {
           return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
         }
         if (
-          key.startsWith("git -C /tmp/") &&
+          key.startsWith("git -C ") &&
           preflightPrefixPattern.test(key) &&
           key.includes(" checkout --detach ") &&
           key.endsWith(upstreamSha)
@@ -1887,7 +1887,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -1895,7 +1895,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         key.endsWith(upstreamSha)
@@ -1981,7 +1981,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "10.0.0", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -1989,7 +1989,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         key.endsWith(upstreamSha)
@@ -2008,7 +2008,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -2068,7 +2068,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `${targetSha}\n`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -2076,7 +2076,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${targetSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         key.includes(` checkout --detach ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -2092,7 +2092,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -2149,7 +2149,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `${targetSha}\n`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -2157,7 +2157,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${targetSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         key.includes(` checkout --detach ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -2173,7 +2173,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -2233,7 +2233,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `${targetSha}\n`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${gitRoot} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${gitRoot} worktree add --detach `) &&
         key.endsWith(` ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -2241,7 +2241,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${targetSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         key.includes(` checkout --detach ${targetSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -2257,7 +2257,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${gitRoot} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${gitRoot} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };
@@ -2313,7 +2313,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `${upstreamSha}\n`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree add --detach /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree add --detach `) &&
         key.endsWith(` ${upstreamSha}`) &&
         preflightPrefixPattern.test(key)
       ) {
@@ -2321,7 +2321,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: `HEAD is now at ${upstreamSha}`, stderr: "", code: 0 };
       }
       if (
-        key.startsWith("git -C /tmp/") &&
+        key.startsWith("git -C ") &&
         preflightPrefixPattern.test(key) &&
         key.includes(" checkout --detach ") &&
         key.endsWith(upstreamSha)
@@ -2329,7 +2329,7 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (
-        key.startsWith(`git -C ${tempDir} worktree remove --force /tmp/`) &&
+        key.startsWith(`git -C ${tempDir} worktree remove --force `) &&
         preflightPrefixPattern.test(key)
       ) {
         return { stdout: "", stderr: "", code: 0 };

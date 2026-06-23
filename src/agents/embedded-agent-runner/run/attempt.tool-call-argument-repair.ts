@@ -6,15 +6,9 @@ import { normalizeProviderId } from "../../model-selection.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { log } from "../logger.js";
-import {
-  createHtmlEntityToolCallArgumentDecodingWrapper,
-  decodeHtmlEntitiesInObject,
-} from "../tool-call-argument-decoding.js";
+import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
+import { isRunnerToolCallBlockType } from "./attempt.tool-call-block-type.js";
 import { wrapStreamObjectEvents } from "./stream-wrapper.js";
-
-function isToolCallBlockType(type: unknown): boolean {
-  return type === "toolCall" || type === "toolUse" || type === "functionCall";
-}
 
 const MAX_TOOLCALL_REPAIR_BUFFER_CHARS = 64_000;
 const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
@@ -581,7 +575,7 @@ function readToolCallNameInMessage(message: unknown, contentIndex: number): stri
     return undefined;
   }
   const typedBlock = block as { type?: unknown; name?: unknown };
-  if (!isToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
+  if (!isRunnerToolCallBlockType(typedBlock.type) || typeof typedBlock.name !== "string") {
     return undefined;
   }
   return normalizeToolCallRepairToolName(typedBlock.name);
@@ -604,7 +598,7 @@ function repairToolCallArgumentsInMessage(
     return;
   }
   const typedBlock = block as { type?: unknown; arguments?: unknown };
-  if (!isToolCallBlockType(typedBlock.type)) {
+  if (!isRunnerToolCallBlockType(typedBlock.type)) {
     return;
   }
   typedBlock.arguments = repairedArgs;
@@ -623,7 +617,7 @@ function hasMeaningfulToolCallArgumentsInMessage(message: unknown, contentIndex:
     return false;
   }
   const typedBlock = block as { type?: unknown; arguments?: unknown };
-  if (!isToolCallBlockType(typedBlock.type)) {
+  if (!isRunnerToolCallBlockType(typedBlock.type)) {
     return false;
   }
   return (
@@ -647,7 +641,7 @@ function clearToolCallArgumentsInMessage(message: unknown, contentIndex: number)
     return;
   }
   const typedBlock = block as { type?: unknown; arguments?: unknown };
-  if (!isToolCallBlockType(typedBlock.type)) {
+  if (!isRunnerToolCallBlockType(typedBlock.type)) {
     return;
   }
   typedBlock.arguments = {};
@@ -799,5 +793,3 @@ export function shouldRepairMalformedToolCallArguments(params: {
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }
-
-export { decodeHtmlEntitiesInObject };

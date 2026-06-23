@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
+  forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
@@ -36,6 +37,7 @@ const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "t
 /** Live-test shards included in release validation. */
 export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-src-agents",
+  "native-live-src-agents-zai-coding",
   "native-live-src-gateway-core",
   "native-live-src-gateway-profiles",
   "native-live-src-gateway-backends",
@@ -244,7 +246,9 @@ function isMoonshotLiveTest(file) {
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
-      return files.filter((file) => file.startsWith("src/agents/"));
+      return files.filter((file) => file.startsWith("src/agents/") || file.startsWith("src/llm/"));
+    case "native-live-src-agents-zai-coding":
+      return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":
       return files.filter(
         (file) => file.startsWith("src/gateway/") || file.startsWith("src/crestodian/"),
@@ -658,18 +662,25 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   let forwardedSignal = null;
   const teardown = installVitestProcessGroupCleanup({
     child,
+    forceSignal: "SIGKILL",
+    forceSignalDelayMs: 100,
     onSignal: (signal) => {
       forwardedSignal ??= signal;
     },
   });
   child.on("exit", (code, signal) => {
     teardown();
-    if (signal) {
-      process.kill(process.pid, signal);
+    if (forwardedSignal) {
+      forwardSignalToVitestProcessGroup({
+        child,
+        kill: process.kill.bind(process),
+        signal: "SIGKILL",
+      });
+      process.kill(process.pid, forwardedSignal);
       return;
     }
-    if (forwardedSignal) {
-      process.kill(process.pid, forwardedSignal);
+    if (signal) {
+      process.kill(process.pid, signal);
       return;
     }
     if ((code ?? 1) === 0) {

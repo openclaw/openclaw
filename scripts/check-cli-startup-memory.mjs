@@ -20,7 +20,7 @@ let rssHookPath = null;
 
 function readPositiveIntEnv(name, fallback, env = process.env) {
   const value = readPositiveNumberEnv(name, fallback, env);
-  if (!Number.isInteger(value)) {
+  if (!Number.isSafeInteger(value)) {
     throw new Error(`${name} must be a positive integer`);
   }
   return value;
@@ -49,7 +49,7 @@ function readNonEmptyEnv(name) {
 
 function readRequiredPathOption(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a path`);
   }
   return value;
@@ -173,6 +173,10 @@ function formatCaseCommand(testCase) {
   return `node ${testCase.args.join(" ")}`;
 }
 
+function nodeImportSpecifierForPath(filePath) {
+  return pathToFileURL(filePath).href;
+}
+
 function buildBenchEnv() {
   if (!tmpHome) {
     throw new Error("temporary home is not initialized");
@@ -218,14 +222,18 @@ function runCase(testCase, params = {}) {
   const env = buildBenchEnv();
   const spawn = params.spawnSync ?? defaultSpawnSync;
   const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
-  const result = spawn(process.execPath, ["--import", rssHookPath, ...testCase.args], {
-    cwd: repoRoot,
-    env,
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
-  });
+  const result = spawn(
+    process.execPath,
+    ["--import", nodeImportSpecifierForPath(rssHookPath), ...testCase.args],
+    {
+      cwd: repoRoot,
+      env,
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    },
+  );
   const stderr = result.stderr ?? "";
   const maxRssMb = parseMaxRssMb(stderr);
   const matrixBootstrapWarning = /matrix: crypto runtime bootstrap failed/i.test(stderr);
@@ -373,6 +381,7 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
  */
 export const testing = {
   cases,
+  nodeImportSpecifierForPath,
   parseArgs,
   readPositiveIntEnv,
   readPositiveNumberEnv,
@@ -386,7 +395,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     runStartupMemoryCheck();
   } catch (error) {
-    console.error(error instanceof Error ? error.stack : String(error));
+    console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }

@@ -68,6 +68,7 @@ type CronUpdatePatch = {
       input?: string;
       message?: string;
       model?: string;
+      fallbacks?: string[] | null;
       thinking?: string;
       lightContext?: boolean;
       timeoutSeconds?: number;
@@ -97,6 +98,7 @@ type CronAddParams = {
     input?: string;
     message?: string;
     model?: string;
+    fallbacks?: string[];
     thinking?: string;
     lightContext?: boolean;
     timeoutSeconds?: number;
@@ -212,6 +214,9 @@ function mockCronEditJobLookup(schedule: unknown): void {
           jobs: [{ id: "job-1", schedule }],
         };
       }
+      if (method === "cron.get") {
+        return { id: "job-1", schedule };
+      }
       return { ok: true, params };
     },
   );
@@ -304,6 +309,7 @@ describe("cron cli", () => {
 
     expect(addCommand?.helpInformation()).toContain("Gateway host local timezone");
     expect(editCommand?.helpInformation()).toContain("Gateway host local timezone");
+    expect(editCommand?.helpInformation()).toMatch(/offset-less uses\s+--tz/);
   });
 
   it.each([
@@ -1040,6 +1046,23 @@ describe("cron cli", () => {
     expect(params?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
   });
 
+  it("sets fallback models on cron add", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Fallbacks",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--fallbacks",
+      "openrouter/gpt-4.1-mini openai/gpt-5",
+    ]);
+
+    expect(params?.payload?.fallbacks).toEqual(["openrouter/gpt-4.1-mini", "openai/gpt-5"]);
+  });
+
   it.each([
     {
       label: "omits empty model and thinking",
@@ -1068,6 +1091,27 @@ describe("cron cli", () => {
     ]);
 
     expect(patch?.patch?.payload?.toolsAllow).toEqual(["exec", "read", "write"]);
+  });
+
+  it("sets fallback models on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch([
+      "--fallbacks",
+      "openrouter/gpt-4.1-mini,openai/gpt-5",
+    ]);
+
+    expect(patch?.patch?.payload?.fallbacks).toEqual(["openrouter/gpt-4.1-mini", "openai/gpt-5"]);
+  });
+
+  it("sets strict empty fallbacks on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch(["--fallbacks", ""]);
+
+    expect(patch?.patch?.payload?.fallbacks).toEqual([]);
+  });
+
+  it("clears fallback models on cron edit", async () => {
+    const patch = await runCronEditAndGetPatch(["--clear-fallbacks"]);
+
+    expect(patch?.patch?.payload?.fallbacks).toBeNull();
   });
 
   it("sets and clears agent id on cron edit", async () => {
@@ -1498,11 +1542,10 @@ describe("cron cli", () => {
   });
 
   it("sets explicit stagger for cron edit", async () => {
-    await runCronCommand(["cron", "edit", "job-1", "--cron", "0 * * * *", "--stagger", "30s"]);
-
-    const patch = getGatewayCallParams<{
-      patch?: { schedule?: { kind?: string; staggerMs?: number } };
-    }>("cron.update");
+    const patch = await runCronEditWithScheduleLookup(
+      { kind: "cron", expr: "0 */2 * * *", tz: "UTC", staggerMs: 300_000 },
+      ["--cron", "0 * * * *", "--stagger", "30s"],
+    );
     expect(patch?.patch?.schedule?.kind).toBe("cron");
     expect(patch?.patch?.schedule?.staggerMs).toBe(30_000);
   });
