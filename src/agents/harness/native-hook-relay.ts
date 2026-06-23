@@ -353,6 +353,8 @@ const NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
   exec_command: "exec",
 };
 
+const CODEX_POST_TOOL_USE_FEEDBACK_EXIT_CODE = 2;
+
 const nativeHookRelayProviderAdapters: Record<
   NativeHookRelayProvider,
   NativeHookRelayProviderAdapter
@@ -366,9 +368,11 @@ const nativeHookRelayProviderAdapters: Record<
       return { stdout: "", stderr: "", exitCode: 0 };
     },
     renderPostToolUseFeedbackResponse: (feedback) => ({
+      // Codex has no JSON field for non-blocking PostToolUse output replacement.
+      // Exit 2 + stderr is its model-feedback path; re-check on Codex upgrades.
       stdout: "",
       stderr: `${feedback.trim()}\n`,
-      exitCode: 2,
+      exitCode: CODEX_POST_TOOL_USE_FEEDBACK_EXIT_CODE,
     }),
     renderPreToolUseBlockResponse: (reason) => ({
       stdout: `${JSON.stringify({
