@@ -30,6 +30,14 @@ import {
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
 
+function readMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const value = (message as Record<string, unknown>).idempotencyKey;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
   // Global sessions can be subscribed through either the raw global key or the
   // default-agent scoped key; non-default agent global sessions stay scoped.
@@ -170,8 +178,10 @@ async function handleTranscriptUpdateBroadcast(
     includeSession: true,
     hasActiveRun,
   });
+  const idempotencyKey = readMessageIdempotencyKey(update.message);
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
     ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
     ...(messageSeq !== undefined ? { seq: messageSeq } : {}),
   });
   const message = projectChatDisplayMessage(rawMessage);

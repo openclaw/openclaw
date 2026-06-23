@@ -158,6 +158,14 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
+function readTranscriptMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const value = (message as Record<string, unknown>).idempotencyKey;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
 /** Read all visible transcript messages for a session from the first existing candidate file. */
 export function readSessionMessages(
   sessionId: string,
@@ -800,8 +808,10 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
         : typeof entry.timestamp === "number"
           ? entry.timestamp
           : Number.NaN;
+    const idempotencyKey = readTranscriptMessageIdempotencyKey(entry.message);
     return attachOpenClawTranscriptMeta(entry.message, {
       ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
       ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
       seq,
     });
