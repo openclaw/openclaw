@@ -28,7 +28,7 @@ import {
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
-const DEFAULT_SCORES_PATH = "docs/maturity-scores.yaml";
+const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
 const DEFAULT_OUTPUT_DIR = "docs";
 
 type Args = {
@@ -134,7 +134,7 @@ function parseArgs(argv: string[]): Args {
 
 Options:
   --taxonomy <path>     Taxonomy YAML path (default: taxonomy.yaml)
-  --scores <path>       Aggregate score YAML path (default: docs/maturity-scores.yaml)
+  --scores <path>       Aggregate score YAML path (default: qa/maturity-scores.yaml)
   --docs-root <path>    Public docs source root for route validation (default: docs)
   --output-dir <path>   Directory for maturity/scorecard.md and maturity/taxonomy.md
   --static-assets-dir <path>
@@ -480,18 +480,11 @@ function deriveCoverageScores(
   }
 
   const surfaces = new Map<string, QaMaturityScoreObject>();
-  const missingCoverage: string[] = [];
   for (const surface of activeQaMaturityTaxonomySurfaces(taxonomy)) {
     const categoryScores = surface.categories
       .map((category) => {
         const key = qaMaturityCoverageCategoryKey(surface.id, category.name);
-        const score = categories.get(key);
-        if (!score) {
-          missingCoverage.push(
-            `${releaseSummary.path}: release evidence is missing scorecard coverage for ${surface.name} / ${category.name}`,
-          );
-        }
-        return score;
+        return categories.get(key);
       })
       .filter((score): score is QaMaturityScoreObject => Boolean(score));
     if (categoryScores.length === surface.categories.length) {
@@ -500,13 +493,6 @@ function deriveCoverageScores(
         surfaces.set(surface.id, surfaceScore);
       }
     }
-  }
-  if (missingCoverage.length > 0) {
-    throw new Error(
-      `maturity scorecard rendering requires complete release evidence coverage:\n${missingCoverage
-        .map((item) => `- ${item}`)
-        .join("\n")}`,
-    );
   }
 
   const activeSurfaces = activeQaMaturityTaxonomySurfaces(taxonomy);

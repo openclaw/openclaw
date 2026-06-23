@@ -172,6 +172,52 @@ jobs:
             echo "- Evidence source run: \`${QA_EVIDENCE_RUN_ID:-$GITHUB_RUN_ID}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Validate QA evidence manifest
+        env:
+          QA_EVIDENCE_PATH: ${{ steps.evidence.outputs.qa_evidence_path }}
+          TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+
+          const evidencePath = process.env.QA_EVIDENCE_PATH;
+          const targetSha = process.env.TARGET_SHA;
+          if (!evidencePath) {
+            throw new Error("QA_EVIDENCE_PATH is required");
+          }
+          if (!targetSha) {
+            throw new Error("TARGET_SHA is required");
+          }
+
+          const evidence = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
+          if (evidence.profile !== "release") {
+            throw new Error(`qa-evidence.json profile must be release, got ${JSON.stringify(evidence.profile)}`);
+          }
+
+          const artifactDir = path.dirname(evidencePath);
+          const manifestNames = fs
+            .readdirSync(artifactDir)
+            .filter((name) => name.endsWith("qa-profile-evidence-manifest.json"))
+            .sort();
+          if (manifestNames.length !== 1) {
+            throw new Error(
+              `Expected exactly one QA profile evidence manifest next to qa-evidence.json, found ${manifestNames.length}`,
+            );
+          }
+
+          const manifestPath = path.join(artifactDir, manifestNames[0]);
+          const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+          const manifestProfile = manifest.qaProfile ?? evidence.profile;
+          if (manifestProfile !== "release") {
+            throw new Error(`QA evidence manifest profile must be release, got ${JSON.stringify(manifestProfile)}`);
+          }
+          if (manifest.targetSha !== targetSha) {
+            throw new Error(`QA evidence manifest targetSha ${manifest.targetSha} does not match selected ref ${targetSha}`);
+          }
+          NODE
+
       - name: Ensure maturity scorecard agent key exists
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
