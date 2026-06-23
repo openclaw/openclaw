@@ -117,8 +117,12 @@ way, so the session cannot recover until you fix the model.
 
 On `claude-cli`/OAuth sessions, leave `compaction.model` unset so OpenClaw defers
 to the backend's native compaction. If you must override, point it at a provider
-that has its own configured credentials — for example `anthropic-api/<model>`
-with an API key, or a local `ollama/<model>`. See
+that has its own standalone credentials configured. Note that on a claude-cli
+setup the built-in `anthropic` provider is typically bound to the same OAuth
+profile and carries no separate API key, so a bare `anthropic/<model>` will not
+work. Configure a dedicated provider entry with an Anthropic API key and
+reference it as `<your-provider-id>/<model>`, or use a local `ollama/<model>`
+(which needs no key). See
 [Native compaction ownership](/gateway/cli-backends#native-compaction-ownership).
 </Warning>
 
