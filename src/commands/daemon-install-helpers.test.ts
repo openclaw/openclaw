@@ -1562,6 +1562,51 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("OPENAI_API_KEY");
   });
+
+  it("marks Gemini env refs collected from auth profiles and config SecretRefs as file-backed", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        HOME: tmpDir,
+        GEMINI_API_KEY: "gemini-shell-key",
+        GOOGLE_API_KEY: "google-shell-key",
+      },
+      port: 3000,
+      runtime: "node",
+      config: {
+        models: {
+          providers: {
+            google: {
+              apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "google:default": {
+            type: "api_key",
+            provider: "google",
+            keyRef: { source: "env", provider: "default", id: "GOOGLE_API_KEY" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.GEMINI_API_KEY).toBe("gemini-shell-key");
+    expect(plan.environment.GOOGLE_API_KEY).toBe("google-shell-key");
+    expect(plan.environmentValueSources?.GEMINI_API_KEY).toBe("file");
+    expect(plan.environmentValueSources?.GOOGLE_API_KEY).toBe("file");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+  });
 });
 
 describe("gatewayInstallErrorHint", () => {
