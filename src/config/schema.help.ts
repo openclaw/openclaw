@@ -1177,7 +1177,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.extraPaths":
     "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
   "agents.defaults.memorySearch.excludePaths":
-    "Sets glob patterns or exact paths to exclude from memory search indexing. Use this to keep low-value or high-volume files (e.g. dreams, archives) out of search results while preserving them on disk. Supports minimatch wildcards (e.g. memory/dreaming/light). Applied against workspace-relative paths inside memory/ and extraPaths, after built-in auxiliary-path filtering.",
+    "(Builtin backend only) Glob patterns or exact paths to exclude from memory search indexing. Use this to keep low-value or high-volume files (e.g. dreams, archives) out of search results while preserving them on disk. Supports minimatch wildcards (e.g. memory/dreaming/light). Applied against workspace-relative paths inside memory/ and extraPaths, after built-in auxiliary-path filtering.",
   "agents.defaults.memorySearch.qmd":
     "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
   "agents.defaults.memorySearch.qmd.extraCollections":
