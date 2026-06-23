@@ -5,9 +5,12 @@ import { jsonResult, ToolInputError } from "./common.js";
 
 export const SOUL_UPDATE_TOOL_NAME = "soul_update";
 
+// `rule` is optional in the provider-visible schema so the reflection prompt's
+// noop path (`{ noop: true }` with no `rule`) is not rejected by provider-side
+// tool validation. The execute body enforces "rule OR noop=true" at runtime.
 const SoulUpdateToolSchema = Type.Object(
   {
-    rule: Type.String({ minLength: 1, maxLength: 280 }),
+    rule: Type.Optional(Type.String({ minLength: 1, maxLength: 280 })),
     evidence: Type.Optional(Type.String({ maxLength: 280 })),
     noop: Type.Optional(Type.Boolean()),
   },

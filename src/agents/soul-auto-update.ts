@@ -32,9 +32,19 @@ function normalizeRule(rule: string): string {
   return rule.trim().replace(/\s+/g, " ");
 }
 
+// User/model-derived text is interpolated into a markdown bullet and an HTML
+// comment. Without neutralization a value containing `-->` would close the
+// evidence comment and persist arbitrary text into the bootstrap personality
+// file that future turns read as system context.
+function neutralizeForSoul(value: string): string {
+  return value.replace(/-->/g, "-- >").replace(/<!--/g, "<!- -").replace(/\s+/g, " ").trim();
+}
+
 function formatEntry(rule: string, evidence: string | undefined, dateIso: string): string {
-  const evidenceSuffix = evidence ? ` <!-- evidence: ${evidence} -->` : "";
-  return `- ${rule} <!-- ${dateIso} -->${evidenceSuffix}`;
+  const safeRule = neutralizeForSoul(rule);
+  const safeEvidence = evidence ? neutralizeForSoul(evidence) : undefined;
+  const evidenceSuffix = safeEvidence ? ` <!-- evidence: ${safeEvidence} -->` : "";
+  return `- ${safeRule} <!-- ${dateIso} -->${evidenceSuffix}`;
 }
 
 function findAutoAddedSectionBounds(

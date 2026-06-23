@@ -89,4 +89,16 @@ describe("createSoulUpdateTool", () => {
 
     expect(await readSoul()).toContain("evidence: User asked twice on 2026-05-12.");
   });
+
+  it("publishes a provider-visible schema where `rule` is optional so the noop call passes provider-side validation", () => {
+    const tool = createSoulUpdateTool({ workspaceDir });
+    // typebox emits JSON Schema. The reflection prompt instructs the model to
+    // call `{ noop: true }` with no `rule` — that must validate at the
+    // provider boundary, otherwise the noop path is unreachable from a real
+    // model and only the append path can ever fire.
+    const schema = tool.parameters as { required?: string[]; properties: Record<string, unknown> };
+    expect(schema.required ?? []).not.toContain("rule");
+    expect(schema.properties).toHaveProperty("rule");
+    expect(schema.properties).toHaveProperty("noop");
+  });
 });

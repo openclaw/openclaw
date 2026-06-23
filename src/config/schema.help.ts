@@ -1133,6 +1133,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.localModelLean":
     "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
+  "agents.defaults.soul":
+    "Opt-in personality persistence settings. Off by default; enabling lets the runtime append durable preferences to SOUL.md via a structured tool.",
+  "agents.defaults.soul.autoUpdate":
+    "When true, signal-keyword user messages (stop, don't, never, prefer, no more) fire a dedicated reflection sub-turn that may append a rule to SOUL.md via the soul_update tool. Forced CLI notice on append; reverse with `openclaw soul undo`. Default false.",
   "agents.defaults.bootstrapPromptTruncationWarning":
     'Inject agent-visible warning text when bootstrap files are truncated: "off", "once", or "always" (default).',
   "agents.defaults.startupContext":

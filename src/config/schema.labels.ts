@@ -436,6 +436,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.bootstrapTotalMaxChars": "Bootstrap Total Max Chars",
   "agents.defaults.experimental": "Experimental Agent Flags",
   "agents.defaults.experimental.localModelLean": "Enable Lean Local Model Mode (Experimental)",
+  "agents.defaults.soul": "Personality Persistence (SOUL.md)",
+  "agents.defaults.soul.autoUpdate": "Enable Self-Evolving SOUL.md",
   "agents.defaults.bootstrapPromptTruncationWarning": "Bootstrap Prompt Truncation Warning",
   "agents.defaults.startupContext": "Startup Context",
   "agents.defaults.startupContext.enabled": "Enable Startup Context",
