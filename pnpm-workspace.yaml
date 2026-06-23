@@ -89,6 +89,9 @@ minimumReleaseAgeExclude:
   - "sqlite-vec-*"
   - "rastermill"
   - "clawpdf"
+  - "spectrum-ts"
+  - "@spectrum-ts/*"
+  - "@photon-ai/*"
 
 nodeLinker: hoisted
 blockExoticSubdeps: true
@@ -122,6 +125,7 @@ overrides:
   yauzl: 3.2.1
   protobufjs: 7.6.3
   uuid: 14.0.0
+  undici: 8.5.0
 
 allowBuilds:
   "@openclaw/fs-safe": true
@@ -143,6 +147,7 @@ allowBuilds:
   clawpdf: true
   "@openclaw/crabline": true
   rastermill: true
+  better-sqlite3: true
 
 packageExtensions:
   baileys:
