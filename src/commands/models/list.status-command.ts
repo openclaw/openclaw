@@ -15,13 +15,15 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
+import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "../../agents/auth-profiles/constants.js";
 import { evaluateStoredCredentialEligibility } from "../../agents/auth-profiles/credential-state.js";
+import { externalCliDiscoveryForConfigStatus } from "../../agents/auth-profiles/external-cli-discovery.js";
 import {
   resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles/order.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
-import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
+import { ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
 import {
@@ -331,14 +333,8 @@ export async function modelsStatusCommand(
     }, {});
     const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
-    const store = ensureAuthProfileStore(agentDir);
     const modelsPath = path.join(agentDir, "models.json");
 
-    const providersFromStore = new Set(
-      Object.values(store.profiles)
-        .map((profile) => normalizeProviderId(profile.provider))
-        .filter((p): p is string => Boolean(p)),
-    );
     const providersFromConfig = new Set(
       Object.keys(cfg.models?.providers ?? {})
         .map((p) => (typeof p === "string" ? normalizeProviderId(p) : ""))
@@ -446,6 +442,55 @@ export async function modelsStatusCommand(
       })
       .filter((usage): usage is NonNullable<typeof usage> => Boolean(usage));
 
+    const codexProvider = normalizeProviderId(OPENAI_PROVIDER_ID);
+    const codexProviderAlias = aliasMap[codexProvider] ?? codexProvider;
+    const codexRuntimeAuthUsages = providerUses.filter(
+      (usage) =>
+        usage.allowCodexRuntimeFallback &&
+        openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }),
+    );
+    const configExternalCliDiscovery = externalCliDiscoveryForConfigStatus({ cfg });
+    const externalCliProviderIds = new Set<string>();
+    const externalCliProfileIds = new Set<string>();
+    if (configExternalCliDiscovery.mode === "scoped") {
+      for (const providerId of configExternalCliDiscovery.providerIds ?? []) {
+        externalCliProviderIds.add(providerId);
+      }
+      for (const profileId of configExternalCliDiscovery.profileIds ?? []) {
+        externalCliProfileIds.add(profileId);
+      }
+    }
+    for (const usage of providerUses) {
+      externalCliProviderIds.add(usage.provider);
+      externalCliProviderIds.add(resolveProviderIdForAuth(usage.provider, envLookupParams));
+    }
+    if (codexRuntimeAuthUsages.length > 0) {
+      externalCliProviderIds.add(codexProvider);
+      externalCliProviderIds.add(codexProviderAlias);
+      externalCliProviderIds.add("codex");
+      externalCliProviderIds.add("codex-cli");
+      externalCliProviderIds.add("codex-app-server");
+      externalCliProfileIds.add(OPENAI_CODEX_DEFAULT_PROFILE_ID);
+    }
+    const store = ensureAuthProfileStore(agentDir, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+      externalCli:
+        externalCliProviderIds.size > 0 || externalCliProfileIds.size > 0
+          ? {
+              mode: "scoped",
+              allowKeychainPrompt: false,
+              config: cfg,
+              providerIds: externalCliProviderIds,
+              profileIds: externalCliProfileIds,
+            }
+          : configExternalCliDiscovery,
+    });
+    const providersFromStore = new Set(
+      Object.values(store.profiles)
+        .map((profile) => normalizeProviderId(profile.provider))
+        .filter((p): p is string => Boolean(p)),
+    );
     const providers = Array.from(
       new Set([
         ...providersFromStore,
@@ -460,13 +505,6 @@ export async function modelsStatusCommand(
       .toSorted((a, b) => a.localeCompare(b));
     const syntheticProvidersToProbe = new Set(
       providers.map((provider) => normalizeProviderId(provider)),
-    );
-    const codexProvider = normalizeProviderId(OPENAI_PROVIDER_ID);
-    const codexProviderAlias = aliasMap[codexProvider] ?? codexProvider;
-    const codexRuntimeAuthUsages = providerUses.filter(
-      (usage) =>
-        usage.allowCodexRuntimeFallback &&
-        openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }),
     );
     if (codexRuntimeAuthUsages.length > 0) {
       syntheticProvidersToProbe.add(codexProvider);

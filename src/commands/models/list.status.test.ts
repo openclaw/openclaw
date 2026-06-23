@@ -145,6 +145,11 @@ const mocks = vi.hoisted(() => {
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
     resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
+    externalCliDiscoveryForConfigStatus: vi.fn().mockReturnValue({
+      mode: "scoped",
+      providerIds: ["openai"],
+      profileIds: ["openai:codex-cli"],
+    }),
   };
 });
 
@@ -177,6 +182,9 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
 vi.mock("../../agents/auth-profiles/store.js", () => ({
   ensureAuthProfileStore: mocks.ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles: mocks.ensureAuthProfileStore,
+}));
+vi.mock("../../agents/auth-profiles/external-cli-discovery.js", () => ({
+  externalCliDiscoveryForConfigStatus: mocks.externalCliDiscoveryForConfigStatus,
 }));
 vi.mock("../../agents/auth-profiles/usage.js", () => ({
   resolveProfileUnusableUntilForDisplay: mocks.resolveProfileUnusableUntilForDisplay,
@@ -390,6 +398,15 @@ describe("modelsStatusCommand auth overview", () => {
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
     expect(payload.auth.storePath).toBe("/tmp/openclaw-agent/auth-profiles.json");
+    expect(mocks.externalCliDiscoveryForConfigStatus).toHaveBeenCalled();
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/openclaw-agent",
+      expect.objectContaining({
+        readOnly: true,
+        allowKeychainPrompt: false,
+        externalCli: expect.objectContaining({ mode: "scoped" }),
+      }),
+    );
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);
     expect(payload.auth.shellEnvFallback.appliedKeys).toContain("OPENAI_API_KEY");
     expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
@@ -437,7 +454,14 @@ describe("modelsStatusCommand auth overview", () => {
     });
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-isolated-agent");
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/openclaw-isolated-agent",
+      expect.objectContaining({
+        readOnly: true,
+        allowKeychainPrompt: false,
+        externalCli: expect.objectContaining({ mode: "scoped" }),
+      }),
+    );
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
     expect(payload.auth.storePath).toBe("/tmp/openclaw-isolated-agent/auth-profiles.json");
@@ -457,7 +481,14 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith("/tmp/openclaw-legacy-agent");
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/openclaw-legacy-agent",
+      expect.objectContaining({
+        readOnly: true,
+        allowKeychainPrompt: false,
+        externalCli: expect.objectContaining({ mode: "scoped" }),
+      }),
+    );
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-legacy-agent");
   });
@@ -524,8 +555,23 @@ describe("modelsStatusCommand auth overview", () => {
     );
 
     try {
+      const storeCallStart = mocks.ensureAuthProfileStore.mock.calls.length;
       await modelsStatusCommand({ json: true, check: true }, localRuntime as never);
       const payload = parseFirstJsonLog(localRuntime);
+      const storeOptions = mocks.ensureAuthProfileStore.mock.calls.find(
+        ([agentDir], index) => index >= storeCallStart && agentDir === "/tmp/openclaw-agent",
+      )?.[1] as
+        | {
+            externalCli?: {
+              providerIds?: Iterable<string>;
+              profileIds?: Iterable<string>;
+            };
+          }
+        | undefined;
+      expect([...(storeOptions?.externalCli?.providerIds ?? [])]).toEqual(
+        expect.arrayContaining(["openai", "codex", "codex-cli", "codex-app-server"]),
+      );
+      expect([...(storeOptions?.externalCli?.profileIds ?? [])]).toContain("openai:default");
       expect(payload.auth.missingProvidersInUse).toStrictEqual([]);
       expect(localRuntime.exit).not.toHaveBeenCalledWith(1);
     } finally {
