@@ -1078,10 +1078,21 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     const replyAbortController = new AbortController();
     const explicitAbortController = new AbortController();
-    replyAbortController.abort(new Error("reply lifecycle timeout"));
+    const timeoutError = new Error("reply lifecycle timeout");
+    timeoutError.name = "TimeoutError";
     const replyOperation = createReplyOperation({
       abortSignal: replyAbortController.signal,
       explicitAbortSignal: explicitAbortController.signal,
+    });
+    let compactAbortSignal: AbortSignal | undefined;
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (call) => {
+      compactAbortSignal = (call as CompactEmbeddedAgentSessionParams).abortSignal;
+      expect(compactAbortSignal?.aborted).toBe(false);
+
+      replyAbortController.abort(timeoutError);
+
+      expect(compactAbortSignal?.aborted).toBe(false);
+      return { ok: true, compacted: true, result: { tokensAfter: 42 } };
     });
 
     await runPreflightCompactionIfNeeded({
@@ -1102,9 +1113,105 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.abortSignal).toBe(explicitAbortController.signal);
+    expect(compactCall.abortSignal).not.toBe(explicitAbortController.signal);
     expect(compactCall.abortSignal).not.toBe(replyOperation.abortSignal);
-    expect(compactCall.abortSignal?.aborted).toBe(false);
+    expect(compactCall.abortSignal).toBe(compactAbortSignal);
+    expect(compactAbortSignal?.aborted).toBe(false);
+  });
+
+  it("cancels required preflight compaction on upstream non-timeout abort", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 180_499,
+      totalTokensFresh: true,
+    };
+    const replyAbortController = new AbortController();
+    const replyOperation = createReplyOperation({
+      abortSignal: replyAbortController.signal,
+    });
+    const abortError = new Error("chat run aborted");
+    abortError.name = "AbortError";
+    let compactAbortSignal: AbortSignal | undefined;
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (call) => {
+      compactAbortSignal = (call as CompactEmbeddedAgentSessionParams).abortSignal;
+      expect(compactAbortSignal?.aborted).toBe(false);
+
+      replyAbortController.abort(abortError);
+
+      expect(compactAbortSignal?.aborted).toBe(true);
+      expect(compactAbortSignal?.reason).toBe(abortError);
+      return { ok: true, compacted: true, result: { tokensAfter: 42 } };
+    });
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactAbortSignal?.aborted).toBe(true);
+  });
+
+  it("still cancels required preflight compaction on explicit abort after lifecycle timeout", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 180_499,
+      totalTokensFresh: true,
+    };
+    const replyAbortController = new AbortController();
+    const explicitAbortController = new AbortController();
+    const timeoutError = new Error("reply lifecycle timeout");
+    timeoutError.name = "TimeoutError";
+    replyAbortController.abort(timeoutError);
+    const replyOperation = createReplyOperation({
+      abortSignal: replyAbortController.signal,
+      explicitAbortSignal: explicitAbortController.signal,
+    });
+    const explicitAbortError = new Error("reply operation aborted by user");
+    explicitAbortError.name = "AbortError";
+    let compactAbortSignal: AbortSignal | undefined;
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (call) => {
+      compactAbortSignal = (call as CompactEmbeddedAgentSessionParams).abortSignal;
+      expect(compactAbortSignal?.aborted).toBe(false);
+
+      explicitAbortController.abort(explicitAbortError);
+
+      expect(compactAbortSignal?.aborted).toBe(true);
+      expect(compactAbortSignal?.reason).toBe(explicitAbortError);
+      return { ok: true, compacted: true, result: { tokensAfter: 42 } };
+    });
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionKey: "agent:main:main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      sessionEntry,
+      sessionStore: { "agent:main:main": sessionEntry },
+      sessionKey: "agent:main:main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(compactAbortSignal?.aborted).toBe(true);
   });
 
   it("fails when required preflight context-engine compaction is deferred to background maintenance", async () => {

@@ -9,6 +9,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { isSignalTimeoutReason } from "../../agents/failover-error.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -63,6 +64,10 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 type EmbeddedAgentRuntime = typeof import("../../agents/embedded-agent.js");
+type ScopedAbortSignal = {
+  abortSignal: AbortSignal;
+  cleanup: () => void;
+};
 type UpdateSessionEntryParams = {
   storePath: string;
   sessionKey: string;
@@ -83,6 +88,44 @@ const embeddedAgentRuntimeLoader = createLazyImportLoader<EmbeddedAgentRuntime>(
 
 function loadEmbeddedAgentRuntime(): Promise<EmbeddedAgentRuntime> {
   return embeddedAgentRuntimeLoader.load();
+}
+
+function createPreflightCompactionAbortSignal(operation: ReplyOperation): ScopedAbortSignal {
+  const controller = new AbortController();
+  const cleanupHandlers: Array<() => void> = [];
+  const abortFrom = (signal: AbortSignal, opts?: { ignoreTimeoutReason?: boolean }) => {
+    if (controller.signal.aborted) {
+      return;
+    }
+    if (opts?.ignoreTimeoutReason && isSignalTimeoutReason(signal.reason)) {
+      return;
+    }
+    controller.abort(signal.reason);
+  };
+  const watch = (signal: AbortSignal | undefined, opts?: { ignoreTimeoutReason?: boolean }) => {
+    if (!signal) {
+      return;
+    }
+    if (signal.aborted) {
+      abortFrom(signal, opts);
+      return;
+    }
+    const onAbort = () => abortFrom(signal, opts);
+    signal.addEventListener("abort", onAbort, { once: true });
+    cleanupHandlers.push(() => signal.removeEventListener("abort", onAbort));
+  };
+
+  watch(operation.abortSignal, { ignoreTimeoutReason: true });
+  watch(operation.explicitAbortSignal);
+
+  return {
+    abortSignal: controller.signal,
+    cleanup: () => {
+      for (const cleanup of cleanupHandlers.splice(0)) {
+        cleanup();
+      }
+    },
+  };
 }
 
 async function compactEmbeddedAgentSessionDefault(
@@ -943,45 +986,49 @@ export async function runPreflightCompactionIfNeeded(params: {
       params.sessionKey ?? params.followupRun.run.sessionKey,
       { storePath: params.storePath },
     );
-    const result = await deps.compactEmbeddedAgentSession({
-      sessionId: entry.sessionId,
-      sessionKey: params.sessionKey,
-      sandboxSessionKey: params.runtimePolicySessionKey,
-      allowGatewaySubagentBinding: true,
-      messageChannel: params.followupRun.run.messageProvider,
-      groupId: entry.groupId ?? params.followupRun.run.groupId,
-      groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
-      groupSpace: entry.space ?? params.followupRun.run.groupSpace,
-      senderId: params.followupRun.run.senderId,
-      senderName: params.followupRun.run.senderName,
-      senderUsername: params.followupRun.run.senderUsername,
-      senderE164: params.followupRun.run.senderE164,
-      sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
-      workspaceDir: params.followupRun.run.workspaceDir,
-      cwd: params.followupRun.run.cwd,
-      agentDir: params.followupRun.run.agentDir,
-      config: params.cfg,
-      skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
-      provider: params.followupRun.run.provider,
-      model: params.followupRun.run.model,
-      authProfileId: params.followupRun.run.authProfileId,
-      agentHarnessId:
-        entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
-      thinkLevel: params.followupRun.run.thinkLevel,
-      bashElevated: params.followupRun.run.bashElevated,
-      ...(params.replyOperation.explicitAbortSignal
-        ? { abortSignal: params.replyOperation.explicitAbortSignal }
-        : {}),
-      trigger: "budget",
-      force: true,
-      forcePreflight: true,
-      preflightRequired: true,
-      preflightCompactionTrigger: compactionTrigger,
-      deferOwningContextEngineCompaction: false,
-      contextTokenBudget: contextWindowTokens,
-      currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
-      ownerNumbers: params.followupRun.run.ownerNumbers,
-    });
+    const preflightAbort = createPreflightCompactionAbortSignal(params.replyOperation);
+    let result: Awaited<ReturnType<typeof deps.compactEmbeddedAgentSession>> | undefined;
+    try {
+      result = await deps.compactEmbeddedAgentSession({
+        sessionId: entry.sessionId,
+        sessionKey: params.sessionKey,
+        sandboxSessionKey: params.runtimePolicySessionKey,
+        allowGatewaySubagentBinding: true,
+        messageChannel: params.followupRun.run.messageProvider,
+        groupId: entry.groupId ?? params.followupRun.run.groupId,
+        groupChannel: entry.groupChannel ?? params.followupRun.run.groupChannel,
+        groupSpace: entry.space ?? params.followupRun.run.groupSpace,
+        senderId: params.followupRun.run.senderId,
+        senderName: params.followupRun.run.senderName,
+        senderUsername: params.followupRun.run.senderUsername,
+        senderE164: params.followupRun.run.senderE164,
+        sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
+        workspaceDir: params.followupRun.run.workspaceDir,
+        cwd: params.followupRun.run.cwd,
+        agentDir: params.followupRun.run.agentDir,
+        config: params.cfg,
+        skillsSnapshot: entry.skillsSnapshot ?? params.followupRun.run.skillsSnapshot,
+        provider: params.followupRun.run.provider,
+        model: params.followupRun.run.model,
+        authProfileId: params.followupRun.run.authProfileId,
+        agentHarnessId:
+          entry.sessionId === params.followupRun.run.sessionId ? entry.agentHarnessId : undefined,
+        thinkLevel: params.followupRun.run.thinkLevel,
+        bashElevated: params.followupRun.run.bashElevated,
+        abortSignal: preflightAbort.abortSignal,
+        trigger: "budget",
+        force: true,
+        forcePreflight: true,
+        preflightRequired: true,
+        preflightCompactionTrigger: compactionTrigger,
+        deferOwningContextEngineCompaction: false,
+        contextTokenBudget: contextWindowTokens,
+        currentTokenCount: tokenCountForCompaction ?? freshPersistedTokens,
+        ownerNumbers: params.followupRun.run.ownerNumbers,
+      });
+    } finally {
+      preflightAbort.cleanup();
+    }
 
     if (!result?.ok) {
       const reason = result?.reason ?? "not_compacted";
