@@ -1,188 +1,39 @@
 name: QA Lab Smoke Profile
 
+run-name: ${{ format('QA Lab Smoke Profile smoke-ci {0}', github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.ref) }}
+
 on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch, tag, or SHA to test. Empty uses the workflow ref.
+        description: Trusted OpenClaw branch, tag, or SHA to test
+        required: true
+        default: main
+        type: string
+      expected_sha:
+        description: Optional full SHA that ref must resolve to
         required: false
         default: ""
-      qa_profile:
-        description: QA profile to run when scenario_id is empty.
-        required: false
-        default: smoke-ci
-      surface:
-        description: Optional taxonomy surface filter for qa_profile runs.
-        required: false
-        default: ""
-      category:
-        description: Optional taxonomy category filter for qa_profile runs.
-        required: false
-        default: ""
-      scenario_id:
-        description: Optional direct scenario target. Empty runs qa_profile.
-        required: false
-        default: ""
-      concurrency:
-        description: QA suite worker concurrency.
-        required: false
-        default: "8"
-      evidence_mode:
-        description: qa-evidence.json detail level for profile runs.
-        required: false
-        default: slim
-        type: choice
-        options:
-          - slim
-          - full
-      fast:
-        description: Enable provider fast mode where supported.
-        required: false
-        default: true
-        type: boolean
+        type: string
+
+permissions:
+  contents: read
 
 concurrency:
-  group: qa-lab-smoke-profile-${{ github.event.pull_request.number || (github.event_name == 'workflow_dispatch' && inputs.ref) || github.sha }}
+  group: qa-lab-smoke-profile-${{ github.event.pull_request.number || inputs.expected_sha || inputs.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  NODE_VERSION: 24.x
-  TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
-  OPENAI_API_KEY: ""
-  ANTHROPIC_API_KEY: ""
-  OPENCLAW_LIVE_OPENAI_KEY: ""
-  OPENCLAW_LIVE_ANTHROPIC_KEY: ""
-  OPENCLAW_LIVE_GEMINI_KEY: ""
-  OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
-  OPENCLAW_BUILD_PRIVATE_QA: "1"
-  OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0"
-
 jobs:
-  qa_lab_smoke_profile:
-    name: Run QA Lab smoke profile
+  smoke_ci_profile_evidence:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-          ref: ${{ env.TARGET_REF }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
-
-      - name: Run QA evidence lane
-        id: run_qa
-        env:
-          INPUT_QA_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.qa_profile || 'smoke-ci' }}
-          INPUT_SURFACE: ${{ github.event_name == 'workflow_dispatch' && inputs.surface || '' }}
-          INPUT_CATEGORY: ${{ github.event_name == 'workflow_dispatch' && inputs.category || '' }}
-          INPUT_SCENARIO_ID: ${{ github.event_name == 'pull_request' && 'dm-chat-baseline' || inputs.scenario_id || '' }}
-          INPUT_CHANNEL_DRIVER: ${{ github.event_name == 'pull_request' && 'crabline' || '' }}
-          INPUT_CONCURRENCY: ${{ github.event_name == 'workflow_dispatch' && inputs.concurrency || '1' }}
-          INPUT_EVIDENCE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.evidence_mode || 'slim' }}
-          INPUT_FAST: ${{ github.event_name != 'workflow_dispatch' || inputs.fast }}
-        run: |
-          set -euo pipefail
-
-          selected="${INPUT_SCENARIO_ID:-profile-${INPUT_QA_PROFILE}}"
-          artifact_label="${selected//[^A-Za-z0-9._-]/-}"
-          output_dir=".artifacts/qa-e2e/${artifact_label}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          {
-            echo "qa_output_dir=$output_dir"
-            echo "qa_target=${INPUT_SCENARIO_ID:-profile:$INPUT_QA_PROFILE}"
-          } >> "$GITHUB_OUTPUT"
-
-          if [[ -n "$INPUT_SCENARIO_ID" ]]; then
-            command=(
-              pnpm openclaw qa suite
-              --repo-root .
-              --provider-mode mock-openai
-              --scenario "$INPUT_SCENARIO_ID"
-              --concurrency "$INPUT_CONCURRENCY"
-              --output-dir "$output_dir"
-            )
-            if [[ -n "$INPUT_CHANNEL_DRIVER" ]]; then
-              command+=(--channel-driver "$INPUT_CHANNEL_DRIVER")
-            fi
-          else
-            command=(
-              pnpm openclaw qa run
-              --repo-root .
-              --qa-profile "$INPUT_QA_PROFILE"
-              --provider-mode mock-openai
-              --concurrency "$INPUT_CONCURRENCY"
-              --evidence-mode "$INPUT_EVIDENCE_MODE"
-              --output-dir "$output_dir"
-            )
-            if [[ -n "$INPUT_SURFACE" ]]; then
-              command+=(--surface "$INPUT_SURFACE")
-            fi
-            if [[ -n "$INPUT_CATEGORY" ]]; then
-              command+=(--category "$INPUT_CATEGORY")
-            fi
-          fi
-
-          if [[ "$INPUT_FAST" == "true" ]]; then
-            command+=(--fast)
-          fi
-
-          printf 'Running QA command:'
-          printf ' %q' "${command[@]}"
-          printf '\n'
-          "${command[@]}"
-
-      - name: Summarize QA artifacts
-        if: always()
-        env:
-          QA_OUTPUT_DIR: ${{ steps.run_qa.outputs.qa_output_dir }}
-          QA_TARGET: ${{ steps.run_qa.outputs.qa_target }}
-        run: |
-          set -euo pipefail
-          {
-            echo "### QA Lab Smoke Profile"
-            echo
-            echo "- Ref: \`${TARGET_REF}\`"
-            echo "- Target: \`${QA_TARGET:-unknown}\`"
-            echo "- Output: \`${QA_OUTPUT_DIR:-.artifacts/qa-e2e}\`"
-            echo
-            echo "Evidence files:"
-            find .artifacts/qa-e2e -type f \
-              \( -name 'qa-evidence.json' \
-                -o -name 'qa-suite-summary.json' \
-                -o -name '*.md' \
-                -o -name '*.log' \
-                -o -name '*.jsonl' \
-                -o -name '*.png' \
-                -o -name '*.jpg' \
-                -o -name '*.jpeg' \
-                -o -name '*.webm' \
-                -o -name '*.mp4' \) \
-              | sort \
-              | sed 's#^#- `#; s#$#`#' || true
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload QA evidence artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: qa-lab-smoke-profile-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/qa-e2e/
-          retention-days: 14
-          if-no-files-found: warn
+    uses: ./.github/workflows/qa-profile-evidence.yml
+    with:
+      # qa-profile-evidence validates refs before entering its environment-backed
+      # QA job. PR runs therefore use the trusted base SHA, while manual runs can
+      # target main, release tags, or release branch heads.
+      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.ref }}
+      expected_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.expected_sha }}
+      qa_profile: smoke-ci
+      fail_on_qa_failure: true
