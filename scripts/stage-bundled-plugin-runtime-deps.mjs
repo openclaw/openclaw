@@ -51,6 +51,26 @@ function assertPathIsNotSymlink(targetPath, label) {
   }
 }
 
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function renameWithRetry(sourcePath, targetPath, maxAttempts = 5, baseDelayMs = 100) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      fs.renameSync(sourcePath, targetPath);
+      return;
+    } catch (error) {
+      if (error?.code === "EPERM" && attempt < maxAttempts) {
+        // Windows: antivirus/Search Indexer transiently locks freshly-written dirs.
+        sleepSync(baseDelayMs * attempt);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 function replaceDirAtomically(targetPath, sourcePath) {
   assertPathIsNotSymlink(targetPath, "replace runtime deps");
   const targetParentDir = path.dirname(targetPath);
@@ -64,10 +84,10 @@ function replaceDirAtomically(targetPath, sourcePath) {
   let movedExistingTarget = false;
   try {
     if (fs.existsSync(targetPath)) {
-      fs.renameSync(targetPath, backupPath);
+      renameWithRetry(targetPath, backupPath);
       movedExistingTarget = true;
     }
-    fs.renameSync(sourcePath, targetPath);
+    renameWithRetry(sourcePath, targetPath);
     removePathIfExists(backupPath);
   } catch (error) {
     if (movedExistingTarget && !fs.existsSync(targetPath) && fs.existsSync(backupPath)) {
