@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import {
+  classifyFailoverReason,
   formatAssistantErrorText,
   isLikelyContextOverflowError,
 } from "./errors.js";
@@ -115,5 +116,23 @@ describe("stream abort error classification (#87876)", () => {
   it("the existing timeout classifier already matches 'This operation was aborted'", async () => {
     const { isTimeoutErrorMessage } = await import("./failover-matches.js");
     expect(isTimeoutErrorMessage("This operation was aborted")).toBe(true);
+  });
+
+  it("the full classification chain classifies stream abort as timeout", () => {
+    // classifyFailoverReason exercises the full chain:
+    //   classifyFailoverSignal -> classifyFailoverClassificationFromMessage -> failoverReasonClassification
+    // Proving "This operation was aborted" → "timeout" means the error advances to
+    // the next configured model (fallback), not surfaces immediately.
+    expect(classifyFailoverReason("This operation was aborted")).toBe("timeout");
+  });
+
+  it("the full chain classifies stream abort embedded in a provider message as timeout", () => {
+    // Bedrock Converse may wrap the abort message.
+    expect(classifyFailoverReason("ConverseStream failed: This operation was aborted")).toBe("timeout");
+  });
+
+  it("the full chain does NOT classify unrelated abort strings as timeout", () => {
+    // "Request was aborted" without "operation" should not match.
+    expect(classifyFailoverReason("Request was aborted by user")).toBeNull();
   });
 });

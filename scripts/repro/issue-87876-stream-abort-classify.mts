@@ -1,9 +1,10 @@
 // Real behavior proof for #87876: verifies the existing timeout classifier
-// already matches "This operation was aborted" stream abort errors,
-// so the configured fallback chain rotates for Bedrock Converse drops.
+// already matches "This operation was aborted" stream abort errors.
+// The full classification chain classifies it as "timeout", meaning the
+// configured fallback model is tried instead of surfacing the error.
 //
 // Run: node --import tsx scripts/repro/issue-87876-stream-abort-classify.mts
-import { isTimeoutErrorMessage } from "../../src/agents/embedded-agent-helpers/failover-matches.ts";
+import { classifyFailoverReason, isTimeoutErrorMessage } from "../../src/agents/embedded-agent-helpers/errors.ts";
 
 function fail(message: string): never {
   console.error(`FAIL: ${message}`);
@@ -11,29 +12,25 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
-// The exact error message from the issue: Bedrock Converse stream drops after ~6 min.
+// 1. Shared timeout classifier matches "This operation was aborted"
 const bedrockAbort = "This operation was aborted";
 if (!isTimeoutErrorMessage(bedrockAbort)) {
-  fail(`expected "${bedrockAbort}" to be classified as timeout`);
+  fail(`expected "${bedrockAbort}" to be classified as timeout by shared classifier`);
 }
 console.log(`PASS: "${bedrockAbort}" -> isTimeout=true (shared classifier)`);
 
-// Case-insensitive.
-if (!isTimeoutErrorMessage("this operation was aborted")) {
-  fail("expected case-insensitive match");
+// 2. Full classification chain classifies as "timeout" (triggers fallback rotation)
+const reason = classifyFailoverReason(bedrockAbort);
+if (reason !== "timeout") {
+  fail(`expected classifyFailoverReason to return "timeout", got "${reason}"`);
 }
-console.log("PASS: case-insensitive match works");
+console.log(`PASS: classifyFailoverReason("${bedrockAbort}") = "${reason}" (triggers fallback)`);
 
-// Embedded in a longer message.
-if (!isTimeoutErrorMessage("ConverseStream failed: This operation was aborted at connection drop")) {
-  fail("expected embedded match");
+// 3. Embedded in a longer provider message
+const embedded = classifyFailoverReason("ConverseStream failed: This operation was aborted");
+if (embedded !== "timeout") {
+  fail(`expected embedded classification to be "timeout", got "${embedded}"`);
 }
-console.log("PASS: embedded in longer message -> true");
+console.log(`PASS: embedded message -> "${embedded}"`);
 
-// Negative: unrelated abort messages should NOT match the timeout classifier.
-if (isTimeoutErrorMessage("Request was aborted by user")) {
-  fail("should not match unrelated abort");
-}
-console.log("PASS: unrelated abort messages -> false");
-
-console.log("\nALL CHECKS PASSED — stream abort errors are already classified as timeout by the shared classifier.");
+console.log("\nALL CHECKS PASSED — stream abort errors are classified as timeout by the shared classifier, triggering fallback rotation.");
