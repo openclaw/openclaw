@@ -29,9 +29,9 @@ import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { OpenClawAgentToolResult } from "../../plugins/agent-tool-result-middleware-types.js";
 import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
-import type { OpenClawAgentToolResult } from "../../plugins/agent-tool-result-middleware-types.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import {
   cancelDeferredPluginToolApproval,
@@ -1471,6 +1471,7 @@ async function runNativeHookRelayPostToolUse(params: {
       runId: params.registration.runId,
     });
     const middlewareInputResult = coerceNativeHookRelayToolResponseForMiddleware(result);
+    const originalModelText = readNativeHookRelayToolResultText(middlewareInputResult);
     const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
       ...(params.invocation.turnId ? { turnId: params.invocation.turnId } : {}),
       toolCallId,
@@ -1480,7 +1481,6 @@ async function runNativeHookRelayPostToolUse(params: {
       isError: nativeHookRelayToolResponseIsError(result),
       result: middlewareInputResult,
     });
-    const originalModelText = readNativeHookRelayToolResultText(middlewareInputResult);
     const middlewareModelText = readNativeHookRelayToolResultText(middlewareResult);
     if (middlewareModelText.trim() && middlewareModelText !== originalModelText) {
       response = params.adapter.renderPostToolUseFeedbackResponse(middlewareModelText);
@@ -1500,9 +1500,7 @@ async function runNativeHookRelayPostToolUse(params: {
   return response;
 }
 
-function coerceNativeHookRelayToolResponseForMiddleware(
-  result: unknown,
-): OpenClawAgentToolResult {
+function coerceNativeHookRelayToolResponseForMiddleware(result: unknown): OpenClawAgentToolResult {
   if (isNativeHookRelayToolResult(result)) {
     return result;
   }
@@ -1520,8 +1518,9 @@ function isNativeHookRelayToolResult(value: unknown): value is OpenClawAgentTool
 
 function readNativeHookRelayToolResultText(result: OpenClawAgentToolResult): string {
   return result.content
-    .filter((block): block is Extract<(typeof result.content)[number], { type: "text" }> =>
-      isJsonObject(block) && block.type === "text" && typeof block.text === "string"
+    .filter(
+      (block): block is Extract<(typeof result.content)[number], { type: "text" }> =>
+        isJsonObject(block) && block.type === "text" && typeof block.text === "string",
     )
     .map((block) => block.text)
     .join("\n");

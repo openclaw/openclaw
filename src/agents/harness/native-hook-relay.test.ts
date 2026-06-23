@@ -2397,6 +2397,40 @@ describe("native hook relay registry", () => {
     expect(response).toEqual({ stdout: "", stderr: "compacted output\n", exitCode: 2 });
   });
 
+  it("returns Codex feedback when native PostToolUse middleware mutates the result in place", async () => {
+    installCodexToolResultMiddlewareForTests((event) => {
+      const firstContent = event.result.content[0];
+      if (firstContent?.type === "text") {
+        firstContent.text = "compacted output";
+      }
+      return undefined;
+    });
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "post_tool_use",
+      rawPayload: {
+        hook_event_name: "PostToolUse",
+        cwd: "/repo",
+        turn_id: "turn-1",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { command: "cat big.log" },
+        tool_response: { output: "uncompacted output", exit_code: 0 },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "compacted output\n", exitCode: 2 });
+  });
+
   it("maps Codex MCP PreToolUse to OpenClaw before_tool_call and can block", async () => {
     const beforeToolCall = vi.fn(async () => ({
       block: true,
