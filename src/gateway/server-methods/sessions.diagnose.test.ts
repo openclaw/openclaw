@@ -144,6 +144,64 @@ test("sessions.diagnose reports no_sessions when no stored sessions exist", asyn
   });
 });
 
+test("sessions.diagnose excludes global and unknown fallback rows unless opted in", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", { updatedAt: 10 }),
+      global: sessionStoreEntry("sess-global", { updatedAt: 30 }),
+      unknown: sessionStoreEntry("sess-unknown", { updatedAt: 50 }),
+    },
+  });
+
+  const defaultResult = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {});
+  expect(defaultResult.ok).toBe(true);
+  expect(defaultResult.payload).toMatchObject({
+    outcome: "diagnosed",
+    session: { key: "agent:main:main", sessionId: "sess-main" },
+  });
+
+  const globalResult = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
+    includeGlobal: true,
+  });
+  expect(globalResult.ok).toBe(true);
+  expect(globalResult.payload).toMatchObject({
+    outcome: "diagnosed",
+    session: { key: "global", sessionId: "sess-global" },
+  });
+
+  const unknownResult = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
+    includeUnknown: true,
+  });
+  expect(unknownResult.ok).toBe(true);
+  expect(unknownResult.payload).toMatchObject({
+    outcome: "diagnosed",
+    session: { key: "unknown", sessionId: "sess-unknown" },
+  });
+});
+
+test("sessions.diagnose rejects key agent mismatch with agentId", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const result = await directSessionReq("sessions.diagnose", {
+    key: "agent:work:main",
+    agentId: "main",
+  });
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: "session key agent does not match agentId",
+    },
+  });
+});
+
 test("sessions.diagnose rejects ambiguous label selectors", async () => {
   await createSessionStoreDir();
   await writeSessionStore({

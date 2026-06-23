@@ -87,12 +87,13 @@ bounded transcript metadata. It does not check channel/provider connectivity;
 use `openclaw status --deep` or `openclaw health --verbose` for process and
 transport health.
 
-Finding codes include `active_progress_fresh`, `last_progress_stale`,
-`queued_without_active_run`, `stale_diagnostic_tool`,
-`store_terminal_but_live_processing`, `lane_blocked`,
-`transcript_unresolved`, `delivery_uncertain`, and `unknown_low_confidence`.
-Text output groups the result into Session, Live State, Findings, Evidence, and
-Next Checks. JSON output is the Gateway `sessions.diagnose` result.
+Finding codes include `active_run_visible`, `active_progress_fresh`,
+`last_progress_stale`, `queued_without_active_run`,
+`stale_diagnostic_tool`, `store_terminal_but_live_processing`,
+`lane_blocked`, `transcript_unresolved`, `delivery_uncertain`,
+`session_not_found`, and `unknown_low_confidence`. Text output groups the
+result into Session, Live State, Findings, Evidence, and Next Checks. JSON
+output is the Gateway `sessions.diagnose` result.
 
 ## Session discovery details
 
