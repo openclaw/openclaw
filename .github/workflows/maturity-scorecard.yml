@@ -90,7 +90,8 @@ jobs:
       ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
       qa_profile: release
       fail_on_qa_failure: false
-    secrets: inherit
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
   publish:
     name: Publish maturity docs PR

@@ -40,6 +40,10 @@ on:
         required: false
         default: false
         type: boolean
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by release QA profile scenarios
+        required: true
     outputs:
       artifact_name:
         description: Uploaded QA profile evidence artifact name
