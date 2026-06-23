@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   probeGateway: vi.fn(),
   callGateway: vi.fn(),
   resolveGatewayProbeAuthResolution: vi.fn(),
+  startGatewayRemoteSshTunnel: vi.fn(),
+  stopSshTunnel: vi.fn(async () => undefined),
   pickGatewaySelfPresence: vi.fn(),
 }));
 
@@ -89,6 +91,22 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
+vi.mock("../gateway/ssh-transport.js", () => ({
+  startGatewayRemoteSshTunnel: mocks.startGatewayRemoteSshTunnel,
+  applyGatewaySshTunnelConnectionDetails: ({
+    details,
+    ssh,
+  }: {
+    details: Record<string, unknown>;
+    ssh: { url: string; urlSource: string };
+  }) => ({
+    ...details,
+    url: ssh.url,
+    urlSource: ssh.urlSource,
+    message: `Gateway target: ${ssh.url}\nSource: ${ssh.urlSource}`,
+  }),
+}));
+
 vi.mock("./status.gateway-probe.js", () => ({
   resolveGatewayProbeAuthResolution: mocks.resolveGatewayProbeAuthResolution,
 }));
@@ -114,6 +132,8 @@ describe("resolveGatewayProbeSnapshot", () => {
       auth: { token: "tok", password: "pw" },
       warning: "warn",
     });
+    mocks.startGatewayRemoteSshTunnel.mockResolvedValue(null);
+    mocks.stopSshTunnel.mockReset().mockResolvedValue(undefined);
     mocks.pickGatewaySelfPresence.mockReturnValue({ host: "box" });
     mocks.callGateway.mockRejectedValue(new Error("status rpc unavailable"));
   });
@@ -176,6 +196,62 @@ describe("resolveGatewayProbeSnapshot", () => {
       password: "pw",
     });
     expect(result.gatewayProbeAuthWarning).toBe("warn");
+  });
+
+  it("probes configured SSH remote URLs through the local tunnel", async () => {
+    const cfg = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          transport: "ssh",
+          sshTarget: "user@gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
+      url: "ws://remote.example.com:18789",
+      urlSource: "config gateway.remote.url",
+      message: "Gateway target: ws://remote.example.com:18789",
+    });
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "remote",
+      gatewayMode: "remote",
+      remoteUrlMissing: false,
+    });
+    mocks.startGatewayRemoteSshTunnel.mockResolvedValue({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      tunnel: { stop: mocks.stopSshTunnel },
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ok: true,
+      url: "ws://127.0.0.1:19091",
+      connectLatencyMs: 12,
+      error: null,
+      close: null,
+      health: {},
+      status: {},
+      presence: [{ host: "box" }],
+      configSnapshot: null,
+    });
+
+    const result = await resolveGatewayProbeSnapshot({
+      cfg: cfg as never,
+      opts: {},
+    });
+
+    expect(mocks.startGatewayRemoteSshTunnel).toHaveBeenCalledWith({
+      config: cfg,
+      url: "ws://remote.example.com:18789",
+      urlSource: "config gateway.remote.url",
+    });
+    expect(readProbeCall().url).toBe("ws://127.0.0.1:19091");
+    expect(result.gatewayConnection.url).toBe("ws://127.0.0.1:19091");
+    expect(result.gatewayConnection.urlSource).toBe("config gateway.remote.url via ssh tunnel");
+    expect(result.gatewayReachable).toBe(true);
+    expect(mocks.stopSshTunnel).toHaveBeenCalledTimes(1);
   });
 
   it("merges auth warnings into failed probe errors by default", async () => {

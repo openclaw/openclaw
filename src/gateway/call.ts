@@ -1158,63 +1158,66 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     url: connectionDetails.url,
     urlSource: connectionDetails.urlSource,
   });
-  if (ssh) {
-    connectionDetails = applyGatewaySshTunnelConnectionDetails({ details: connectionDetails, ssh });
-  }
-  const url = connectionDetails.url;
-  const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
-  const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
-  const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
-  const allowAuthNone =
-    opts.requireLocalBackendSharedAuth === true &&
-    resolveGatewayCallAuth(context.config).mode === "none";
-  const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
-    opts,
-    url,
-    token,
-    password,
-    allowAuthNone,
-  });
-  if (opts.requireLocalBackendSharedAuth && !omitDeviceIdentity) {
-    throw new GatewayLocalBackendSharedAuthUnavailableError(
-      "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
-    );
-  }
-  const deviceIdentity =
-    opts.deviceIdentity === undefined
-      ? omitDeviceIdentity
-        ? null
-        : resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
-      : opts.deviceIdentity;
-  if (useStoredDeviceAuth) {
-    const storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity);
-    if (!storedAuth?.token) {
-      throw new GatewayCredentialsRequiredError({
-        method: opts.method,
-        configPath: context.configPath,
+  try {
+    if (ssh) {
+      connectionDetails = applyGatewaySshTunnelConnectionDetails({
+        details: connectionDetails,
+        ssh,
       });
     }
-    if (
-      Array.isArray(opts.requiredStoredDeviceAuthScopes) &&
-      !roleScopesAllow({
-        role: "operator",
-        requestedScopes: opts.requiredStoredDeviceAuthScopes,
-        allowedScopes: storedAuth.scopes,
-      })
-    ) {
-      throw new GatewayStoredDeviceAuthUnavailableError(
-        "stored device auth does not grant the required operator scopes",
+    const url = connectionDetails.url;
+    const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
+    const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
+    const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
+    const allowAuthNone =
+      opts.requireLocalBackendSharedAuth === true &&
+      resolveGatewayCallAuth(context.config).mode === "none";
+    const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
+      opts,
+      url,
+      token,
+      password,
+      allowAuthNone,
+    });
+    if (opts.requireLocalBackendSharedAuth && !omitDeviceIdentity) {
+      throw new GatewayLocalBackendSharedAuthUnavailableError(
+        "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
       );
     }
-  }
-  ensureGatewayCallCanAuthenticate({
-    opts,
-    context,
-    token,
-    password,
-    deviceIdentity,
-  });
-  try {
+    const deviceIdentity =
+      opts.deviceIdentity === undefined
+        ? omitDeviceIdentity
+          ? null
+          : resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
+        : opts.deviceIdentity;
+    if (useStoredDeviceAuth) {
+      const storedAuth = loadStoredOperatorDeviceAuthToken(deviceIdentity);
+      if (!storedAuth?.token) {
+        throw new GatewayCredentialsRequiredError({
+          method: opts.method,
+          configPath: context.configPath,
+        });
+      }
+      if (
+        Array.isArray(opts.requiredStoredDeviceAuthScopes) &&
+        !roleScopesAllow({
+          role: "operator",
+          requestedScopes: opts.requiredStoredDeviceAuthScopes,
+          allowedScopes: storedAuth.scopes,
+        })
+      ) {
+        throw new GatewayStoredDeviceAuthUnavailableError(
+          "stored device auth does not grant the required operator scopes",
+        );
+      }
+    }
+    ensureGatewayCallCanAuthenticate({
+      opts,
+      context,
+      token,
+      password,
+      deviceIdentity,
+    });
     return await executeGatewayRequestWithScopes<T>({
       opts,
       scopes: useStoredDeviceAuth ? undefined : scopes,

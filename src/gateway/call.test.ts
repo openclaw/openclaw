@@ -477,6 +477,37 @@ describe("callGateway url resolution", () => {
     expect(stopSshTunnelMock).toHaveBeenCalledTimes(1);
   });
 
+  it("stops configured SSH tunnels when auth validation fails before connecting", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          transport: "ssh",
+          sshTarget: "user@gateway.example",
+        },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+    startSshPortForwardMock.mockResolvedValue({
+      parsedTarget: { user: "user", host: "gateway.example", port: 22 },
+      localPort: 19091,
+      remotePort: 18789,
+      pid: 1234,
+      stderr: [],
+      stop: stopSshTunnelMock,
+    });
+
+    await expect(callGateway({ method: "sessions.list" })).rejects.toThrow(
+      "requires credentials before opening a websocket",
+    );
+
+    expect(startSshPortForwardMock).toHaveBeenCalledTimes(1);
+    expect(stopSshTunnelMock).toHaveBeenCalledTimes(1);
+    expect(lastClientOptions).toBeNull();
+  });
+
   it("skips config loading when explicit url and token are provided", async () => {
     getRuntimeConfig.mockImplementation(() => {
       throw new Error("getRuntimeConfig should not run");

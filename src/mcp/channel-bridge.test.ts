@@ -12,15 +12,20 @@ const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   stopAndWait: vi.fn(async () => undefined),
   sshTunnelStop: vi.fn(async () => undefined),
+  bootstrapPromise: null as Promise<Record<string, unknown>> | null,
 }));
 
 vi.mock("../gateway/client-bootstrap.js", () => ({
-  resolveGatewayClientBootstrap: vi.fn(async () => ({
-    url: "ws://127.0.0.1:19091",
-    urlSource: "config gateway.remote.url via ssh tunnel",
-    auth: { token: undefined, password: undefined },
-    sshTunnel: { stop: gatewayClientState.sshTunnelStop },
-  })),
+  resolveGatewayClientBootstrap: vi.fn(
+    () =>
+      gatewayClientState.bootstrapPromise ??
+      Promise.resolve({
+        url: "ws://127.0.0.1:19091",
+        urlSource: "config gateway.remote.url via ssh tunnel",
+        auth: { token: undefined, password: undefined },
+        sshTunnel: { stop: gatewayClientState.sshTunnelStop },
+      }),
+  ),
 }));
 
 vi.mock("../gateway/client.js", () => ({
@@ -124,6 +129,7 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
     gatewayClientState.options = null;
     gatewayClientState.stopAndWait.mockReset().mockResolvedValue(undefined);
     gatewayClientState.sshTunnelStop.mockReset().mockResolvedValue(undefined);
+    gatewayClientState.bootstrapPromise = null;
   });
 
   afterEach(async () => {
@@ -267,6 +273,28 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
     await bridge.close();
 
     expect(gatewayClientState.stopAndWait).toHaveBeenCalledTimes(1);
+    expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("close() stops a bootstrap SSH tunnel when shutdown wins startup", async () => {
+    let resolveBootstrap: (value: Record<string, unknown>) => void = () => undefined;
+    gatewayClientState.bootstrapPromise = new Promise((resolve) => {
+      resolveBootstrap = resolve;
+    });
+    const bridge = makeBridge();
+
+    const startPromise = bridge.start();
+    await bridge.close();
+    resolveBootstrap({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      auth: { token: undefined, password: undefined },
+      sshTunnel: { stop: gatewayClientState.sshTunnelStop },
+    });
+    await startPromise;
+
+    expect(gatewayClientState.options).toBeNull();
+    expect(gatewayClientState.stopAndWait).not.toHaveBeenCalled();
     expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
   });
 

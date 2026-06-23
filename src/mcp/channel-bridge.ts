@@ -138,6 +138,7 @@ export class OpenClawChannelBridge {
       env: process.env,
     });
     if (this.closed) {
+      await bootstrap.sshTunnel?.stop();
       this.resolveReadyOnce();
       return;
     }
