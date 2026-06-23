@@ -146,13 +146,70 @@ async function createCanonicalMemoryIndex(agentPath: string, text: string): Prom
   }
 }
 
+async function createUnrelatedCanonicalMemoryIndex(agentPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(agentPath), { recursive: true });
+  const db = new DatabaseSync(agentPath);
+  try {
+    ensureMemoryIndexSchema({
+      db,
+      cacheEnabled: true,
+      ftsEnabled: true,
+    });
+    db.prepare(
+      "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
+    ).run("OTHER.md", "memory", "canonical-other-file-hash", 11, 21);
+    db.prepare(
+      "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "canonical-other-chunk",
+      "OTHER.md",
+      "memory",
+      1,
+      1,
+      "canonical-other-hash",
+      "embed-model",
+      "canonical unrelated memory",
+      "[0,1,0]",
+      31,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+async function createMismatchedCanonicalVectorIndex(agentPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(agentPath), { recursive: true });
+  const db = new DatabaseSync(agentPath, { allowExtension: true });
+  try {
+    ensureMemoryIndexSchema({
+      db,
+      cacheEnabled: true,
+      ftsEnabled: true,
+    });
+    const loaded = await loadSqliteVecExtension({ db });
+    expect(loaded.ok, loaded.error).toBe(true);
+    db.exec(`
+      CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
+        id TEXT PRIMARY KEY,
+        embedding FLOAT[4]
+      )
+    `);
+  } finally {
+    db.close();
+  }
+}
+
 function readMemoryRows(agentPath: string) {
   const db = new DatabaseSync(agentPath);
   try {
     return {
-      sources: db.prepare("SELECT path, source, hash FROM memory_index_sources").all(),
-      chunks: db.prepare("SELECT id, text FROM memory_index_chunks").all(),
-      cache: db.prepare("SELECT provider, hash FROM memory_embedding_cache").all(),
+      sources: db
+        .prepare("SELECT path, source, hash FROM memory_index_sources ORDER BY path, source")
+        .all(),
+      chunks: db.prepare("SELECT id, text FROM memory_index_chunks ORDER BY id").all(),
+      cache: db
+        .prepare("SELECT provider, hash FROM memory_embedding_cache ORDER BY provider, hash")
+        .all(),
     };
   } finally {
     db.close();
@@ -453,7 +510,7 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
-  it("leaves the legacy memory sidecar in place when the canonical index already has rows", async () => {
+  it("leaves the legacy memory sidecar in place when canonical rows conflict", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -463,7 +520,9 @@ describe("memory-core doctor dreaming migration", () => {
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([
-      "Skipped Memory Core legacy memory index import for agent main because per-agent SQLite already has memory index rows; left legacy sidecar in place",
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory files rows conflict",
+      ),
     ]);
     expect(result.changes).toEqual([]);
     expect(readMemoryRows(agentPath)).toEqual({
@@ -471,6 +530,53 @@ describe("memory-core doctor dreaming migration", () => {
       chunks: [{ id: "canonical-chunk", text: "canonical memory remains authoritative" }],
       cache: [],
     });
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+  });
+
+  it("merges legacy sidecar rows into a non-empty canonical index when rows do not conflict", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createUnrelatedCanonicalMemoryIndex(agentPath);
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
+    expect(readMemoryRows(agentPath)).toEqual({
+      sources: [
+        { path: "MEMORY.md", source: "memory", hash: "file-hash" },
+        { path: "OTHER.md", source: "memory", hash: "canonical-other-file-hash" },
+      ],
+      chunks: [
+        { id: "canonical-other-chunk", text: "canonical unrelated memory" },
+        { id: "chunk-1", text: "remember this" },
+      ],
+      cache: [{ provider: "openai", hash: "chunk-hash" }],
+    });
+    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+  });
+
+  it("leaves legacy vector sidecars in place when vector dimensions conflict", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath, { vector: true });
+    await createMismatchedCanonicalVectorIndex(agentPath);
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec dimensions 3 do not match canonical memory chunks_vec dimensions 4",
+      ),
+    ]);
+    expect(result.changes).toEqual([]);
     await expect(fs.access(legacyPath)).resolves.toBeUndefined();
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });

@@ -88,7 +88,7 @@ const LEGACY_MEMORY_CACHE_COLUMNS = [
 
 type LegacyMemorySidecarImportResult = {
   imported: boolean;
-  reason?: "missing-sidecar" | "canonical-not-empty" | "legacy-schema-missing";
+  reason?: "missing-sidecar" | "legacy-schema-missing";
   sources: number;
   chunks: number;
   cacheEntries: number;
@@ -165,18 +165,6 @@ function readLegacySidecarCounts(
   };
 }
 
-function canonicalMemoryIndexHasRows(db: DatabaseSync): boolean {
-  const row = db
-    .prepare(
-      `SELECT
-         (SELECT COUNT(*) FROM main.${MEMORY_INDEX_META_TABLE}) +
-         (SELECT COUNT(*) FROM main.${MEMORY_INDEX_SOURCES_TABLE}) +
-         (SELECT COUNT(*) FROM main.${MEMORY_INDEX_CHUNKS_TABLE}) AS count`,
-    )
-    .get() as { count?: unknown } | undefined;
-  return Number(row?.count ?? 0) > 0;
-}
-
 function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
   const row = db.prepare(query).get() as { missing?: unknown } | undefined;
   if (Number(row?.missing ?? 0) > 0) {
@@ -184,17 +172,53 @@ function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: stri
   }
 }
 
-function readLegacyVectorDimensions(db: DatabaseSync, schema: string): number | undefined {
+function readMemoryIndexMetaVectorDimensions(
+  db: DatabaseSync,
+  schema: string,
+  tableName: string,
+): number | undefined {
+  if (!tableExists(db, schema, tableName)) {
+    return undefined;
+  }
   const meta = db
-    .prepare(`SELECT value FROM ${schema}.meta WHERE key = ?`)
+    .prepare(`SELECT value FROM ${schema}.${tableName} WHERE key = ?`)
     .get(MEMORY_INDEX_META_KEY) as { value?: unknown } | undefined;
-  if (typeof meta?.value === "string") {
-    try {
-      const parsed = JSON.parse(meta.value) as { vectorDims?: unknown };
-      if (Number.isSafeInteger(parsed.vectorDims) && Number(parsed.vectorDims) > 0) {
-        return Number(parsed.vectorDims);
-      }
-    } catch {}
+  if (typeof meta?.value !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(meta.value) as { vectorDims?: unknown };
+    if (Number.isSafeInteger(parsed.vectorDims) && Number(parsed.vectorDims) > 0) {
+      return Number(parsed.vectorDims);
+    }
+  } catch {}
+  return undefined;
+}
+
+function readVectorTableSqlDimensions(
+  db: DatabaseSync,
+  schema: string,
+  tableName: string,
+): number | undefined {
+  const row = db
+    .prepare(`SELECT sql FROM ${schema}.sqlite_master WHERE name = ?`)
+    .get(tableName) as { sql?: unknown } | undefined;
+  if (typeof row?.sql !== "string") {
+    return undefined;
+  }
+  const match = /embedding\s+FLOAT\[(\d+)\]/i.exec(row.sql);
+  const dimensions = Number(match?.[1] ?? 0);
+  return Number.isSafeInteger(dimensions) && dimensions > 0 ? dimensions : undefined;
+}
+
+function readLegacyVectorDimensions(db: DatabaseSync, schema: string): number | undefined {
+  const metaDimensions = readMemoryIndexMetaVectorDimensions(db, schema, "meta");
+  if (metaDimensions) {
+    return metaDimensions;
+  }
+  const tableSqlDimensions = readVectorTableSqlDimensions(db, schema, LEGACY_MEMORY_VECTOR_TABLE);
+  if (tableSqlDimensions) {
+    return tableSqlDimensions;
   }
   const row = db
     .prepare(
@@ -208,6 +232,13 @@ function readLegacyVectorDimensions(db: DatabaseSync, schema: string): number | 
   return undefined;
 }
 
+function readCanonicalVectorDimensions(db: DatabaseSync): number | undefined {
+  return (
+    readVectorTableSqlDimensions(db, "main", MEMORY_INDEX_VECTOR_TABLE) ??
+    readMemoryIndexMetaVectorDimensions(db, "main", MEMORY_INDEX_META_TABLE)
+  );
+}
+
 function ensureCanonicalVectorTableForLegacyRows(db: DatabaseSync, schema: string): void {
   if (
     !hasLegacyVectorTable(db, schema) ||
@@ -215,12 +246,23 @@ function ensureCanonicalVectorTableForLegacyRows(db: DatabaseSync, schema: strin
   ) {
     return;
   }
-  if (tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE)) {
-    return;
-  }
   const dimensions = readLegacyVectorDimensions(db, schema);
   if (!Number.isSafeInteger(dimensions) || Number(dimensions) <= 0) {
     throw new Error("legacy memory chunks_vec rows require vector dimensions before import");
+  }
+  if (tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE)) {
+    const canonicalDimensions = readCanonicalVectorDimensions(db);
+    if (!Number.isSafeInteger(canonicalDimensions) || Number(canonicalDimensions) <= 0) {
+      throw new Error(
+        "canonical memory chunks_vec table requires vector dimensions before legacy import",
+      );
+    }
+    if (Number(canonicalDimensions) !== Number(dimensions)) {
+      throw new Error(
+        `legacy memory chunks_vec dimensions ${Number(dimensions)} do not match canonical memory chunks_vec dimensions ${Number(canonicalDimensions)}`,
+      );
+    }
+    return;
   }
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS main.${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
@@ -366,17 +408,6 @@ function importLegacyMemorySidecarIndex(params: {
       vectorEntries: 0,
     };
   }
-  if (canonicalMemoryIndexHasRows(params.db)) {
-    return {
-      imported: false,
-      reason: "canonical-not-empty",
-      sources: 0,
-      chunks: 0,
-      cacheEntries: 0,
-      vectorEntries: 0,
-    };
-  }
-
   params.db
     .prepare(`ATTACH DATABASE ? AS ${LEGACY_MEMORY_SIDECAR_SCHEMA}`)
     .run(params.legacySidecarDatabasePath);
@@ -487,12 +518,26 @@ async function archiveLegacyMemorySidecar(params: {
     );
     return;
   }
+  const renamed: Array<{ sourcePath: string; archivedPath: string }> = [];
   for (const sourcePath of existingSources) {
+    const archivedPath = `${sourcePath}.migrated`;
     try {
-      await fs.rename(sourcePath, `${sourcePath}.migrated`);
+      await fs.rename(sourcePath, archivedPath);
+      renamed.push({ sourcePath, archivedPath });
     } catch (err) {
+      for (const entry of renamed.toReversed()) {
+        try {
+          if ((await fileExists(entry.archivedPath)) && !(await fileExists(entry.sourcePath))) {
+            await fs.rename(entry.archivedPath, entry.sourcePath);
+          }
+        } catch (rollbackErr) {
+          params.warnings.push(
+            `Failed restoring Memory Core legacy memory index sidecar ${entry.archivedPath}: ${String(rollbackErr)}`,
+          );
+        }
+      }
       params.warnings.push(
-        `Failed archiving Memory Core legacy memory index sidecar ${sourcePath}: ${String(err)}`,
+        `Failed archiving Memory Core legacy memory index sidecar ${sourcePath}: ${String(err)}; restored ${renamed.length} already archived file(s)`,
       );
       return;
     }
@@ -524,19 +569,21 @@ async function migrateLegacyMemorySidecarSource(params: {
     });
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
     await loadSqliteVecExtension({ db });
-    const result = importLegacyMemorySidecarIndex({
-      db,
-      legacySidecarDatabasePath: params.source.legacyPath,
-    });
-    if (result.reason === "legacy-schema-missing") {
+    let result: LegacyMemorySidecarImportResult;
+    try {
+      result = importLegacyMemorySidecarIndex({
+        db,
+        legacySidecarDatabasePath: params.source.legacyPath,
+      });
+    } catch (err) {
       params.warnings.push(
-        `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because the sidecar schema is not a legacy memory index`,
+        `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because legacy rows could not be imported: ${String(err)}`,
       );
       return;
     }
-    if (result.reason === "canonical-not-empty") {
+    if (result.reason === "legacy-schema-missing") {
       params.warnings.push(
-        `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because per-agent SQLite already has memory index rows; left legacy sidecar in place`,
+        `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because the sidecar schema is not a legacy memory index`,
       );
       return;
     }
