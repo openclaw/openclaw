@@ -2179,8 +2179,8 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(1);
 
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(state.restartRecoveryPending).toBe(true);
-      expect(state.timer).toBeNull();
+      expect(state.restartRecoveryPending).toBe(false);
+      expect(state.timer).not.toBeNull();
       expect(scheduledStarted).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -2352,7 +2352,7 @@ describe("cron service timer regressions", () => {
     ).toBe(replacementReservationMs);
   });
 
-  it("stops an active scheduled batch from claiming more jobs after manual setup-timeout recovery", async () => {
+  it("continues scheduled batch after manual setup-timeout without requesting gateway restart", async () => {
     vi.useFakeTimers();
     try {
       const store = timerRegressionFixtures.makeStorePath();
@@ -2419,15 +2419,16 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(60_100);
       now += 60_100;
       await manualRun;
-      expect(state.restartRecoveryPending).toBe(true);
+      expect(state.restartRecoveryPending).toBe(false);
 
       finishFirstScheduled.resolve();
       await timerRun;
 
       const second = requireJob(state, secondScheduledJob.id);
       expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(secondScheduledStarted).not.toHaveBeenCalled();
-      expect(second.state.runningAtMs).toBeUndefined();
+      expect(secondScheduledStarted).toHaveBeenCalledTimes(1);
+      expect(secondScheduledStarted).toHaveBeenCalledWith(secondScheduledJob.id);
+      expect(second.state.lastRunStatus).toBe("ok");
     } finally {
       vi.useRealTimers();
     }
