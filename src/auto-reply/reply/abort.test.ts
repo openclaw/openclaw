@@ -446,6 +446,28 @@ describe("abort detection", () => {
     expectSessionLaneCleared(sessionKey);
   });
 
+  it("fast-abort resolves canonical stored session identity before metadata persistence", async () => {
+    const storeKey = "agent:main:telegram:group:-1001234567890:topic:99";
+    const lookupKey = "Agent:Main:Telegram:Group:-1001234567890:Topic:99";
+    const sessionId = "agent-topic-99";
+    const { root, cfg } = await createAbortConfig({
+      sessionIdsByKey: { [storeKey]: sessionId },
+    });
+    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: storeKey });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey: lookupKey,
+      from: "telegram:123",
+      to: "telegram:123",
+    });
+
+    expect(result.handled).toBe(true);
+    expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
+    expect(getFollowupQueueDepth(storeKey)).toBe(0);
+    expectSessionLaneCleared(storeKey);
+  });
+
   it("fast-abort still stops active runs when abort metadata persistence fails", async () => {
     const sessionKey = "telegram:persistence-failure";
     const sessionId = "session-persistence-failure";
@@ -509,6 +531,14 @@ describe("abort detection", () => {
         sessionId,
         sessionKey: canonicalKey,
       })),
+      resolveSessionAbortTarget: vi.fn(() => ({
+        entry: {
+          sessionId,
+          updatedAt: 10,
+        },
+        sessionId,
+        sessionKey: canonicalKey,
+      })),
       getLatestSubagentRunByChildSessionKey:
         subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
       listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
@@ -528,6 +558,96 @@ describe("abort detection", () => {
     expect(getFollowupQueueDepth(canonicalKey)).toBe(0);
     expectSessionLaneCleared(canonicalKey);
     expect(getAbortMemory(canonicalKey)).toBe(true);
+  });
+
+  it("fast-abort does not wait for abort metadata persistence before stopping runs", async () => {
+    const sessionKey = "telegram:slow-persistence";
+    const childKey = "agent:main:subagent:slow-persistence-child";
+    const sessionId = "session-slow-persistence";
+    const childSessionId = "session-slow-persistence-child";
+    const { root, cfg } = await createAbortConfig({
+      sessionIdsByKey: {
+        [childKey]: childSessionId,
+        [sessionKey]: sessionId,
+      },
+    });
+    let finishPersistence: (() => void) | undefined;
+    const persistenceStarted = new Promise<void>((resolveStarted) => {
+      abortTesting.setDepsForTests({
+        getAcpSessionManager: (() =>
+          ({
+            resolveSession: acpManagerMocks.resolveSession,
+            cancelSession: acpManagerMocks.cancelSession,
+          }) as never) as never,
+        abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
+        resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
+        markSessionAbortTarget: vi.fn(
+          () =>
+            new Promise((resolvePersistence) => {
+              resolveStarted();
+              finishPersistence = () => {
+                resolvePersistence({
+                  entry: {
+                    sessionId,
+                    updatedAt: 10,
+                  },
+                  persisted: true,
+                  sessionId,
+                  sessionKey,
+                });
+              };
+            }),
+        ),
+        resolveSessionAbortTarget: vi.fn(() => ({
+          entry: {
+            sessionId,
+            updatedAt: 10,
+          },
+          sessionId,
+          sessionKey,
+        })),
+        getLatestSubagentRunByChildSessionKey:
+          subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
+        listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+        markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+      });
+    });
+    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+    subagentRegistryMocks.listSubagentRunsForRequester.mockReturnValueOnce([
+      {
+        runId: "slow-child-run",
+        childSessionKey: childKey,
+        requesterSessionKey: sessionKey,
+        requesterDisplayKey: sessionKey,
+        task: "slow child",
+        cleanup: "keep",
+        createdAt: Date.now(),
+      },
+    ]);
+
+    const resultPromise = runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:123",
+      to: "telegram:123",
+    });
+    await persistenceStarted;
+
+    expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
+    expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(childSessionId);
+    expect(subagentRegistryMocks.markSubagentRunTerminated).toHaveBeenCalledWith({
+      childSessionKey: childKey,
+      reason: "killed",
+      runId: "slow-child-run",
+    });
+    expect(getFollowupQueueDepth(sessionKey)).toBe(0);
+    expectSessionLaneCleared(sessionKey);
+
+    finishPersistence?.();
+    await expect(resultPromise).resolves.toMatchObject({
+      aborted: true,
+      handled: true,
+    });
   });
 
   it("plain-language stop on ACP-bound session triggers ACP cancel", async () => {

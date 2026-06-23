@@ -304,10 +304,13 @@ export type SessionAbortTargetContext = {
   sessionKey: string;
 };
 
-export type SessionAbortTargetResult = SessionAbortTargetContext & {
+export type SessionAbortTargetIdentity = SessionAbortTargetContext & {
+  sessionId?: string;
+};
+
+export type SessionAbortTargetResult = SessionAbortTargetIdentity & {
   persisted: boolean;
   persistenceError?: string;
-  sessionId?: string;
 };
 
 export type SessionLifecycleTranscriptInfo = {
@@ -640,6 +643,22 @@ export async function updateSessionEntry(
     requireWriteSuccess: options.requireWriteSuccess,
     update,
   });
+}
+
+/** Resolves one abort target identity without exposing the mutable store. */
+export function resolveSessionAbortTarget(
+  scope: SessionAccessScope,
+): SessionAbortTargetIdentity | null {
+  const store = loadSessionStore(resolveAccessStorePath(scope));
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+  if (!resolved.existing) {
+    return null;
+  }
+  return {
+    entry: { ...resolved.existing },
+    sessionId: resolved.existing.sessionId,
+    sessionKey: resolved.normalizedKey,
+  };
 }
 
 /**
