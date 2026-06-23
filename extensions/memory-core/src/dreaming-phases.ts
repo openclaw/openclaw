@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   buildSessionEntry,
+  isSessionArchiveArtifactName,
   listSessionFilesForAgent,
   loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
@@ -860,6 +861,9 @@ async function collectSessionIngestionBatches(params: {
       if (isCheckpointSessionTranscriptPath(absolutePath)) {
         continue;
       }
+      if (isSessionArchiveArtifactName(path.basename(absolutePath))) {
+        continue;
+      }
       const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
       sessionFiles.push({
         agentId,
@@ -931,20 +935,21 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
     if (entry.generatedByDreamingNarrative || entry.generatedByCronRun) {
+      const contentHash = entry.hash.trim();
       nextFiles[stateKey] = {
         mtimeMs: fingerprint.mtimeMs,
         size: fingerprint.size,
-        contentHash: entry.hash.trim(),
-        lineCount: entry.lineMap.length,
-        lastContentLine: entry.lineMap.length,
+        contentHash,
+        lineCount: 0,
+        lastContentLine: 0,
       };
       if (
         !previous ||
         previous.mtimeMs !== fingerprint.mtimeMs ||
         previous.size !== fingerprint.size ||
-        previous.contentHash !== entry.hash.trim() ||
-        previous.lineCount !== entry.lineMap.length ||
-        previous.lastContentLine !== entry.lineMap.length
+        previous.contentHash !== contentHash ||
+        previous.lineCount !== 0 ||
+        previous.lastContentLine !== 0
       ) {
         changed = true;
       }

@@ -1623,6 +1623,28 @@ describe("memory-core dreaming phases", () => {
       "utf-8",
     );
     await fs.writeFile(
+      path.join(sessionsDir, "ordinary-archive.jsonl.reset.2026-04-16T18-10-00Z"),
+      [
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            timestamp: "2026-04-16T18:10:00.000Z",
+            content: "Archive-only migration detail should not enter Dreaming corpus.",
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          message: {
+            role: "assistant",
+            timestamp: "2026-04-16T18:11:00.000Z",
+            content: "This reset archive response should also stay out.",
+          },
+        }),
+      ].join("\n") + "\n",
+      "utf-8",
+    );
+    await fs.writeFile(
       path.join(sessionsDir, "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
       JSON.stringify({
         type: "message",
@@ -1741,6 +1763,8 @@ describe("memory-core dreaming phases", () => {
       "Assistant: I documented the Ollama provider setup in the workspace notes.",
     );
     expect(corpus).not.toContain("Run the nightly sync");
+    expect(corpus).not.toContain("Archive-only migration detail");
+    expect(corpus).not.toContain("reset archive response");
     expect(corpus).not.toContain("Checkpoint chatter should stay out.");
     expect(corpus).not.toContain("Read HEARTBEAT.md");
     expect(corpus).not.toContain("HEARTBEAT_OK");
