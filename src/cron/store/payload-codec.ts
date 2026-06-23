@@ -119,9 +119,6 @@ export function bindPayloadColumns(
     payload_external_content_source_json: serializeJson(payload.externalContentSource),
     payload_light_context: booleanToInteger(payload.lightContext),
     payload_tools_allow_json: serializeJson(payload.toolsAllow),
-    // Persist whether toolsAllow is the auto-applied creator-surface default
-    // (#91499) so a CLI-resolved run can drop the unenforceable cap after a
-    // restart instead of failing. Only meaningful when toolsAllow is set.
     payload_tools_allow_is_default: payload.toolsAllow
       ? booleanToInteger(payload.toolsAllowIsDefault)
       : null,

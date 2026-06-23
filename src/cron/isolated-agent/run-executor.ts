@@ -168,19 +168,8 @@ function resolveCliRuntimeToolsAllow(
   if (toolsAllow === undefined) {
     return undefined;
   }
-  // CLI backends do not enforce a runtime toolsAllow: cli-runner/prepare.ts
-  // rejects any defined allow-list, and a CLI backend runs with its own
-  // configured tool set as the operator on the local machine — it is not a
-  // runtime tool-policy boundary. #91499 auto-stamps the creator surface as a
-  // *default* cap on agentTurn payloads (toolsAllowIsDefault); on a CLI backend
-  // that default is unenforceable theatre, so drop it and let the scheduled run
-  // proceed instead of failing to start.
-  //
-  // An EXPLICIT per-cron restriction (the user narrowed this job; no isDefault
-  // flag) is deliberately NOT dropped: it falls through and prepare.ts fails it
-  // closed, surfacing that the requested policy needs an embedded runtime. So
-  // only the unenforceable inherited default is relaxed on CLI; explicit intent
-  // is still honoured.
+  // CLI runners reject runtime toolsAllow. Drop only the auto-stamped default;
+  // explicit per-cron restrictions stay fail-closed in prepareCliRunContext.
   if (toolsAllowIsDefault) {
     return undefined;
   }

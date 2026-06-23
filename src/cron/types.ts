@@ -248,13 +248,7 @@ type CronAgentTurnPayloadFields = {
   lightContext?: boolean;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
-  /**
-   * Set by the server when `toolsAllow` is the auto-applied creator-surface cap
-   * (#91499) rather than an explicit user restriction. CLI backends cannot
-   * enforce a runtime `toolsAllow`, so a CLI-resolved run drops this default cap
-   * (it is unenforceable) instead of failing; an explicit user restriction has
-   * no flag and stays fail-closed. Not user-settable.
-   */
+  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
   toolsAllowIsDefault?: boolean;
 };
 

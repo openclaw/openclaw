@@ -465,9 +465,6 @@ function capCronAgentTurnToolsAllow(params: {
     ? params.payload.toolsAllow
     : params.defaultToolsAllow;
   if (!Array.isArray(requestedRaw)) {
-    // No explicit user toolsAllow: stamp the full creator surface as the default
-    // cap and flag it so a CLI-resolved run (which cannot enforce a runtime
-    // toolsAllow) drops it rather than failing to start.
     params.payload.toolsAllow = creatorToolNames;
     params.payload.toolsAllowIsDefault = true;
     return;
@@ -476,15 +473,11 @@ function capCronAgentTurnToolsAllow(params: {
     requestedRaw.filter((entry): entry is string => typeof entry === "string"),
   );
   if (requestedToolsAllow.length === 0) {
-    // Explicit empty allow-list is a real restriction (no tools): keep it
-    // fail-closed, never flagged as a droppable default.
     params.payload.toolsAllow = [];
     delete params.payload.toolsAllowIsDefault;
     return;
   }
   if (requestedToolsAllow.includes("*")) {
-    // Wildcard requests the creator's full surface with no narrowing — a
-    // non-restrictive default, droppable on a non-enforcing CLI backend.
     params.payload.toolsAllow = creatorToolNames;
     params.payload.toolsAllowIsDefault = true;
     return;
@@ -497,9 +490,6 @@ function capCronAgentTurnToolsAllow(params: {
     { allow: requestedToolsAllow },
     pluginGroups,
   );
-  // Explicit narrowing restriction: keep it fail-closed (no default flag) so a
-  // CLI backend that cannot enforce it surfaces the error instead of silently
-  // widening the requested tool surface.
   params.payload.toolsAllow = creatorToolNames.filter((toolName) =>
     isToolAllowedByPolicyName(toolName, requestedPolicy),
   );
@@ -563,13 +553,8 @@ async function capCronAgentTurnUpdatePatchToolsAllow(params: {
   capCronAgentTurnToolsAllow({
     payload: nextPayload,
     creatorToolAllowlist: params.creatorToolAllowlist,
-    // Carry the existing cap forward across a no-toolsAllow update ONLY when it
-    // was an explicit per-cron restriction. A previously auto-stamped default
-    // (toolsAllowIsDefault === true) must NOT be carried forward as a literal
-    // value: that would route it through the explicit-narrowing branch, strip
-    // the default flag, and re-break the job on a CLI backend after the next
-    // restart (the run-time drop keys off the flag). Omitting it lets the cap
-    // be re-derived as a flagged default from the current creator surface.
+    // Flagged defaults are re-derived so normal updates do not turn them into
+    // explicit restrictions or lose the marker needed after restart.
     defaultToolsAllow:
       existingPayloadKind === "agentTurn" &&
       isRecord(existingPayload) &&
