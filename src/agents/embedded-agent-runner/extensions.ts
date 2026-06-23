@@ -14,6 +14,7 @@ import { resolveEffectiveCompactionMode } from "../agent-settings.js";
 import {
   finalizeToolTerminalPresentation,
   peekAdjustedParamsForToolCall,
+  type ToolOutcomeObserver,
 } from "../agent-tools.before-tool-call.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -52,6 +53,7 @@ function snapshotToolSendReceipt(details: unknown): unknown {
 function buildAgentToolResultMiddlewareFactory(
   sessionManager: SessionManager,
   runId?: string,
+  onToolOutcome?: ToolOutcomeObserver,
 ): ExtensionFactory {
   const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" });
   return (agent) => {
@@ -96,6 +98,8 @@ function buildAgentToolResultMiddlewareFactory(
           runId,
           result,
           isError,
+          observer: onToolOutcome,
+          toolName: event.toolName,
         });
       }
       return {
@@ -170,6 +174,7 @@ export function buildEmbeddedExtensionFactories(params: {
   modelId: string;
   model: ProviderRuntimeModel | undefined;
   runId?: string;
+  onToolOutcome?: ToolOutcomeObserver;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveEffectiveCompactionMode(params.cfg) === "safeguard") {
@@ -203,6 +208,12 @@ export function buildEmbeddedExtensionFactories(params: {
   if (pruningFactory) {
     factories.push(pruningFactory);
   }
-  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
+  factories.push(
+    buildAgentToolResultMiddlewareFactory(
+      params.sessionManager,
+      params.runId,
+      params.onToolOutcome,
+    ),
+  );
   return factories;
 }
