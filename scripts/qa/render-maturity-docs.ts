@@ -413,12 +413,11 @@ function checkSetTitle(profile: string): string {
 }
 
 function resultCountsText(statuses: StatusCounts): string {
-  return [
-    `${statuses.pass} passed`,
-    `${statuses.fail} failed`,
-    `${statuses.blocked} blocked`,
-    `${statuses.skipped} skipped`,
-  ].join(", ");
+  const parts = [`${statuses.pass} passed`];
+  if (statuses.skipped > 0) {
+    parts.push(`${statuses.skipped} skipped`);
+  }
+  return parts.join(", ");
 }
 
 function readinessStatusText(status: string): string {

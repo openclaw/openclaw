@@ -114,4 +114,24 @@ describe("maturity docs renderer CLI", () => {
     expect(result.stderr).toContain("failing-scenario (fail)");
     expect(result.stderr).toContain("blocked-scenario (blocked)");
   });
+
+  it("renders passing evidence without impossible failed or blocked result counts", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [
+        { id: "passing-scenario", status: "pass" },
+        { id: "skipped-scenario", status: "skipped" },
+      ],
+    });
+
+    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+
+    expect(result.status).toBe(0);
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    expect(scorecard).toContain("1 passed, 1 skipped");
+    expect(scorecard).not.toContain("0 failed");
+    expect(scorecard).not.toContain("0 blocked");
+  });
 });
