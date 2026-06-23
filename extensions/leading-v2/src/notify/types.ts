@@ -1,7 +1,7 @@
 import type { BackendConfig } from "../client/types.js";
 
-/** The async task kinds the completion-notifier can watch. P0 ships crawl_refresh only. */
-export type NotifyKind = "crawl_refresh";
+/** The async task kinds the completion-notifier can watch. */
+export type NotifyKind = "crawl_refresh" | "link_check";
 
 /** Where to deliver a proactive message — captured from the tool context at submit time. */
 export interface DeliveryTarget {

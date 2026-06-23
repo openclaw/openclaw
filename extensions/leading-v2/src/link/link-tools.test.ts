@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../../api.js";
 import { ApiKeyResolver } from "../client/key-resolver.js";
 import { RecentTaskStore } from "../client/recent-tasks.js";
+import type { PendingTaskRegistry } from "../notify/pending-store.js";
+import type { NotifyConfig } from "../notify/types.js";
 import type { RecentLinkBatch } from "./link-tools.js";
+
+const NOTIFY_OFF: NotifyConfig = { enabled: false, pollIntervalMs: 5000, ttlMs: 7_200_000, maxPerTick: 5 };
+const NOTIFY_ON: NotifyConfig = { enabled: true, pollIntervalMs: 5000, ttlMs: 7_200_000, maxPerTick: 5 };
+const makeRegistry = () => ({ add: vi.fn() }) as unknown as PendingTaskRegistry;
 
 const { mockPostForm, mockGetJson } = vi.hoisted(() => ({
   mockPostForm: vi.fn<(...args: unknown[]) => Promise<Record<string, unknown>>>(),
@@ -25,7 +31,7 @@ const fakeApi = {
 
 const resolver = new ApiKeyResolver({ "1749": "sk_test1749" }, undefined);
 const store = new RecentTaskStore<RecentLinkBatch>();
-const createFactory = createLinkBatchCreateToolFactory(fakeApi, resolver, store);
+const createFactory = createLinkBatchCreateToolFactory(fakeApi, resolver, store, makeRegistry(), NOTIFY_OFF);
 const statusFactory = createLinkBatchStatusToolFactory(fakeApi, resolver, store);
 
 function parse(result: unknown): Record<string, unknown> {
@@ -111,12 +117,53 @@ describe("link_batch_create", () => {
     expect(res.success).toBe(false);
     expect(mockPostForm).not.toHaveBeenCalled();
   });
+
+  it("registers the task for completion notification when a session + notify exist", async () => {
+    const registry = makeRegistry();
+    const tool = createLinkBatchCreateToolFactory(
+      fakeApi,
+      resolver,
+      new RecentTaskStore<RecentLinkBatch>(),
+      registry,
+      NOTIFY_ON,
+    )({ agentId: "rabbitmq-1749", sessionKey: "agent:rabbitmq-1749:rabbitmq:1749:session_1" })!;
+    mockPostForm.mockResolvedValue({ uuid: "u-xyz", total: 1 });
+
+    await tool.execute("r1", { links: "https://a.com/1", label: "批次N" });
+
+    expect(registry.add).toHaveBeenCalledTimes(1);
+    expect((registry.add as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      id: "link_check:u-xyz",
+      kind: "link_check",
+      uid: "1749",
+      backendId: "u-xyz",
+      title: "批次N",
+      sessionKey: "agent:rabbitmq-1749:rabbitmq:1749:session_1",
+      notified: false,
+    });
+  });
+
+  it("does not register when no session is available", async () => {
+    const registry = makeRegistry();
+    const tool = createLinkBatchCreateToolFactory(
+      fakeApi,
+      resolver,
+      new RecentTaskStore<RecentLinkBatch>(),
+      registry,
+      NOTIFY_ON,
+    )({ agentId: "rabbitmq-1749" })!;
+    mockPostForm.mockResolvedValue({ uuid: "u-2", total: 1 });
+
+    await tool.execute("r2", { links: "https://a.com/1", label: "x" });
+
+    expect(registry.add).not.toHaveBeenCalled();
+  });
 });
 
 describe("link_batch_status", () => {
   it("polls the most recent task by uuid and returns per-link verdicts when done", async () => {
     const localStore = new RecentTaskStore<RecentLinkBatch>();
-    const create = createLinkBatchCreateToolFactory(fakeApi, resolver, localStore)({
+    const create = createLinkBatchCreateToolFactory(fakeApi, resolver, localStore, makeRegistry(), NOTIFY_OFF)({
       agentId: "rabbitmq-1749",
     })!;
     const status = createLinkBatchStatusToolFactory(fakeApi, resolver, localStore)({

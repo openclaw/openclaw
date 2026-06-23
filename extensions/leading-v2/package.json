@@ -6,10 +6,12 @@
   "type": "module",
   "dependencies": {
     "@sinclair/typebox": "0.34.49",
-    "mysql2": "^3.12.0"
+    "mysql2": "^3.12.0",
+    "nodemailer": "^6.9.16"
   },
   "devDependencies": {
-    "@openclaw/plugin-sdk": "workspace:*"
+    "@openclaw/plugin-sdk": "workspace:*",
+    "@types/nodemailer": "^6.4.17"
   },
   "openclaw": {
     "extensions": [

@@ -7,6 +7,9 @@ import type { ApiKeyResolver } from "../client/key-resolver.js";
 import type { RecentTaskStore } from "../client/recent-tasks.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import type { BackendConfig } from "../client/types.js";
+import { getChatMercureTopic } from "../notify/chat-topic.js";
+import type { PendingTaskRegistry } from "../notify/pending-store.js";
+import type { NotifyConfig, NotifyToolContext } from "../notify/types.js";
 
 /**
  * What we remember per user so link_batch_status can poll without exposing the
@@ -77,10 +80,12 @@ export function createLinkBatchCreateToolFactory(
   api: OpenClawPluginApi,
   resolver: ApiKeyResolver,
   store: RecentTaskStore<RecentLinkBatch>,
+  registry: PendingTaskRegistry,
+  notify: NotifyConfig,
 ) {
   const config: BackendConfig = resolveConfig(api.pluginConfig ?? {});
 
-  return (ctx: { agentId?: string }) => {
+  return (ctx: NotifyToolContext) => {
     const userId = extractUserId(ctx.agentId);
     if (!userId) {
       return null;
@@ -136,15 +141,43 @@ export function createLinkBatchCreateToolFactory(
           return jsonResult({ success: false, error: "Backend did not return a task id." });
         }
         store.remember(userId, { uuid, label });
+
+        // Register for background completion notification (same flow as
+        // 互动量刷新): the CompletionNotifier polls this task and pushes the
+        // verdict summary when it finishes, so the user need not keep asking.
+        const sessionKey =
+          ctx.sessionKey ??
+          (ctx.sessionId ? `agent:rabbitmq-${userId}:rabbitmq:${userId}:${ctx.sessionId}` : undefined);
+        const willNotify = notify.enabled && Boolean(sessionKey);
+        if (willNotify && sessionKey) {
+          const now = Date.now();
+          registry.add({
+            id: `link_check:${uuid}`,
+            kind: "link_check",
+            uid: userId,
+            backendId: uuid,
+            sessionKey,
+            mercureTopic: getChatMercureTopic(userId) ?? userId,
+            delivery: ctx.deliveryContext ?? {},
+            title: label,
+            createdAt: now,
+            attempts: 0,
+            notified: false,
+            expiresAt: now + notify.ttlMs,
+          });
+        }
+
         return jsonResult({
           success: true,
           submitted: true,
           label,
           linkCount: Number(res.total ?? links.length),
           message: asString(res.message) ?? "检测任务已提交",
-          agentInstruction:
-            "失效链接强化检测任务已提交成功。请立刻告知用户任务正在后台逐条检测，通常需要数分钟。" +
-            "不要调用任何状态查询工具——等用户主动询问进度时再用 link_batch_status 查询。",
+          agentInstruction: willNotify
+            ? "失效链接强化检测任务已提交成功。任务在后台逐条检测，通常需要数分钟。" +
+              "完成后系统会自动通知用户，无需用户追问、也不要调用状态查询工具——你现在只需告诉用户「任务已提交，检测完会自动告诉你」。"
+            : "失效链接强化检测任务已提交成功。请立刻告知用户任务正在后台逐条检测，通常需要数分钟。" +
+              "不要调用任何状态查询工具——等用户主动询问进度时再用 link_batch_status 查询。",
         });
       },
     };

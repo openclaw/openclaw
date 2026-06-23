@@ -17,7 +17,9 @@ import {
   type RecentCrawlRefresh,
 } from "./src/crawl/crawl-tools.js";
 import { resolveNotifyConfig } from "./src/notify/config.js";
+import type { NotifyKind } from "./src/notify/types.js";
 import { pollCrawlRefresh } from "./src/notify/crawl-adapter.js";
+import { pollLinkCheck } from "./src/notify/link-check-adapter.js";
 import { debugLog } from "./src/notify/debug.js";
 import { MercurePusher, resolveMercureConfig } from "./src/notify/mercure.js";
 import { resolveSmtpConfig } from "./src/notify/email-client.js";
@@ -27,6 +29,15 @@ import { EmailNotificationTransport } from "./src/notify/transports/email.js";
 import { MercureNotificationTransport } from "./src/notify/transports/mercure-notification.js";
 import { CompletionNotifier } from "./src/notify/notifier.js";
 import { getSharedPendingRegistry } from "./src/notify/pending-store.js";
+import { buildRunners } from "./src/schedule/actions/registry.js";
+import { getSharedScheduleStore } from "./src/schedule/schedule-store.js";
+import { Scheduler } from "./src/schedule/scheduler.js";
+import {
+  createScheduleCreateToolFactory,
+  createScheduleDeleteToolFactory,
+  createScheduleListToolFactory,
+  createScheduleToggleToolFactory,
+} from "./src/schedule/schedule-tools.js";
 import {
   createLinkBatchCreateToolFactory,
   createLinkBatchStatusToolFactory,
@@ -65,12 +76,18 @@ export default definePluginEntry({
     const config = resolveConfig(api.pluginConfig ?? {});
     // One shared resolver for the whole backend: each uid is minted/cached once.
     const resolver = new ApiKeyResolver(config.apiKeys, config.db);
+    // Completion-notification plumbing, shared by every async-task module below.
+    // Process-global singleton: the tool-discovery register() and the service
+    // register() must enqueue into and poll the SAME registry instance.
+    const notify = resolveNotifyConfig(api.pluginConfig ?? {});
+    const pendingTasks = getSharedPendingRegistry();
 
     // --- link-data-crawler (失效链接强化检测，task_type=link_check) ---
     const linkBatches = new RecentTaskStore<RecentLinkBatch>();
-    api.registerTool(createLinkBatchCreateToolFactory(api, resolver, linkBatches), {
-      name: "link_batch_create",
-    });
+    api.registerTool(
+      createLinkBatchCreateToolFactory(api, resolver, linkBatches, pendingTasks, notify),
+      { name: "link_batch_create" },
+    );
     api.registerTool(createLinkBatchStatusToolFactory(api, resolver, linkBatches), {
       name: "link_batch_status",
     });
@@ -119,10 +136,6 @@ export default definePluginEntry({
     api.registerTool(createLetterFetchToolFactory(api, resolver), { name: "letter_fetch" });
 
     // --- link-data-crawler (互动量刷新，只读：重抓互动量但不写回主看板) ---
-    const notify = resolveNotifyConfig(api.pluginConfig ?? {});
-    // Process-global singleton: the tool-discovery register() and the service
-    // register() must enqueue into and poll the SAME registry instance.
-    const pendingTasks = getSharedPendingRegistry();
     const crawlRefreshes = new RecentTaskStore<RecentCrawlRefresh>();
     api.registerTool(
       createCrawlRefreshCreateToolFactory(api, resolver, crawlRefreshes, pendingTasks, notify),
@@ -135,7 +148,15 @@ export default definePluginEntry({
       name: "crawl_refresh_list",
     });
 
+    // --- scheduled tasks (口述定时；结果走同一套 notifier) ---
+    const scheduleStore = getSharedScheduleStore();
+    api.registerTool(createScheduleCreateToolFactory(api, scheduleStore), { name: "schedule_create" });
+    api.registerTool(createScheduleListToolFactory(api, scheduleStore), { name: "schedule_list" });
+    api.registerTool(createScheduleDeleteToolFactory(api, scheduleStore), { name: "schedule_delete" });
+    api.registerTool(createScheduleToggleToolFactory(api, scheduleStore), { name: "schedule_toggle" });
+
     let notifier: CompletionNotifier | undefined;
+    let scheduler: Scheduler | undefined;
     api.registerService({
       id: "leading-v2",
       async start(ctx) {
@@ -147,43 +168,62 @@ export default definePluginEntry({
               `loaded=${pendingTasks.all().length} hasRuntime=${Boolean(api.runtime)} ` +
               `hasSubagent=${Boolean(api.runtime?.subagent)} stateFile=${stateFile}`,
           );
+          // Generic Notifier: tasks emit a Notification; transports deliver it.
+          // Built unconditionally so both the completion-notifier and the
+          // scheduler's agent_prompt action share one fanout.
+          // T1 = Mercure `notification` event on the user's topic (web frontend
+          // renders it via one handler — see plan-notifier-delivery.md §3.1).
+          const mercureCfg = resolveMercureConfig(api.pluginConfig ?? {});
+          const transports: NotificationTransport[] = [];
+          if (mercureCfg) {
+            // T1 live in-app event (renders if the user's chat SSE is open).
+            transports.push(new MercureNotificationTransport(new MercurePusher(mercureCfg, ctx.logger)));
+          }
+          if (config.db) {
+            // T2 durable: persist as an assistant-only history row so it shows
+            // on next reload even if the user was offline (key for scheduled tasks).
+            transports.push(new DbHistoryTransport(config.db));
+          }
+          const smtpCfg = resolveSmtpConfig(api.pluginConfig ?? {});
+          if (smtpCfg && config.db) {
+            // T3 offline push: email subscribers (address from feed_report_subscriber).
+            transports.push(new EmailNotificationTransport(smtpCfg, config.db));
+          }
+          const fanout = new Notifier(transports, ctx.logger);
+          if (!fanout.hasTransports()) {
+            ctx.logger.warn("[LEADING_V2] No notification transport configured (set plugins.leading-v2.mercure)");
+          }
+
           if (notify.enabled) {
-            // Generic Notifier: tasks emit a Notification; transports deliver it.
-            // T1 = Mercure `notification` event on the user's topic (web frontend
-            // renders it via one handler — see plan-notifier-delivery.md §3.1).
-            const mercureCfg = resolveMercureConfig(api.pluginConfig ?? {});
-            const transports: NotificationTransport[] = [];
-            if (mercureCfg) {
-              // T1 live in-app event (renders if the user's chat SSE is open).
-              transports.push(new MercureNotificationTransport(new MercurePusher(mercureCfg, ctx.logger)));
-            }
-            if (config.db) {
-              // T2 durable: persist as an assistant-only history row so it shows
-              // on next reload even if the user was offline (key for scheduled tasks).
-              transports.push(new DbHistoryTransport(config.db));
-            }
-            const smtpCfg = resolveSmtpConfig(api.pluginConfig ?? {});
-            if (smtpCfg && config.db) {
-              // T3 offline push: email subscribers (address from feed_report_subscriber).
-              transports.push(new EmailNotificationTransport(smtpCfg, config.db));
-            }
-            const fanout = new Notifier(transports, ctx.logger);
-            if (!fanout.hasTransports()) {
-              ctx.logger.warn("[LEADING_V2] No notification transport configured (set plugins.leading-v2.mercure)");
-            }
+            // Title/category vary by task kind; everything else is shared.
+            const NOTIFY_TITLES: Record<
+              NotifyKind,
+              { named: (t: string) => string; done: string }
+            > = {
+              crawl_refresh: { named: (t) => `互动量刷新：${t}`, done: "互动量刷新完成" },
+              link_check: { named: (t) => `失效链接检测：${t}`, done: "失效链接检测完成" },
+            };
             const deliver = async (
-              task: { uid: string; sessionKey: string; mercureTopic: string; backendId: string; title: string | null },
+              task: {
+                uid: string;
+                sessionKey: string;
+                mercureTopic: string;
+                backendId: string;
+                title: string | null;
+                kind: NotifyKind;
+              },
               summary: string,
             ) => {
               const topic = task.mercureTopic || task.uid;
-              debugLog(`deliver notification topic=${topic} category=crawl_refresh`);
+              debugLog(`deliver notification topic=${topic} category=${task.kind}`);
+              const titles = NOTIFY_TITLES[task.kind] ?? NOTIFY_TITLES.crawl_refresh;
               await fanout.notify(
                 {
-                  id: `crawl_refresh:${task.backendId}`,
+                  id: `${task.kind}:${task.backendId}`,
                   uid: task.uid,
-                  category: "crawl_refresh",
+                  category: task.kind,
                   level: "success",
-                  title: task.title ? `互动量刷新：${task.title}` : "互动量刷新完成",
+                  title: task.title ? titles.named(task.title) : titles.done,
                   body: summary,
                   ts: Date.now(),
                 },
@@ -197,10 +237,27 @@ export default definePluginEntry({
               notify,
               deliver,
               logger: ctx.logger,
-              adapters: { crawl_refresh: pollCrawlRefresh },
+              adapters: { crawl_refresh: pollCrawlRefresh, link_check: pollLinkCheck },
             });
             notifier.start();
           }
+
+          // Scheduler: run user-defined recurring tasks; results flow through the
+          // same completion-notifier + Notifier as chat-initiated tasks.
+          // MySQL-backed when a db is configured (shared with the web frontend
+          // so it can list/edit/delete the same schedules); JSON file otherwise.
+          await scheduleStore.init(join(ctx.stateDir, "leading-v2-schedules.json"), ctx.logger, config.db);
+          const runners = buildRunners({
+            config,
+            resolver,
+            registry: pendingTasks,
+            subagent: api.runtime?.subagent,
+            deliver: (n, to) => fanout.notify(n, to),
+            logger: ctx.logger,
+          });
+          scheduler = new Scheduler({ store: scheduleStore, runners, logger: ctx.logger });
+          scheduler.start();
+
           ctx.logger.info("[LEADING_V2] Service initialized");
         } catch (error) {
           debugLog(`service.start ERROR ${String(error)}`);
@@ -209,7 +266,9 @@ export default definePluginEntry({
       },
       async stop(ctx) {
         notifier?.stop();
+        scheduler?.stop();
         await pendingTasks.flush();
+        await scheduleStore.flush();
         await closePool();
         ctx.logger.info("[LEADING_V2] DB pool closed, service stopped");
       },

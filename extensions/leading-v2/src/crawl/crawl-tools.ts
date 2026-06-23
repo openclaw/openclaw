@@ -2,15 +2,15 @@ import { Type } from "@sinclair/typebox";
 import { jsonResult, type OpenClawPluginApi } from "../../api.js";
 import { extractUserId } from "../client/agent-id.js";
 import { asString, envelopeError } from "../client/envelope.js";
-import { type FieldValue, getJson, postForm, resolveConfig } from "../client/http-client.js";
+import { type FieldValue, getJson, resolveConfig } from "../client/http-client.js";
 import type { ApiKeyResolver } from "../client/key-resolver.js";
 import type { RecentTaskStore } from "../client/recent-tasks.js";
 import { failure, resolveKeyOrError } from "../client/tool-helpers.js";
 import type { BackendConfig } from "../client/types.js";
 import { getChatMercureTopic } from "../notify/chat-topic.js";
-import { debugLog } from "../notify/debug.js";
 import type { PendingTaskRegistry } from "../notify/pending-store.js";
 import type { NotifyConfig, NotifyToolContext } from "../notify/types.js";
+import { submitCrawlRefresh } from "./crawl-submit.js";
 
 /** What we remember per user so crawl_refresh_status can poll without exposing the uuid. */
 export interface RecentCrawlRefresh {
@@ -88,39 +88,6 @@ const ListSchema = Type.Object(
   { additionalProperties: false },
 );
 
-function normalizeLinks(raw: unknown): string[] {
-  if (Array.isArray(raw)) {
-    return raw.map((x) => String(x).trim()).filter((u) => /^https?:\/\//i.test(u));
-  }
-  if (typeof raw === "string") {
-    return raw
-      .split(/\r?\n/)
-      .map((x) => x.trim())
-      .filter((u) => /^https?:\/\//i.test(u));
-  }
-  return [];
-}
-
-/** Build the backend `feeds` snapshot array, keeping only the fields insertFeeds reads. */
-function normalizeFeeds(raw: unknown): Array<Record<string, unknown>> {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw
-    .map((f) => f as Record<string, unknown>)
-    .filter((f) => Number.isInteger(Number(f.feedId)) && Number(f.feedId) > 0)
-    .map((f) => ({
-      feedId: Number(f.feedId),
-      url: asString(f.url) ?? "",
-      title: asString(f.title) ?? "",
-      contentType: asString(f.contentType) ?? "",
-      level: asString(f.level) ?? "",
-      offline: f.offline ? 1 : 0,
-      platform: asString(f.platform) ?? "",
-      author: asString(f.author) ?? "",
-    }));
-}
-
 export function createCrawlRefreshCreateToolFactory(
   api: OpenClawPluginApi,
   resolver: ApiKeyResolver,
@@ -145,101 +112,45 @@ export function createCrawlRefreshCreateToolFactory(
         "Tracked server-side; never mention any internal id/uuid to the user.",
       parameters: CreateSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
-        const keyed = await resolveKeyOrError(api, resolver, userId, "crawl_refresh_create");
-        if ("error" in keyed) {
-          return keyed.error;
-        }
-        const feeds = normalizeFeeds(rawParams.feeds);
-        // The task only crawls `links`; for 条目 mode derive the urls from the snapshots.
-        const explicitLinks = normalizeLinks(rawParams.links);
-        const links = explicitLinks.length > 0 ? explicitLinks : feeds.map((f) => String(f.url)).filter(Boolean);
-        const uniqueLinks = [...new Set(links)];
-
-        if (uniqueLinks.length === 0 && feeds.length === 0) {
-          return jsonResult({ success: false, error: "Provide links (URLs) or feeds (监测方案条目) to refresh." });
-        }
-        if (uniqueLinks.length > 5000) {
-          return jsonResult({ success: false, error: "Too many links (max 5000 per task)." });
-        }
-        if (feeds.length > 1000) {
-          return jsonResult({ success: false, error: "Too many feeds (max 1000 per task)." });
-        }
-        const topicId = Number(rawParams.topicId);
-        if (feeds.length > 0 && (!Number.isInteger(topicId) || topicId <= 0)) {
-          return jsonResult({ success: false, error: "topicId is required when refreshing 监测方案条目 (feeds)." });
-        }
-        if (uniqueLinks.length === 0) {
-          return jsonResult({
-            success: false,
-            error: "No crawlable URL found; each feed needs a url, or pass links directly.",
-          });
-        }
-
-        const name = asString(rawParams.name)?.slice(0, 255);
-        const fields: Record<string, FieldValue> = {
-          name: name ?? "",
-          links: uniqueLinks.join("\n"),
-          feeds: feeds.length > 0 ? JSON.stringify(feeds) : undefined,
-          topicId: feeds.length > 0 ? topicId : undefined,
-          dispatch: 1,
-          siteId: config.siteId,
-        };
-
-        let res: Record<string, unknown>;
-        try {
-          res = await postForm(config, "/link-data-crawler/add-task", fields, keyed.apiKey);
-        } catch (error) {
-          return failure(api, "crawl_refresh_create", userId, error);
-        }
-        const envErr = envelopeError(res);
-        if (envErr) {
-          return jsonResult({ success: false, error: envErr });
-        }
-        const uuid = asString(res.uuid);
-        if (!uuid) {
-          return jsonResult({ success: false, error: "Backend did not return a task id." });
-        }
-        store.remember(userId, { uuid, name: name ?? null });
-
-        // Register for proactive completion notification (default-on). We need a
-        // sessionKey to address the user later. Prefer ctx.sessionKey; if only the
-        // sessionId is exposed, reconstruct the key the chat pipeline uses
-        // (agent:rabbitmq-<uid>:rabbitmq:<uid>:<sessionId>).
+        // Notification addressing: prefer ctx.sessionKey; if only sessionId is
+        // exposed, reconstruct the chat-pipeline key.
         const sessionKey =
           ctx.sessionKey ??
           (ctx.sessionId ? `agent:rabbitmq-${userId}:rabbitmq:${userId}:${ctx.sessionId}` : undefined);
         const willNotify = notify.enabled && Boolean(sessionKey);
-        // The web frontend's Mercure topic for this user (recorded by the
-        // rabbitmq-consumer for the live turn); fall back to uid.
-        const mercureTopic = getChatMercureTopic(userId) ?? userId;
-        debugLog(
-          `submit uuid=${uuid} agentId=${ctx.agentId} willNotify=${willNotify} ` +
-            `mercureTopic=${mercureTopic} hasSessionKey=${Boolean(ctx.sessionKey)}`,
-        );
-        if (willNotify && sessionKey) {
-          const now = Date.now();
-          registry.add({
-            id: `crawl_refresh:${uuid}`,
-            kind: "crawl_refresh",
-            uid: userId,
-            backendId: uuid,
-            sessionKey,
-            mercureTopic,
-            delivery: ctx.deliveryContext ?? {},
-            title: name ?? null,
-            createdAt: now,
-            attempts: 0,
-            notified: false,
-            expiresAt: now + notify.ttlMs,
-          });
-        }
 
+        const result = await submitCrawlRefresh({
+          config,
+          resolver,
+          registry,
+          userId,
+          params: {
+            links: rawParams.links as string[] | string | undefined,
+            feeds: rawParams.feeds as Array<Record<string, unknown>> | undefined,
+            topicId: rawParams.topicId as number | undefined,
+            name: rawParams.name as string | undefined,
+          },
+          notify:
+            willNotify && sessionKey
+              ? {
+                  sessionKey,
+                  mercureTopic: getChatMercureTopic(userId) ?? userId,
+                  delivery: ctx.deliveryContext ?? {},
+                  ttlMs: notify.ttlMs,
+                }
+              : undefined,
+        });
+
+        if (!result.ok) {
+          return jsonResult({ success: false, error: result.error });
+        }
+        store.remember(userId, { uuid: result.uuid, name: result.name });
         return jsonResult({
           success: true,
           submitted: true,
-          name: name ?? null,
-          linkCount: Number(res.total ?? uniqueLinks.length),
-          message: asString(res.message) ?? "任务已提交",
+          name: result.name,
+          linkCount: result.linkCount,
+          message: result.message,
           agentInstruction: willNotify
             ? "互动量刷新任务已提交成功。任务在后台抓取真实页面，通常需要数分钟甚至更久。" +
               "完成后系统会自动通知用户，无需用户追问、也不要调用状态查询工具——你现在只需告诉用户「任务已提交，抓好后会自动告诉你」。"

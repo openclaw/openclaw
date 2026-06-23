@@ -16,7 +16,9 @@ export interface CompletionNotifierDeps {
   notify: NotifyConfig;
   deliver: DeliverFn;
   logger: PluginLogger;
-  adapters: Record<NotifyKind, PollAdapter>;
+  // Partial: a kind without a registered adapter is dropped in processOne, so
+  // callers may wire only the kinds they actually poll.
+  adapters: Partial<Record<NotifyKind, PollAdapter>>;
 }
 
 /**

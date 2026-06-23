@@ -62,13 +62,15 @@
       "smtp": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Email-proxy (/api/send-email) for offline notification delivery to report subscribers. Falls back to SMTP_* env. Email address resolved from feed_report_subscriber.",
+        "description": "Direct SMTP (SSL/465 or STARTTLS/587) for offline notification email to report subscribers. Falls back to SMTP_* env. Recipient resolved from feed_report_subscriber.",
         "properties": {
-          "host": { "type": "string" },
-          "port": { "type": "number" },
-          "from": { "type": "string" },
-          "password": { "type": "string" }
-        }
+          "host": { "type": "string", "description": "SMTP server, e.g. smtp.exmail.qq.com" },
+          "port": { "type": "number", "description": "465 (SSL) | 587 (STARTTLS) | 25" },
+          "user": { "type": "string", "description": "Login account = sender, e.g. zhoufeng@ibtai.com" },
+          "password": { "type": "string", "description": "授权码 (client auth code)" },
+          "from": { "type": "string", "description": "From header; defaults to user" }
+        },
+        "required": ["host", "port", "user", "password"]
       }
     },
     "required": ["backend"]

@@ -303,6 +303,20 @@ export async function processChatMessage(
     const userId = chatMsg.userId || record.userId;
     const mercureTopic = chatMsg.topic || userId;
 
+    // Bridge the live web-chat Mercure topic to other plugins (the leading-v2
+    // completion notifier delivers proactive "task done" messages to this exact
+    // topic). Shared via Symbol.for — no cross-extension import. Best-effort.
+    {
+      const sym = Symbol.for("openclaw.chat.mercureTopicByUid");
+      const g = globalThis as unknown as Record<symbol, Map<string, string> | undefined>;
+      let topicMap = g[sym];
+      if (!topicMap) {
+        topicMap = new Map<string, string>();
+        g[sym] = topicMap;
+      }
+      topicMap.set(userId, mercureTopic);
+    }
+
     if (!userMessage) {
       logger.error(`[CHAT_PIPELINE] Empty message for historyId=${chatMsg.historyId}`);
       return "Error: Empty message";
