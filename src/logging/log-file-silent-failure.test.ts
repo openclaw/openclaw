@@ -48,9 +48,15 @@ describe("logging.file silent failure", () => {
     expect(getResolvedLoggerSettings().file).toMatch(/\.log$/);
   });
 
-  it("trims trailing whitespace from a valid path", () => {
+  it("preserves exact bytes of a non-empty path (no silent trim)", () => {
+    // Non-empty configured paths are kept verbatim; only blank values fall back.
     setLoggerOverride({ level: "info", file: `${logPath}  `, maxFileBytes: 1024 * 1024 });
-    expect(getResolvedLoggerSettings().file).toBe(logPath);
+    expect(getResolvedLoggerSettings().file).toBe(`${logPath}  `);
+  });
+
+  it("preserves leading whitespace in a non-empty path", () => {
+    setLoggerOverride({ level: "info", file: `  ${logPath}`, maxFileBytes: 1024 * 1024 });
+    expect(getResolvedLoggerSettings().file).toBe(`  ${logPath}`);
   });
 
   it("emits stderr warning when file writes fail persistently", () => {

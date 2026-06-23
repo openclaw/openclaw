@@ -539,8 +539,14 @@ function resolveSettings(): ResolvedSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const level = envLevel ?? fromConfig;
-  const rawFile = typeof cfg?.file === "string" ? cfg.file.trim() : undefined;
-  const file = rawFile && rawFile.length > 0 ? rawFile : resolveDefaultActiveLogFile();
+  // Preserve the exact bytes of any non-empty configured path. Trimming here would
+  // silently rewrite a legitimate log path that contains leading/trailing spaces and
+  // write to a different file after upgrade. Trim is used only to detect blank values.
+  const configuredFile = typeof cfg?.file === "string" ? cfg.file : undefined;
+  const file =
+    configuredFile && configuredFile.trim().length > 0
+      ? configuredFile
+      : resolveDefaultActiveLogFile();
   const maxFileBytes = resolveMaxLogFileBytes(cfg?.maxFileBytes);
   return { level, file, maxFileBytes };
 }
