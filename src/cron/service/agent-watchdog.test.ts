@@ -6,6 +6,23 @@ describe("cron agent setup watchdog", () => {
     vi.useRealTimers();
   });
 
+  it("allows setup to continue past 60 seconds when the job timeout budget allows it", async () => {
+    vi.useFakeTimers();
+    const triggerTimeout = vi.fn();
+    const watchdog = createCronAgentWatchdog({
+      deferUntilRunner: true,
+      jobTimeoutMs: CRON_AGENT_SETUP_WATCHDOG_MS * 5,
+      triggerTimeout,
+    });
+
+    watchdog.start();
+
+    await vi.advanceTimersByTimeAsync(CRON_AGENT_SETUP_WATCHDOG_MS + 10_000);
+    watchdog.noteRunnerStarted();
+
+    expect(triggerTimeout).not.toHaveBeenCalled();
+  });
+
   it("does not keep lane-wait suppression after lane admission", async () => {
     vi.useFakeTimers();
     const triggerTimeout = vi.fn();

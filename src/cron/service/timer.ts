@@ -46,11 +46,7 @@ import type {
   CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
-import {
-  cleanupTimedOutCronAgentRun,
-  createCronAgentWatchdog,
-  CRON_AGENT_SETUP_WATCHDOG_MS,
-} from "./agent-watchdog.js";
+import { cleanupTimedOutCronAgentRun, createCronAgentWatchdog } from "./agent-watchdog.js";
 import {
   abortErrorMessage,
   isSetupTimeoutErrorText,
@@ -278,7 +274,7 @@ export async function executeJobCoreWithTimeout(
         job.sessionTarget === "isolated" && isSetupTimeoutErrorText(error) && !observedLaneWait
           ? {
               error,
-              timeoutMs: CRON_AGENT_SETUP_WATCHDOG_MS,
+              timeoutMs: watchdog.setupTimeoutMs(),
               otherCronJobsActiveAtTimeout: false,
             }
           : undefined;
