@@ -20,6 +20,8 @@ const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
+/** Minimum drain budget for forced restarts so pending replies are not silently dropped. */
+const RESTART_FORCE_DRAIN_MIN_MS = 5_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 
@@ -354,7 +356,7 @@ export async function runGatewayLoop(params: {
     restartIntent?: RestartIntentOptions,
   ): Promise<RestartDrainTimeoutMs> => {
     if (restartIntent?.force) {
-      return 0;
+      return RESTART_FORCE_DRAIN_MIN_MS;
     }
     if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
       return restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
@@ -562,11 +564,32 @@ export async function runGatewayLoop(params: {
                   );
                 }
                 if (restartIntent?.force) {
-                  gatewayLog.warn("forced restart requested; skipping active work drain");
+                  gatewayLog.warn(
+                    `forced restart requested; allowing ${restartDrainTimeoutMs}ms drain window`,
+                  );
                   await markActiveMainSessionsForRestart(
                     restartIntent.reason ?? "forced gateway restart",
                   );
                   abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" });
+                  if (activeTasks > 0 || activeRuns > 0) {
+                    const tasksDrainPromise =
+                      activeTasks > 0
+                        ? waitForActiveTasks(restartDrainTimeoutMs)
+                        : Promise.resolve({ drained: true });
+                    const runsDrain =
+                      activeRuns > 0
+                        ? await waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
+                        : { drained: true };
+                    const tasksDrain = await tasksDrainPromise;
+                    if (tasksDrain.drained && runsDrain.drained) {
+                      gatewayLog.info("all active work drained after force abort");
+                    } else {
+                      drainTimedOut = true;
+                      gatewayLog.warn(
+                        "forced restart drain window exhausted; proceeding with shutdown",
+                      );
+                    }
+                  }
                 } else {
                   const stillPendingDrainLogger = createStillPendingDrainLogger();
                   let abortedAfterRunTimeout = false;
