@@ -1101,6 +1101,62 @@ describe("Tool Search", () => {
     expect(secondExecuteInput.input).toEqual({ value: "structured" });
     expect(secondExecuteInput.signal).toBe(abortController.signal);
     expect(secondExecuteInput.onUpdate).toBe(onUpdate);
+
+    await runtimeCallTool.execute("call-lifecycle-input-alias", {
+      id: "fake_lifecycle",
+      input: { value: "input-alias" },
+    });
+
+    const inputAliasExecuteInput = mockCall(executeTool, 2)[0] as { input?: unknown };
+    expect(inputAliasExecuteInput.input).toEqual({ value: "input-alias" });
+
+    await runtimeCallTool.execute("call-lifecycle-flattened", {
+      id: "fake_lifecycle",
+      command: "ls -la /tmp/openclaw",
+      timeout_ms: "5000",
+    });
+
+    const thirdExecuteInput = mockCall(executeTool, 3)[0] as { input?: unknown };
+    expect(thirdExecuteInput.input).toEqual({
+      command: "ls -la /tmp/openclaw",
+      timeout_ms: "5000",
+    });
+
+    await runtimeCallTool.execute("call-lifecycle-flattened-target-id", {
+      toolId: "fake_lifecycle",
+      id: "job-1",
+      action: "get",
+    });
+
+    const fourthExecuteInput = mockCall(executeTool, 4)[0] as { input?: unknown };
+    expect(fourthExecuteInput.input).toEqual({ id: "job-1", action: "get" });
+
+    await runtimeCallTool.execute("call-lifecycle-flattened-target-name", {
+      id: "fake_lifecycle",
+      name: "demo-project",
+      action: "create",
+    });
+
+    const fifthExecuteInput = mockCall(executeTool, 5)[0] as { input?: unknown };
+    expect(fifthExecuteInput.input).toEqual({ name: "demo-project", action: "create" });
+
+    await runtimeCallTool.execute("call-lifecycle-flattened-target-input", {
+      id: "fake_lifecycle",
+      input: "search text",
+      mode: "exact",
+    });
+
+    const sixthExecuteInput = mockCall(executeTool, 6)[0] as { input?: unknown };
+    expect(sixthExecuteInput.input).toEqual({ input: "search text", mode: "exact" });
+
+    await runtimeCallTool.execute("call-lifecycle-flattened-target-input-object", {
+      id: "fake_lifecycle",
+      input: { text: "search text" },
+      mode: "object",
+    });
+
+    const seventhExecuteInput = mockCall(executeTool, 7)[0] as { input?: unknown };
+    expect(seventhExecuteInput.input).toEqual({ input: { text: "search text" }, mode: "object" });
   });
 
   it("projects target tool calls after their Tool Search wrapper result", () => {

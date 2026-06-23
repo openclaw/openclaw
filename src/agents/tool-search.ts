@@ -1679,10 +1679,32 @@ function readSearchArgs(args: unknown, config: ToolSearchConfig): { query: strin
 
 function readCallArgs(args: unknown): { id: string; input: unknown } {
   const params = asToolParamsRecord(args);
-  const id = readId(params);
+  const wrapperKey =
+    typeof params.toolId === "string" && params.toolId.trim()
+      ? "toolId"
+      : typeof params.id === "string" && params.id.trim()
+        ? "id"
+        : "name";
+  const id = readId({ ...params, id: params[wrapperKey] });
+  if (isRecord(params.args)) {
+    return {
+      id,
+      input: params.args,
+    };
+  }
+  const flattenedInputKeys = Object.keys(params).filter(
+    (key) => key !== wrapperKey && key !== "input" && params[key] !== undefined,
+  );
+  if (isRecord(params.input) && flattenedInputKeys.length === 0) {
+    return {
+      id,
+      input: params.input,
+    };
+  }
+  const input = Object.fromEntries(Object.entries(params).filter(([key]) => key !== wrapperKey));
   return {
     id,
-    input: params.args ?? params.input ?? {},
+    input,
   };
 }
 
@@ -2309,12 +2331,22 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       name: TOOL_CALL_RAW_TOOL_NAME,
       label: "Tool Call",
       description: "Call a selected Tool Search catalog entry through OpenClaw.",
-      parameters: Type.Object({
-        id: Type.String({ description: "Tool search result id or tool name." }),
-        args: Type.Optional(
-          Type.Record(Type.String(), Type.Unknown(), { description: "Tool input." }),
-        ),
-      }),
+      parameters: Type.Object(
+        {
+          id: Type.String({ description: "Tool search result id or tool name." }),
+          toolId: Type.Optional(
+            Type.String({ description: "Tool search result id when target input also needs id." }),
+          ),
+          args: Type.Optional(
+            Type.Record(Type.String(), Type.Unknown(), { description: "Tool input." }),
+          ),
+        },
+        {
+          additionalProperties: Type.Unknown({
+            description: "Flattened target-tool input forwarded when args is omitted.",
+          }),
+        },
+      ),
       execute: async (
         _toolCallId: string,
         args: unknown,
