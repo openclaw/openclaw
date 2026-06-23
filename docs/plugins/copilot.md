@@ -150,6 +150,12 @@ the same directory), or `~/.openclaw/agents/<agentId>/copilot` otherwise.
 Override with `copilotHome: <path>` on the attempt input when you need a
 custom location (for example, a shared mount for migration).
 
+Live harness tests use `OPENCLAW_COPILOT_AGENT_LIVE_TOKEN` when a direct token
+is needed. The shared live-test setup intentionally scrubs `COPILOT_GITHUB_TOKEN`,
+`GH_TOKEN`, and `GITHUB_TOKEN` after staging real auth profiles into the isolated
+test home, so passing a `gh auth token` value through the dedicated live-test
+variable avoids false skips without exposing the token to unrelated suites.
+
 ## Configuration surface
 
 The harness reads its config from per-attempt input
@@ -314,13 +320,19 @@ right scope, and `session_status: "current"` resolves to a stale
 sandbox key. The bridge builder is in
 `extensions/copilot/src/tool-bridge.ts` and mirrors the PI
 authoritative call at
-`src/agents/pi-embedded-runner/run/attempt.ts:1029-1117`. Two PI fields
-are intentionally **not** forwarded at MVP and tracked as follow-ups:
-`sandbox` (the harness does not yet route through `resolveSandboxContext`)
-and the PI tool-search/code-mode machinery
-(`toolSearchCatalogRef`, `includeCoreTools`,
-`includeToolSearchControls`, `toolSearchCatalogExecutor`,
-`toolConstructionPlan`), which has no analog at the SDK boundary.
+`src/agents/pi-embedded-runner/run/attempt.ts:1029-1117`. `runAttempt`
+already resolves sandbox context through the shared
+`resolveSandboxContext` seam, passes the SDK an effective working
+directory, and forwards `sandbox` plus the subagent-spawn workspace into
+the tool bridge. The bridge also forwards the bounded tool-construction
+controls it can enforce at the SDK boundary: `includeCoreTools`, the
+runtime tool allowlist, and `toolConstructionPlan`.
+
+The remaining PI tool-search/code-mode fields are intentionally **not**
+forwarded at MVP and tracked as follow-ups: `toolSearchCatalogRef`,
+`includeToolSearchControls`, and `toolSearchCatalogExecutor`. Those
+controls drive PI's native tool-search UI and have no direct Copilot SDK
+analog yet.
 
 ### Session-level GitHub token
 

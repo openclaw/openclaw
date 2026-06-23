@@ -46,6 +46,15 @@ describe("chunkQQBotMarkdownText", () => {
     ).toEqual([["| Id | Value |", "|---:|---|", "| 1 | alpha |", "| 2 | beta |"].join("\n")]);
   });
 
+  it("confirms a table when the separator uses one or two dashes, not only three", () => {
+    // GFM delimiter cells need only one or more dashes; a sub-3-dash separator previously failed
+    // recognition, so the header and all rows but the last were silently dropped on send.
+    for (const separator of ["|--|--|", "|-|-|", "|:--|--:|"]) {
+      const text = ["| Id | Value |", separator, "| 1 | alpha |", "| 2 | beta |"].join("\n");
+      expect(chunkQQBotMarkdownText(text, 200, baseChunker)).toEqual([text]);
+    }
+  });
+
   it("flushes a possible table header as text when the next block is not a separator", () => {
     const chunker = createQQBotMarkdownChunker((text) => [text]);
 

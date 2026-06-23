@@ -1,7 +1,8 @@
 // Bench Cli Startup tests cover bench cli startup script behavior.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 import { withEnv } from "../../src/test-utils/env.js";
@@ -185,6 +186,12 @@ describe("bench-cli-startup", () => {
     } finally {
       tempDirs.cleanup();
     }
+  });
+
+  it("passes generated import hook paths as file URL specifiers", () => {
+    const hookPath = resolve("measure-rss.mjs");
+
+    expect(testing.nodeImportSpecifierForPath(hookPath)).toBe(pathToFileURL(hookPath).href);
   });
 
   it("fails reports with no measured samples", () => {

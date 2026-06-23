@@ -14,6 +14,7 @@ const MIN_SEVERITY = "high";
 export const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
 export const BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
 export const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 60_000;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const SEVERITY_RANK = {
   info: 0,
   low: 1,
@@ -695,9 +696,11 @@ function parsePositiveIntegerEnv(name, fallback) {
 }
 
 function resolveBulkAdvisoryRequestTimeoutMs() {
-  return parsePositiveIntegerEnv(
-    "OPENCLAW_PNPM_AUDIT_BULK_TIMEOUT_MS",
-    BULK_ADVISORY_REQUEST_TIMEOUT_MS,
+  return clampTimerTimeoutMs(
+    parsePositiveIntegerEnv(
+      "OPENCLAW_PNPM_AUDIT_BULK_TIMEOUT_MS",
+      BULK_ADVISORY_REQUEST_TIMEOUT_MS,
+    ),
   );
 }
 
@@ -708,15 +711,21 @@ function resolveBulkAdvisoryResponseBodyMaxBytes() {
   );
 }
 
+function clampTimerTimeoutMs(valueMs) {
+  const value = Number.isFinite(valueMs) ? valueMs : BULK_ADVISORY_REQUEST_TIMEOUT_MS;
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
 async function withBulkAdvisoryTimeout({ label, timeoutMs, run }) {
+  const resolvedTimeoutMs = clampTimerTimeoutMs(timeoutMs);
   const controller = new AbortController();
   let timeout;
   const timeoutPromise = new Promise((_resolve, reject) => {
     timeout = setTimeout(() => {
-      const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
+      const error = new Error(`${label} exceeded timeout of ${resolvedTimeoutMs}ms`);
       controller.abort(error);
       reject(error);
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
   });
   try {
     return await Promise.race([run({ signal: controller.signal, timeoutPromise }), timeoutPromise]);

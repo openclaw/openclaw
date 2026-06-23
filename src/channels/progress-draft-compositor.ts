@@ -171,8 +171,12 @@ export function createChannelProgressDraftCompositor(params: {
       return true;
     }
     if (options?.startImmediately || params.shouldStartNow?.(line)) {
+      const alreadyStarted = gate.hasStarted;
       await gate.startNow();
-      return gate.hasStarted ? await render() : false;
+      if (!gate.hasStarted) {
+        return false;
+      }
+      return alreadyStarted ? await render() : true;
     }
     const alreadyStarted = gate.hasStarted;
     const progressActive = await gate.noteWork();

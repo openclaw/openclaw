@@ -22,22 +22,14 @@ import { resolveModel } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { normalizeToolName } from "./tool-policy.js";
-import {
-  buildEffectiveToolInventoryGroups,
-  buildRuntimeCompatibleToolInventory,
-} from "./tools-effective-inventory-build.js";
+import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
+import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
 import type {
   EffectiveToolInventoryNotice,
   EffectiveToolInventoryEntry,
   EffectiveToolInventoryResult,
   ResolveEffectiveToolInventoryParams,
 } from "./tools-effective-inventory.types.js";
-
-export {
-  buildEffectiveToolInventoryEntries,
-  buildEffectiveToolInventoryGroups,
-  buildRuntimeCompatibleToolInventory,
-} from "./tools-effective-inventory-build.js";
 
 function listIncludesTool(list: string[] | undefined, toolName: string): boolean {
   if (!Array.isArray(list)) {

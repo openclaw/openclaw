@@ -1282,6 +1282,34 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps Mantis proof workflow edits on workflow evidence regression tests", () => {
+    const packageAcceptanceTargets = [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ];
+    const workflowTargets = new Map([
+      [".github/workflows/mantis-discord-smoke.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-discord-status-reactions.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-discord-thread-attachment.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
+      [
+        ".github/workflows/mantis-telegram-desktop-proof.yml",
+        [
+          "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+    ]);
+
+    for (const [workflowPath, targets] of workflowTargets) {
+      expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
+        mode: "targets",
+        targets,
+      });
+    }
+  });
+
   it("keeps release-check workflow edits on release workflow regression tests", () => {
     expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-release-checks.yml"])).toEqual(
       {
@@ -1387,6 +1415,11 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(resolveChangedTestTargetPlan(["scripts/clawtributors-map.json"])).toEqual({
       mode: "targets",
       targets: ["test/scripts/update-clawtributors.test.ts"],
+    });
+
+    expect(resolveChangedTestTargetPlan(["scripts/docs-list.js"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/docs-list.test.ts"],
     });
 
     expect(resolveChangedTestTargetPlan(["scripts/docs-link-audit.mjs"])).toEqual({

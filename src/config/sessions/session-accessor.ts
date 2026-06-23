@@ -835,22 +835,6 @@ export async function persistSessionRolloverLifecycle(params: {
   };
 }
 
-/** Reads parsed transcript records from an explicit or derived transcript target. */
-export async function loadTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
-): Promise<TranscriptEvent[]> {
-  const transcript = await resolveTranscriptReadAccess(scope);
-  const events: TranscriptEvent[] = [];
-  for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
-    try {
-      events.push(JSON.parse(line) as TranscriptEvent);
-    } catch {
-      continue;
-    }
-  }
-  return events;
-}
-
 /**
  * Appends a non-message transcript record such as session or metadata events.
  * Message records must use appendTranscriptMessage so parent links, idempotency,
@@ -1498,18 +1482,8 @@ async function persistExpectedSessionTranscriptTurn(
 export async function resolveSessionTranscriptRuntimeTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  if (!agentId) {
-    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
-  }
-  const sessionStore = scope.storePath
-    ? loadSessionStore(scope.storePath, { skipCache: true })
-    : undefined;
-  const resolvedStoreEntry = sessionStore
-    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
-    : undefined;
-  const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
-  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  const { agentId, sessionEntry, sessionKey, sessionStore } =
+    resolveSessionTranscriptRuntimeContext(scope);
   if (scope.sessionFile?.trim()) {
     return {
       agentId,
@@ -1568,18 +1542,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
 export async function resolveSessionTranscriptRuntimeReadTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
-  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
-  if (!agentId) {
-    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
-  }
-  const sessionStore = scope.storePath
-    ? loadSessionStore(scope.storePath, { skipCache: true })
-    : undefined;
-  const resolvedStoreEntry = sessionStore
-    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
-    : undefined;
-  const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
-  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  const { agentId, sessionEntry, sessionKey } = resolveSessionTranscriptRuntimeContext(scope);
   if (scope.sessionFile?.trim()) {
     return {
       agentId,
@@ -1612,6 +1575,36 @@ export async function resolveSessionTranscriptRuntimeReadTarget(
     sessionFile,
     sessionId: scope.sessionId,
     sessionKey,
+  };
+}
+
+type SessionTranscriptRuntimeContext = {
+  agentId: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionKey: string;
+  sessionStore: Record<string, SessionEntry> | undefined;
+};
+
+function resolveSessionTranscriptRuntimeContext(
+  scope: SessionTranscriptRuntimeScope,
+): SessionTranscriptRuntimeContext {
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  const sessionStore = scope.storePath
+    ? loadSessionStore(scope.storePath, { skipCache: true })
+    : undefined;
+  const resolvedStoreEntry = sessionStore
+    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
+    : undefined;
+  const sessionEntry = resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
+  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  return {
+    agentId,
+    sessionKey,
+    sessionStore,
+    sessionEntry,
   };
 }
 
@@ -1765,32 +1758,6 @@ function resolveAccessStorePath(scope: SessionAccessScope): string {
     agentId,
     env: scope.env,
   });
-}
-
-async function resolveTranscriptReadAccess(scope: SessionTranscriptAccessScope): Promise<{
-  sessionFile: string;
-}> {
-  if (scope.sessionFile?.trim()) {
-    return { sessionFile: scope.sessionFile };
-  }
-  if (scope.sessionKey) {
-    return await resolveTranscriptAccess({ ...scope, sessionKey: scope.sessionKey });
-  }
-  if (scope.storePath) {
-    return {
-      sessionFile: resolveSessionTranscriptPathInDir(
-        scope.sessionId,
-        path.dirname(path.resolve(scope.storePath)),
-        scope.threadId,
-      ),
-    };
-  }
-  if (scope.agentId) {
-    return {
-      sessionFile: resolveSessionTranscriptPath(scope.sessionId, scope.agentId, scope.threadId),
-    };
-  }
-  throw new Error(`Cannot resolve transcript read scope without a session target`);
 }
 
 async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Promise<{

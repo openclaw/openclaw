@@ -64,6 +64,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
+  normalizeOptionalAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
@@ -529,14 +530,6 @@ function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
     }
   }
   return Array.from(ids);
-}
-
-function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  return normalizeAgentId(trimmed);
 }
 
 function summarizeError(err: unknown): string {

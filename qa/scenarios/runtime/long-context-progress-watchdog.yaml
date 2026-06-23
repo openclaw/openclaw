@@ -56,6 +56,9 @@ flow:
         - set: originalCodexPluginEntry
           value:
             expr: originalSnapshot.config.plugins?.entries?.codex
+        - set: originalCodexPluginEnabled
+          value:
+            expr: "originalCodexPluginEntry && typeof originalCodexPluginEntry === 'object' ? originalCodexPluginEntry.enabled : undefined"
         - try:
             actions:
               - call: patchConfig
@@ -137,11 +140,10 @@ flow:
                       ref: env
                     patch:
                       plugins:
-                        allow:
-                          expr: "originalPluginAllow === undefined ? null : originalPluginAllow"
                         entries:
                           codex:
-                            expr: "originalCodexPluginEntry === undefined ? null : { ...originalCodexPluginEntry, enabled: originalCodexPluginEntry.enabled === undefined ? null : originalCodexPluginEntry.enabled }"
+                            enabled:
+                              expr: "originalCodexPluginEnabled === undefined ? null : originalCodexPluginEnabled"
                       agents:
                         defaults:
                           models:

@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
@@ -22,6 +22,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   claimAgentRunContext,
+  emitAgentItemEvent,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   registerAgentRunContext,
@@ -29,7 +30,7 @@ import {
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
@@ -89,6 +90,12 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import {
+  DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
+  type FastModeAutoProgressState,
+  formatFastModeAutoProgressText,
+  resolveFastModeForElapsed,
+} from "../fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
@@ -220,6 +227,7 @@ import {
   resolveHookModelSelection,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
+import type { EmbeddedRunFastModeParam } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -772,6 +780,14 @@ async function runEmbeddedAgentInternal(
     return enqueueGlobal(async () => {
       throwIfAborted();
       const started = Date.now();
+      const fastModeStarted = params.fastModeStartedAtMs ?? started;
+      const fastModeAutoOnSeconds =
+        params.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
+      const fastModeAutoProgressState: FastModeAutoProgressState =
+        params.fastModeAutoProgressState ?? {
+          offAnnounced: false,
+          resetAnnounced: false,
+        };
       const startupStages = createEmbeddedRunStageTracker();
       let startupStagesEmitted = false;
       const notifyExecutionPhase = (
@@ -789,6 +805,114 @@ async function runEmbeddedAgentInternal(
       ) => {
         noteLaneTaskProgress();
         params.onRunProgress?.(info);
+      };
+      const emitFastModeAutoProgress = async (payload: {
+        enabled: boolean;
+        elapsedSeconds: number;
+        fastAutoOnSeconds?: number;
+      }) => {
+        const summary = formatFastModeAutoProgressText(payload);
+        try {
+          emitAgentItemEvent({
+            runId: params.runId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            data: {
+              itemId: `fast-mode-auto:${payload.enabled ? "on" : "off"}`,
+              kind: "status",
+              title: "Fast",
+              phase: "update",
+              status: "running",
+              summary,
+            },
+          });
+        } catch (error) {
+          log.debug(
+            `embedded run fast mode auto global event failed: ${formatErrorMessage(error)}`,
+          );
+        }
+        try {
+          await params.onAgentEvent?.({
+            stream: "item",
+            data: {
+              kind: "status",
+              title: "Fast",
+              phase: "update",
+              summary,
+            },
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          });
+        } catch (error) {
+          log.debug(`embedded run fast mode auto event failed: ${formatErrorMessage(error)}`);
+        }
+        try {
+          await params.onToolResult?.({
+            text: summary,
+            channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
+          });
+        } catch (error) {
+          log.debug(`embedded run fast mode auto progress failed: ${formatErrorMessage(error)}`);
+        }
+      };
+      const maybeAnnounceFastModeAutoOff = async () => {
+        if (params.fastMode !== "auto" || fastModeAutoProgressState.offAnnounced) {
+          return;
+        }
+        const next = resolveFastModeForElapsed({
+          mode: "auto",
+          startedAtMs: fastModeStarted,
+          fastAutoOnSeconds: fastModeAutoOnSeconds,
+        });
+        if (next.enabled) {
+          return;
+        }
+        fastModeAutoProgressState.offAnnounced = true;
+        await emitFastModeAutoProgress(next);
+      };
+      const notifyToolResult = async (payload: ReplyPayload) => {
+        await params.onToolResult?.(payload);
+      };
+      const notifyAgentEvent = async (
+        event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
+      ) => {
+        await params.onAgentEvent?.(event);
+      };
+      const resolveAttemptFastMode = (): boolean | undefined => {
+        const resolved = resolveFastModeForElapsed({
+          mode: params.fastMode,
+          startedAtMs: fastModeStarted,
+          fastAutoOnSeconds: fastModeAutoOnSeconds,
+        });
+        return resolved.mode === undefined ? undefined : resolved.enabled;
+      };
+      const resolveAttemptFastModeParam = (): EmbeddedRunFastModeParam | undefined => {
+        if (params.fastMode === "auto") {
+          return resolveAttemptFastMode;
+        }
+        return resolveAttemptFastMode();
+      };
+      const maybeEmitFastModeAutoReset = async () => {
+        if (
+          params.fastMode !== "auto" ||
+          !fastModeAutoProgressState.offAnnounced ||
+          fastModeAutoProgressState.resetAnnounced
+        ) {
+          return;
+        }
+        fastModeAutoProgressState.resetAnnounced = true;
+        await emitFastModeAutoProgress({
+          enabled: true,
+          elapsedSeconds: 0,
+          fastAutoOnSeconds: fastModeAutoOnSeconds,
+        });
+      };
+      const maybeEmitFastModeAutoResetBestEffort = async () => {
+        try {
+          await maybeEmitFastModeAutoReset();
+        } catch (error) {
+          log.warn(
+            `embedded run fast mode auto reset progress failed: ${formatErrorMessage(error)}`,
+          );
+        }
       };
       const emitStartupStageSummary = (phase: string) => {
         const summary = startupStages.snapshot();
@@ -1809,6 +1933,7 @@ async function runEmbeddedAgentInternal(
             apiKeyInfo,
             runtimeAuthState,
           });
+          const attemptFastMode = resolveAttemptFastModeParam();
           if (!startupStagesEmitted) {
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
           }
@@ -1838,7 +1963,7 @@ async function runEmbeddedAgentInternal(
             thinkingLevel: thinkLevel,
             extraParamsOverride: {
               ...params.streamParams,
-              fastMode: params.fastMode,
+              fastMode: attemptFastMode,
             },
           });
           if (!startupStagesEmitted) {
@@ -1928,6 +2053,8 @@ async function runEmbeddedAgentInternal(
             senderE164: params.senderE164,
             approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             currentChannelId: params.currentChannelId,
+            chatId: params.chatId,
+            channelContext: params.channelContext,
             currentMessagingTarget: params.currentMessagingTarget,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
@@ -1994,8 +2121,17 @@ async function runEmbeddedAgentInternal(
             thinkLevel,
             onToolOutcome: observeToolOutcome,
             allocateToolOutcomeOrdinal,
+            onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
             onRunProgress: notifyRunProgress,
-            fastMode: params.fastMode,
+            fastMode: attemptFastMode,
+            fastModeAuto: params.fastMode === "auto",
+            ...(params.fastMode === "auto"
+              ? {
+                  fastModeStartedAtMs: fastModeStarted,
+                  fastModeAutoOnSeconds,
+                  fastModeAutoProgressState,
+                }
+              : {}),
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
@@ -2028,9 +2164,9 @@ async function runEmbeddedAgentInternal(
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
-            onToolResult: params.onToolResult,
+            onToolResult: notifyToolResult,
             onAgentToolResult: params.onAgentToolResult,
-            onAgentEvent: params.onAgentEvent,
+            onAgentEvent: notifyAgentEvent,
             deferTerminalLifecycle:
               params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
             deferTerminalLifecycleEnd:
@@ -2831,7 +2967,7 @@ async function runEmbeddedAgentInternal(
               !hasRecoverableCodexAppServerTimeoutOutcome &&
               !shouldSurfaceCodexCompletionTimeout
             ) {
-              throw toLintErrorObject(promptError, "Prompt failed");
+              throw toErrorObject(promptError, "Prompt failed");
             }
           }
 
@@ -3101,7 +3237,7 @@ async function runEmbeddedAgentInternal(
               });
               logPromptFailoverDecision("surface_error");
             }
-            throw toLintErrorObject(promptError, "Prompt failed");
+            throw toErrorObject(promptError, "Prompt failed");
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
@@ -3994,6 +4130,9 @@ async function runEmbeddedAgentInternal(
           };
         }
       } finally {
+        if (params.isFinalFallbackAttempt !== false) {
+          await maybeEmitFastModeAutoResetBestEffort();
+        }
         forgetPromptBuildDrainCacheForRun(params.runId);
         stopRuntimeAuthRefreshTimer();
         await runAgentCleanupStep({
@@ -4048,18 +4187,4 @@ function resolveAuthProfileStateProvider(
   }
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

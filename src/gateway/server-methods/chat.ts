@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   buildTtsSupplementMediaPayload,
@@ -280,6 +281,26 @@ function shouldIncludeChatSendAckServerTiming(client?: {
   mode?: string | null;
 }): boolean {
   return isOperatorUiClient(client);
+}
+
+const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
+
+function resolveControlUiReconnectResumeParams(
+  params: unknown,
+  clientInfo?: { id?: string | null; mode?: string | null },
+): { params: unknown; resumeRequested: boolean } {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return { params, resumeRequested: false };
+  }
+  const record = params as Record<string, unknown>;
+  const resumeRequested =
+    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
+  if (!resumeRequested) {
+    return { params, resumeRequested: false };
+  }
+  const validatedParams = { ...record };
+  delete validatedParams[CONTROL_UI_RECONNECT_RESUME_PARAM];
+  return { params: validatedParams, resumeRequested: true };
 }
 
 function emitOperatorChatSendServerTiming(params: {
@@ -3109,7 +3130,9 @@ export const chatHandlers: GatewayRequestHandlers = {
   },
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();
-    if (!validateChatSendParams(params)) {
+    const clientInfo = client?.connect?.client;
+    const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
+    if (!validateChatSendParams(controlUiReconnectResume.params)) {
       respond(
         false,
         undefined,
@@ -3120,13 +3143,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as {
+    const p = controlUiReconnectResume.params as {
       sessionKey: string;
       agentId?: string;
       sessionId?: string;
       message: string;
       thinking?: string;
-      fastMode?: boolean;
+      fastMode?: FastMode;
+      fastAutoOnSeconds?: number;
       deliver?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
@@ -3362,7 +3386,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const clientInfo = client?.connect?.client;
     const chatSendTraceAttributes = {
       runId: clientRunId,
       sessionKey,
@@ -3955,12 +3978,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                     }),
                   }
                 : {}),
+              requestedSessionId,
+              resumeRequestedSession: controlUiReconnectResume.resumeRequested,
               abortSignal: activeRunAbort.controller.signal,
               images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
               userTurnTranscriptRecorder: userTurnRecorder,
+              fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 emitServerTiming(

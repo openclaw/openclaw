@@ -434,6 +434,21 @@ function normalizeNotificationSubscription(
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
+  const preservedFields: Partial<WorkboardNotificationSubscription> = {};
+  if (fallback) {
+    if (fallback.lastEventAt) {
+      preservedFields.lastEventAt = fallback.lastEventAt;
+    }
+    if (fallback.lastEventId) {
+      preservedFields.lastEventId = fallback.lastEventId;
+    }
+    if (fallback.lastEventSequence) {
+      preservedFields.lastEventSequence = fallback.lastEventSequence;
+    }
+    if (fallback.deliveredEventIds?.length) {
+      preservedFields.deliveredEventIds = fallback.deliveredEventIds;
+    }
+  }
   return {
     id: fallback?.id ?? randomUUID(),
     boardId,
@@ -442,12 +457,7 @@ function normalizeNotificationSubscription(
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
-    ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
-    ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),
-    ...(fallback?.lastEventSequence ? { lastEventSequence: fallback.lastEventSequence } : {}),
-    ...(fallback?.deliveredEventIds?.length
-      ? { deliveredEventIds: fallback.deliveredEventIds }
-      : {}),
+    ...preservedFields,
     createdAt: fallback?.createdAt ?? now,
     updatedAt: now,
   };

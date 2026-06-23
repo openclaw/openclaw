@@ -1,6 +1,7 @@
 /**
  * Scans remote provider model catalogs for configured providers.
  */
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
@@ -25,6 +26,12 @@ import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_CONCURRENCY = 3;
+// The OpenRouter /models catalog is a provider-controlled, runtime-fetched body
+// (already >100 KB and growing). Read it under a byte cap before JSON.parse so a
+// faulty or hostile provider cannot stream an unbounded document and exhaust
+// process memory. Keep this aligned with the runtime capability cache for the
+// same endpoint so scan and runtime discovery fail at the same boundary.
+const OPENROUTER_MODELS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
@@ -184,6 +191,26 @@ async function withTimeout<T>(
   }
 }
 
+// Reads the OpenRouter /models success body under a byte cap before JSON.parse.
+// The success path was previously buffered with an unbounded res.json(); a faulty
+// or hostile provider could stream an effectively endless document and exhaust
+// memory. readResponseWithLimit caps the read, cancels the stream on overflow,
+// and bounds idle stalls with the call's existing timeout.
+async function readOpenRouterModelsJson(response: Response, timeoutMs: number): Promise<unknown> {
+  const buffer = await readResponseWithLimit(response, OPENROUTER_MODELS_BODY_MAX_BYTES, {
+    chunkTimeoutMs: timeoutMs,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`OpenRouter /models response too large: ${size} bytes (limit ${maxBytes} bytes)`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`OpenRouter /models response stalled after ${chunkTimeoutMs}ms`),
+  });
+  try {
+    return JSON.parse(buffer.toString("utf8")) as unknown;
+  } catch (cause) {
+    throw new Error("OpenRouter /models response is malformed JSON", { cause });
+  }
+}
+
 async function fetchOpenRouterModels(
   fetchImpl: typeof fetch,
   timeoutMs: number,
@@ -199,7 +226,7 @@ async function fetchOpenRouterModels(
     if (!res.ok) {
       throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
     }
-    const payload = (await res.json()) as { data?: unknown };
+    const payload = (await readOpenRouterModelsJson(res, timeoutMs)) as { data?: unknown };
     const entries = Array.isArray(payload.data) ? payload.data : [];
 
     return entries

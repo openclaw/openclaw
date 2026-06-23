@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildPackageArtifacts,
@@ -316,6 +317,20 @@ describe("package-openclaw-for-docker", () => {
     expect(calls).toEqual(["prepare:/repo", "pack", "restore:/repo"]);
   });
 
+  it("clamps oversized command timers before scheduling", async () => {
+    await expect(
+      runCommandForTest(
+        process.execPath,
+        ["-e", "setTimeout(() => process.exit(0), 25);"],
+        process.cwd(),
+        {
+          killAfterMs: MAX_TIMER_TIMEOUT_MS + 1,
+          timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+        },
+      ),
+    ).resolves.toBe("");
+  });
+
   it("kills timed-out child process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -346,6 +361,41 @@ describe("package-openclaw-for-docker", () => {
       childPid = await readPid(childPidPath, 2000);
       await timeoutAssertion;
       await waitForDead(childPid, 2000);
+    } finally {
+      if (childPid && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("clamps oversized kill grace before scheduling", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-grace-"));
+    const donePath = path.join(tempDir, "done");
+    const childPidPath = path.join(tempDir, "child.pid");
+    let childPid;
+    try {
+      const script = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {",
+        `  setTimeout(() => { fs.writeFileSync(${JSON.stringify(donePath)}, 'done'); process.exit(0); }, 75);`,
+        "});",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const runPromise = runCommandForTest(process.execPath, ["-e", script], process.cwd(), {
+        killAfterMs: MAX_TIMER_TIMEOUT_MS + 1,
+        timeoutMs: 500,
+      });
+      childPid = await readPid(childPidPath, 2000);
+
+      await expect(runPromise).rejects.toThrow(/timed out after 500ms/u);
+      expect(fs.readFileSync(donePath, "utf8")).toBe("done");
     } finally {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");

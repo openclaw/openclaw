@@ -59,7 +59,7 @@ plugins {
 
 android {
   namespace = "ai.openclaw.app"
-  compileSdk = 37
+  compileSdk = 36
 
   // Release signing is local-only; keep the keystore path and passwords out of the repo.
   signingConfigs {

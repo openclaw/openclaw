@@ -41,6 +41,7 @@ function runResolver(remote: string, args: string[]) {
     encoding: "utf8",
     env: {
       ...process.env,
+      GITHUB_OUTPUT: "",
       OPENCLAW_REF_REMOTE: remote,
     },
   });

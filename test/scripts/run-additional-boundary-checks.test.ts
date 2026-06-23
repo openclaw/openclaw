@@ -270,6 +270,25 @@ describe("run-additional-boundary-checks", () => {
     expect(result.output).toContain("timed out after 50ms");
   });
 
+  it("clamps oversized check timers before scheduling", async () => {
+    const result = await runSingleCheck(
+      {
+        label: "slow-pass",
+        command: process.execPath,
+        args: ["-e", "setTimeout(() => process.exit(0), 25)"],
+      },
+      {
+        checkTimeoutMs: Number.MAX_SAFE_INTEGER,
+        cwd: process.cwd(),
+        env: process.env,
+        outputMaxBytes: 4096,
+      },
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.timedOut).toBe(false);
+  });
+
   it.skipIf(process.platform === "win32")(
     "waits for timed-out process groups after the wrapper exits",
     async () => {

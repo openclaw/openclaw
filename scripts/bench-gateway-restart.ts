@@ -10,7 +10,6 @@ import { writeGatewayRestartIntentSync } from "../src/infra/restart.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 import {
-  classifyProbeErrorKind,
   getFreePort,
   parseProcessRssKb,
   readProcessRssMb,
@@ -1583,8 +1582,8 @@ async function main() {
     return;
   }
 
-  ensureSupportedRestartPlatform();
   const options = parseOptions(argv);
+  ensureSupportedRestartPlatform();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
     results.push(
@@ -1635,7 +1634,6 @@ async function main() {
 
 export const testing = {
   classifyGatewayReadyLog,
-  classifyProbeErrorKind,
   collectOutputLines,
   collectTraceLine,
   countLsofFileDescriptors,

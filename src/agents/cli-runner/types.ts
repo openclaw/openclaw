@@ -4,6 +4,7 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { FastMode } from "../../auto-reply/thinking.shared.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
@@ -13,6 +14,7 @@ import type { ContextEngine } from "../../context-engine/types.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
+import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   PersistedUserTurnMessage,
@@ -28,6 +30,7 @@ import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../embedded-agent-runner/run/params.js";
+import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 /** Input contract for one CLI-backed agent run. */
@@ -62,6 +65,15 @@ export type RunCliAgentParams = {
   provider: string;
   model?: string;
   thinkLevel?: ThinkLevel;
+  fastMode?: FastMode;
+  /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
+  fastModeStartedAtMs?: number;
+  /** Effective auto fast-mode cutoff for this run, in seconds. */
+  fastModeAutoOnSeconds?: number;
+  /** Shared notification state for nested harnesses that can observe the same tool boundary. */
+  fastModeAutoProgressState?: FastModeAutoProgressState;
+  /** True when the outer model fallback loop has reached its final candidate. */
+  isFinalFallbackAttempt?: boolean;
   timeoutMs: number;
   /**
    * Explicit run timeout, in milliseconds, when the caller can distinguish a
@@ -100,6 +112,8 @@ export type RunCliAgentParams = {
   messageChannel?: string;
   messageProvider?: string;
   currentChannelId?: string;
+  chatId?: string;
+  channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
