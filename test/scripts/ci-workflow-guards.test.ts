@@ -23,6 +23,14 @@ function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
+function readAndroidCompileSdk(path: string): number {
+  const match = readFileSync(path, "utf8").match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
+  if (!match) {
+    throw new Error(`Missing compileSdk in ${path}`);
+  }
+  return Number(match[1]);
+}
+
 function findYamlFiles(directory: string): string[] {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = `${directory}/${entry.name}`;
@@ -132,6 +140,22 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(8);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
+  });
+
+  it("installs the Android SDK platform used by Gradle", () => {
+    const workflow = readCiWorkflow();
+    const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
+    const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
+    const cacheStep = workflow.jobs.android.steps.find((step) => step.name === "Cache Android SDK");
+    const installStep = workflow.jobs.android.steps.find(
+      (step) => step.name === "Install Android SDK packages",
+    );
+    const packageId = `platforms;android-${appCompileSdk}`;
+
+    expect(appCompileSdk).toBe(benchmarkCompileSdk);
+    expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}-`);
+    expect(installStep.run).toContain(`"${packageId}"`);
+    expect(installStep.run).not.toContain(`${packageId}.0`);
   });
 
   it("debounces canonical main pushes before Blacksmith admission", () => {
