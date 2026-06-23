@@ -2,6 +2,7 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowlist-config-edit";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createAsyncComputedAccountStatusAdapter,
@@ -70,8 +71,12 @@ function resolveWhatsAppTargetInfo(raw: string) {
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
   createChatChannelPlugin<ResolvedWhatsAppAccount>({
     pairing: {
-      idLabel: "whatsappSenderId",
-      normalizeAllowEntry: (entry) => normalizeWhatsAppAllowFromEntry(entry) ?? "",
+      text: {
+        idLabel: "whatsappSenderId",
+        message: PAIRING_APPROVED_MESSAGE,
+        normalizeAllowEntry: (entry) => normalizeWhatsAppAllowFromEntry(entry) ?? "",
+        delivery: "outbound-message",
+      },
     },
     outbound: whatsappChannelOutbound,
     threading: {

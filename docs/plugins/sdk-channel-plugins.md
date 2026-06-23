@@ -506,6 +506,7 @@ Use `resolveInboundMentionDecision({ facts, policy })` for mention gating.
         text: {
           idLabel: "Acme Chat username",
           message: "Send this code to verify your identity:",
+          // Default adapter delivery: the plugin sends the pairing reply.
           notify: async ({ target, code }) => {
             await acmeChatApi.sendDm(target, `Pairing code: ${code}`);
           },
@@ -535,6 +536,18 @@ Use `resolveInboundMentionDecision({ facts, policy })` for mention gating.
     });
     ```
 
+    Pairing text delivery defaults to `"adapter"` mode: provide `notify`
+    and let the plugin send the approval message with its own platform
+    client. Channels whose approval notification must go through the
+    shared OpenClaw outbound path, usually because a short-lived CLI
+    process needs the running gateway to deliver the message, may instead
+    set `delivery: "outbound-message"` and omit `notify`. In that mode the
+    builder sends `message` to the approved pairing target through
+    `sendMessage` for the current channel and account, so the normal
+    outbound routing, gateway delivery, and channel send semantics apply.
+    Do not combine `delivery: "outbound-message"` with a `notify`
+    callback.
+
     For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
     <Accordion title="What createChatChannelPlugin does for you">
@@ -544,7 +557,7 @@ Use `resolveInboundMentionDecision({ facts, policy })` for mention gating.
       | Option | What it wires |
       | --- | --- |
       | `security.dm` | Scoped DM security resolver from config fields |
-      | `pairing.text` | Text-based DM pairing flow with code exchange |
+      | `pairing.text` | Text-based DM pairing flow with code exchange and adapter or outbound-message approval notification delivery |
       | `threading` | Reply-to-mode resolver (fixed, account-scoped, or custom) |
       | `outbound.attachedResults` | Send functions that return result metadata (message IDs) |
 
