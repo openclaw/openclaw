@@ -61,6 +61,7 @@ import {
 import {
   applyGatewaySshTunnelConnectionDetails,
   startGatewayRemoteSshTunnel,
+  type GatewaySshTunnelConnection,
 } from "./ssh-transport.js";
 export type { GatewayConnectionDetails };
 
@@ -223,6 +224,7 @@ export type GatewayClientRequestErrorJson = {
 export type GatewayProbeConnectionDetails = GatewayConnectionDetails & {
   tlsFingerprint?: string;
   preauthHandshakeTimeoutMs?: number;
+  sshTunnel?: GatewaySshTunnelConnection["tunnel"];
 };
 
 function firstGatewayErrorLine(message: string): string {
@@ -1252,7 +1254,7 @@ export async function buildGatewayProbeConnectionDetails(
   } satisfies CallGatewayBaseOptions;
   const context = await resolveGatewayCallContext(callOpts);
   ensureRemoteModeUrlConfigured(context);
-  const connectionDetails = buildGatewayConnectionDetails({
+  let connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
     url: context.urlOverride,
     urlSource: context.urlOverrideSource,
@@ -1260,18 +1262,35 @@ export async function buildGatewayProbeConnectionDetails(
     localPortOverride: opts.localPortOverride,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
-  const tlsFingerprint = await resolveGatewayTlsFingerprint({
-    opts: callOpts,
-    context,
+  const ssh = await startGatewayRemoteSshTunnel({
+    config: context.config,
     url: connectionDetails.url,
+    urlSource: connectionDetails.urlSource,
   });
-  return {
-    ...connectionDetails,
-    ...(tlsFingerprint ? { tlsFingerprint } : {}),
-    ...(context.config.gateway?.handshakeTimeoutMs
-      ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
-      : {}),
-  };
+  try {
+    if (ssh) {
+      connectionDetails = applyGatewaySshTunnelConnectionDetails({
+        details: connectionDetails,
+        ssh,
+      });
+    }
+    const tlsFingerprint = await resolveGatewayTlsFingerprint({
+      opts: callOpts,
+      context,
+      url: connectionDetails.url,
+    });
+    return {
+      ...connectionDetails,
+      ...(tlsFingerprint ? { tlsFingerprint } : {}),
+      ...(context.config.gateway?.handshakeTimeoutMs
+        ? { preauthHandshakeTimeoutMs: context.config.gateway.handshakeTimeoutMs }
+        : {}),
+      ...(ssh ? { sshTunnel: ssh.tunnel } : {}),
+    };
+  } catch (error) {
+    await ssh?.tunnel.stop();
+    throw error;
+  }
 }
 
 export async function callGatewayCli<T = Record<string, unknown>>(

@@ -73,9 +73,11 @@ const buildGatewayConnectionDetailsMock = vi.fn(() => ({
   message: TEST_GATEWAY_MESSAGE,
   url: TEST_GATEWAY_URL,
 }));
+const stopGatewayProbeTunnelMock = vi.fn(async () => undefined);
 const buildGatewayProbeConnectionDetailsMock = vi.fn(() => ({
   message: TEST_GATEWAY_MESSAGE,
   preauthHandshakeTimeoutMs: 4321,
+  sshTunnel: { stop: stopGatewayProbeTunnelMock },
   tlsFingerprint: TEST_TLS_FINGERPRINT,
   url: TEST_GATEWAY_URL,
 }));
@@ -137,9 +139,11 @@ describe("healthCommand", () => {
       message: TEST_GATEWAY_MESSAGE,
       url: TEST_GATEWAY_URL,
     });
+    stopGatewayProbeTunnelMock.mockReset().mockResolvedValue(undefined);
     buildGatewayProbeConnectionDetailsMock.mockReturnValue({
       message: TEST_GATEWAY_MESSAGE,
       preauthHandshakeTimeoutMs: 4321,
+      sshTunnel: { stop: stopGatewayProbeTunnelMock },
       tlsFingerprint: TEST_TLS_FINGERPRINT,
       url: TEST_GATEWAY_URL,
     });
@@ -314,6 +318,7 @@ describe("healthCommand", () => {
         json,
       });
       expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(stopGatewayProbeTunnelMock).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledTimes(expectedLogs);
       if (json) {
         expect(JSON.parse(requireFirstRuntimeLog())).toEqual(
@@ -352,6 +357,7 @@ describe("healthCommand", () => {
       json: false,
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(stopGatewayProbeTunnelMock).toHaveBeenCalledTimes(1);
     expect(runtime.log.mock.calls).toEqual([
       [GATEWAY_HEALTH_REACHABLE_LINE],
       [GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE],

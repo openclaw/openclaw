@@ -1223,6 +1223,43 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.preauthHandshakeTimeoutMs).toBe(4321);
   });
 
+  it("opens an SSH tunnel for configured remote probe connection details", async () => {
+    const config = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          transport: "ssh",
+          sshTarget: "user@gateway.example",
+          sshIdentity: "~/.ssh/id_ed25519",
+        },
+      },
+    } satisfies OpenClawConfig;
+    resolveGatewayPort.mockReturnValue(18789);
+    startSshPortForwardMock.mockResolvedValue({
+      parsedTarget: { user: "user", host: "gateway.example", port: 22 },
+      localPort: 19091,
+      remotePort: 18789,
+      pid: 1234,
+      stderr: [],
+      stop: stopSshTunnelMock,
+    });
+
+    const details = await buildGatewayProbeConnectionDetails({ config });
+
+    expect(startSshPortForwardMock).toHaveBeenCalledWith({
+      target: "user@gateway.example",
+      identity: "~/.ssh/id_ed25519",
+      localPortPreferred: 18789,
+      remotePort: 18789,
+      timeoutMs: expect.any(Number),
+    });
+    expect(details.url).toBe("ws://127.0.0.1:19091");
+    expect(details.urlSource).toBe("config gateway.remote.url via ssh tunnel");
+    await details.sshTunnel?.stop();
+    expect(stopSshTunnelMock).toHaveBeenCalledTimes(1);
+  });
+
   it("lets probe details local port override bypass gateway env URL and port", async () => {
     const config = {
       gateway: {
