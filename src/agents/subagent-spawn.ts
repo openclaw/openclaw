@@ -62,6 +62,7 @@ import {
 } from "./subagent-attachments.js";
 import { resolveSubagentCapabilities } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { isGatewayLifecycleTransientError } from "./subagent-gateway-lifecycle.js";
 import { buildSubagentInitialUserMessage } from "./subagent-initial-user-message.js";
 import { countActiveRunsForSession, registerSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentRunTimerDelayMs } from "./subagent-run-timeout.js";
@@ -157,6 +158,19 @@ let subagentSpawnDeps: SubagentSpawnDeps = defaultSubagentSpawnDeps;
 const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
+const SUBAGENT_GATEWAY_READINESS_TIMEOUT_MS = 20_000;
+const SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_DEFAULT = [1_000, 3_000, 10_000] as const;
+const SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_FAST = [8, 16, 32] as const;
+let subagentGatewayReadinessRetryDelaysMsForTest: readonly number[] | null = null;
+
+function getSubagentGatewayReadinessRetryDelaysMs(): readonly number[] {
+  if (subagentGatewayReadinessRetryDelaysMsForTest !== null) {
+    return subagentGatewayReadinessRetryDelaysMsForTest;
+  }
+  return process.env.OPENCLAW_TEST_FAST === "1"
+    ? SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_FAST
+    : SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_DEFAULT;
+}
 
 export type SpawnSubagentParams = {
   task: string;
@@ -741,6 +755,42 @@ function summarizeError(err: unknown): string {
   return "error";
 }
 
+async function waitForGatewayReadinessRetryDelay(ms: number): Promise<void> {
+  if (!Number.isFinite(ms) || ms <= 0) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function ensureGatewayReadyForSubagentSpawn(params: {
+  requireAdminScope: boolean;
+}): Promise<void> {
+  const retryDelaysMs = [...getSubagentGatewayReadinessRetryDelaysMs()];
+  for (;;) {
+    try {
+      // Keep default cleanup="keep" spawns on the least-privilege path so
+      // existing write-scoped clients can still start child agents. Only
+      // cleanup="delete" preflights at admin scope because that path is known
+      // to need admin-only lifecycle cleanup after the child run (#59428).
+      await callSubagentGateway({
+        method: "sessions.list",
+        params: {},
+        timeoutMs: SUBAGENT_GATEWAY_READINESS_TIMEOUT_MS,
+        ...(params.requireAdminScope ? { scopes: [ADMIN_SCOPE] } : {}),
+      });
+      return;
+    } catch (err) {
+      const delayMs = retryDelaysMs.shift();
+      if (delayMs == null || !isGatewayLifecycleTransientError(err)) {
+        throw err;
+      }
+      await waitForGatewayReadinessRetryDelay(delayMs);
+    }
+  }
+}
+
 function buildThreadBindingUnavailableError(mode: SpawnSubagentMode): string {
   if (mode === "session") {
     return (
@@ -1270,6 +1320,20 @@ export async function spawnSubagentDirect(
         "cwd override is not supported for sandboxed subagent runs; omit cwd or use the target agent workspace as cwd",
     };
   }
+
+  // All local guards passed — verify the gateway is reachable before performing
+  // any gateway operations. Default cleanup="keep" spawns intentionally preflight
+  // without admin scope so existing write-scoped clients remain compatible.
+  try {
+    await ensureGatewayReadyForSubagentSpawn({
+      requireAdminScope: cleanup === "delete",
+    });
+  } catch (err) {
+    return {
+      status: "error",
+      error: summarizeError(err),
+    };
+  }
   const childDepth = callerDepth + 1;
   const spawnedByKey = requesterInternalKey;
   const childCapabilities = resolveSubagentCapabilities({
@@ -1765,6 +1829,9 @@ export const testing = {
           ...overrides,
         }
       : defaultSubagentSpawnDeps;
+  },
+  setReadinessRetryDelaysForTest(delays: readonly number[] | null) {
+    subagentGatewayReadinessRetryDelaysMsForTest = delays;
   },
 };
 export { testing as __testing };

@@ -168,6 +168,10 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     return clampTimerTimeoutMs(configured) ?? 120_000;
   },
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
+  isTransientAnnounceDeliveryError: (error: unknown) => {
+    const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+    return /gateway timeout/i.test(message) || /gateway closed/i.test(message);
+  },
 }));
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: createGatewayCallModuleMock().callGateway,
