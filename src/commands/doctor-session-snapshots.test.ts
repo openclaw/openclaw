@@ -15,8 +15,11 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 }));
 
 import {
+  detectSessionSnapshotHealthIssues,
   noteSessionSnapshotHealth,
   scanSessionStoreForStaleRuntimeSnapshotPaths,
+  sessionSnapshotIssueToHealthFinding,
+  sessionSnapshotIssueToRepairEffect,
 } from "./doctor-session-snapshots.js";
 
 function sessionEntry(patch: Partial<SessionEntry>): SessionEntry {
@@ -133,6 +136,57 @@ describe("doctor session snapshot stale runtime metadata", () => {
         expectedPath: path.join(bundledSkillsDir, "doctor", "SKILL.md"),
       },
     ]);
+  });
+
+  it("maps stale snapshot paths to structured findings and dry-run effects", async () => {
+    const stalePath = path.join(
+      root,
+      "old-runtime",
+      "node_modules",
+      "openclaw",
+      "skills",
+      "doctor",
+      "SKILL.md",
+    );
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    await writeSessionStore(storePath, {
+      "agent:main": sessionEntry({
+        skillsSnapshot: {
+          prompt: skillPrompt(stalePath),
+          skills: [{ name: "doctor" }],
+        },
+      }),
+    });
+
+    const [issue] = await detectSessionSnapshotHealthIssues({
+      storePaths: [storePath],
+      bundledSkillsDir,
+    });
+
+    if (!issue) {
+      throw new Error("expected session snapshot health issue");
+    }
+    expect(issue).toMatchObject({
+      storePath,
+      sessionKey: "agent:main",
+      field: "skillsSnapshot.prompt",
+      cachedPath: stalePath,
+      expectedPath: path.join(bundledSkillsDir, "doctor", "SKILL.md"),
+    });
+    expect(sessionSnapshotIssueToHealthFinding(issue)).toMatchObject({
+      checkId: "core/doctor/session-snapshots",
+      severity: "warning",
+      path: storePath,
+      target: stalePath,
+      requirement: expect.stringContaining(bundledSkillsDir),
+      fixHint: expect.stringContaining("openclaw doctor --fix"),
+    });
+    expect(sessionSnapshotIssueToRepairEffect(issue)).toEqual({
+      kind: "file",
+      action: "would-rewrite-session-snapshot-path",
+      target: storePath,
+      dryRunSafe: false,
+    });
   });
 
   it("expands home-relative cached bundled skill locations before classifying them", () => {
