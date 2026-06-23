@@ -1447,4 +1447,40 @@ describe("config strict validation", () => {
       expect(issuePaths(snap.legacyIssues)).toContain("gateway.bind");
     });
   });
+
+  describe("gateway.chatHistoryTextMaxChars validation", () => {
+    it("accepts a positive integer", () => {
+      const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: 16_384 } });
+      expect(res.ok).toBe(true);
+    });
+
+    it("rejects zero", () => {
+      const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: 0 } });
+      expect(res.ok).toBe(false);
+      expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+    });
+
+    it("rejects negative values", () => {
+      const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: -1 } });
+      expect(res.ok).toBe(false);
+      expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+    });
+
+    it("rejects non-integer values", () => {
+      const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: "8000" } });
+      expect(res.ok).toBe(false);
+      expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+    });
+
+    it("rejects float values", () => {
+      const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: 8000.5 } });
+      expect(res.ok).toBe(false);
+      expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+    });
+
+    it("allows omission (field is optional)", () => {
+      const res = validateConfigObject({ gateway: { port: 18789 } });
+      expect(res.ok).toBe(true);
+    });
+  });
 });

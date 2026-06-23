@@ -140,6 +140,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.channelHealthCheckMinutes": "Gateway Channel Health Check Interval (min)",
   "gateway.channelStaleEventThresholdMinutes": "Gateway Channel Stale Event Threshold (min)",
   "gateway.channelMaxRestartsPerHour": "Gateway Channel Max Restarts Per Hour",
+  "gateway.chatHistoryTextMaxChars": "Gateway Chat History Text Max Characters",
   "gateway.tailscale": "Gateway Tailscale",
   "gateway.tailscale.mode": "Gateway Tailscale Mode",
   "gateway.tailscale.resetOnExit": "Gateway Tailscale Reset on Exit",
