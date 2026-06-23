@@ -90,6 +90,32 @@ describe("commitments command", () => {
     ]);
   });
 
+  it("keeps truncated id/scope cells within their padEnd column width", async () => {
+    mocks.listCommitments.mockResolvedValue([
+      commitment({
+        id: "cm_abcdefghijklmnopqrstuvwxyz",
+        agentId: "main-agent-with-a-very-long-identifier",
+        channel: "telegram",
+        to: "+15551234567",
+      }),
+    ]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsListCommand({}, runtime);
+
+    const rows = logs.map(stripAnsi);
+    const header = rows.find((line) => line.startsWith("ID"));
+    const row = rows.find((line) => line.startsWith("cm_"));
+    expect(header).toBeDefined();
+    expect(row).toBeDefined();
+    // A truncated cell stays exactly maxChars wide, so the Status column on the
+    // row lines up with the Status column in the header (no rightward drift).
+    const statusCol = (header as string).indexOf("Status");
+    expect(row).toMatch(/^cm_abcdefghijkl… /);
+    expect((row as string).slice(statusCol, statusCol + "pending".length)).toBe("pending");
+    expect(row).toContain(" main-agent-with-a-very-long… ");
+  });
+
   it("tolerates Date-invalid commitment due timestamps in table output", async () => {
     mocks.listCommitments.mockResolvedValue([
       commitment({

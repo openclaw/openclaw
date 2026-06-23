@@ -24,7 +24,9 @@ const STATUS_VALUES = new Set<CommitmentStatus>([
 ]);
 
 function truncate(value: string, maxChars: number): string {
-  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 1)}...`;
+  // One reserved char + the single-char "…" keeps a truncated cell exactly maxChars
+  // wide so the padEnd table columns stay aligned, matching flows.ts/tasks.ts.
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 1)}…`;
 }
 
 function safe(value: string): string {
