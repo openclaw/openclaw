@@ -72,6 +72,37 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
+  it("classifies Codex subscription usage-limit payloads as rate-limit fallback", () => {
+    const errorText =
+      "You've reached your Codex subscription usage limit. " +
+      "Next reset in 32 minutes, Jun 20 at 3:44 PM EDT. " +
+      "Wait until the reset time, use another Codex account if available, " +
+      "or switch to another configured model/provider.";
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: errorText,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "openai/gpt-5.5 ended with a provider error: " + errorText,
+      reason: "rate_limit",
+      code: "embedded_error_payload",
+      rawError: errorText,
+    });
+  });
+
   it("does not classify normal visible assistant output as fallback-worthy", () => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "claude-cli",

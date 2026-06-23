@@ -85,6 +85,8 @@ type DerivedCoverageScores = QaMaturityCoverageScores & {
   warnings: string[];
 };
 
+const MATURITY_DOC_OUTPUTS = ["maturity/scorecard.md", "maturity/taxonomy.md"] as const;
+
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     taxonomy: DEFAULT_TAXONOMY_PATH,
@@ -394,6 +396,9 @@ function averageScores(
 
 function checkSetTitle(profile: string): string {
   const normalized = profile.trim();
+  if (normalized === "all") {
+    return "Full taxonomy validation";
+  }
   if (!normalized || normalized === "release") {
     return "Release validation";
   }
@@ -444,11 +449,19 @@ function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
   });
 }
 
-function latestReleaseScorecard(evidenceSummaries: EvidenceSummary[]): EvidenceSummary | undefined {
-  return evidenceSummaries
-    .filter((item) => item.profile === "release" && item.scorecard)
-    .toSorted((left, right) => left.generatedAt.localeCompare(right.generatedAt))
-    .at(-1);
+function latestCoverageScorecard(
+  evidenceSummaries: EvidenceSummary[],
+): EvidenceSummary | undefined {
+  for (const profile of ["all", "release"]) {
+    const latest = evidenceSummaries
+      .filter((item) => item.profile === profile && item.scorecard)
+      .toSorted((left, right) => left.generatedAt.localeCompare(right.generatedAt))
+      .at(-1);
+    if (latest) {
+      return latest;
+    }
+  }
+  return undefined;
 }
 
 function deriveCoverageScores(
@@ -456,23 +469,23 @@ function deriveCoverageScores(
   evidenceSummaries: EvidenceSummary[],
 ): DerivedCoverageScores {
   const warnings: string[] = [];
-  const releaseSummary = latestReleaseScorecard(evidenceSummaries);
-  const releaseScorecardSummaries = evidenceSummaries.filter(
-    (item) => item.profile === "release" && item.scorecard,
-  );
-  if (!releaseSummary) {
+  const coverageSummary = latestCoverageScorecard(evidenceSummaries);
+  if (!coverageSummary) {
     throw new Error(
-      "maturity scorecard rendering requires release profile qa-evidence.json with a scorecard field; pass --evidence-dir with release QA evidence artifacts",
+      "maturity scorecard rendering requires all or release profile qa-evidence.json with a scorecard field; pass --evidence-dir with QA evidence artifacts",
     );
   }
-  if (releaseScorecardSummaries.length > 1) {
+  const selectedProfileScorecardSummaries = evidenceSummaries.filter(
+    (item) => item.profile === coverageSummary.profile && item.scorecard,
+  );
+  if (selectedProfileScorecardSummaries.length > 1) {
     warnings.push(
-      `multiple release profile evidence scorecards found; using latest from ${releaseSummary.path}`,
+      `multiple ${coverageSummary.profile} profile evidence scorecards found; using latest from ${coverageSummary.path}`,
     );
   }
 
   const categories = new Map<string, QaMaturityScoreObject>();
-  for (const report of releaseSummary.scorecard?.categoryReports ?? []) {
+  for (const report of coverageSummary.scorecard?.categoryReports ?? []) {
     categories.set(
       qaMaturityCoverageCategoryKey(report.surfaceId, report.name),
       qaMaturityScoreObjectForScore(Math.round(report.features.fulfillmentPercent)),
@@ -500,6 +513,11 @@ function deriveCoverageScores(
     (count, surface) => count + surface.categories.length,
     0,
   );
+  if (coverageSummary.profile === "all" && categories.size !== expectedCategoryCount) {
+    warnings.push(
+      `${coverageSummary.path}: all profile evidence covers ${categories.size} of ${expectedCategoryCount} active taxonomy categories`,
+    );
+  }
   const categoryScores = Array.from(categories.values());
   const surfaceScores = Array.from(surfaces.values());
   return {
@@ -521,10 +539,10 @@ function evidenceScorecardWarnings(
 ): string[] {
   return [
     ...evidenceSummaries
-      .filter((item) => item.profile === "release" && !item.scorecard)
+      .filter((item) => (item.profile === "all" || item.profile === "release") && !item.scorecard)
       .map(
         (item) =>
-          `${item.path}: release profile qa-evidence.json does not include a scorecard field; run pnpm openclaw qa run --qa-profile release to produce deterministic scorecard rows`,
+          `${item.path}: ${item.profile} profile qa-evidence.json does not include a scorecard field; run pnpm openclaw qa run --qa-profile ${item.profile} to produce deterministic scorecard rows`,
       ),
     ...coverage.warnings,
   ];
@@ -591,9 +609,9 @@ function renderEvidenceSection(
     return [];
   }
   const lines = [
-    "## Release check summary",
+    "## QA evidence summary",
     "",
-    "The checks below show which scorecard areas were exercised during release validation.",
+    "The checks below show which scorecard areas were exercised by QA profile evidence.",
     "",
   ];
 
@@ -676,7 +694,7 @@ function renderMaturityScorecard({
       ],
     ]),
     "",
-    "- Coverage is derived from release validation results.",
+    "- Coverage is derived from QA profile evidence.",
     "- Quality measures reliability and operational confidence.",
     "- Completeness measures how much of the expected user workflow is available.",
     "",
@@ -757,7 +775,7 @@ function renderTaxonomy({
   ];
 
   for (const family of qaMaturityFamilyOrder(surfaces)) {
-    lines.push(`### ${familyTitle(family)}`, "");
+    lines.push(`### ${familyTitle(family)} surfaces`, "");
     for (const surface of surfaces.filter((candidate) => candidate.family === family)) {
       const surfaceName = surface.name;
       lines.push(`- [${markdownEscape(surfaceName)}](#${markdownSlug(surfaceName)})`);
@@ -832,14 +850,58 @@ function writeOrCheck(outputPath: string, content: string, check: boolean): bool
   return false;
 }
 
+function checkEvidenceIndependentInputs({
+  args,
+  scoresPath,
+  taxonomy,
+  taxonomyPath,
+}: {
+  args: Args;
+  scoresPath: string;
+  taxonomy: QaMaturityTaxonomy;
+  taxonomyPath: string;
+}): void {
+  const { warnings } = readValidatedQaMaturityScoreSources({
+    scoresPath,
+    taxonomy,
+    taxonomyPath,
+  });
+  writeInputWarnings(warnings);
+  if (args.strictInputs) {
+    enforceStrictInputs(warnings);
+  }
+
+  const missing = MATURITY_DOC_OUTPUTS.map((fileName) =>
+    path.join(args.outputDir, fileName),
+  ).filter((outputPath) => !fs.existsSync(outputPath));
+  if (missing.length > 0) {
+    throw new Error(
+      `maturity docs check cannot skip evidence-backed freshness because generated docs are missing:\n${missing.map((file) => `- ${file}`).join("\n")}`,
+    );
+  }
+}
+
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   const taxonomyPath = path.normalize(args.taxonomy);
   const scoresPath = path.normalize(args.scores);
   const docsRoot = path.normalize(args.docsRoot);
   const outputDir = path.normalize(args.outputDir);
-  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
   const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
+  if (args.check && !args.evidenceDir?.trim()) {
+    checkEvidenceIndependentInputs({
+      args: { ...args, outputDir },
+      scoresPath,
+      taxonomy,
+      taxonomyPath,
+    });
+    process.stdout.write(
+      `maturity docs inputs are valid in ${outputDir}; evidence-backed freshness check skipped because --evidence-dir was not supplied\n`,
+    );
+    return;
+  }
+
+  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,

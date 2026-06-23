@@ -754,6 +754,11 @@ def prepare_app_store_release!(version:, build_number:)
   release_xcconfig
 end
 
+def validate_app_store_ipa!(ipa_path)
+  script_path = File.join(repo_root, "scripts", "ios-validate-app-store-ipa.sh")
+  sh(shell_join(["bash", script_path, "--ipa", ipa_path]))
+end
+
 def build_app_store_release(context)
   version = context[:version]
   project_path = File.join(ios_root, "OpenClaw.xcodeproj")
@@ -804,6 +809,7 @@ def build_app_store_release(context)
   UI.user_error!("xcodebuild export produced multiple IPAs in #{output_directory}: #{exported_ipas.join(", ")}") if exported_ipas.length > 1
   exported_ipa = exported_ipas.first
   FileUtils.mv(exported_ipa, expected_ipa_path) unless exported_ipa == expected_ipa_path
+  validate_app_store_ipa!(expected_ipa_path)
 
   {
     archive_path: archive_path,
@@ -923,25 +929,12 @@ platform :ios do
     ENV.delete("XCODE_XCCONFIG_FILE")
   end
 
-  desc "Build + upload an App Store distribution build to App Store Connect"
-  lane :app_store do
-    context = prepare_app_store_context(require_api_key: true)
-    build = build_app_store_release(context)
-
-    upload_to_testflight(
-      api_key: context[:api_key],
-      ipa: build[:ipa_path],
-      skip_waiting_for_build_processing: true,
-      uses_non_exempt_encryption: false
-    )
-
-    UI.success("Uploaded iOS App Store build: version=#{build[:version]} short=#{build[:short_version]} build=#{build[:build_number]}")
-  ensure
-    ENV.delete("XCODE_XCCONFIG_FILE")
-  end
-
   desc "Generate screenshots, update App Store version metadata, then upload an App Store build"
   lane :release_upload do
+    unless ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"
+      UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane TestFlight upload is disabled.")
+    end
+
     release_signing_check!
     preserve_local_signing do
       screenshots

@@ -7,7 +7,7 @@
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
-  "dependencies": {
+  "optionalDependencies": {
     "node-llama-cpp": "3.18.1"
   },
   "devDependencies": {

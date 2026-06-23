@@ -12,10 +12,14 @@ const PRODUCER_WORKFLOW_PATH = ".github/workflows/ios-periphery.yml";
 const ARTIFACT_NAME = "ios-periphery-dead-code-12345-2";
 
 type WorkflowStep = {
+  if?: string;
   id?: string;
   name?: string;
+  uses?: string;
   with?: {
+    "if-no-files-found"?: string;
     name?: string;
+    path?: string;
     script?: string;
   };
 };
@@ -436,6 +440,9 @@ describe("iOS Periphery comment workflow", () => {
     expect(upload?.with?.name).toBe(
       "ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}",
     );
+    expect(upload?.if).toBe("always()");
+    expect(upload?.with?.path).toBe("${{ runner.temp }}/ios-periphery");
+    expect(upload?.with?.["if-no-files-found"]).toBe("error");
   });
 
   it("runs scope detection for PR transitions that can clear stale findings", () => {

@@ -69,7 +69,7 @@ actor PushRegistrationManager {
     async throws -> String {
         guard self.buildConfig.distribution == .official else {
             throw PushRelayError.relayMisconfigured(
-                "Relay transport requires OpenClawPushDistribution=official")
+                "Relay transport requires an official push build mode")
         }
         try Self.validateRelayContract(
             relayProfile: self.buildConfig.relayProfile,

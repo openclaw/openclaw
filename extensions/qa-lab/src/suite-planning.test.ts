@@ -14,6 +14,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
+  scenarioRequiresIsolatedQaSuiteWorker,
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
@@ -202,6 +203,16 @@ describe("qa suite planning helpers", () => {
         }),
       ).toBe(1500);
     }
+    expect(resolveQaSuiteWorkerStartStaggerMs(4, {}, 500)).toBe(500);
+    expect(
+      resolveQaSuiteWorkerStartStaggerMs(
+        4,
+        {
+          OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS: "25",
+        },
+        500,
+      ),
+    ).toBe(25);
   });
 
   it("keeps explicitly requested provider-specific scenarios", () => {
@@ -281,6 +292,15 @@ describe("qa suite planning helpers", () => {
         ],
       }),
     ).toThrow("Selected QA scenarios require multiple channels");
+  });
+
+  it("isolates flow scenarios with explicit suite isolation metadata", () => {
+    expect(
+      scenarioRequiresIsolatedQaSuiteWorker(
+        makeQaSuiteTestScenario("explicit-isolated", { suiteIsolation: "isolated" }),
+      ),
+    ).toBe(true);
+    expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {

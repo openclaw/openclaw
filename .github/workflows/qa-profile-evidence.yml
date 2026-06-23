@@ -20,11 +20,6 @@ on:
         required: true
         default: release
         type: string
-      fail_on_qa_failure:
-        description: Fail the workflow when the QA profile command exits non-zero
-        required: false
-        default: true
-        type: boolean
   workflow_call:
     inputs:
       ref:
@@ -40,11 +35,6 @@ on:
         description: Taxonomy QA profile id to run
         required: true
         type: string
-      fail_on_qa_failure:
-        description: Fail the reusable workflow when the QA profile command exits non-zero
-        required: false
-        default: false
-        type: boolean
     secrets:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
@@ -367,8 +357,8 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      - name: Fail if configured QA gate failed
-        if: always() && inputs.fail_on_qa_failure
+      - name: Fail if QA profile failed
+        if: always()
         env:
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
           QA_PROFILE: ${{ steps.profile.outputs.profile }}

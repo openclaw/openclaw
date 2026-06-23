@@ -29,6 +29,8 @@ scenario:
     - scripts/e2e/kitchen-sink-plugin-docker.sh
   execution:
     kind: flow
+    suiteIsolation: isolated
+    isolationReason: Mutates gateway plugin/channel/tool config across gateway restarts.
     summary: Install @openclaw/kitchen-sink, restart the gateway, exercise command inventory/tool/channel/OpenAI-or-block paths, and record CPU/RSS/log evidence.
     config:
       requiredProviderMode: live-frontier
@@ -94,7 +96,6 @@ scenario:
         - only bundled plugins can register Codex app-server extension factories
         - compaction provider "kitchen-sink-compaction-provider" registration missing summarize
         - context engine registration missing id
-        - control UI descriptor registration requires id, surface, label, and valid optional fields
         - hosted media resolver registration missing resolver
         - "http route registration missing or invalid auth: /kitchen-sink/http-route"
         - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
