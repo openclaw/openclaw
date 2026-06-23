@@ -588,6 +588,15 @@ describe("ci workflow guards", () => {
       default: false,
       type: "boolean",
     });
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
+    expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
+    const validateProfileStep = qaRunJob.steps.find(
+      (step) => step.name === "Validate QA profile input",
+    );
+    expect(validateProfileStep.run).toContain(
+      "taxonomy.profiles.find((entry) => entry.id === requested)",
+    );
+    expect(validateProfileStep.run).toContain("profile=${profile.id}");
     expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({

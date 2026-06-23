@@ -49,7 +49,10 @@ import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream
 import type { AssistantMessage } from "../../../llm/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
-import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
@@ -1268,6 +1271,7 @@ export async function runEmbeddedAttempt(
             memberRoleIds: params.memberRoleIds,
             spawnedBy: params.spawnedBy,
             senderId: params.senderId,
+            channelContext: params.channelContext,
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
@@ -3518,6 +3522,12 @@ export async function runEmbeddedAttempt(
                 modelId: reportedModelRef.model,
                 trigger: params.trigger,
                 ...buildAgentHookContextChannelFields(params),
+                ...buildAgentHookContextIdentityFields({
+                  trigger: params.trigger,
+                  senderId: params.senderId,
+                  chatId: params.chatId,
+                  channelContext: params.channelContext,
+                }),
               },
               hookRunner,
             });
@@ -3926,6 +3936,12 @@ export async function runEmbeddedAttempt(
           modelId: params.model.id,
           trigger: params.trigger,
           ...buildAgentHookContextChannelFields(params),
+          ...buildAgentHookContextIdentityFields({
+            trigger: params.trigger,
+            senderId: params.senderId,
+            chatId: params.chatId,
+            channelContext: params.channelContext,
+          }),
         };
         const promptBuildMessages =
           pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
@@ -4546,6 +4562,12 @@ export async function runEmbeddedAttempt(
                   workspaceDir: params.workspaceDir,
                   trigger: params.trigger,
                   ...buildAgentHookContextChannelFields(params),
+                  ...buildAgentHookContextIdentityFields({
+                    trigger: params.trigger,
+                    senderId: params.senderId,
+                    chatId: params.chatId,
+                    channelContext: params.channelContext,
+                  }),
                 },
               )
               .catch((err: unknown) => {
@@ -5222,6 +5244,12 @@ export async function runEmbeddedAttempt(
               trigger: params.trigger,
               ...(params.config ? { config: params.config } : {}),
               ...buildAgentHookContextChannelFields(params),
+              ...buildAgentHookContextIdentityFields({
+                trigger: params.trigger,
+                senderId: params.senderId,
+                chatId: params.chatId,
+                channelContext: params.channelContext,
+              }),
             },
             hookRunner,
           });
@@ -5386,6 +5414,12 @@ export async function runEmbeddedAttempt(
                 ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
                 : {}),
               ...buildAgentHookContextChannelFields(params),
+              ...buildAgentHookContextIdentityFields({
+                trigger: params.trigger,
+                senderId: params.senderId,
+                chatId: params.chatId,
+                channelContext: params.channelContext,
+              }),
             },
           )
           .catch((err: unknown) => {

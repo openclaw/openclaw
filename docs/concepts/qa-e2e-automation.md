@@ -31,7 +31,7 @@ script aliases; both forms are supported.
 
 | Command                                             | Purpose                                                                                                                                                                                                                                                                 |
 | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `qa run`                                            | Bundled QA self-check without `--qa-profile`; taxonomy-backed maturity profile runner with `--qa-profile smoke-ci` or `--qa-profile release`.                                                                                                                           |
+| `qa run`                                            | Bundled QA self-check without `--qa-profile`; taxonomy-backed maturity profile runner with `--qa-profile smoke-ci`, `--qa-profile release`, or `--qa-profile all`.                                                                                                      |
 | `qa suite`                                          | Run repo-backed scenarios against the QA gateway lane. Aliases: `pnpm openclaw qa suite --runner multipass` for a disposable Linux VM.                                                                                                                                  |
 | `qa coverage`                                       | Print the YAML scenario-coverage inventory (`--json` for machine output).                                                                                                                                                                                               |
 | `qa parity-report`                                  | Compare two `qa-suite-summary.json` files and write the agentic parity report, or use `--runtime-axis --token-efficiency` to write Codex-vs-OpenClaw runtime parity and token-efficiency reports from one runtime-pair summary.                                         |
@@ -75,8 +75,10 @@ pnpm openclaw qa run \
 
 Use `smoke-ci` for deterministic profile proof with mock model providers and
 Crabline fake provider servers. Use `release` for Stable/LTS proof against live
-channels. When a command also needs an OpenClaw root profile, put the root
-profile before the QA command:
+channels. Use `all` only for explicit full-taxonomy evidence runs; it selects
+every active maturity category and can be dispatched through the `QA Profile
+Evidence` workflow with `qa_profile=all`. When a command also needs an OpenClaw
+root profile, put the root profile before the QA command:
 
 ```bash
 pnpm openclaw --profile work qa run --qa-profile smoke-ci

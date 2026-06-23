@@ -514,6 +514,24 @@ describe("qa cli runtime", () => {
     expect(suiteArgs.channelDriverSelection).toBeUndefined();
   });
 
+  it("runs the all profile through the live taxonomy profile path", async () => {
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      profile: "all",
+      surface: "agent-runtime-and-provider-execution",
+      category: "agent-runtime-and-provider-execution.agent-turn-execution",
+      providerMode: "mock-openai",
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expectFields(suiteArgs, {
+      providerMode: "mock-openai",
+      channelDriver: "live",
+    });
+    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expectWriteContains(stdoutWrite, "QA run profile: all; categories: 1; scenarios:");
+  });
+
   it("filters QA-channel-pinned scenarios from the Crabline smoke profile", async () => {
     runQaSuite.mockImplementationOnce(async () => {
       await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
@@ -592,7 +610,7 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         profile: "nightly",
       }),
-    ).rejects.toThrow('--qa-profile must be one of smoke-ci, release, got "nightly".');
+    ).rejects.toThrow('--qa-profile must be one of smoke-ci, release, all, got "nightly".');
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 

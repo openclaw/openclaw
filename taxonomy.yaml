@@ -219,6 +219,12 @@ profiles:
       - browser-automation-and-exec-sandbox-tools.browser-automation
       - browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
       - browser-automation-and-exec-sandbox-tools.sandbox-and-tool-policy
+  - id: all
+    description: Full taxonomy scorecard selector for generated maturity coverage evidence across
+      every active category. Intended for explicit QA evidence workflow dispatches rather than the
+      default release gate.
+    channelDriver: live
+    includeAllCategories: true
 levels:
   - id: planned
     code: M0

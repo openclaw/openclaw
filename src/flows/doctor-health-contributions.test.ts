@@ -1012,6 +1012,7 @@ describe("doctor health contributions", () => {
       expect(contributionIds).toContain(coreId);
     }
     expect(contributionIds).toContain("core/doctor/sandbox/registry-files");
+    expect(contributionIds).toContain("core/doctor/gateway-services/extra");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
 

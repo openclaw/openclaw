@@ -13,6 +13,7 @@ import { listExtensionHealthChecksForDoctor } from "../flows/health-check-regist
 import {
   healthFindingMeetsSeverity,
   parseHealthFindingSeverity,
+  type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
 } from "../flows/health-checks.js";
@@ -24,6 +25,7 @@ interface DoctorLintCliOptions {
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
   readonly allowExec?: boolean;
+  readonly deep?: boolean;
 }
 
 function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
@@ -44,7 +46,7 @@ export async function runDoctorLintCli(
   opts: DoctorLintCliOptions,
 ): Promise<number> {
   const sevMin =
-    opts.severityMin === undefined ? "info" : parseHealthFindingSeverity(opts.severityMin);
+    opts.severityMin === undefined ? "warning" : parseHealthFindingSeverity(opts.severityMin);
   if (sevMin === null) {
     throw new Error("Invalid --severity-min value. Expected one of: info, warning, error.");
   }
@@ -80,9 +82,10 @@ export async function runDoctorLintCli(
   registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
   const coreChecks = await resolveDoctorContributionHealthChecks();
   const extensionChecks = listExtensionHealthChecksForDoctor(coreChecks);
+  const coreCtx = { ...ctx, deep: opts.deep === true };
 
   const runOpts: DoctorLintRunOptions = {
-    checks: [...coreChecks, ...extensionChecks],
+    checks: [...coreChecks.map((check) => withCoreLintContext(check, coreCtx)), ...extensionChecks],
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };
@@ -116,6 +119,18 @@ export async function runDoctorLintCli(
   }
 
   return exitCodeFromFindings(result.findings, sevMin);
+}
+
+function withCoreLintContext(
+  check: HealthCheck,
+  ctx: HealthCheckContext & { readonly deep?: boolean },
+): HealthCheck {
+  return {
+    ...check,
+    detect(_ctx, scope) {
+      return check.detect(ctx, scope);
+    },
+  };
 }
 
 function writeJsonResult(result: {
