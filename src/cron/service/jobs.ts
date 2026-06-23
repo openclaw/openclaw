@@ -305,6 +305,13 @@ function assertCronExpressionSatisfiable(job: CronJob, nowMs: number) {
   );
 }
 
+function assertDeleteAfterRunSchedule(job: Pick<CronJob, "deleteAfterRun" | "schedule">) {
+  if (job.deleteAfterRun !== true || job.schedule.kind === "at") {
+    return;
+  }
+  throw new Error('cron deleteAfterRun is only supported for schedule.kind="at"');
+}
+
 function assertMainSessionAgentId(
   job: Pick<CronJob, "sessionTarget" | "agentId">,
   defaultAgentId: string | undefined,
@@ -797,6 +804,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
+  assertDeleteAfterRunSchedule(job);
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
@@ -886,6 +894,7 @@ export function applyJobPatch(
     job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
+  assertDeleteAfterRunSchedule(job);
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
