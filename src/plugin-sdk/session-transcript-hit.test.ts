@@ -214,16 +214,6 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     expect(keys).toEqual(["agent:main:deleted-stem"]);
   });
 
-  it("falls back to owner metadata when agent-scoped live transcripts are missing from the store", () => {
-    const keys = resolveTranscriptStemToSessionKeys({
-      store: {},
-      stem: "live-stem",
-      ownerAgentId: "main",
-    });
-
-    expect(keys).toEqual(["agent:main:live-stem"]);
-  });
-
   it("matches QMD-slugified stems to unique session ids with safe punctuation", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),

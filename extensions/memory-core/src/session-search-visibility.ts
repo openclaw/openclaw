@@ -42,6 +42,14 @@ function filterSessionKeysByScopedAgent(params: {
   });
 }
 
+function synthesizeLiveOwnerSessionKey(params: {
+  ownerAgentId: string | undefined;
+  stem: string;
+}): string[] {
+  const ownerAgentId = normalizeAgentIdForCompare(params.ownerAgentId);
+  return ownerAgentId ? [`agent:${ownerAgentId}:${params.stem}`] : [];
+}
+
 export async function filterMemorySearchHitsBySessionVisibility(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -107,8 +115,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     const qmdArchivedOwnerMatchesScope = Boolean(
       identity.archived && isQmdSessionHit && scopedAgentId,
     );
-    const fallbackOwnerAgentId =
-      ownerMatchesScope || qmdArchivedOwnerMatchesScope
+    const archivedOwnerAgentId =
+      identity.archived && (ownerMatchesScope || qmdArchivedOwnerMatchesScope)
         ? (identity.ownerAgentId ?? scopedAgentId)
         : undefined;
     const liveKeys = identity.liveStem
@@ -124,12 +132,20 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       keys:
         liveKeys.length > 0
           ? liveKeys
-          : resolveTranscriptStemToSessionKeys({
-              store: combinedSessionStore,
-              stem: identity.stem,
-              allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
-              ...(fallbackOwnerAgentId ? { ownerAgentId: fallbackOwnerAgentId } : {}),
-            }),
+          : (() => {
+              const resolvedKeys = resolveTranscriptStemToSessionKeys({
+                store: combinedSessionStore,
+                stem: identity.stem,
+                allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
+                ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+              });
+              return resolvedKeys.length > 0 || identity.archived || !ownerMatchesScope
+                ? resolvedKeys
+                : synthesizeLiveOwnerSessionKey({
+                    ownerAgentId: identity.ownerAgentId,
+                    stem: identity.stem,
+                  });
+            })(),
     });
     if (keys.length === 0) {
       continue;
