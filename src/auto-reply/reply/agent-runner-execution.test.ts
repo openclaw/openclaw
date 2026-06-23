@@ -626,6 +626,21 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).not.toContain("reset our conversation");
   });
 
+  it("omits operator config advice for external preserved-session copy", () => {
+    const text = buildContextOverflowRecoveryText({
+      preserveSessionMapping: true,
+      includeOperatorHint: false,
+      cfg: {},
+      primaryProvider: "openrouter",
+      primaryModel: "qwen3.6-plus",
+    });
+
+    expect(text).toContain("kept this conversation mapped to the current session");
+    expect(text).toContain("The conversation history is still available");
+    expect(text).not.toContain("reserveTokensFloor");
+    expect(text).not.toContain("agents.defaults.compaction");
+  });
+
   it("falls back to session entry model when runtimeProvider is not provided", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {
@@ -5348,7 +5363,9 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("kept this conversation mapped to the current session");
-      expect(result.payload.text).toContain("reserveTokensFloor");
+      expect(result.payload.text).toContain("The conversation history is still available");
+      expect(result.payload.text).not.toContain("reserveTokensFloor");
+      expect(result.payload.text).not.toContain("agents.defaults.compaction");
       expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
@@ -5391,7 +5408,9 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("kept this conversation mapped to the current session");
-      expect(result.payload.text).toContain("reserveTokensFloor");
+      expect(result.payload.text).toContain("The conversation history is still available");
+      expect(result.payload.text).not.toContain("reserveTokensFloor");
+      expect(result.payload.text).not.toContain("agents.defaults.compaction");
       expectRecordFields(requireRecord(getReplyPayloadMetadata(result.payload), "reply metadata"), {
         deliverDespiteSourceReplySuppression: true,
       });
@@ -5434,8 +5453,9 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("reserveTokensFloor");
-      expect(result.payload.text).toContain("20000");
+      expect(result.payload.text).toContain("The conversation history is still available");
+      expect(result.payload.text).not.toContain("reserveTokensFloor");
+      expect(result.payload.text).not.toContain("agents.defaults.compaction");
       expect(result.payload.text).not.toContain("100000");
     }
   });

@@ -439,6 +439,56 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("blocks instead of retrying when compaction reports context still over budget", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: makeOverflowError(
+          "Context overflow: prompt too large for the model (precheck).",
+        ),
+        promptErrorSource: "precheck",
+        preflightRecovery: { route: "compact_only" },
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "anthropic",
+          model: "test-model",
+          route: "compact_only",
+          shouldCompact: true,
+          estimatedPromptTokens: 220_000,
+          contextTokenBudget: 200_000,
+          promptBudgetBeforeReserve: 180_000,
+          reserveTokens: 20_000,
+          effectiveReserveTokens: 20_000,
+          remainingPromptBudgetTokens: 0,
+          overflowTokens: 40_000,
+          toolResultReducibleChars: 0,
+          messageCount: 14,
+          unwindowedMessageCount: 14,
+          sessionId: "test-session",
+        },
+      }),
+    );
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 230_000,
+        tokensAfter: 190_000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta.error?.kind).toBe("context_overflow");
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expectLogIncludes(mockedLog.warn, "post-compaction budget check failed");
+    expectLogExcludes(mockedLog.info, "auto-compaction succeeded");
+  });
+
   it("retries compaction up to 3 times before giving up", async () => {
     const overflowError = makeOverflowError();
 
