@@ -50,6 +50,7 @@ import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
   capFrozenResultText,
+  formatDefaultGiveUpError,
   logAnnounceGiveUp,
   MAX_ANNOUNCE_RETRY_COUNT,
   MIN_ANNOUNCE_RETRY_DELAY_MS,
@@ -577,15 +578,34 @@ export function createSubagentRegistryLifecycleController(params: {
     return true;
   };
 
+  /** Emits delivery failure event for observability (#44925) */
+  const emitDeliveryFailedEvent = (entry: SubagentRunRecord, deliveryError: string) => {
+    // Use sanitized displayName to avoid exposing raw error details to session subscribers.
+    // The full deliveryError is still available via task records and logs.
+    const displayName = entry.label ?? "Subagent delivery failed";
+    emitSessionLifecycleEvent({
+      sessionKey: entry.childSessionKey,
+      reason: "subagent-delivery-failed",
+      parentSessionKey: entry.requesterSessionKey,
+      label: entry.label,
+      displayName,
+    });
+  };
+
   const suspendPendingFinalDelivery = (args: {
     runId: string;
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
     error?: string;
   }) => {
+    // Ensure deliveryError is always populated for auditability (#44925)
+    const deliveryError =
+      args.error ??
+      getDeliveryLastError(args.entry) ??
+      formatDefaultGiveUpError(args.entry, args.reason);
     markPendingFinalDelivery({
       entry: args.entry,
-      error: args.error ?? getDeliveryLastError(args.entry) ?? args.reason,
+      error: deliveryError,
     });
     const now = Date.now();
     const delivery = ensureDeliveryState(args.entry);
@@ -602,13 +622,14 @@ export function createSubagentRegistryLifecycleController(params: {
       runId: args.runId,
       childSessionKey: args.entry.childSessionKey,
       deliveryStatus: "failed",
-      deliveryError: getDeliveryLastError(args.entry) ?? args.reason,
+      deliveryError,
     });
     safeMarkRequiredCompletionDeliveryBlocked({
       entry: args.entry,
-      reason: getDeliveryLastError(args.entry) ?? args.reason,
+      reason: deliveryError,
     });
     logAnnounceGiveUp(args.entry, args.reason);
+    emitDeliveryFailedEvent(args.entry, deliveryError);
     params.persist();
   };
 
@@ -632,7 +653,10 @@ export function createSubagentRegistryLifecycleController(params: {
       });
       return;
     }
-    const deliveryError = getDeliveryLastError(giveUpParams.entry) ?? giveUpParams.reason;
+    // Ensure deliveryError is always populated for auditability (#44925)
+    const deliveryError =
+      getDeliveryLastError(giveUpParams.entry) ??
+      formatDefaultGiveUpError(giveUpParams.entry, giveUpParams.reason);
     clearPendingFinalDelivery(giveUpParams.entry);
     const failedDelivery = ensureDeliveryState(giveUpParams.entry);
     failedDelivery.status = "failed";
@@ -658,6 +682,8 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     const completionReason = resolveCleanupCompletionReason(giveUpParams.entry);
     logAnnounceGiveUp(giveUpParams.entry, giveUpParams.reason);
+    emitDeliveryFailedEvent(giveUpParams.entry, deliveryError);
+
     // Retry-limit / expiry give-up should not leave cleanup stuck behind the
     // best-effort ended hook. Mark the run cleaned first, then fire the hook.
     completeCleanupBookkeeping({
@@ -909,7 +935,9 @@ export function createSubagentRegistryLifecycleController(params: {
         });
         return;
       }
-      const deliveryError = getDeliveryLastError(entry) ?? deferredDecision.reason;
+      // Ensure deliveryError is always populated for auditability (#44925)
+      const deliveryError =
+        getDeliveryLastError(entry) ?? formatDefaultGiveUpError(entry, deferredDecision.reason);
       clearPendingFinalDelivery(entry);
       const failedDelivery = ensureDeliveryState(entry);
       failedDelivery.status = "failed";
@@ -938,6 +966,8 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       const completionReason = resolveCleanupCompletionReason(entry);
       logAnnounceGiveUp(entry, deferredDecision.reason);
+      emitDeliveryFailedEvent(entry, deliveryError);
+
       // Giving up on announce delivery is terminal for cleanup even if the
       // best-effort hook is still resolving.
       completeCleanupBookkeeping({

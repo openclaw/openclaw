@@ -1,0 +1,17 @@
+scopes:
+    - name: app
+      description: Android application and UI implementation in apps/; does not cover CLI tools or core engine.
+    - name: cfg
+      description: Configuration schemas and type definitions in config/; does not cover runtime logic.
+    - name: ext
+      description: Plugin and service extensions in extensions/; covers all provider and browser integrations.
+    - name: pkg
+      description: Shared internal libraries and SDKs in packages/; does not cover app or extension code.
+    - name: cli
+      description: CLI commands and runtime execution helpers in src/cli/ and src/commands/; does not cover core agent logic.
+    - name: core
+      description: Agent runtime, session management, and sandbox execution in src/agents/ and src/acp/.
+    - name: chan
+      description: Channel and message-handling primitives in src/channels/ and src/auto-reply/.
+    - name: sec
+      description: Security audits, policy guards, and access controls in security/ and src/security/.

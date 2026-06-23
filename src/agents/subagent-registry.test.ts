@@ -3075,14 +3075,24 @@ describe("subagent registry seam flow", () => {
       "delete give-up run",
     );
 
+    // Retry 1: advance by base delay (1000ms) to ensure jittered timer fires
     await vi.advanceTimersByTimeAsync(1_000);
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
 
+    // Retry 2: advance by base delay (2000ms)
     await vi.advanceTimersByTimeAsync(2_000);
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
 
+    // Retry 3: advance by base delay (4000ms)
     await vi.advanceTimersByTimeAsync(4_000);
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(4);
+
+    // Retry 4: advance by base delay (8000ms)
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(5);
+
+    // After 5 retries, should give up and delete the run
+    await vi.advanceTimersByTimeAsync(100);
     expect(
       mod
         .listSubagentRunsForRequester("agent:main:main")
@@ -3113,7 +3123,7 @@ describe("subagent registry seam flow", () => {
         expectsCompletionMessage: true,
         delivery: {
           status: "pending",
-          attemptCount: 3,
+          attemptCount: 5,
           lastAttemptAt: Date.parse("2026-03-24T11:59:40Z"),
         },
       });
@@ -3163,7 +3173,7 @@ describe("subagent registry seam flow", () => {
         completion: { required: true, resultText: "child completed successfully" },
         delivery: {
           status: "pending",
-          attemptCount: 3,
+          attemptCount: 5,
           lastAttemptAt: Date.parse("2026-03-24T11:59:40Z"),
           lastError: "gateway request timeout for agent",
           payload: {
@@ -3223,7 +3233,7 @@ describe("subagent registry seam flow", () => {
         status: "suspended",
         createdAt: endedAt + 1_000,
         lastAttemptAt: endedAt + 2_000,
-        attemptCount: 3,
+        attemptCount: 5,
         lastError: "gateway request timeout for agent",
         payload: {
           requesterSessionKey: "agent:main:main",
@@ -3287,6 +3297,11 @@ describe("subagent registry seam flow", () => {
       endedAt: Date.parse("2026-03-24T11:51:00Z"),
       cleanupHandled: false,
       cleanupCompletedAt: undefined,
+      delivery: {
+        status: "pending",
+        attemptCount: 5,
+        lastAttemptAt: Date.parse("2026-03-24T11:51:30Z"),
+      },
     });
 
     mod.registerSubagentRun({

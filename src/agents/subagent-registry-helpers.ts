@@ -36,10 +36,10 @@ export {
 } from "./subagent-session-metrics.js";
 
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 1_000;
-const MAX_ANNOUNCE_RETRY_DELAY_MS = 8_000;
-export const MAX_ANNOUNCE_RETRY_COUNT = 3;
-export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
-export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
+const MAX_ANNOUNCE_RETRY_DELAY_MS = 30_000;
+export const MAX_ANNOUNCE_RETRY_COUNT = 5;
+export const ANNOUNCE_EXPIRY_MS = 10 * 60_000;
+export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 45 * 60_000;
 
 const FROZEN_RESULT_TEXT_MAX_BYTES = 100 * 1024;
 
@@ -65,13 +65,29 @@ export function capFrozenResultText(resultText: string): string {
   return `${payload}${notice}`;
 }
 
-/** Computes bounded exponential backoff for subagent announce retries. */
+/**
+ * Computes bounded exponential backoff with jitter for subagent announce retries.
+ *
+ * The jitter prevents thundering herd when multiple subagents fail simultaneously.
+ * Formula: baseDelay * 2^retryCount, capped at MAX_ANNOUNCE_RETRY_DELAY_MS,
+ * then randomized between [delay/2, delay].
+ *
+ * With current constants (1s base, 30s cap, 5 retries):
+ * - Retry 1: ~0.5-1.0s
+ * - Retry 2: ~1-2s
+ * - Retry 3: ~2-4s
+ * - Retry 4: ~4-8s
+ * - Retry 5: ~8-16s (capped at 30s)
+ */
 export function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
   // retryCount is "attempts already made", so retry #1 waits 1s, then 2s, 4s...
   const backoffExponent = Math.max(0, boundedRetryCount - 1);
   const baseDelay = MIN_ANNOUNCE_RETRY_DELAY_MS * 2 ** backoffExponent;
-  return Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
+  const cappedDelay = Math.min(baseDelay, MAX_ANNOUNCE_RETRY_DELAY_MS);
+  // Add jitter: random value between [cappedDelay/2, cappedDelay]
+  const jitteredDelay = cappedDelay / 2 + Math.random() * (cappedDelay / 2);
+  return Math.round(jitteredDelay);
 }
 
 function formatAnnounceGiveUpLogField(value: string): string {
@@ -92,6 +108,21 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
   defaultRuntime.log(
     `[warn] Subagent announce give up (${reason}) run=${entry.runId} child=${entry.childSessionKey} requester=${entry.requesterSessionKey} retries=${retryCount} endedAgo=${endedAgoLabel}${deliveryError}`,
   );
+}
+
+/**
+ * Build a human-readable error message for give-up when no prior delivery error exists.
+ * Used by both finalize and suspend paths to guarantee deliveryError is always populated (#44925).
+ */
+export function formatDefaultGiveUpError(
+  entry: SubagentRunRecord,
+  reason: "retry-limit" | "expiry",
+): string {
+  const retryCount = getDeliveryAttemptCount(entry);
+  // Use label/taskName only — never copy raw task text which may contain user prompts
+  // that would leak into logs, delivery errors, and session lifecycle broadcasts (#44925).
+  const taskLabel = entry.label ?? entry.taskName ?? "subagent";
+  return `subagent "${taskLabel}" delivery failed after ${retryCount} retries (${reason})`;
 }
 
 // Session keys may differ only by casing after legacy writes. Prefer exact

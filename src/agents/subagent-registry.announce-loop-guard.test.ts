@@ -144,12 +144,12 @@ describe("announce loop guard (#18264)", () => {
       createdAt: now - 60_000,
       startedAt: now - 55_000,
       endedAt: now - 50_000,
-      delivery: { status: "pending", attemptCount: 3, lastAttemptAt: now - 10_000 },
+      delivery: { status: "pending", attemptCount: 5, lastAttemptAt: now - 10_000 },
     });
 
     const runs = registry.listSubagentRunsForRequester("agent:main:main");
     const entry = requireRunById(runs, "test-loop-guard");
-    expect(entry.delivery?.attemptCount).toBe(3);
+    expect(entry.delivery?.attemptCount).toBe(5);
     expect(entry.delivery?.lastAttemptAt).toBe(now - 10_000);
   });
 
@@ -157,18 +157,18 @@ describe("announce loop guard (#18264)", () => {
     {
       name: "expired entries with high retry count are skipped by resumeSubagentRun",
       createEntry: (now: number) => ({
-        // Ended 10 minutes ago (well past ANNOUNCE_EXPIRY_MS of 5 min).
+        // Ended 15 minutes ago (well past ANNOUNCE_EXPIRY_MS of 10 min).
         runId: "test-expired-loop",
         childSessionKey: "agent:main:subagent:expired-child",
         requesterSessionKey: "agent:main:main",
         requesterDisplayKey: "agent:main:main",
         task: "expired test task",
         cleanup: "keep" as const,
-        createdAt: now - 15 * 60_000,
-        startedAt: now - 14 * 60_000,
-        endedAt: now - 10 * 60_000,
+        createdAt: now - 20 * 60_000,
+        startedAt: now - 19 * 60_000,
+        endedAt: now - 15 * 60_000,
         cleanupCompletedAt: undefined,
-        delivery: { status: "pending" as const, attemptCount: 3, lastAttemptAt: now - 9 * 60_000 },
+        delivery: { status: "pending" as const, attemptCount: 5, lastAttemptAt: now - 14 * 60_000 },
       }),
     },
     {
@@ -184,7 +184,7 @@ describe("announce loop guard (#18264)", () => {
         startedAt: now - 90_000,
         endedAt: now - 60_000,
         cleanupCompletedAt: undefined,
-        delivery: { status: "pending" as const, attemptCount: 3, lastAttemptAt: now - 30_000 },
+        delivery: { status: "pending" as const, attemptCount: 5, lastAttemptAt: now - 30_000 },
       }),
     },
   ])("$name", async ({ createEntry }) => {
