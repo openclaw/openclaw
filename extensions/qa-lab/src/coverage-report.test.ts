@@ -135,7 +135,7 @@ describe("qa coverage report", () => {
       "telegram",
       "whatsapp",
     ]);
-    expect(inventory.scorecardTaxonomy.profileCount).toBe(2);
+    expect(inventory.scorecardTaxonomy.profileCount).toBe(3);
     expect(
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci"),
     ).toMatchObject({
@@ -146,6 +146,14 @@ describe("qa coverage report", () => {
       inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "release"),
     ).toMatchObject({
       channelDriver: "live",
+    });
+    expect(
+      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "all"),
+    ).toMatchObject({
+      channelDriver: "live",
+      categoryIds: expect.arrayContaining([
+        "browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution",
+      ]),
     });
     expect(inventory.scorecardTaxonomy.categoryCount).toBeGreaterThan(200);
     expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeGreaterThan(0);
@@ -233,7 +241,7 @@ describe("qa coverage report", () => {
     expect(report).toContain("- Evidence refs:");
     expect(report).toContain("- Scenario coverage IDs:");
     expect(report).toContain(
-      "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; partial): profiles: release, smoke-ci; coverage IDs:",
+      "- browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution (browser-automation-and-exec-sandbox-tools / Tool Invocation and Execution; partial): profiles: all, release, smoke-ci; coverage IDs:",
     );
     expect(report).toContain("primary:playwright:ui/src/ui/e2e/chat-flow.e2e.test.ts (ui.control)");
     expect(report).not.toContain("### Unknown Scenario Coverage IDs");
