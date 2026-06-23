@@ -17,6 +17,7 @@ const {
   fetchWithTimeoutGuardedMock,
   pollProviderOperationJsonMock,
   assertOkOrThrowHttpErrorMock,
+  readProviderJsonResponseMock,
   executeProviderOperationWithRetryMock,
   resolveProviderHttpRequestConfigMock,
   sanitizeConfiguredModelProviderRequestMock,
@@ -178,14 +179,13 @@ describe("openai video generation provider", () => {
 
   it("uses JSON for text-only Sora requests", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "vid_123",
-          model: "sora-2",
-          status: "queued",
-        }),
-      },
+      response: {} as Response,
       release: vi.fn(async () => {}),
+    });
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_123",
+      model: "sora-2",
+      status: "queued",
     });
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
@@ -226,14 +226,13 @@ describe("openai video generation provider", () => {
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "vid_too_large",
-          model: "sora-2",
-          status: "queued",
-        }),
-      },
+      response: {} as Response,
       release: vi.fn(async () => {}),
+    });
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_too_large",
+      model: "sora-2",
+      status: "queued",
     });
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
@@ -258,14 +257,13 @@ describe("openai video generation provider", () => {
 
   it("uses JSON input_reference.image_url for image-to-video requests", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "vid_456",
-          model: "sora-2",
-          status: "queued",
-        }),
-      },
+      response: {} as Response,
       release: vi.fn(async () => {}),
+    });
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_456",
+      model: "sora-2",
+      status: "queued",
     });
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
@@ -303,14 +301,13 @@ describe("openai video generation provider", () => {
 
   it("keeps configured local baseUrl private-network blocked unless explicitly enabled", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "vid_local",
-          model: "sora-2",
-          status: "queued",
-        }),
-      },
+      response: {} as Response,
       release: vi.fn(async () => {}),
+    });
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_local",
+      model: "sora-2",
+      status: "queued",
     });
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
@@ -351,14 +348,13 @@ describe("openai video generation provider", () => {
 
   it("honors configured request allowPrivateNetwork for local video providers", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "vid_local",
-          model: "sora-2",
-          status: "queued",
-        }),
-      },
+      response: {} as Response,
       release: vi.fn(async () => {}),
+    });
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_local",
+      model: "sora-2",
+      status: "queued",
     });
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
@@ -426,14 +422,13 @@ describe("openai video generation provider", () => {
       })
       .mockImplementationOnce(async () => {});
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "vid_local",
-          model: "sora-2",
-          status: "queued",
-        }),
-      },
+      response: {} as Response,
       release: vi.fn(async () => {}),
+    });
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_local",
+      model: "sora-2",
+      status: "queued",
     });
     fetchWithTimeoutMock.mockResolvedValueOnce({
       json: async () => ({
@@ -497,14 +492,13 @@ describe("openai video generation provider", () => {
         throw new Error(label);
       });
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "vid_local",
-          model: "sora-2",
-          status: "queued",
-        }),
-      },
+      response: {} as Response,
       release: vi.fn(async () => {}),
+    });
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_local",
+      model: "sora-2",
+      status: "queued",
     });
     fetchWithTimeoutMock.mockResolvedValueOnce({
       json: async () => ({
@@ -551,6 +545,11 @@ describe("openai video generation provider", () => {
   });
 
   it("uses the video edits endpoint for video-to-video uploads", async () => {
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_789",
+      model: "sora-2",
+      status: "queued",
+    });
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
         ok: true,
@@ -596,6 +595,11 @@ describe("openai video generation provider", () => {
   });
 
   it("honors configured request allowPrivateNetwork for multipart video uploads", async () => {
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_789",
+      model: "sora-2",
+      status: "queued",
+    });
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
         ok: true,
@@ -661,5 +665,70 @@ describe("openai video generation provider", () => {
         inputVideos: [{ buffer: Buffer.from("b"), mimeType: "video/mp4" }],
       }),
     ).rejects.toThrow("OpenAI video generation supports at most one reference image or video.");
+  });
+
+  it("routes the submitted Sora body through the bounded provider-json reader", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {} as Response,
+      release,
+    });
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      id: "vid_bound",
+      model: "sora-2",
+      status: "queued",
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "vid_bound",
+          model: "sora-2",
+          status: "completed",
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "draw a square",
+      cfg: {} as never,
+    } as never);
+
+    expect(readProviderJsonResponseMock).toHaveBeenCalledTimes(1);
+    const [responseArg, labelArg] = readProviderJsonResponseMock.mock.calls[0] as [
+      Response,
+      string,
+    ];
+    expect(responseArg).toBeDefined();
+    expect(labelArg).toBe("OpenAI video generation failed");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces the bounded-reader error verbatim when the body exceeds the cap", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {} as Response,
+      release,
+    });
+    readProviderJsonResponseMock.mockRejectedValueOnce(
+      new Error("OpenAI video generation failed: JSON response exceeds 16777216 bytes"),
+    );
+
+    const provider = buildOpenAIVideoGenerationProvider();
+
+    await expect(
+      provider.generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "oversized",
+        cfg: {} as never,
+      } as never),
+    ).rejects.toThrow(/JSON response exceeds 16777216 bytes/);
+    expect(release).toHaveBeenCalledOnce();
   });
 });
