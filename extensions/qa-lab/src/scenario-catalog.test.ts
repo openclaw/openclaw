@@ -11,6 +11,11 @@ import {
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
+type CatalogScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
+type FlowCatalogScenario = CatalogScenario & {
+  execution: Extract<CatalogScenario["execution"], { kind: "flow" }>;
+};
+
 function listScenarioMarkdownPaths(dir = "qa/scenarios"): string[] {
   return fs
     .readdirSync(dir, { withFileTypes: true })
@@ -22,6 +27,32 @@ function listScenarioMarkdownPaths(dir = "qa/scenarios"): string[] {
       return entry.isFile() && entry.name.endsWith(".md") ? [entryPath] : [];
     })
     .toSorted();
+}
+
+function isFlowScenario(scenario: CatalogScenario): scenario is FlowCatalogScenario {
+  return scenario.execution.kind === "flow";
+}
+
+function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
+  expect(scenario.execution.kind).toBe("flow");
+  if (!isFlowScenario(scenario)) {
+    throw new Error(`expected ${scenario.id} to be a flow scenario`);
+  }
+  return scenario;
+}
+
+function flowContainsCall(value: unknown, callName: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => flowContainsCall(entry, callName));
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    record.call === callName ||
+    Object.values(record).some((entry) => flowContainsCall(entry, callName))
+  );
 }
 
 describe("qa scenario catalog", () => {
@@ -142,6 +173,34 @@ describe("qa scenario catalog", () => {
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-1: ok");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
+  });
+
+  it("loads explicit suite isolation metadata from per-scenario YAML", () => {
+    const staleLinks = requireFlowScenario(readQaScenarioById("subagent-stale-child-links"));
+    const kitchenSink = requireFlowScenario(readQaScenarioById("kitchen-sink-live-openai"));
+
+    expect(staleLinks.execution.suiteIsolation).toBe("isolated");
+    expect(staleLinks.execution.isolationReason).toContain("gateway session");
+    expect(kitchenSink.execution.suiteIsolation).toBe("isolated");
+    expect(kitchenSink.execution.isolationReason).toContain("plugin/channel/tool config");
+  });
+
+  it("requires explicit suite isolation for gateway state restart scenarios", () => {
+    const scenarios = readQaScenarioPack()
+      .scenarios.filter(isFlowScenario)
+      .filter((scenario) =>
+        flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation"),
+      );
+
+    expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
+      "kitchen-sink-live-openai",
+      "subagent-stale-child-links",
+    ]);
+    expect(
+      scenarios
+        .filter((scenario) => scenario.execution.suiteIsolation !== "isolated")
+        .map((scenario) => scenario.id),
+    ).toEqual([]);
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {
@@ -517,9 +576,6 @@ describe("qa scenario catalog", () => {
       "trusted tool policy registration requires id, description, and evaluate()",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
-      "control UI descriptor registration requires id, surface, label, and valid optional fields",
-    );
-    expect(config?.expectedAdversarialDiagnostics).toContain(
       "hosted media resolver registration missing resolver",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
@@ -555,7 +611,7 @@ describe("qa scenario catalog", () => {
       "this seeded scenario is mock-openai only",
     );
     expect(heartbeatFlow).toContain("sessionKey");
-    expect(heartbeatFlow).toContain("targetOutbound.length === 0");
+    expect(heartbeatFlow).toContain("commitmentOutbound.length === 0");
     expect(heartbeatFlow).not.toContain("waitForNoOutbound");
   });
 
@@ -639,6 +695,7 @@ describe("qa scenario catalog", () => {
       | {
           workspaceFiles?: Record<string, string>;
           prompt?: string;
+          requiredChannelDriver?: string;
           expectedReplyAll?: string[];
           expectedArtifactAll?: string[];
           expectedArtifactAny?: string[];
@@ -651,10 +708,44 @@ describe("qa scenario catalog", () => {
       "Mission: prove you followed the repo contract.",
     );
     expect(config?.prompt).toContain("Repo contract followthrough check.");
+    expect(config?.requiredChannelDriver).toBe("qa-channel");
     expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
     expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
     expect(config?.expectedArtifactAny).toContain("evidence path");
     expect(scenario.title).toBe("Instruction followthrough repo contract");
+  });
+
+  it("keeps native QA-channel fixtures out of Crabline profile selection", () => {
+    const scenarioIds = [
+      "subagent-forked-context",
+      "subagent-handoff",
+      "group-message-tool-unavailable-fallback",
+      "qa-channel-reconnect-dedupe",
+      "reaction-edit-delete",
+      "thread-follow-up",
+      "image-generation-roundtrip",
+      "image-understanding-attachment",
+      "native-image-generation",
+      "active-memory-preprompt-recall",
+      "memory-recall",
+      "session-memory-ranking",
+      "thread-memory-isolation",
+      "personal-channel-thread-reply",
+      "personal-memory-preference-recall",
+      "personal-reminder-roundtrip",
+      "cron-natural-fire-no-duplicate",
+      "cron-one-minute-ping",
+      "cron-single-run-no-duplicate",
+      "control-ui-qa-channel-image-roundtrip",
+      "config-apply-restart-wakeup",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+      expect(config?.requiredChannelDriver, scenarioId).toBe("qa-channel");
+    }
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

@@ -417,9 +417,15 @@ print_log_tail "$LOG_PATH"
     };
 
     const invalid = runProbe("12mb");
+    const overlarge = runProbe("9999999999");
+    const overprecise = runProbe("12.1234567");
     const decimal = runProbe("12.5");
     expect(invalid.status).toBe(2);
     expect(invalid.stderr).toContain("invalid OPENCLAW_SAMPLE_RESOURCE_LIMIT: 12mb");
+    expect(overlarge.status).toBe(2);
+    expect(overlarge.stderr).toContain("invalid OPENCLAW_SAMPLE_RESOURCE_LIMIT: 9999999999");
+    expect(overprecise.status).toBe(2);
+    expect(overprecise.stderr).toContain("invalid OPENCLAW_SAMPLE_RESOURCE_LIMIT: 12.1234567");
     expect(decimal.status).toBe(0);
     expect(decimal.stdout.trimEnd()).toBe("12.5");
   });

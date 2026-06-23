@@ -736,6 +736,7 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       scenario,
       providerMode: normalizedProviderMode,
       primaryModel,
+      channelDriver: profileReport.channelDriver,
     }),
   );
   if (scenarios.length === 0) {
@@ -786,6 +787,7 @@ function selectQaScenarioDefinitionsForChannelResolution(params: {
   scenarioIds: string[];
   providerMode: QaProviderMode;
   primaryModel: string;
+  channelDriver?: QaScorecardChannelDriver | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const scenarios = readQaScenarioPack().scenarios;
@@ -801,6 +803,7 @@ function selectQaScenarioDefinitionsForChannelResolution(params: {
       scenario,
       providerMode: params.providerMode,
       primaryModel: params.primaryModel,
+      channelDriver: params.channelDriver,
       claudeCliAuthMode: params.claudeCliAuthMode,
     }),
   );
@@ -915,6 +918,7 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
               scenarioIds,
               providerMode,
               primaryModel: primaryModel ?? defaultQaModelForMode(providerMode),
+              channelDriver,
               claudeCliAuthMode,
             }),
           }),

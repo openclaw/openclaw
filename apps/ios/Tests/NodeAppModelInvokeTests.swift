@@ -1377,6 +1377,24 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         #expect(center.addCalls == 1)
     }
 
+    @Test @MainActor func apnsRegistrationRequiresDisclosureAndNotificationAuthorization() async {
+        let center = MockBootstrapNotificationCenter()
+        center.status = .authorized
+        let appModel = NodeAppModel(notificationCenter: center)
+        PushEnrollmentConsent.reset()
+        defer { PushEnrollmentConsent.reset() }
+
+        #expect(await appModel._test_canPublishAPNsRegistration() == false)
+        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false) == false)
+
+        PushEnrollmentConsent.markDisclosureAccepted()
+        center.status = .notDetermined
+        #expect(await appModel._test_canPublishAPNsRegistration() == false)
+
+        center.status = .authorized
+        #expect(await appModel._test_canPublishAPNsRegistration())
+    }
+
     @Test @MainActor func chatPushWithoutSpeechReturnsUnavailableWhenNotificationsOff() async throws {
         let center = MockBootstrapNotificationCenter()
         center.status = .notDetermined

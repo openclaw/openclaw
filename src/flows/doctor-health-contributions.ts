@@ -1351,7 +1351,10 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:gateway-services",
       label: "Gateway services",
-      healthCheckIds: ["core/doctor/gateway-services/platform-notes"],
+      healthCheckIds: [
+        "core/doctor/gateway-services/extra",
+        "core/doctor/gateway-services/platform-notes",
+      ],
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({

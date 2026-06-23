@@ -71,6 +71,7 @@ export type QaScenarioRuntimeDeps = {
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
   startAgentRun: QaScenarioRuntimeFunction;
   waitForAgentRun: QaScenarioRuntimeFunction;
+  waitForAgentHistoryReply: QaScenarioRuntimeFunction;
   listCronJobs: QaScenarioRuntimeFunction;
   findManagedDreamingCronJob: QaScenarioRuntimeFunction;
   waitForCronRunCompletion: QaScenarioRuntimeFunction;
@@ -164,6 +165,7 @@ type QaScenarioRuntimeApi<
   resolveGeneratedImagePath: TDeps["resolveGeneratedImagePath"];
   startAgentRun: TDeps["startAgentRun"];
   waitForAgentRun: TDeps["waitForAgentRun"];
+  waitForAgentHistoryReply: TDeps["waitForAgentHistoryReply"];
   listCronJobs: TDeps["listCronJobs"];
   findManagedDreamingCronJob: TDeps["findManagedDreamingCronJob"];
   waitForCronRunCompletion: TDeps["waitForCronRunCompletion"];
@@ -272,6 +274,7 @@ export function createQaScenarioRuntimeApi<
     resolveGeneratedImagePath: params.deps.resolveGeneratedImagePath,
     startAgentRun: params.deps.startAgentRun,
     waitForAgentRun: params.deps.waitForAgentRun,
+    waitForAgentHistoryReply: params.deps.waitForAgentHistoryReply,
     listCronJobs: params.deps.listCronJobs,
     findManagedDreamingCronJob: params.deps.findManagedDreamingCronJob,
     waitForCronRunCompletion: params.deps.waitForCronRunCompletion,

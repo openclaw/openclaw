@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements self check behavior.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -27,7 +28,8 @@ export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; rep
     return params.outputPath;
   }
   const repoRoot = path.resolve(params?.repoRoot ?? process.cwd());
-  return path.join(repoRoot, ".artifacts", "qa-e2e", "self-check.md");
+  const runId = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+  return path.join(repoRoot, ".artifacts", "qa-e2e", `self-check-${runId}.md`);
 }
 
 export async function runQaSelfCheckAgainstState(params: {

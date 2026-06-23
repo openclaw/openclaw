@@ -186,12 +186,23 @@ export const streamOpenAICompletions: StreamFunction<
       let hasFinishReason = false;
       const toolCallBlocksByIndex = new Map<number, StreamingToolCallBlock>();
       const toolCallBlocksById = new Map<string, StreamingToolCallBlock>();
+      const toolCallBlocksByFirstId = new Map<string, StreamingToolCallBlock>();
       const blocks = output.content as StreamingBlock[];
       // A block can be finished mid-stream (native reasoning sealed at the
       // text-lane transition) and again by the end-of-stream loop; guard so its
       // *_end event is emitted exactly once.
       const finishedBlocks = new Set<StreamingBlock>();
-      const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
+      const contentIndices = new WeakMap<StreamingBlock, number>();
+      const appendBlock = (block: StreamingBlock) => {
+        contentIndices.set(block, blocks.length);
+        blocks.push(block);
+      };
+      const getContentIndex = (block: StreamingBlock) => contentIndices.get(block) ?? -1;
+      const rememberFirstToolCallById = (id: string, block: StreamingToolCallBlock) => {
+        if (!toolCallBlocksByFirstId.has(id)) {
+          toolCallBlocksByFirstId.set(id, block);
+        }
+      };
       const finishBlock = (block: StreamingBlock) => {
         const contentIndex = getContentIndex(block);
         if (contentIndex === -1 || finishedBlocks.has(block)) {
@@ -229,7 +240,7 @@ export const streamOpenAICompletions: StreamFunction<
       const ensureTextBlock = () => {
         if (!textBlock) {
           textBlock = { type: "text", text: "" };
-          blocks.push(textBlock);
+          appendBlock(textBlock);
           stream.push({
             type: "text_start",
             contentIndex: getContentIndex(textBlock),
@@ -245,7 +256,7 @@ export const streamOpenAICompletions: StreamFunction<
             thinking: "",
             thinkingSignature,
           };
-          blocks.push(thinkingBlock);
+          appendBlock(thinkingBlock);
           stream.push({
             type: "thinking_start",
             contentIndex: getContentIndex(thinkingBlock),
@@ -306,8 +317,9 @@ export const streamOpenAICompletions: StreamFunction<
           }
           if (toolCall.id) {
             toolCallBlocksById.set(toolCall.id, block);
+            rememberFirstToolCallById(toolCall.id, block);
           }
-          blocks.push(block);
+          appendBlock(block);
           stream.push({
             type: "toolcall_start",
             contentIndex: getContentIndex(block),
@@ -427,6 +439,7 @@ export const streamOpenAICompletions: StreamFunction<
               if (!block.id && toolCall.id) {
                 block.id = toolCall.id;
                 toolCallBlocksById.set(toolCall.id, block);
+                rememberFirstToolCallById(toolCall.id, block);
               }
               if (!block.name && toolCall.function?.name) {
                 block.name = toolCall.function.name;
@@ -452,9 +465,7 @@ export const streamOpenAICompletions: StreamFunction<
           if (reasoningDetails && Array.isArray(reasoningDetails)) {
             for (const detail of reasoningDetails) {
               if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
-                const matchingToolCall = output.content.find(
-                  (b) => b.type === "toolCall" && b.id === detail.id,
-                ) as ToolCall | undefined;
+                const matchingToolCall = toolCallBlocksByFirstId.get(detail.id);
                 if (matchingToolCall) {
                   matchingToolCall.thoughtSignature = JSON.stringify(detail);
                 }

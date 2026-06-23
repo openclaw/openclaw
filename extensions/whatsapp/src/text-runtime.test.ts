@@ -7,6 +7,7 @@ import {
   assertWebChannel,
   jidToE164,
   markdownToWhatsApp,
+  resolveEquivalentWhatsAppDirectChatJids,
   resolveJidToE164,
   toWhatsappJid,
   toWhatsappJidWithLid,
@@ -208,5 +209,36 @@ describe("resolveJidToE164", () => {
     };
     await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBeNull();
     expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
+  });
+});
+
+describe("resolveEquivalentWhatsAppDirectChatJids", () => {
+  it.each([
+    ["15551230000:0@s.whatsapp.net", "15551230000@s.whatsapp.net"],
+    ["15551230000:2@hosted", "15551230000@hosted"],
+    ["777:1@lid", "777@lid"],
+    ["777:2@hosted.lid", "777@hosted.lid"],
+  ])("includes the bare direct-chat form for %s", async (observedJid, bareJid) => {
+    await expect(resolveEquivalentWhatsAppDirectChatJids(observedJid)).resolves.toEqual([
+      observedJid,
+      bareJid,
+    ]);
+  });
+
+  it("preserves hosted direct-chat domains for local PN/LID mappings", async () => {
+    await withTempDir("whatsapp-hosted-lid-map-", async (authDir) => {
+      fs.writeFileSync(path.join(authDir, "lid-mapping-15551230000.json"), JSON.stringify("777"));
+      fs.writeFileSync(
+        path.join(authDir, "lid-mapping-777_reverse.json"),
+        JSON.stringify("15551230000"),
+      );
+
+      await expect(
+        resolveEquivalentWhatsAppDirectChatJids("15551230000@hosted", { authDir }),
+      ).resolves.toEqual(["15551230000@hosted", "777@hosted.lid"]);
+      await expect(
+        resolveEquivalentWhatsAppDirectChatJids("777@hosted.lid", { authDir }),
+      ).resolves.toEqual(["777@hosted.lid", "15551230000@hosted"]);
+    });
   });
 });

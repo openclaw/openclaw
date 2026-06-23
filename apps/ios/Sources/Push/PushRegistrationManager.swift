@@ -69,12 +69,16 @@ actor PushRegistrationManager {
     async throws -> String {
         guard self.buildConfig.distribution == .official else {
             throw PushRelayError.relayMisconfigured(
-                "Relay transport requires OpenClawPushDistribution=official")
+                "Relay transport requires an official push build mode")
         }
         try Self.validateRelayContract(
             relayProfile: self.buildConfig.relayProfile,
             apnsEnvironment: self.buildConfig.apnsEnvironment,
             proofPolicy: self.buildConfig.proofPolicy)
+        GatewayDiagnostics.pushRelay.stage(
+            "contract validated apns=\(self.buildConfig.apnsEnvironment.rawValue) "
+                + "profile=\(self.buildConfig.relayProfile.rawValue) "
+                + "proof=\(self.buildConfig.proofPolicy.rawValue)")
         guard let relayClient = self.relayClient else {
             throw PushRelayError.relayBaseURLMissing
         }
@@ -102,6 +106,7 @@ actor PushRegistrationManager {
            stored.lastAPNsTokenHashHex == tokenHashHex,
            !Self.isExpired(stored.relayHandleExpiresAtMs)
         {
+            GatewayDiagnostics.pushRelay.stage("using cached relay registration")
             return try Self.encodePayload(
                 RelayGatewayPushRegistrationPayload(
                     relayHandle: stored.relayHandle,
@@ -115,6 +120,7 @@ actor PushRegistrationManager {
                     tokenDebugSuffix: stored.tokenDebugSuffix))
         }
 
+        GatewayDiagnostics.pushRelay.stage("relay registration cache miss")
         let response = try await relayClient.register(PushRelayRegistrationInput(
             installationId: installationId,
             bundleId: bundleId,
@@ -139,6 +145,7 @@ actor PushRegistrationManager {
             relayProfile: self.buildConfig.relayProfile.rawValue,
             proofPolicy: self.buildConfig.proofPolicy.rawValue)
         _ = PushRelayRegistrationStore.saveRegistrationState(registrationState)
+        GatewayDiagnostics.pushRelay.stage("stored relay registration hasExpiry=\(response.expiresAtMs != nil)")
         return try Self.encodePayload(
             RelayGatewayPushRegistrationPayload(
                 relayHandle: response.relayHandle,

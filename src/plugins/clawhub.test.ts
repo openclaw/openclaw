@@ -2069,6 +2069,7 @@ describe("installPluginFromClawHub", () => {
             family: "skill",
             channel: "official",
             isOfficial: true,
+            ownerHandle: "openclaw",
             createdAt: 0,
             updatedAt: 0,
           },
@@ -2078,7 +2079,7 @@ describe("installPluginFromClawHub", () => {
       expected: {
         ok: false,
         code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
-        error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+        error: '"calendar" is a skill. Use "openclaw skills install @openclaw/calendar" instead.',
       },
     },
     {
@@ -2091,6 +2092,7 @@ describe("installPluginFromClawHub", () => {
             family: "skill",
             channel: "official",
             isOfficial: true,
+            ownerHandle: "openclaw",
             createdAt: 0,
             updatedAt: 0,
           },
@@ -2107,7 +2109,7 @@ describe("installPluginFromClawHub", () => {
       expected: {
         ok: false,
         code: CLAWHUB_INSTALL_ERROR_CODE.SKILL_PACKAGE,
-        error: '"calendar" is a skill. Use "openclaw skills install calendar" instead.',
+        error: '"calendar" is a skill. Use "openclaw skills install @openclaw/calendar" instead.',
       },
     },
     {

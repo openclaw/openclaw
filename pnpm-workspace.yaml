@@ -134,7 +134,7 @@ allowBuilds:
   "@discordjs/opus": false
   esbuild: true
   koffi: false
-  node-llama-cpp: true
+  node-llama-cpp: false
   protobufjs: true
   tree-sitter-bash: false
   openclaw: true
