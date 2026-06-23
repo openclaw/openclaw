@@ -887,6 +887,7 @@ describe("test-projects args", () => {
           "test/scripts/codex-install-assertions.test.ts",
           "test/scripts/config-reload-mutate-metadata.test.ts",
           "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/docs-list.test.ts",
           "test/scripts/doctor-install-switch-wrapper.test.ts",
           "test/scripts/e2e-text-file-utils.test.ts",
           "test/scripts/fixture-common.test.ts",

@@ -106,6 +106,7 @@ import {
   setSessionRuntimeModel,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
+import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
 
@@ -963,6 +964,7 @@ async function finalizeCronRun(params: {
   execution: CronExecutionResult;
   abortReason: () => string;
   isAborted: () => boolean;
+  markCronRunSessionCleanupAttempted: () => void;
 }): Promise<RunCronAgentTurnResult> {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
@@ -1161,6 +1163,7 @@ async function finalizeCronRun(params: {
       sessionId: prepared.currentRunSessionId(),
       retireReason: "cron-delete-after-run-aborted",
     });
+    params.markCronRunSessionCleanupAttempted();
     return prepared.withRunSession({
       status: "error",
       error,
@@ -1245,6 +1248,7 @@ async function finalizeCronRun(params: {
       sessionId: prepared.currentRunSessionId(),
       retireReason: "cron-delete-after-run-fatal-error",
     });
+    params.markCronRunSessionCleanupAttempted();
     const deliveryTrace = buildCronDeliveryTrace({
       deliveryPlan: prepared.deliveryPlan,
       resolvedDelivery: prepared.resolvedDelivery,
@@ -1288,6 +1292,9 @@ async function finalizeCronRun(params: {
     abortReason: params.abortReason,
     withRunSession: prepared.withRunSession,
   });
+  if (deliveryResult.cronRunSessionCleanupAttempted) {
+    params.markCronRunSessionCleanupAttempted();
+  }
   const deliveryTrace = buildCronDeliveryTrace({
     deliveryPlan: prepared.deliveryPlan,
     resolvedDelivery: prepared.resolvedDelivery,
@@ -1440,6 +1447,7 @@ export async function runCronIsolatedAgentTurn(params: {
 
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
+  let cronRunSessionCleanupAttempted = false;
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
     const existingRunContext = getAgentRunContext(initialSessionId);
@@ -1506,6 +1514,9 @@ export async function runCronIsolatedAgentTurn(params: {
       execution,
       abortReason,
       isAborted,
+      markCronRunSessionCleanupAttempted: () => {
+        cronRunSessionCleanupAttempted = true;
+      },
     });
     if (finalized.status === "error") {
       outcome = "error";
@@ -1536,14 +1547,25 @@ export async function runCronIsolatedAgentTurn(params: {
       ...finalSessionRef,
       error: outcomeError,
     });
-    // Release runtime references after the run completes (success or failure).
-    // The session entry has already been persisted to disk by this point,
-    // so the in-memory store and run context can be safely dropped.
-    await disposeCronRunContext({
-      sessionId: initialSessionId,
-      cronSession: prepared.context.cronSession,
-      ownsRunContext,
-      runContextOwnerToken,
-    });
+    try {
+      if (!cronRunSessionCleanupAttempted) {
+        cronRunSessionCleanupAttempted = await cleanupCronRunSessionAfterRun({
+          job: params.job,
+          agentSessionKey: prepared.context.agentSessionKey,
+          sessionId: prepared.context.currentRunSessionId(),
+          reason: "cron-delete-after-run-finally",
+        });
+      }
+    } finally {
+      // Release runtime references after the run completes (success or failure).
+      // The session entry has already been persisted to disk by this point,
+      // so the in-memory store and run context can be safely dropped.
+      await disposeCronRunContext({
+        sessionId: initialSessionId,
+        cronSession: prepared.context.cronSession,
+        ownsRunContext,
+        runContextOwnerToken,
+      });
+    }
   }
 }

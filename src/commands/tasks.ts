@@ -24,7 +24,6 @@ import {
 import {
   listTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
-  summarizeTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
 import {
   getInspectableTaskAuditSummary,
@@ -41,6 +40,7 @@ import {
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
 import {
+  buildTaskSystemAuditJsonPayload,
   buildTaskSystemAuditFindings,
   type TaskSystemAuditCode,
   type TaskSystemAuditFinding,
@@ -499,37 +499,22 @@ export async function tasksAuditCommand(
   configureTaskMaintenanceFromConfig();
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
-  const { allFindings, filteredFindings, taskFindings, summary } = toSystemAuditFindings({
+  const auditResult = toSystemAuditFindings({
     severityFilter,
     codeFilter,
   });
+  const { filteredFindings, summary } = auditResult;
   const limit = typeof opts.limit === "number" && opts.limit > 0 ? opts.limit : undefined;
   const displayed = limit ? filteredFindings.slice(0, limit) : filteredFindings;
 
   if (opts.json) {
-    const legacySummary = summarizeTaskAuditFindings(taskFindings);
     runtime.log(
       JSON.stringify(
-        {
-          count: allFindings.length,
-          filteredCount: filteredFindings.length,
-          displayed: displayed.length,
-          filters: {
-            severity: severityFilter ?? null,
-            code: codeFilter ?? null,
-            limit: limit ?? null,
-          },
-          summary: {
-            ...legacySummary,
-            taskFlows: summary.taskFlows,
-            combined: {
-              total: summary.total,
-              errors: summary.errors,
-              warnings: summary.warnings,
-            },
-          },
-          findings: displayed,
-        },
+        buildTaskSystemAuditJsonPayload(auditResult, {
+          severityFilter,
+          codeFilter,
+          limit: opts.limit,
+        }),
         null,
         2,
       ),

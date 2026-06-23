@@ -1026,6 +1026,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     "scripts/deadcode-unused-files.allowlist.mjs",
     ["test/scripts/check-deadcode-unused-files.test.ts"],
   ],
+  ["scripts/docs-list.js", ["test/scripts/docs-list.test.ts"]],
   ["scripts/docs-link-audit.mjs", ["src/scripts/docs-link-audit.test.ts"]],
   ["scripts/lib/arg-utils.mjs", ["test/scripts/arg-utils.test.ts"]],
   [

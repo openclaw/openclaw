@@ -6,7 +6,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveArchiveKind } from "../infra/archive.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { tryReadJson } from "../infra/json-files.js";
@@ -792,7 +792,7 @@ async function readMarketplaceChunkWithTimeout(
       (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(toLintErrorObject(err, "Non-Error rejection"));
+          reject(toErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -1333,18 +1333,4 @@ export async function installPluginFromMarketplace(
     await installCleanup?.();
     await loaded.marketplace.cleanup?.();
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -1973,6 +1973,212 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
   });
 
+  it("ignores a stale native InputEvent replay after send clears the host draft", () => {
+    let draft = "";
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn(() => {
+      draft = "";
+    });
+    const renderWithDraft = () => {
+      render(
+        renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+        container,
+      );
+    };
+
+    renderWithDraft();
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a new same-session draft when a delayed stale replay arrives", () => {
+    let draft = "";
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn(() => {
+      draft = "";
+    });
+    const renderWithDraft = () => {
+      render(
+        renderChat(createChatProps({ draft, getDraft: () => draft, onDraftChange, onSend })),
+        container,
+      );
+    };
+
+    renderWithDraft();
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        data: "new draft",
+        inputType: "insertText",
+      }),
+    );
+    textarea!.value = "new draft";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "new draft",
+        inputType: "insertText",
+      }),
+    );
+    expect(textarea?.value).toBe("new draft");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("new draft");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not apply a stale submitted draft replay to another session", () => {
+    const drafts: Record<string, string> = {
+      "stale-replay-a": "",
+      "stale-replay-b": "",
+    };
+    const onDraftChange = vi.fn((sessionKey: string, next: string) => {
+      drafts[sessionKey] = next;
+    });
+    const container = document.createElement("div");
+    const renderSession = (sessionKey: string) => {
+      render(
+        renderChat(
+          createChatProps({
+            currentAgentId: "stale-replay-agent",
+            draft: drafts[sessionKey],
+            getDraft: () => drafts[sessionKey],
+            onDraftChange: (next) => onDraftChange(sessionKey, next),
+            onSend: () => {
+              drafts[sessionKey] = "";
+            },
+            sessionKey,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderSession("stale-replay-a");
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+
+    renderSession("stale-replay-b");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("");
+    expect(drafts["stale-replay-b"]).toBe("");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an intervening session draft when a delayed stale replay arrives", () => {
+    const drafts: Record<string, string> = {
+      "delayed-replay-a": "",
+      "delayed-replay-b": "",
+    };
+    const onDraftChange = vi.fn((sessionKey: string, next: string) => {
+      drafts[sessionKey] = next;
+    });
+    const container = document.createElement("div");
+    const renderSession = (sessionKey: string) => {
+      render(
+        renderChat(
+          createChatProps({
+            currentAgentId: "delayed-replay-agent",
+            draft: drafts[sessionKey],
+            getDraft: () => drafts[sessionKey],
+            onDraftChange: (next) => onDraftChange(sessionKey, next),
+            onSend: () => {
+              drafts[sessionKey] = "";
+            },
+            sessionKey,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderSession("delayed-replay-a");
+    inputDraft(container, "submitted message");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+
+    renderSession("delayed-replay-b");
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    expect(textarea?.value).toBe("");
+
+    textarea!.dispatchEvent(
+      new InputEvent("beforeinput", {
+        bubbles: true,
+        data: "session b draft",
+        inputType: "insertText",
+      }),
+    );
+    textarea!.value = "session b draft";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "session b draft",
+        inputType: "insertText",
+      }),
+    );
+    expect(textarea?.value).toBe("session b draft");
+
+    textarea!.value = "submitted message";
+    textarea!.dispatchEvent(
+      new InputEvent("input", {
+        bubbles: true,
+        data: "submitted message",
+        inputType: "insertText",
+      }),
+    );
+
+    expect(textarea?.value).toBe("session b draft");
+    expect(drafts["delayed-replay-b"]).toBe("");
+    expect(onDraftChange).toHaveBeenCalledTimes(1);
+  });
+
   it("commits local draft input before Enter sends", () => {
     const onDraftChange = vi.fn();
     const onSend = vi.fn();
@@ -3001,6 +3207,189 @@ describe("chat session controls", () => {
       offset: 50,
       search: "telegram",
     });
+  });
+
+  it("skips hidden subagent pages when loading more chat picker sessions", async () => {
+    const { state, request } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows(
+      [
+        { key: "agent:main:main", kind: "direct", label: "Main chat", updatedAt: 6 },
+        {
+          key: "agent:main:spawn-child:first",
+          kind: "direct",
+          label: "Subagent first",
+          updatedAt: 5,
+          spawnedBy: "agent:main:main",
+        },
+      ],
+      {
+        hasMore: true,
+        nextOffset: 2,
+        totalCount: 177,
+      },
+    );
+    request
+      .mockResolvedValueOnce(
+        createSessionsResultFromRows(
+          [
+            {
+              key: "agent:main:spawn-child:second",
+              kind: "direct",
+              label: "Subagent second",
+              updatedAt: 4,
+              spawnedBy: "agent:main:main",
+            },
+            {
+              key: "agent:main:spawn-child:third",
+              kind: "direct",
+              label: "Subagent third",
+              updatedAt: 3,
+              spawnedBy: "agent:main:main",
+            },
+          ],
+          { hasMore: true, nextOffset: 4, offset: 2, totalCount: 177 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        createSessionsResultFromRows(
+          [
+            {
+              key: "agent:main:work",
+              kind: "direct",
+              label: "Main work",
+              updatedAt: 2,
+            },
+          ],
+          { hasMore: false, nextOffset: null, offset: 4, totalCount: 177 },
+        ),
+      );
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+    expect(container.querySelector(".chat-session-picker__count")?.textContent).toBe("1");
+
+    container
+      .querySelector<HTMLButtonElement>('button[data-chat-session-load-more="true"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() =>
+      expect(state.chatSessionPickerResult?.sessions.map((row) => row.key)).toEqual([
+        "agent:main:main",
+        "agent:main:spawn-child:first",
+        "agent:main:spawn-child:second",
+        "agent:main:spawn-child:third",
+        "agent:main:work",
+      ]),
+    );
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+      offset: 2,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+      offset: 4,
+    });
+
+    render(renderChatSessionSelect(state), container);
+    const labels = Array.from(
+      container.querySelectorAll<HTMLElement>(".chat-session-picker__option-label"),
+    ).map((node) => node.textContent?.trim());
+    expect(labels).toEqual(["Main chat", "Main work"]);
+    expect(container.querySelector(".chat-session-picker__count")?.textContent).toBe("2");
+    expect(container.querySelector('button[data-chat-session-load-more="true"]')).toBeNull();
+  });
+
+  it("continues past many hidden chat picker pages until a visible session is loaded", async () => {
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows(
+      [{ key: "agent:main:main", kind: "direct", label: "Main chat", updatedAt: 20 }],
+      { hasMore: true, nextOffset: 1, totalCount: 20 },
+    );
+    const request = vi.fn((method: string, params: Record<string, unknown> = {}) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      const offset =
+        typeof params.offset === "number" && Number.isFinite(params.offset) ? params.offset : 0;
+      if (offset < 12) {
+        return Promise.resolve(
+          createSessionsResultFromRows(
+            [
+              {
+                key: `agent:main:spawn-child:${offset}`,
+                kind: "direct",
+                label: `Subagent ${offset}`,
+                updatedAt: 20 - offset,
+                spawnedBy: "agent:main:main",
+              },
+            ],
+            { hasMore: true, nextOffset: offset + 1, offset, totalCount: 20 },
+          ),
+        );
+      }
+      return Promise.resolve(
+        createSessionsResultFromRows(
+          [{ key: "agent:main:work", kind: "direct", label: "Main work", updatedAt: 1 }],
+          { hasMore: false, nextOffset: null, offset, totalCount: 20 },
+        ),
+      );
+    });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    container
+      .querySelector<HTMLButtonElement>('button[data-chat-session-load-more="true"]')!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() =>
+      expect(state.chatSessionPickerResult?.sessions.at(-1)?.key).toBe("agent:main:work"),
+    );
+    expect(request).toHaveBeenCalledTimes(12);
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+      offset: 11,
+    });
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "main",
+      configuredAgentsOnly: true,
+      includeGlobal: true,
+      includeUnknown: true,
+      limit: 50,
+      offset: 12,
+    });
+
+    render(renderChatSessionSelect(state), container);
+    const labels = Array.from(
+      container.querySelectorAll<HTMLElement>(".chat-session-picker__option-label"),
+    ).map((node) => node.textContent?.trim());
+    expect(labels).toEqual(["Main chat", "Main work"]);
+    expect(container.querySelector(".chat-session-picker__count")?.textContent).toBe("2");
+    expect(container.querySelector('button[data-chat-session-load-more="true"]')).toBeNull();
   });
 
   it("loads unsearched picker pages from a scoped first page", async () => {

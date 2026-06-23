@@ -404,7 +404,7 @@ export class WhatsAppConnectionController {
     this.heartbeatSeconds = params.heartbeatSeconds;
     this.transportTimeoutMs = params.transportTimeoutMs;
     this.messageTimeoutMs = params.messageTimeoutMs;
-    this.appSilenceTimeoutMs = Math.max(params.messageTimeoutMs, params.messageTimeoutMs * 4);
+    this.appSilenceTimeoutMs = params.messageTimeoutMs * 4;
     this.watchdogCheckMs = params.watchdogCheckMs;
     this.reconnectPolicy = params.reconnectPolicy;
     this.abortSignal = params.abortSignal;

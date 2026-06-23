@@ -60,10 +60,7 @@ export {
   downgradeOpenAIReasoningBlocks,
   normalizeOpenAIResponsesToolCallIds,
 } from "./embedded-agent-helpers/openai.js";
-export {
-  isEmptyAssistantMessageContent,
-  sanitizeSessionMessagesImages,
-} from "./embedded-agent-helpers/images.js";
+export { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
 export {
   isMessagingToolDuplicate,
   isMessagingToolDuplicateNormalized,

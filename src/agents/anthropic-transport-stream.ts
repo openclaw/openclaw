@@ -5,6 +5,7 @@
  */
 import { readResponseTextSnippet } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { toErrorObject } from "../infra/errors.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../llm/model-utils.js";
 import {
@@ -681,7 +682,7 @@ function readAnthropicSseChunk(
         }
         settled = true;
         signal.removeEventListener("abort", onAbort);
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       },
     );
   });
@@ -1603,18 +1604,4 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
     })();
     return eventStream as ReturnType<StreamFn>;
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }
