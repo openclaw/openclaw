@@ -73,6 +73,7 @@ export const allowedSessionStoreRuntimeFileBackedCompatExports = new Set([
 ]);
 
 export const migratedSessionAccessorFiles = new Set([
+  "packages/memory-host-sdk/src/host/session-files.ts",
   "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/embedded-agent-runner/tool-result-truncation.ts",
@@ -166,6 +167,24 @@ export const migratedSessionLifecycleCleanupFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/cron/session-reaper.ts",
   "src/infra/heartbeat-runner.ts",
+]);
+
+export const migratedMemoryHostSessionCorpusFiles = new Set([
+  "packages/memory-host-sdk/src/host/session-files.ts",
+  "packages/memory-host-sdk/src/host/session-transcript-corpus.ts",
+]);
+
+const memoryHostSessionCorpusFunctionNames = new Set([
+  "listSessionTranscriptCorpusEntriesForAgentSync",
+  "listSessionTranscriptCorpusEntriesForAgent",
+  "loadDreamingNarrativeTranscriptPathSetForAgent",
+  "loadSessionTranscriptClassificationForAgent",
+  "listSessionFilesForAgent",
+]);
+
+const legacyMemoryHostSessionCorpusNames = new Set([
+  "loadSessionTranscriptClassificationForSessionsDir",
+  "readSessionTranscriptClassificationStore",
 ]);
 
 function normalizeRelativePath(filePath) {
@@ -423,9 +442,90 @@ export function findSessionLifecycleCleanupBoundaryViolations(content, fileName 
   );
 }
 
+function declarationName(node) {
+  if (ts.isFunctionDeclaration(node) && node.name) {
+    return node.name.text;
+  }
+  if (!ts.isVariableStatement(node)) {
+    return null;
+  }
+  const declaration = node.declarationList.declarations[0];
+  return declaration && ts.isIdentifier(declaration.name) ? declaration.name.text : null;
+}
+
+function functionBodyForDeclaration(node) {
+  if (ts.isFunctionDeclaration(node)) {
+    return node.body ?? null;
+  }
+  if (!ts.isVariableStatement(node)) {
+    return null;
+  }
+  const declaration = node.declarationList.declarations[0];
+  const initializer = declaration?.initializer;
+  if (initializer && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
+    return initializer.body;
+  }
+  return null;
+}
+
+function collectTopLevelFunctionBodies(sourceFile) {
+  const bodies = new Map();
+  for (const statement of sourceFile.statements) {
+    const name = declarationName(statement);
+    const body = functionBodyForDeclaration(statement);
+    if (name && body) {
+      bodies.set(name, body);
+    }
+  }
+  return bodies;
+}
+
+export function findMemoryHostSessionCorpusBoundaryViolations(content, fileName = "source.ts") {
+  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const functionBodies = collectTopLevelFunctionBodies(sourceFile);
+  const visitedFunctions = new Set();
+  const violationKeys = new Set();
+  const violations = [];
+
+  const visitCorpusBody = (node) => {
+    if (ts.isCallExpression(node)) {
+      const calleeName = propertyAccessName(node.expression);
+      if (calleeName && legacyMemoryHostSessionCorpusNames.has(calleeName)) {
+        const line = toLine(sourceFile, node.expression);
+        const reason = `calls legacy memory-host session corpus helper "${calleeName}"`;
+        const key = `${line}:${reason}`;
+        if (!violationKeys.has(key)) {
+          violationKeys.add(key);
+          violations.push({ line, reason });
+        }
+      }
+      if (calleeName && ts.isIdentifier(unwrapExpression(node.expression))) {
+        const localBody = functionBodies.get(calleeName);
+        if (localBody && !visitedFunctions.has(calleeName)) {
+          visitedFunctions.add(calleeName);
+          visitCorpusBody(localBody);
+        }
+      }
+    }
+    ts.forEachChild(node, visitCorpusBody);
+  };
+
+  for (const name of memoryHostSessionCorpusFunctionNames) {
+    const body = functionBodies.get(name);
+    if (!body || visitedFunctions.has(name)) {
+      continue;
+    }
+    visitedFunctions.add(name);
+    visitCorpusBody(body);
+  }
+
+  return violations;
+}
+
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const readSourceRoots = resolveSourceRoots(repoRoot, [
+    "packages/memory-host-sdk/src/host",
     "extensions/discord/src/monitor",
     "extensions/telegram/src",
     "src/agents",
@@ -506,6 +606,15 @@ export async function main() {
       ),
     findViolations: findSessionLifecycleCleanupBoundaryViolations,
   });
+  const memoryHostSessionCorpusViolations = await collectFileViolations({
+    repoRoot,
+    sourceRoots: resolveSourceRoots(repoRoot, ["packages/memory-host-sdk/src/host"]),
+    skipFile: (filePath) =>
+      !migratedMemoryHostSessionCorpusFiles.has(
+        normalizeRelativePath(path.relative(repoRoot, filePath)),
+      ),
+    findViolations: findMemoryHostSessionCorpusBoundaryViolations,
+  });
   const sessionStoreRuntimePath = path.join(repoRoot, "src/plugin-sdk/session-store-runtime.ts");
   const sessionStoreRuntimeCompatViolations =
     findSessionStoreRuntimeFileBackedCompatExportViolations(
@@ -521,6 +630,7 @@ export async function main() {
     ...sessionCreateLifecycleViolations,
     ...manualCompactTrimViolations,
     ...lifecycleCleanupViolations,
+    ...memoryHostSessionCorpusViolations,
     ...sessionStoreRuntimeCompatViolations,
   ];
 

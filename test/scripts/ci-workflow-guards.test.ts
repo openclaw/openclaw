@@ -1,5 +1,6 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -37,10 +38,17 @@ function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
-function readAndroidCompileSdk(path: string): number {
-  const match = readFileSync(path, "utf8").match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
+function readTrackedText(relativePath: string): string {
+  if (existsSync(relativePath)) {
+    return readFileSync(relativePath, "utf8");
+  }
+  return execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
+}
+
+function readAndroidCompileSdk(relativePath: string): number {
+  const match = readTrackedText(relativePath).match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
   if (!match) {
-    throw new Error(`Missing compileSdk in ${path}`);
+    throw new Error(`Missing compileSdk in ${relativePath}`);
   }
   return Number(match[1]);
 }
