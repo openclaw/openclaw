@@ -1093,6 +1093,64 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       ]);
     });
 
+    it("strips tool_calls, reasoning, and diagnostics from the resulting summary message", () => {
+      const messages = [
+        { role: "user", content: HEARTBEAT_PROMPT },
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "call_heartbeat",
+              name: "heartbeat_respond",
+              arguments: {
+                outcome: "no_change",
+                notify: false,
+                summary: "Clean summary.",
+              },
+            },
+          ],
+          tool_calls: [
+            {
+              id: "call_heartbeat",
+              type: "toolCall",
+              name: "heartbeat_respond",
+              arguments: {
+                outcome: "no_change",
+                notify: false,
+                summary: "Clean summary.",
+              },
+            },
+          ],
+          reasoning_content: "internal thinking...",
+          diagnostics: [{ key: "value" }],
+          timestamp: 123456789,
+          model: "gpt-4o",
+          provider: "openai",
+          api: "openai-responses",
+          stopReason: "toolUse",
+        },
+      ];
+      expect(
+        filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
+      ).toEqual([
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "[Heartbeat summary: Clean summary.]",
+            },
+          ],
+          timestamp: 123456789,
+          model: "gpt-4o",
+          provider: "openai",
+          api: "openai-responses",
+          stopReason: "stop",
+        },
+      ]);
+    });
+
     it("strips heartbeat_respond silent turn when arguments are empty in keep-result mode", () => {
       const messages = [
         { role: "user", content: "Hello" },

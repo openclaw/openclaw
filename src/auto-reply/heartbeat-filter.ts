@@ -532,15 +532,26 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
 
         if (cleanTrimmed) {
           const summaryContent = `[Heartbeat summary: ${cleanTrimmed}]`;
+          const msgObj = lastAssistantMessage as unknown as Record<string, unknown>;
+          const {
+            tool_calls: _tc,
+            function_call: _fc,
+            reasoning_content: _rc,
+            reasoning: _r,
+            diagnostics: _d,
+            ...rest
+          } = msgObj;
+
           result.push({
-            ...lastAssistantMessage,
+            ...rest,
             content:
               typeof lastAssistantMessage.content === "string"
                 ? summaryContent
                 : Array.isArray(lastAssistantMessage.content)
                   ? [{ type: "text", text: summaryContent }]
                   : summaryContent,
-          });
+            ...(msgObj.stopReason !== undefined ? { stopReason: "stop" } : {}),
+          } as T);
         }
       }
     }
