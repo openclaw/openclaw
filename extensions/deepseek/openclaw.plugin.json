@@ -1,6 +1,6 @@
 {
   "id": "deepseek",
-  "icon": "https://cdn.simpleicons.org/deepseek/111111",
+  "icon": "https://cdn.simpleicons.org/deepseek",
   "activation": {
     "onStartup": false
   },
