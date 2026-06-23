@@ -218,6 +218,67 @@ jobs:
           }
           NODE
 
+      - name: Ensure maturity scorecard agent key exists
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Run Codex maturity scorecard agent
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          MATURITY_EVIDENCE_DIR: .artifacts/maturity-evidence
+          MATURITY_SCORES_PATH: qa/maturity-scores.yaml
+          MATURITY_TAXONOMY_PATH: taxonomy.yaml
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/maturity-scorecard-agent.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: high
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+
+      - name: Enforce focused maturity score patch
+        run: |
+          set -euo pipefail
+          git restore --staged :/
+
+          allowed='^qa/maturity-scores\.yaml$'
+          bad_tracked="$(
+            git diff --name-only HEAD -- | while IFS= read -r path; do
+              if [[ ! "$path" =~ $allowed ]]; then
+                printf '%s\n' "$path"
+              fi
+            done
+          )"
+          if [[ -n "$bad_tracked" ]]; then
+            echo "Maturity scorecard agent touched forbidden tracked paths:"
+            printf '%s\n' "$bad_tracked"
+            exit 1
+          fi
+
+          bad_untracked="$(
+            git ls-files --others --exclude-standard | while IFS= read -r path; do
+              if [[ "$path" != "qa/maturity-scores.yaml" ]]; then
+                printf '%s\n' "$path"
+              fi
+            done
+          )"
+          if [[ -n "$bad_untracked" ]]; then
+            echo "Maturity scorecard agent created forbidden untracked paths:"
+            printf '%s\n' "$bad_untracked"
+            exit 1
+          fi
+
+          if [[ ! -f qa/maturity-scores.yaml ]]; then
+            echo "Maturity scorecard agent must produce qa/maturity-scores.yaml." >&2
+            exit 1
+          fi
+
       - name: Validate maturity score sources
         run: |
           node --import tsx --input-type=module <<'NODE'
@@ -291,7 +352,7 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "$(git status --porcelain -- qa/maturity-scores.yaml docs/maturity-scores.yaml docs/maturity/scorecard.md docs/maturity/taxonomy.md)" ]]; then
+          if [[ -z "$(git status --porcelain -- qa/maturity-scores.yaml docs/maturity/scorecard.md docs/maturity/taxonomy.md)" ]]; then
             {
               echo
               echo "- Pull request: skipped; generated scorecard matches selected ref"
@@ -311,9 +372,6 @@ jobs:
           git fetch --no-tags --depth=1 origin "refs/heads/${branch}:refs/remotes/origin/${branch}" || true
           git switch -C "$branch"
           git add qa/maturity-scores.yaml docs/maturity/scorecard.md docs/maturity/taxonomy.md
-          if git ls-files --error-unmatch docs/maturity-scores.yaml >/dev/null 2>&1 || [[ -e docs/maturity-scores.yaml ]]; then
-            git add docs/maturity-scores.yaml
-          fi
           git commit -m "docs: update maturity scorecard"
           git push --force-with-lease origin "$branch"
 
