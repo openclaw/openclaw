@@ -185,6 +185,63 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     expect(lifecycle.wakeTaskCompletion).toHaveBeenCalledTimes(1);
   });
 
+  it("recovers via direct fallback when wake returns false with deliverable requesterOrigin", async () => {
+    const scheduled: Array<() => Promise<void>> = [];
+    const lifecycle = {
+      createTaskRun: vi.fn(),
+      recordTaskProgress: vi.fn(),
+      completeTaskRun: vi.fn(),
+      failTaskRun: vi.fn(),
+      wakeTaskCompletion: vi.fn(async () => false),
+    };
+    taskRegistryDeliveryRuntimeMocks.sendMessage.mockResolvedValueOnce({});
+
+    scheduleMediaGenerationTaskCompletion({
+      lifecycle,
+      handle: {
+        taskId: "task-direct-wakefalse",
+        runId: "tool:image_generate:direct-wakefalse",
+        requesterSessionKey: "agent:main:discord:channel:123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:123",
+        },
+        taskLabel: "proof image",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+      progressSummary: "Generating image",
+      toolName: "Image generation",
+      onWakeFailure: vi.fn(),
+      run: async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        paths: ["/tmp/proof.png"],
+        wakeResult: "generated",
+        mediaUrls: ["/tmp/proof.png"],
+      }),
+    });
+
+    await scheduled[0]?.();
+
+    // Direct fallback attempted and succeeded → terminalResult cleared.
+    expect(taskRegistryDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:123",
+        content: "Image generation completed.",
+        idempotencyKey: expect.stringContaining("blocked") as unknown,
+      }),
+    );
+    expect(lifecycle.completeTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        terminalResult: undefined,
+      }),
+    );
+  });
+
   it("completes a generated media task when completion wake throws", async () => {
     const scheduled: Array<() => Promise<void>> = [];
     const wakeError = new Error("requester wake failed");

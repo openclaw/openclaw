@@ -472,6 +472,30 @@ export function scheduleMediaGenerationTaskCompletion<
         terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
           "completion delivery was not confirmed after successful generation",
         );
+        if (params.handle) {
+          const mediaUrls = Array.from(
+            new Set([
+              ...(executed.mediaUrls ?? []),
+              ...mediaUrlsFromGeneratedAttachments(executed.attachments),
+            ]),
+          );
+          // The wake agent path returned false (not threw), so the in-wake
+          // direct fallback didn't fire or its allowlisted reasons didn't match.
+          // Try direct channel delivery here — same pattern as the catch branch
+          // below — so the user sees the result when a generated artifact is on
+          // disk but the announce path lost the handoff.
+          const delivered = await tryDeliverMediaGenerationDirect({
+            config: params.config,
+            handle: params.handle,
+            toolName: params.toolName,
+            content: `${params.toolName} completed.`,
+            mediaUrls,
+            idempotencySuffix: "blocked",
+          });
+          if (delivered) {
+            terminalResult = undefined;
+          }
+        }
         params.onWakeFailure(
           `${params.toolName} completion delivery was not confirmed after successful generation`,
           {
