@@ -423,6 +423,47 @@ describe("opencode provider plugin", () => {
     expect(fallback.models.map((model) => model.id)).toContain("claude-opus-4-6");
   });
 
+  it("keeps live OpenCode Zen discovery caches scoped to discovery credentials", async () => {
+    const fetchGuard = vi
+      .fn()
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({ data: [{ id: "claude-opus-4-8", object: "model" }] }),
+        ),
+        finalUrl: "https://opencode.ai/zen/v1/models",
+        release: vi.fn(async () => undefined),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ data: [{ id: "gpt-5.5", object: "model" }] })),
+        finalUrl: "https://opencode.ai/zen/v1/models",
+        release: vi.fn(async () => undefined),
+      });
+
+    const first = await buildOpencodeZenLiveProviderConfig({
+      apiKey: "runtime-a",
+      discoveryApiKey: "discovery-a",
+      fetchGuard,
+    });
+    const second = await buildOpencodeZenLiveProviderConfig({
+      apiKey: "runtime-b",
+      discoveryApiKey: "discovery-b",
+      fetchGuard,
+    });
+    const secondCached = await buildOpencodeZenLiveProviderConfig({
+      apiKey: "runtime-c",
+      discoveryApiKey: "discovery-b",
+      fetchGuard,
+    });
+
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
+    expect(first.apiKey).toBe("runtime-a");
+    expect(first.models.map((model) => model.id)).toEqual(["claude-opus-4-8"]);
+    expect(second.apiKey).toBe("runtime-b");
+    expect(second.models.map((model) => model.id)).toEqual(["gpt-5.5"]);
+    expect(secondCached.apiKey).toBe("runtime-c");
+    expect(secondCached.models.map((model) => model.id)).toEqual(["gpt-5.5"]);
+  });
+
   it("canonicalizes stale OpenCode Zen base URLs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
