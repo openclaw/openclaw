@@ -51,6 +51,10 @@
           "timezone": {
             "type": "string"
           },
+          "language": {
+            "type": "string",
+            "description": "BCP 47 language tag for dream diary entries (e.g. zh-CN, ja-JP, ko-KR). Falls back to English."
+          },
           "verboseLogging": {
             "type": "boolean"
           },

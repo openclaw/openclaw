@@ -66,11 +66,49 @@ type Logger = {
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-const LANGUAGE_INSTRUCTIONS: Record<string, string> = {
-  "zh-CN": "IMPORTANT: Write entries in Chinese (\u4e2d\u6587). Use first-person poetic prose in Chinese.",
-  "zh-TW": "IMPORTANT: Write entries in Chinese (\u4e2d\u6587). Use first-person poetic prose in Chinese.",
-  "ja-JP": "IMPORTANT: Write entries in Japanese. Use first-person poetic prose in Japanese.",
-};
+const LANGUAGE_INSTRUCTIONS: ReadonlyMap<string, string> = new Map([
+  ["zh-CN", "IMPORTANT: Write entries in Chinese (\u4e2d\u6587). Use first-person poetic prose in Chinese."],
+  ["zh-TW", "IMPORTANT: Write entries in Traditional Chinese. Use first-person poetic prose in Traditional Chinese."],
+  ["zh", "IMPORTANT: Write entries in Chinese (\u4e2d\u6587). Use first-person poetic prose in Chinese."],
+  ["ja-JP", "IMPORTANT: Write entries in Japanese. Use first-person poetic prose in Japanese."],
+  ["ja", "IMPORTANT: Write entries in Japanese. Use first-person poetic prose in Japanese."],
+  ["ko-KR", "IMPORTANT: Write entries in Korean. Use first-person poetic prose in Korean."],
+  ["ko", "IMPORTANT: Write entries in Korean. Use first-person poetic prose in Korean."],
+  ["fr-FR", "IMPORTANT: Write entries in French. Use first-person poetic prose in French."],
+  ["fr", "IMPORTANT: Write entries in French. Use first-person poetic prose in French."],
+  ["de-DE", "IMPORTANT: Write entries in German. Use first-person poetic prose in German."],
+  ["de", "IMPORTANT: Write entries in German. Use first-person poetic prose in German."],
+  ["es-ES", "IMPORTANT: Write entries in Spanish. Use first-person poetic prose in Spanish."],
+  ["es", "IMPORTANT: Write entries in Spanish. Use first-person poetic prose in Spanish."],
+  ["pt-BR", "IMPORTANT: Write entries in Portuguese (Brazilian). Use first-person poetic prose in Portuguese."],
+  ["pt", "IMPORTANT: Write entries in Portuguese. Use first-person poetic prose in Portuguese."],
+  ["ru-RU", "IMPORTANT: Write entries in Russian. Use first-person poetic prose in Russian."],
+  ["ru", "IMPORTANT: Write entries in Russian. Use first-person poetic prose in Russian."],
+  ["ar-SA", "IMPORTANT: Write entries in Arabic. Use first-person poetic prose in Arabic."],
+  ["hi-IN", "IMPORTANT: Write entries in Hindi. Use first-person poetic prose in Hindi."],
+  ["th-TH", "IMPORTANT: Write entries in Thai. Use first-person poetic prose in Thai."],
+  ["vi-VN", "IMPORTANT: Write entries in Vietnamese. Use first-person poetic prose in Vietnamese."],
+  ["it-IT", "IMPORTANT: Write entries in Italian. Use first-person poetic prose in Italian."],
+  ["it", "IMPORTANT: Write entries in Italian. Use first-person poetic prose in Italian."],
+  ["nl-NL", "IMPORTANT: Write entries in Dutch. Use first-person poetic prose in Dutch."],
+  ["pl-PL", "IMPORTANT: Write entries in Polish. Use first-person poetic prose in Polish."],
+  ["tr-TR", "IMPORTANT: Write entries in Turkish. Use first-person poetic prose in Turkish."],
+  ["uk-UA", "IMPORTANT: Write entries in Ukrainian. Use first-person poetic prose in Ukrainian."],
+  ["el-GR", "IMPORTANT: Write entries in Greek. Use first-person poetic prose in Greek."],
+  ["he-IL", "IMPORTANT: Write entries in Hebrew. Use first-person poetic prose in Hebrew."],
+  ["sv-SE", "IMPORTANT: Write entries in Swedish. Use first-person poetic prose in Swedish."],
+  ["nb-NO", "IMPORTANT: Write entries in Norwegian Bokm\u00e5l. Use first-person poetic prose in Norwegian."],
+  ["da-DK", "IMPORTANT: Write entries in Danish. Use first-person poetic prose in Danish."],
+  ["fi-FI", "IMPORTANT: Write entries in Finnish. Use first-person poetic prose in Finnish."],
+  ["cs-CZ", "IMPORTANT: Write entries in Czech. Use first-person poetic prose in Czech."],
+  ["hu-HU", "IMPORTANT: Write entries in Hungarian. Use first-person poetic prose in Hungarian."],
+  ["ro-RO", "IMPORTANT: Write entries in Romanian. Use first-person poetic prose in Romanian."],
+  ["id-ID", "IMPORTANT: Write entries in Indonesian. Use first-person poetic prose in Indonesian."],
+  ["ms-MY", "IMPORTANT: Write entries in Malay. Use first-person poetic prose in Malay."],
+  ["en-GB", undefined],  // No override needed — use default English
+  ["en-AU", undefined],  // No override needed — use default English
+  ["en-CA", undefined],  // No override needed — use default English
+]);
 
 const NARRATIVE_SYSTEM_PROMPT = [
   "You are keeping a dream diary. Write a single entry in first person.",
@@ -165,6 +203,7 @@ export async function appendFallbackNarrativeEntry(params: {
   data: NarrativePhaseData;
   nowMs: number;
   timezone?: string;
+  language?: string;
   logger: Logger;
   reason: string;
 }): Promise<void> {
@@ -176,6 +215,7 @@ export async function appendFallbackNarrativeEntry(params: {
       narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
+      language: params.language,
     });
     params.logger.info(
       `memory-core: narrative generation used fallback for ${params.data.phase} phase because ${params.reason}.`,
@@ -237,13 +277,34 @@ function formatNarrativeTerminalStatus(params: { status: string; error?: string 
   return detail ? `status=${params.status} (${detail})` : `status=${params.status}`;
 }
 
+function resolveLanguageInstruction(language?: string): string | undefined {
+  if (!language) return undefined;
+  // Exact match first, then fall back to language-only prefix (e.g. "zh" matches "zh-CN")
+  const exact = LANGUAGE_INSTRUCTIONS.get(language);
+  if (exact !== undefined) return exact;
+  const prefix = language.split("-")[0];
+  if (prefix) {
+    const fallback = LANGUAGE_INSTRUCTIONS.get(prefix);
+    if (fallback !== undefined) return fallback;
+  }
+  return undefined;
+}
+
+function resolveNarrativeLocale(language?: string): string {
+  if (!language) return "en-US";
+  // Accept most BCP 47-like tags directly; Intl.DateTimeFormat does the rest.
+  if (/^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(language)) return language;
+  return "en-US";
+}
+
 function buildLanguageAwarePrompt(): string {
   try {
     const runtimeConfig = getRuntimeConfig();
     const dreamingConfig = (runtimeConfig as any)?.plugins?.entries?.["memory-core"]?.config?.dreaming;
     const language = dreamingConfig?.language;
-    if (language && LANGUAGE_INSTRUCTIONS[language]) {
-      return NARRATIVE_SYSTEM_PROMPT + "\n\n" + LANGUAGE_INSTRUCTIONS[language];
+    const instruction = resolveLanguageInstruction(language);
+    if (instruction) {
+      return NARRATIVE_SYSTEM_PROMPT + "\n\n" + instruction;
     }
   } catch {
     // Best-effort: fall back to default English prompt.
@@ -303,7 +364,7 @@ function buildNarrativeSessionKey(params: {
 
 // ── Prompt building ────────────────────────────────────────────────────
 
-export function buildNarrativePrompt(data: NarrativePhaseData): string {
+export function buildNarrativePrompt(data: NarrativePhaseData, language?: string): string {
   const lines: string[] = [];
   lines.push("Write a dream diary entry from these memory fragments:\n");
 
@@ -425,7 +486,8 @@ async function readSettledNarrativeText(params: {
 
 // ── Date formatting ────────────────────────────────────────────────────
 
-export function formatNarrativeDate(epochMs: number, timezone?: string): string {
+export function formatNarrativeDate(epochMs: number, timezone?: string, language?: string): string {
+  const locale = resolveNarrativeLocale(language);
   const opts: Intl.DateTimeFormatOptions = {
     timeZone: timezone ?? process.env.TZ,
     year: "numeric",
@@ -440,7 +502,7 @@ export function formatNarrativeDate(epochMs: number, timezone?: string): string 
     // UTC, causing confusion (see #65027).
     timeZoneName: "short",
   };
-  return new Intl.DateTimeFormat("en-US", opts).format(new Date(epochMs));
+  return new Intl.DateTimeFormat(locale, opts).format(new Date(epochMs));
 }
 
 // ── DREAMS.md file I/O ─────────────────────────────────────────────────
@@ -603,12 +665,13 @@ function stripBackfillDiaryBlocks(existing: string): { updated: string; removed:
   };
 }
 
-export function formatBackfillDiaryDate(isoDay: string, _timezone?: string): string {
+export function formatBackfillDiaryDate(isoDay: string, _timezone?: string, language?: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDay);
   if (!match) {
     return isoDay;
   }
   const [, year, month, day] = match;
+  const locale = resolveNarrativeLocale(language);
   const opts: Intl.DateTimeFormatOptions = {
     // Preserve the source iso day exactly; backfill labels should not drift by timezone.
     timeZone: "UTC",
@@ -617,7 +680,7 @@ export function formatBackfillDiaryDate(isoDay: string, _timezone?: string): str
     day: "numeric",
   };
   const epochMs = Date.UTC(Number(year), Number(month) - 1, Number(day), 12);
-  return new Intl.DateTimeFormat("en-US", opts).format(new Date(epochMs));
+  return new Intl.DateTimeFormat(locale, opts).format(new Date(epochMs));
 }
 
 async function withNarrativeSessionLock<T>(sessionKey: string, fn: () => Promise<T>): Promise<T> {
@@ -766,8 +829,9 @@ export async function appendNarrativeEntry(params: {
   narrative: string;
   nowMs: number;
   timezone?: string;
+  language?: string;
 }): Promise<string> {
-  const dateStr = formatNarrativeDate(params.nowMs, params.timezone);
+  const dateStr = formatNarrativeDate(params.nowMs, params.timezone, params.language);
   const entry = buildDiaryEntry(params.narrative, dateStr);
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
@@ -1143,6 +1207,7 @@ export async function generateAndAppendDreamNarrative(params: {
         narrative,
         nowMs,
         timezone: params.timezone,
+        language: params.language,
       });
 
       params.logger.info(
