@@ -96,6 +96,7 @@ export const migratedSessionAccessorFiles = new Set([
   "src/cron/service/timer.ts",
   "src/gateway/session-compaction-checkpoints.ts",
   "src/gateway/session-history-state.ts",
+  "src/gateway/sessions-history-http.ts",
   "src/gateway/session-utils.ts",
   "src/gateway/managed-image-attachments.ts",
   "src/gateway/server-methods/artifacts.ts",
