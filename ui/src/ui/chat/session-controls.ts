@@ -321,14 +321,18 @@ async function refreshChatSessionPickerAfterRename(state: AppViewState) {
   }
   // Tie the refresh to the picker request-generation counter so that a newer
   // search arriving while the rename-triggered sessions.list is in flight
-  // is not overwritten by the stale refresh response.
-  const requestId =
-    beginChatSessionPickerSearchRequest(
-      state,
-      createChatSessionPickerRequestSignature({
-        query: normalizeOptionalString(state.chatSessionPickerAppliedQuery) ?? "",
-      }),
-    ) ?? invalidateChatSessionPickerSearchRequests(state);
+  // is not overwritten by the stale refresh response.  When the signature
+  // matches the active request (begin returns null) there is no concurrent
+  // search to race against, so proceed without the cancel guard.
+  const guardId = beginChatSessionPickerSearchRequest(
+    state,
+    createChatSessionPickerRequestSignature({
+      query: normalizeOptionalString(state.chatSessionPickerAppliedQuery) ?? "",
+    }),
+  );
+  if (guardId === null) {
+    invalidateChatSessionPickerSearchRequests(state);
+  }
   const query = normalizeOptionalString(state.chatSessionPickerAppliedQuery) ?? "";
   const limit =
     typeof result.nextOffset === "number" && Number.isFinite(result.nextOffset)
@@ -345,11 +349,11 @@ async function refreshChatSessionPickerAfterRename(state: AppViewState) {
       limit,
     }),
   );
-  if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
+  if (guardId !== null && !isCurrentChatSessionPickerSearchRequest(state, guardId)) {
     return;
   }
   state.chatSessionPickerResult = projectChatSessionPickerResult(state, listResult);
-  finishChatSessionPickerSearchRequest(state, requestId);
+  if (guardId !== null) finishChatSessionPickerSearchRequest(state, guardId);
 }
 
 async function saveChatSessionPickerRename(
