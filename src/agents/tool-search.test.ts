@@ -1318,6 +1318,33 @@ describe("Tool Search", () => {
     expect(writeTool.execute).not.toHaveBeenCalled();
   });
 
+  it("uses exact ids when recovery suggestions have duplicate names", async () => {
+    const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
+    const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");
+    const describeTool = fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe");
+    const firstWriteTool = pluginTool("write", "Write a file", "first-plugin");
+    const secondWriteTool = pluginTool("write", "Write another file", "second-plugin");
+    applyToolSearchCatalog({
+      tools: [callTool, searchTool, describeTool, firstWriteTool, secondWriteTool],
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+      sessionId: "session-duplicate-recovery",
+      sessionKey: "agent:main:main",
+    });
+
+    const runtimeTools = createToolSearchTools({
+      sessionId: "session-duplicate-recovery",
+      sessionKey: "agent:main:main",
+      config: { tools: { toolSearch: { mode: "tools" } } } as never,
+    });
+
+    await expect(
+      runtimeTools[3].execute("call-duplicate-write", {
+        id: "file_write",
+        args: {},
+      }),
+    ).rejects.toThrow("Did you mean: openclaw:first-plugin:write, openclaw:second-plugin:write?");
+  });
+
   it("keeps raw Tool Search recovery guidance when no suggestion matches", async () => {
     const callTool = fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call");
     const searchTool = fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search");

@@ -1581,10 +1581,14 @@ function formatUnknownToolIdError(
   entries: readonly ToolSearchCatalogEntry[],
   options: UnknownToolErrorOptions = {},
 ): string {
+  const nameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
+  }
   const suggestions = uniqueStrings(
     entries
       .map((entry) => ({
-        value: options.exactIdOnly ? entry.id : entry.name,
+        value: options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name,
         score: scoreUnknownToolSuggestion(needle, entry),
       }))
       .filter((candidate) => candidate.score > 0)
