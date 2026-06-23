@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-onboard";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   OLLAMA_DEFAULT_BASE_URL,
@@ -38,6 +39,25 @@ const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
 const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
+// Ollama base URLs are user-supplied and can point at remote/cloud endpoints, so the discovery
+// responses (`/api/tags`, `/api/show`) are untrusted. Cap the success body before parsing so a
+// hostile or buggy server cannot stream an unbounded JSON payload into memory during discovery.
+const OLLAMA_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Reads an Ollama discovery JSON body under a byte cap, cancelling the stream on overflow.
+ *
+ * The body is read through the shared bounded reader instead of `await response.json()` so an
+ * endpoint that streams an unbounded (or never-ending) body cannot force the discovery path to
+ * buffer the whole payload before parsing. Overflow throws a bounded error that the existing
+ * fail-soft discovery handlers swallow.
+ */
+async function readOllamaDiscoveryJson<T>(response: Response, label: string): Promise<T> {
+  const bytes = await readResponseWithLimit(response, OLLAMA_DISCOVERY_JSON_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => new Error(`${label}: JSON response exceeds ${maxBytes} bytes`),
+  });
+  return JSON.parse(new TextDecoder().decode(bytes)) as T;
+}
 
 export function buildOllamaBaseUrlSsrFPolicy(baseUrl: string) {
   const trimmed = baseUrl.trim();
@@ -146,11 +166,11 @@ export async function queryOllamaModelShowInfo(
       if (!response.ok) {
         return {};
       }
-      const data = (await response.json()) as {
+      const data = await readOllamaDiscoveryJson<{
         model_info?: Record<string, unknown>;
         capabilities?: unknown;
         parameters?: unknown;
-      };
+      }>(response, "ollama-provider-models.show");
 
       let contextWindow: number | undefined;
       if (data.model_info) {
@@ -314,7 +334,10 @@ export async function fetchOllamaModels(
       if (!response.ok) {
         return { reachable: true, models: [] };
       }
-      const data = (await response.json()) as OllamaTagsResponse;
+      const data = await readOllamaDiscoveryJson<OllamaTagsResponse>(
+        response,
+        "ollama-provider-models.tags",
+      );
       const models = (data.models ?? []).filter((m) => m.name);
       return { reachable: true, models };
     } finally {
