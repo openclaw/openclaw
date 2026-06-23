@@ -22,7 +22,7 @@ import {
   setRuntimeConfigSnapshot,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
-import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
+import { isNixMode, normalizeStateDirEnv, resolveStateDir } from "../config/paths.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -117,6 +117,10 @@ import {
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { createReadinessChecker } from "./server/readiness.js";
+import {
+  createStorageReadinessChecker,
+  resolveGatewayStorageReadinessRoots,
+} from "./server/storage-readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
@@ -890,6 +894,16 @@ export async function startGatewayServer(
   });
   const deferStartupSidecars = opts.deferStartupSidecars === true;
   const isGatewayStartupPending = () => !startupSidecarsReady && !deferStartupSidecars;
+  const startupStateDir = resolveStateDir();
+  const getStorageReadiness = createStorageReadinessChecker({
+    getWritableRoots: () => {
+      const runtimeConfigLocal = getRuntimeConfig();
+      return resolveGatewayStorageReadinessRoots({
+        config: runtimeConfigLocal,
+        stateDir: startupStateDir,
+      });
+    },
+  });
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
@@ -897,6 +911,7 @@ export async function startGatewayServer(
     getStartupPendingReason: () => startupPendingReason,
     getGatewayDraining: isGatewayDraining,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
+    getStorageReadiness,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
