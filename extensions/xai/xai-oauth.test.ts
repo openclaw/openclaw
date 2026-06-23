@@ -211,6 +211,47 @@ describe("xAI OAuth", () => {
     expect(refreshed.expires).toBe(121_000);
   });
 
+  it("rediscovers the current token endpoint for stale xAI OAuth credentials", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+      if (requestUrl(url) === XAI_OAUTH_DISCOVERY_URL) {
+        expect(init?.method).toBeUndefined();
+        return jsonResponse({
+          authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+          token_endpoint: "https://auth.x.ai/oauth2/token",
+        });
+      }
+      expect(requestUrl(url)).toBe("https://auth.x.ai/oauth2/token");
+      expect(init?.method).toBe("POST");
+      expect(requireStringBody(init)).toContain("refresh_token=refresh-1");
+      return jsonResponse({
+        access_token: "access-2",
+        refresh_token: "refresh-2",
+        expires_in: 120,
+      });
+    });
+    const credential = {
+      type: "oauth",
+      provider: "xai",
+      access: "access-1",
+      refresh: "refresh-1",
+      expires: 100,
+      tokenEndpoint: "https://auth.x.ai/oauth/token",
+    } satisfies OAuthCredential & { tokenEndpoint: string };
+
+    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls.map(([url]) => requestUrl(url))).toEqual([
+      XAI_OAUTH_DISCOVERY_URL,
+      "https://auth.x.ai/oauth2/token",
+    ]);
+    expect(refreshed).toMatchObject({
+      access: "access-2",
+      refresh: "refresh-2",
+      tokenEndpoint: "https://auth.x.ai/oauth2/token",
+    });
+  });
+
   it("does not coerce partial xAI expires_in values", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () =>
       jsonResponse({

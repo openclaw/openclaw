@@ -27,6 +27,7 @@ export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 export const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 export const XAI_OAUTH_ISSUER = "https://auth.x.ai";
 export const XAI_OAUTH_DISCOVERY_URL = `${XAI_OAUTH_ISSUER}/.well-known/openid-configuration`;
+const XAI_LEGACY_OAUTH_TOKEN_ENDPOINT = `${XAI_OAUTH_ISSUER}/oauth/token`;
 export const XAI_OAUTH_CALLBACK_HOST = "127.0.0.1";
 export const XAI_OAUTH_CALLBACK_PORT = 56121;
 export const XAI_OAUTH_CALLBACK_PATH = "/callback";
@@ -492,6 +493,27 @@ function readCredentialString<TKey extends string>(
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
+async function resolveXaiOAuthRefreshTokenEndpoint(
+  credential: OAuthCredential,
+  options: XaiOAuthFetchOptions,
+): Promise<string> {
+  const cachedEndpoint = readCredentialString(credential, "tokenEndpoint");
+  if (!cachedEndpoint) {
+    return (await fetchXaiOAuthDiscovery(options)).tokenEndpoint;
+  }
+  try {
+    const endpoint = new URL(cachedEndpoint);
+    if (`${endpoint.origin}${endpoint.pathname}` !== XAI_LEGACY_OAUTH_TOKEN_ENDPOINT) {
+      return cachedEndpoint;
+    }
+    // Older persisted xAI OAuth credentials can point at the retired endpoint;
+    // rediscover once so refresh writes back the current OAuth token endpoint.
+    return (await fetchXaiOAuthDiscovery(options)).tokenEndpoint;
+  } catch {
+    return cachedEndpoint;
+  }
+}
+
 async function noteXaiOAuthUrl(ctx: ProviderAuthContext, authorizeUrl: string): Promise<void> {
   const lines = ["Open this xAI OAuth URL in your browser:"];
   if (ctx.isRemote) {
@@ -665,9 +687,7 @@ export async function refreshXaiOAuthCredential(
   if (!refreshToken) {
     throw new Error("xAI OAuth credential is missing refresh token");
   }
-  const tokenEndpoint =
-    readCredentialString(credential, "tokenEndpoint") ??
-    (await fetchXaiOAuthDiscovery(options)).tokenEndpoint;
+  const tokenEndpoint = await resolveXaiOAuthRefreshTokenEndpoint(credential, options);
   const tokens = await exchangeXaiOAuthToken({
     ...options,
     tokenEndpoint,
