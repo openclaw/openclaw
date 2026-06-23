@@ -578,16 +578,8 @@ describe("ci workflow guards", () => {
     const publishJob = maturityWorkflow.jobs.publish;
     const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
 
-    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.fail_on_qa_failure).toEqual({
-      description: "Fail the workflow when the QA profile command exits non-zero",
-      required: false,
-      default: true,
-      type: "boolean",
-    });
-    expect(qaEvidenceWorkflow.on.workflow_call.inputs.fail_on_qa_failure).toMatchObject({
-      default: false,
-      type: "boolean",
-    });
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
+    expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
     const validateProfileStep = qaRunJob.steps.find(
@@ -602,8 +594,8 @@ describe("ci workflow guards", () => {
     expect(generateJob.with).toMatchObject({
       ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
       qa_profile: "all",
-      fail_on_qa_failure: false,
     });
+    expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
 
     const generatedDownloadStep = publishJob.steps.find(
       (step) => step.name === "Download generated QA evidence artifact",
@@ -643,10 +635,8 @@ describe("ci workflow guards", () => {
       "if-no-files-found": "error",
     });
 
-    const qaFailStep = qaRunJob.steps.find(
-      (step) => step.name === "Fail if configured QA gate failed",
-    );
-    expect(qaFailStep.if).toBe("always() && inputs.fail_on_qa_failure");
+    const qaFailStep = qaRunJob.steps.find((step) => step.name === "Fail if QA profile failed");
+    expect(qaFailStep.if).toBe("always()");
   });
 
   it("keeps workflow guards in fast CI-routing checks", () => {
