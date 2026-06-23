@@ -23,9 +23,8 @@ const DEFAULT_CLAWHUB_URL = "https://clawhub.ai";
 const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const SKILL_CARD_MAX_BYTES = 256 * 1024;
-// ClawHub is an external marketplace (untrusted source): bound JSON and error
-// bodies so a hostile or malfunctioning host cannot exhaust memory by streaming
-// an unbounded response. Mirrors the error-stream hardening landed in #95108.
+// ClawHub is an external marketplace: bound untrusted JSON and error bodies so
+// a hostile or malfunctioning host cannot exhaust memory with an endless stream.
 const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
@@ -654,10 +653,7 @@ async function clawhubRequest(
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   const controller = new AbortController();
   const timeout = setTimeout(
-    () =>
-      controller.abort(
-        new Error(`ClawHub request timed out after ${timeoutMs}ms`),
-      ),
+    () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
     timeoutMs,
   );
   try {
@@ -682,12 +678,12 @@ async function clawhubRequest(
   }
 }
 
-async function readErrorBody(response: Response): Promise<string> {
+async function readErrorBody(response: Response, timeoutMs?: number): Promise<string> {
   try {
     const snippet = await readResponseTextSnippet(response, {
       maxBytes: CLAWHUB_ERROR_BODY_MAX_BYTES,
       maxChars: CLAWHUB_ERROR_BODY_MAX_CHARS,
-      chunkTimeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+      chunkTimeoutMs: resolveClawHubRequestTimeoutMs(timeoutMs),
     });
     return snippet || response.statusText || `HTTP ${response.status}`;
   } catch {
@@ -699,8 +695,9 @@ async function buildClawHubError(
   response: Response,
   url: URL,
   hasToken: boolean,
+  timeoutMs?: number,
 ): Promise<ClawHubRequestError> {
-  let body = await readErrorBody(response);
+  let body = await readErrorBody(response, timeoutMs);
   if (response.status === 429) {
     const suffix = formatRateLimitSuffix(response.headers, hasToken);
     if (suffix) {
@@ -731,14 +728,18 @@ function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   const { response, url, hasToken } = await clawhubRequest(params);
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
-  return parseClawHubJsonBody<T>(response, url);
+  return parseClawHubJsonBody<T>(response, url, params.timeoutMs);
 }
 
-async function parseClawHubJsonBody<T>(response: Response, url: URL): Promise<T> {
+async function parseClawHubJsonBody<T>(
+  response: Response,
+  url: URL,
+  timeoutMs?: number,
+): Promise<T> {
   const buffer = await readResponseWithLimit(response, CLAWHUB_JSON_MAX_BYTES, {
-    chunkTimeoutMs: DEFAULT_FETCH_TIMEOUT_MS,
+    chunkTimeoutMs: resolveClawHubRequestTimeoutMs(timeoutMs),
     onOverflow: ({ size, maxBytes }) =>
       new Error(
         `ClawHub ${url.pathname} response exceeded ${maxBytes} bytes (${size} bytes received)`,
@@ -1016,9 +1017,13 @@ export async function fetchClawHubSkillInstallResolution(params: {
   });
   const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
   if (!response.ok && !isStructuredBlock) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
-  return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(response, url);
+  return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(
+    response,
+    url,
+    params.timeoutMs,
+  );
 }
 
 export async function fetchClawHubSkillVerification(params: {
@@ -1094,7 +1099,7 @@ export async function fetchClawHubSkillCard(params: {
     skipAuth,
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1129,7 +1134,7 @@ export async function downloadClawHubPackageArchive(params: {
       fetchImpl: params.fetchImpl,
     });
     if (!response.ok) {
-      throw await buildClawHubError(response, url, hasToken);
+      throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
     }
     const bytes = await readClawHubResponseBytes({
       response,
@@ -1208,7 +1213,7 @@ export async function downloadClawHubPackageArchive(params: {
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1255,7 +1260,7 @@ export async function downloadClawHubSkillArchive(params: {
     },
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1298,7 +1303,7 @@ export async function downloadClawHubSkillArchiveUrl(params: {
     skipAuth,
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1335,7 +1340,7 @@ export async function downloadClawHubGitHubSkillArchive(params: {
     fetchImpl: params.fetchImpl,
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
   const bytes = await readClawHubResponseBytes({
     response,
@@ -1395,7 +1400,7 @@ export async function reportClawHubSkillInstallTelemetry(params: {
     },
   });
   if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken);
+    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
   }
 }
 

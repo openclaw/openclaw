@@ -40,7 +40,12 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((statError as { code?: unknown }).code).toBe("ENOENT");
 }
 
-function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: Uint8Array }): {
+function createStalledBodyResponse(params: {
+  headers: HeadersInit;
+  firstChunk: Uint8Array;
+  status?: number;
+  statusText?: string;
+}): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
 } {
@@ -55,7 +60,8 @@ function createStalledBodyResponse(params: { headers: HeadersInit; firstChunk: U
   });
   return {
     response: new Response(body, {
-      status: 200,
+      status: params.status ?? 200,
+      statusText: params.statusText,
       headers: params.headers,
     }),
     cancel,
@@ -799,6 +805,42 @@ describe("clawhub helpers", () => {
           }),
       }),
     ).rejects.toThrow("ClawHub /api/v1/search returned malformed JSON");
+  });
+
+  it("times out and cancels stalled successful ClawHub JSON bodies", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new TextEncoder().encode('{"results":['),
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow(/ClawHub \/api\/v1\/search response stalled after 5ms/);
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
+  it("times out and cancels stalled ClawHub error bodies", async () => {
+    const stalled = createStalledBodyResponse({
+      firstChunk: new TextEncoder().encode("partial error"),
+      headers: { "content-type": "text/plain" },
+      status: 500,
+      statusText: "Server Error",
+    });
+
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        timeoutMs: 5,
+        fetchImpl: async () => stalled.response,
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/search failed (500): Server Error");
+    expect(stalled.cancel).toHaveBeenCalledTimes(1);
+    expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
   it("bounds oversized successful ClawHub JSON responses and cancels the stream", async () => {

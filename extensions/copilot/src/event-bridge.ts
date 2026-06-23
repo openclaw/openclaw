@@ -41,6 +41,16 @@ export interface SessionLike {
 
 export interface EventBridgeOptions {
   onAssistantDelta?: (payload: OnAssistantDeltaPayload) => void | Promise<void>;
+  onAgentEvent?: (event: {
+    stream: "item" | "plan";
+    data: Record<string, unknown>;
+  }) => void | Promise<void>;
+  onNativeSubagentEvent?: (
+    event: Extract<
+      SessionEvent,
+      { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
+    >,
+  ) => void;
   onCompactionComplete?: (payload: {
     messagesRemoved?: number;
     success: boolean;
@@ -72,6 +82,7 @@ export interface EventBridgeController {
   awaitSessionIdle(): Promise<void>;
   settleCompactionWait(): void;
   awaitDeltaChain(): Promise<void>;
+  awaitAgentEventChain(): Promise<void>;
   hasObservedCompaction(): boolean;
   hasObservedSessionIdle(): boolean;
   isCompacting(): boolean;
@@ -103,6 +114,7 @@ export function attachEventBridge(
   let observedCompaction = false;
   let deltaQueue = Promise.resolve();
   let deltaChain = Promise.resolve();
+  let agentEventChain = Promise.resolve();
   let compactionChain = Promise.resolve();
   let compactionIdle = Promise.resolve();
   let resolveCompactionIdle: (() => void) | undefined;
@@ -191,6 +203,51 @@ export function attachEventBridge(
     }
   });
 
+  registerListener(session, unsubscribeFns, "session.plan_changed", (event) => {
+    enqueueAgentEvent({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        operation: event.data.operation,
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+      },
+    });
+  });
+
+  registerListener(session, unsubscribeFns, "exit_plan_mode.requested", (event) => {
+    const steps = splitPlanText(event.data.planContent);
+    enqueueAgentEvent({
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        ...(event.data.summary ? { explanation: event.data.summary } : {}),
+        ...(steps.length > 0 ? { steps } : {}),
+        ...(event.data.actions.length > 0 ? { actions: event.data.actions } : {}),
+        ...(event.data.requestId ? { requestId: event.data.requestId } : {}),
+        ...(event.data.recommendedAction
+          ? { recommendedAction: event.data.recommendedAction }
+          : {}),
+        ...(event.agentId ? { agentId: event.agentId } : {}),
+      },
+    });
+  });
+
+  registerListener(session, unsubscribeFns, "subagent.started", (event) => {
+    forwardNativeSubagentEvent(event);
+  });
+
+  registerListener(session, unsubscribeFns, "subagent.completed", (event) => {
+    forwardNativeSubagentEvent(event);
+  });
+
+  registerListener(session, unsubscribeFns, "subagent.failed", (event) => {
+    forwardNativeSubagentEvent(event);
+  });
+
   registerListener(session, unsubscribeFns, "session.compaction_start", (event) => {
     if (!isRootCompactionEvent(event)) {
       return;
@@ -276,6 +333,9 @@ export function attachEventBridge(
     awaitDeltaChain() {
       return deltaChain;
     },
+    awaitAgentEventChain() {
+      return agentEventChain;
+    },
     hasObservedCompaction() {
       return observedCompaction;
     },
@@ -332,6 +392,31 @@ export function attachEventBridge(
     }
     const queued = compactionChain.then(callback, callback);
     compactionChain = queued.catch(() => undefined);
+  }
+
+  function enqueueAgentEvent(event: {
+    stream: "item" | "plan";
+    data: Record<string, unknown>;
+  }): void {
+    const callback = options.onAgentEvent;
+    if (!callback) {
+      return;
+    }
+    const invoke = () => callback(event);
+    agentEventChain = agentEventChain.then(invoke, invoke).catch(() => undefined);
+  }
+
+  function forwardNativeSubagentEvent(
+    event: Extract<
+      SessionEvent,
+      { type: "subagent.started" | "subagent.completed" | "subagent.failed" }
+    >,
+  ): void {
+    try {
+      options.onNativeSubagentEvent?.(event);
+    } catch {
+      // Native task mirroring must not corrupt the Copilot turn.
+    }
   }
 
   async function awaitStableCompaction(): Promise<void> {
@@ -454,6 +539,13 @@ function isRootCompactionEvent(event: { agentId?: string }): boolean {
 
 function joinReasoning(order: string[], reasoningById: Map<string, string>): string {
   return order.map((reasoningId) => reasoningById.get(reasoningId) ?? "").join("");
+}
+
+function splitPlanText(text: string | undefined): string[] {
+  return (text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[-*]\s+/, ""))
+    .filter((line) => line.length > 0);
 }
 
 function readString(value: unknown): string | undefined {
