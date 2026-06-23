@@ -397,6 +397,48 @@ describe("CORE_HEALTH_CHECKS", () => {
     expect(findings[0]?.message).toContain("Codex plugin is disabled by config");
   });
 
+  it("reports missing default account routing as core health findings", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(createDeps()),
+      "core/doctor/default-account-routing",
+    );
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime,
+      cfg: {
+        channels: {
+          telegram: {
+            accounts: {
+              alerts: {},
+              work: {},
+            },
+          },
+        },
+        bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/default-account-routing",
+          severity: "warning",
+          message: expect.stringContaining(
+            "channels.telegram: accounts.default is missing and no valid account-scoped binding",
+          ),
+        }),
+        expect.objectContaining({
+          checkId: "core/doctor/default-account-routing",
+          severity: "warning",
+          message: expect.stringContaining(
+            "channels.telegram: multiple accounts are configured but no explicit default is set",
+          ),
+        }),
+      ]),
+    );
+  });
+
   it("uses the read-only model catalog for hooks.gmail.model checks", async () => {
     const cfg: OpenClawConfig = {
       hooks: {

@@ -28,6 +28,10 @@ import {
   uiProtocolFreshnessIssueToRepairEffects,
 } from "../commands/doctor-ui.js";
 import { collectDisabledCodexPluginRouteIssues } from "../commands/doctor/shared/codex-route-warnings.js";
+import {
+  collectMissingDefaultAccountBindingWarnings,
+  collectMissingExplicitDefaultAccountWarnings,
+} from "../commands/doctor/shared/default-account-warnings.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
@@ -46,6 +50,7 @@ import type {
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
+const DEFAULT_ACCOUNT_ROUTING_CHECK_ID = "core/doctor/default-account-routing";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
@@ -654,6 +659,27 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
   },
 };
 
+const defaultAccountRoutingCheck: HealthCheck = {
+  id: DEFAULT_ACCOUNT_ROUTING_CHECK_ID,
+  kind: "core",
+  description:
+    "Multi-account channels declare explicit default routing or complete account-scoped bindings.",
+  source: "doctor",
+  async detect(ctx) {
+    const warnings = [
+      ...collectMissingDefaultAccountBindingWarnings(ctx.cfg),
+      ...collectMissingExplicitDefaultAccountWarnings(ctx.cfg),
+    ];
+    return warnings.map((text) =>
+      noteTextToFinding({
+        checkId: DEFAULT_ACCOUNT_ROUTING_CHECK_ID,
+        severity: "warning",
+        text,
+      }),
+    );
+  },
+};
+
 const codexSessionRoutesCheck: HealthCheck = {
   id: CODEX_SESSION_ROUTES_CHECK_ID,
   kind: "core",
@@ -1016,6 +1042,7 @@ function createConvertedWorkflowChecks(
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
+    defaultAccountRoutingCheck,
     codexSessionRoutesCheck,
     sessionLocksCheck,
     shellCompletionCheck,

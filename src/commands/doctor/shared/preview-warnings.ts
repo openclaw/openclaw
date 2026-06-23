@@ -20,6 +20,10 @@ import type {
 } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import {
+  collectMissingDefaultAccountBindingWarnings,
+  collectMissingExplicitDefaultAccountWarnings,
+} from "./default-account-warnings.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -717,6 +721,8 @@ export async function collectDoctorPreviewNotes(params: {
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
   warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
+  warnings.push(...collectMissingDefaultAccountBindingWarnings(params.cfg));
+  warnings.push(...collectMissingExplicitDefaultAccountWarnings(params.cfg));
   const { collectBlockedLegacyOpenAICodexProviderWarnings } =
     await import("./legacy-config-migrations.runtime.models.js");
   warnings.push(...collectBlockedLegacyOpenAICodexProviderWarnings(params.cfg));

@@ -390,6 +390,38 @@ describe("doctor preview warnings", () => {
     ).toBe(true);
   });
 
+  it("collects missing default account routing warnings in preview mode", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        channels: {
+          telegram: {
+            accounts: {
+              alerts: {},
+              work: {},
+            },
+          },
+        },
+        bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
+      } as OpenClawConfig,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(
+      warnings.some((warning) =>
+        warning.includes(
+          "channels.telegram: accounts.default is missing and no valid account-scoped binding",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      warnings.some((warning) =>
+        warning.includes(
+          "channels.telegram: multiple accounts are configured but no explicit default is set",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("resolves configured channel SecretRefs before collecting channel preview warnings", async () => {
     const rawConfig = {
       channels: {
@@ -509,10 +541,10 @@ describe("doctor preview warnings", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    const warning = expectSingleWarningContaining(
-      warnings,
-      "channels.signal.accounts.ops-teamnext.dmPolicy",
+    const warning = warnings.find((entry) =>
+      entry.includes("channels.signal.accounts.ops-teamnext.dmPolicy"),
     );
+    expect(warning).toBeDefined();
     expect(warning).not.toContain("\u001B");
     expect(warning).not.toContain("\r");
   });
