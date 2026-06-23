@@ -752,7 +752,9 @@ describe("session accessor file-backed seam", () => {
     );
     expect(fs.existsSync(currentTranscriptPath)).toBe(true);
     expect(
-      fs.readdirSync(lifecycleSessionsDir).filter((file) => file.startsWith(`${staleSessionId}.jsonl.deleted.`)),
+      fs
+        .readdirSync(lifecycleSessionsDir)
+        .filter((file) => file.startsWith(`${staleSessionId}.jsonl.deleted.`)),
     ).toHaveLength(1);
   });
 

@@ -26,7 +26,7 @@ import {
 } from "./disk-budget.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
-import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
+import { resolveExplicitSessionFilePath, resolveSessionFilePath, resolveStorePath } from "./paths.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   isSessionSkillPromptBlobReadable,
@@ -760,9 +760,11 @@ function resolveLifecycleTranscriptPath(params: {
   const sessionFile = params.entry?.sessionFile?.trim();
   const generatedSessionId = extractGeneratedTranscriptSessionId(sessionFile);
   if (sessionFile && (!sessionId || !generatedSessionId || generatedSessionId === sessionId)) {
-    return resolveSessionFilePath("session-file-reference", { sessionFile }, {
-      sessionsDir: params.sessionsDir,
-    });
+    try {
+      return resolveExplicitSessionFilePath(sessionFile, { sessionsDir: params.sessionsDir });
+    } catch {
+      return null;
+    }
   }
   if (!sessionId) {
     return null;
