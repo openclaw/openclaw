@@ -568,9 +568,17 @@ async function buildGatewayInstallEnvironment(params: {
   addServiceEnvPlanEntries(plan, configSecretRefEnvironment, { source: "config-secretref-env" });
   addServiceEnvPlanEntries(plan, execSecretRefPassEnvEnvironment, { source: "exec-passenv" });
   addServiceEnvPlanEntries(plan, authProfileEnvironment, { source: "auth-profile-env" });
-  const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {
-    omitKeys: Object.keys(params.serviceEnvironment),
-  });
+  // Config-secretref env refs are explicit user-configured secrets. Include them
+  // when computing managed keys so generated service files reference them via
+  // OPENCLAW_SERVICE_MANAGED_ENV_KEYS instead of writing plaintext values inline
+  // (#95895).
+  const managedServiceEnvKeys = formatManagedServiceEnvKeys(
+    {
+      ...durableEnvironment,
+      ...configSecretRefEnvironment,
+    },
+    { omitKeys: Object.keys(params.serviceEnvironment) },
+  );
   applyManagedServiceEnvRenderPolicy({
     plan,
     managedServiceEnvKeys,

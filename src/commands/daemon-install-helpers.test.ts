@@ -433,8 +433,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.DISCORD_BOT_TOKEN).toBe("discord-test-token");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("DISCORD_BOT_TOKEN");
   });
 
   it("includes passEnv values for configured exec SecretRef providers", async () => {
