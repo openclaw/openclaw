@@ -12,7 +12,9 @@
 #     stored OAuth credentials / runtime state are preserved, never clobbered:
 #       * Control UI host-header fallback + device-auth off (behind Railway proxy)
 #       * admin-http-rpc plugin enabled (Hypertransient MCP -> POST /api/v1/admin/rpc)
-#       * default agent model = Claude Opus 4.8 (Sonnet fallback, high thinking)
+#       * default agent model = Claude Opus 4.8 (Sonnet 4.6 fallback, high
+#         thinking); Opus 4.7/4.6, Haiku 4.5, and Fable 5 also registered so they
+#         are selectable in the UI picker and via /model
 #       * heartbeat disabled (every:0m) -- no periodic token burn; trigger manually
 #       * Hypertransient MCP server registered as a client (streamable-http, oauth;
 #         GitHub/Railway infra tools filtered out; n8n, Postman, OpenClaw admin,
@@ -26,7 +28,7 @@ STATE_DIR="${OPENCLAW_STATE_DIR:-$NODE_HOME/.openclaw}"
 CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-/app/.openclaw/openclaw.json}"
 GATEWAY="node --max-old-space-size=4096 openclaw.mjs gateway --bind lan --port ${PORT:-18789} --allow-unconfigured"
 
-BASE_CONFIG='{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"plugins":{"entries":{"admin-http-rpc":{"enabled":true}}},"agents":{"defaults":{"model":{"primary":"anthropic/claude-opus-4-8","fallbacks":["anthropic/claude-sonnet-4-6"]},"thinkingDefault":"high","heartbeat":{"every":"0m"}}},"mcp":{"servers":{"Hypertransient MCP Server":{"url":"https://mcp.hypertransient.com/mcp","transport":"streamable-http","auth":"oauth","toolFilter":{"exclude":["gh_*","railway_*"]}}}}}'
+BASE_CONFIG='{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"plugins":{"entries":{"admin-http-rpc":{"enabled":true}}},"agents":{"defaults":{"model":{"primary":"anthropic/claude-opus-4-8","fallbacks":["anthropic/claude-sonnet-4-6"]},"models":{"anthropic/claude-opus-4-8":{},"anthropic/claude-opus-4-7":{},"anthropic/claude-opus-4-6":{},"anthropic/claude-sonnet-4-6":{},"anthropic/claude-haiku-4-5":{},"anthropic/claude-fable-5":{}},"thinkingDefault":"high","heartbeat":{"every":"0m"}}},"mcp":{"servers":{"Hypertransient MCP Server":{"url":"https://mcp.hypertransient.com/mcp","transport":"streamable-http","auth":"oauth","toolFilter":{"exclude":["gh_*","railway_*"]}}}}}'
 
 write_config() {
   mkdir -p "$(dirname "$CONFIG_PATH")" 2>/dev/null || true
