@@ -568,9 +568,14 @@ async function buildGatewayInstallEnvironment(params: {
   addServiceEnvPlanEntries(plan, configSecretRefEnvironment, { source: "config-secretref-env" });
   addServiceEnvPlanEntries(plan, execSecretRefPassEnvEnvironment, { source: "exec-passenv" });
   addServiceEnvPlanEntries(plan, authProfileEnvironment, { source: "auth-profile-env" });
-  const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {
-    omitKeys: Object.keys(params.serviceEnvironment),
-  });
+  // Auth-profile env refs (e.g. GEMINI_API_KEY resolved from an auth profile) are
+  // also service-managed secrets. Include them when computing managed keys so the
+  // generated service file references them via OPENCLAW_SERVICE_MANAGED_ENV_KEYS
+  // instead of writing the plaintext value inline (#95895).
+  const managedServiceEnvKeys = formatManagedServiceEnvKeys(
+    { ...durableEnvironment, ...authProfileEnvironment },
+    { omitKeys: Object.keys(params.serviceEnvironment) },
+  );
   applyManagedServiceEnvRenderPolicy({
     plan,
     managedServiceEnvKeys,

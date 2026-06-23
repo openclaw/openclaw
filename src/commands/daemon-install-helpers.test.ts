@@ -993,8 +993,8 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("OPENAI_API_KEY");
     expect(mocks.hasAnyAuthProfileStoreSource).not.toHaveBeenCalled();
     expect(mocks.loadAuthProfileStoreForSecretsRuntime).not.toHaveBeenCalled();
   });
@@ -1058,9 +1058,11 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.GIT_ASKPASS).toBeUndefined();
     expect(plan.environment["BAD KEY"]).toBeUndefined();
     expect(plan.environment.MISSING_TOKEN).toBeUndefined();
-    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
-    expect(plan.environment.ANTHROPIC_TOKEN).toBe("ant-test-token");
-    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBeUndefined();
+    expect(plan.environment.OPENAI_API_KEY).toBeUndefined();
+    expect(plan.environment.ANTHROPIC_TOKEN).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "ANTHROPIC_TOKEN,OPENAI_API_KEY",
+    );
     expect(warn).toHaveBeenCalledWith(
       'Auth profile env ref "NODE_OPTIONS" blocked by host-env security policy',
       "Auth profile",
@@ -1069,6 +1071,35 @@ describe("buildGatewayInstallPlan", () => {
       'Auth profile env ref "GIT_ASKPASS" blocked by host-env security policy',
       "Auth profile",
     );
+  });
+
+  it("marks auth-profile env refs as managed so they are not written as plaintext literals (#95895)", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+    mocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
+      version: 1,
+      profiles: {
+        "google:default": {
+          type: "api_key",
+          provider: "google",
+          keyRef: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+        },
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        GEMINI_API_KEY: "sk-gemini-test", // pragma: allowlist secret
+      }),
+      port: 3000,
+      runtime: "node",
+    });
+
+    expect(plan.environment.GEMINI_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("GEMINI_API_KEY");
   });
 });
 
