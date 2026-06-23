@@ -1043,7 +1043,7 @@ describe("before_tool_call requireApproval handling", () => {
     }
   }
 
-  function registerDisabledTelegramApprovalCapability(): void {
+  function registerTelegramApprovalCapabilityWithoutNativeDelivery(): void {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -1053,10 +1053,10 @@ describe("before_tool_call requireApproval handling", () => {
             ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
             approvalCapability: {
               native: {},
-              getActionAvailabilityState: () => ({ kind: "disabled" as const }),
+              getActionAvailabilityState: () => ({ kind: "enabled" as const }),
               getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
               describeExecApprovalSetup: () =>
-                "Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`.",
+                "Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`; leave `channels.telegram.execApprovals.enabled` unset/`auto` or set it to `true`.",
             },
           },
         },
@@ -1628,8 +1628,8 @@ describe("before_tool_call requireApproval handling", () => {
     ]);
   });
 
-  it("includes Telegram setup guidance when plugin approval has no route", async () => {
-    registerDisabledTelegramApprovalCapability();
+  it("includes Telegram setup guidance when plugin approval has no route without native delivery", async () => {
+    registerTelegramApprovalCapabilityWithoutNativeDelivery();
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "No route",
@@ -1654,7 +1654,7 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty(
       "reason",
-      "Plugin approval unavailable (no approval route)\n\nApprove it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`.",
+      "Plugin approval unavailable (no approval route)\n\nApprove it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`; leave `channels.telegram.execApprovals.enabled` unset/`auto` or set it to `true`.",
     );
     expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
@@ -1662,7 +1662,7 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("includes Telegram setup guidance when plugin approval times out without native delivery", async () => {
-    registerDisabledTelegramApprovalCapability();
+    registerTelegramApprovalCapabilityWithoutNativeDelivery();
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {
         title: "Timed out",
@@ -1688,7 +1688,7 @@ describe("before_tool_call requireApproval handling", () => {
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty(
       "reason",
-      "Approval timed out\n\nApprove it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`.",
+      "Approval timed out\n\nApprove it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`; leave `channels.telegram.execApprovals.enabled` unset/`auto` or set it to `true`.",
     );
     expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",

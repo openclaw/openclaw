@@ -661,13 +661,22 @@ function buildPluginApprovalFailureReason(params: {
     cfg: params.ctx?.config,
     approvalKind: "plugin",
   });
-  if (initiatingSurface.kind !== "disabled") {
+  const nativeExecSurface =
+    initiatingSurface.kind === "disabled"
+      ? initiatingSurface
+      : resolveApprovalInitiatingSurfaceState({
+          channel: turnSourceChannel,
+          accountId: params.ctx?.turnSourceAccountId,
+          cfg: params.ctx?.config,
+          approvalKind: "exec",
+        });
+  if (nativeExecSurface.kind !== "disabled") {
     return params.fallbackReason;
   }
   const setupText = describeNativeExecApprovalClientSetup({
-    channel: initiatingSurface.channel,
-    channelLabel: initiatingSurface.channelLabel,
-    accountId: initiatingSurface.accountId,
+    channel: nativeExecSurface.channel,
+    channelLabel: nativeExecSurface.channelLabel,
+    accountId: nativeExecSurface.accountId,
   });
   return setupText ? `${params.fallbackReason}\n\n${setupText}` : params.fallbackReason;
 }
