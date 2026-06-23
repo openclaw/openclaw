@@ -15,11 +15,11 @@ import {
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { markTaskDeliveringByRunId } from "../../tasks/runtime-internal.js";
 import {
   resolveRequiredCompletionDeliveryFailureTerminalResult,
   type RequiredCompletionTerminalResult,
 } from "../../tasks/task-completion-contract.js";
-import { markTaskDeliveringByRunId } from "../../tasks/task-registry.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,

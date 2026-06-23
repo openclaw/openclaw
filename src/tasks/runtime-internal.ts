@@ -15,6 +15,7 @@ export {
   listTasksForOwnerKey,
   linkTaskToFlowById,
   markTaskLostById,
+  markTaskDeliveringByRunId,
   markTaskRunningByRunId,
   markTaskTerminalById,
   maybeDeliverTaskTerminalUpdate,
