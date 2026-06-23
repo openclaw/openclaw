@@ -165,6 +165,7 @@ function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
 
 type RegisterEventHandlersContext = {
   cfg: ClawdbotConfig;
+  feishuCfg: ResolvedFeishuAccount["config"];
   accountId: string;
   channelRuntime: PluginRuntime["channel"];
   runtime?: RuntimeEnv;
@@ -271,7 +272,8 @@ function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
 ): void {
-  const { cfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget } = context;
+  const { cfg, feishuCfg, accountId, channelRuntime, runtime, chatHistories, fireAndForget } =
+    context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
   const runFeishuHandler = async (params: { task: () => Promise<void>; errorMessage: string }) => {
@@ -303,7 +305,17 @@ function registerEventHandlers(
       recordProcessedMessage: recordProcessedFeishuMessage,
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
-      resolveSequentialKey: getFeishuSequentialKey,
+      resolveSequentialKey: ({ accountId: id, event, botOpenId, botName }) =>
+        getFeishuSequentialKey({
+          accountId: id,
+          event,
+          botOpenId,
+          botName,
+          cfg,
+          feishuCfg,
+          fetchMessage: getMessageFeishu,
+          log,
+        }),
     }),
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
@@ -490,6 +502,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
 
     registerEventHandlers(eventDispatcher, {
       cfg,
+      feishuCfg: account.config,
       accountId,
       channelRuntime,
       runtime,
