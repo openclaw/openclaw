@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { RootHelpRenderOptions } from "../src/cli/program/root-help.js";
 import type { OpenClawConfig } from "../src/config/config.js";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 function dedupe(values: string[]): string[] {
   const seen = new Set<string>();
@@ -32,7 +33,14 @@ const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
 const COMMAND_HELP_RENDER_CONCURRENCY = 2;
-const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = ["doctor", "gateway", "models", "plugins"] as const;
+const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
+  "doctor",
+  "gateway",
+  "models",
+  "plugins",
+  "sessions",
+  "tasks",
+] as const;
 const CORE_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
@@ -62,6 +70,89 @@ type RootHelpRenderContext = Pick<RootHelpRenderOptions, "config" | "env">;
 type Awaitable<T> = T | Promise<T>;
 type SourceCommandHelpCommand = "nodes" | "secrets" | PrecomputedSubcommandHelpCommand;
 type SourceCommandHelpText = Record<SourceCommandHelpCommand, string>;
+type SpawnTextParentSignalState = {
+  done: boolean;
+  signal: NodeJS.Signals | null;
+};
+type KillableChild = {
+  kill(signal: NodeJS.Signals): boolean;
+  pid?: number;
+};
+type RunTaskkill = (
+  command: string,
+  args: string[],
+  options: { stdio: "ignore" },
+) => { error?: unknown; status?: number | null } | undefined;
+
+const activeSpawnTextParentSignals = new Set<SpawnTextParentSignalState>();
+
+function maybeReraiseSpawnTextParentSignal(signal: NodeJS.Signals): void {
+  for (const state of activeSpawnTextParentSignals) {
+    if (state.signal === null || !state.done) {
+      return;
+    }
+  }
+  process.kill(process.pid, signal);
+}
+
+function signalWindowsProcessTree(
+  pid: number,
+  signal: NodeJS.Signals,
+  runTaskkill: RunTaskkill = spawnSync,
+): boolean {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(
+  pid: number,
+  signal: NodeJS.Signals,
+  runTaskkill: RunTaskkill = spawnSync,
+): boolean {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+function signalCliStartupMetadataProcessTree(
+  child: KillableChild,
+  signal: NodeJS.Signals,
+  {
+    appendDiagnostic = () => {},
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  }: {
+    appendDiagnostic?: (message: string) => void;
+    platform?: NodeJS.Platform;
+    runTaskkill?: RunTaskkill;
+    useProcessGroup?: boolean;
+  } = {},
+): void {
+  if (useProcessGroup && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+        appendDiagnostic(
+          `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
+  }
+  child.kill(signal);
+}
 
 function resolveRootHelpBundleIdentity(
   distDirOverride: string = distDir,
@@ -165,6 +256,7 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
       path.join(sourceRootDir, "src/cli/help-format.ts"),
       path.join(sourceRootDir, "src/cli/daemon-cli/register-service-commands.ts"),
       path.join(sourceRootDir, "src/cli/program/register.maintenance.ts"),
+      path.join(sourceRootDir, "src/cli/program/register.status-health-sessions.ts"),
       path.join(sourceRootDir, "src/cli/gateway-cli.ts"),
       path.join(sourceRootDir, "src/cli/gateway-cli/register.ts"),
       path.join(sourceRootDir, "src/cli/gateway-cli/run-command.ts"),
@@ -312,6 +404,9 @@ async function spawnText(
     let waitingForKillGrace = false;
     let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let parentSignalPending: NodeJS.Signals | null = null;
+    const parentSignalState: SpawnTextParentSignalState = { done: false, signal: null };
+    activeSpawnTextParentSignals.add(parentSignalState);
     const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
     const cleanupParentSignalHandlers = () => {
       for (const { signal, handler } of parentSignalHandlers) {
@@ -320,23 +415,37 @@ async function spawnText(
       parentSignalHandlers.length = 0;
     };
     const signalChild = (signal: NodeJS.Signals) => {
-      if (useProcessGroup && typeof child.pid === "number") {
-        try {
-          process.kill(-child.pid, signal);
-          return;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
-            stderr += `failed to send ${signal} to process group: ${error instanceof Error ? error.message : String(error)}\n`;
-          }
-        }
-      }
-      child.kill(signal);
+      signalCliStartupMetadataProcessTree(child, signal, {
+        appendDiagnostic: (message) => {
+          stderr += message;
+        },
+        useProcessGroup,
+      });
     };
     const relayParentSignal = (signal: NodeJS.Signals) => {
       const handler = () => {
+        parentSignalPending = signal;
+        parentSignalState.signal = signal;
         signalChild(signal);
         cleanupParentSignalHandlers();
-        process.kill(process.pid, signal);
+        if (!processGroupIsAlive()) {
+          parentSignalState.done = true;
+          maybeReraiseSpawnTextParentSignal(signal);
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        // Keep this timer ref'ed so parent signal relay waits long enough to
+        // force-kill stubborn detached descendants before re-raising.
+        waitingForKillGrace = true;
+        killTimer = setTimeout(() => {
+          waitingForKillGrace = false;
+          killTimer = undefined;
+          signalChild("SIGKILL");
+          parentSignalState.done = true;
+          maybeReraiseSpawnTextParentSignal(signal);
+        }, killGraceMs);
       };
       parentSignalHandlers.push({ handler, signal });
       process.once(signal, handler);
@@ -363,8 +472,11 @@ async function spawnText(
       }
       settled = true;
       clearTimeout(timeout);
-      if (killTimer) {
+      if (!parentSignalPending && killTimer) {
         clearTimeout(killTimer);
+      }
+      if (!parentSignalPending) {
+        activeSpawnTextParentSignals.delete(parentSignalState);
       }
       cleanupParentSignalHandlers();
       callback();
@@ -448,6 +560,19 @@ async function spawnText(
     });
     child.once("close", (code, signal) => {
       const result = { code, signal };
+      if (parentSignalPending) {
+        if (processGroupIsAlive()) {
+          childClosedResult = result;
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+          killTimer = undefined;
+        }
+        parentSignalState.done = true;
+        maybeReraiseSpawnTextParentSignal(parentSignalPending);
+        return;
+      }
       if (waitingForKillGrace && processGroupIsAlive()) {
         childClosedResult = result;
         return;
@@ -790,6 +915,7 @@ function hasAllPrecomputedSubcommandHelpText(value: unknown): boolean {
 
 export const testing = {
   mapWithConcurrency,
+  signalCliStartupMetadataProcessTree,
   spawnText,
 };
 

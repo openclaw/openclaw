@@ -7,6 +7,7 @@ import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
@@ -22,6 +23,7 @@ function scenarioMatchesQaProviderLane(params: {
   scenario: QaSeedScenario;
   primaryModel: string;
   providerMode: QaProviderMode;
+  channelDriver?: QaScorecardChannelDriver | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const provider = getQaProvider(params.providerMode);
@@ -31,6 +33,11 @@ function scenarioMatchesQaProviderLane(params: {
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
+    return false;
+  }
+  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
+  const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
+  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
     return false;
   }
   if (provider.kind !== "live") {
@@ -57,6 +64,7 @@ function selectQaFlowSuiteScenarios(params: {
   scenarioIds?: string[];
   providerMode: QaProviderMode;
   primaryModel: string;
+  channelDriver?: QaScorecardChannelDriver | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const requestedScenarioIds =
@@ -92,8 +100,48 @@ function selectQaFlowSuiteScenarios(params: {
         scenario,
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
+        channelDriver: params.channelDriver,
         claudeCliAuthMode: params.claudeCliAuthMode,
       }),
+  );
+}
+
+function listQaSuiteScenarioChannels(
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+) {
+  return [
+    ...new Set(
+      scenarios
+        .map((scenario) => scenario.execution.channel?.trim().toLowerCase())
+        .filter((channel): channel is string => Boolean(channel)),
+    ),
+  ];
+}
+
+function resolveQaSuiteScenarioChannel(params: {
+  defaultChannel: string;
+  explicitChannel?: string | null;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  const scenarioChannels = listQaSuiteScenarioChannels(params.scenarios);
+  const explicitChannel = params.explicitChannel?.trim().toLowerCase();
+  if (explicitChannel) {
+    const conflictingChannels = scenarioChannels.filter((channel) => channel !== explicitChannel);
+    if (conflictingChannels.length > 0) {
+      throw new Error(
+        `--channel ${explicitChannel} conflicts with selected scenario execution.channel ${conflictingChannels.join(", ")}.`,
+      );
+    }
+    return explicitChannel;
+  }
+  if (scenarioChannels.length === 0) {
+    return params.defaultChannel;
+  }
+  if (scenarioChannels.length === 1) {
+    return scenarioChannels[0];
+  }
+  throw new Error(
+    `Selected QA scenarios require multiple channels (${scenarioChannels.join(", ")}); split the run by channel.`,
   );
 }
 
@@ -277,6 +325,7 @@ export {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,

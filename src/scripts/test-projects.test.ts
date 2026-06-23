@@ -618,10 +618,10 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
     );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
   });
@@ -862,6 +862,7 @@ describe("test-projects args", () => {
           "src/install-sh-version.test.ts",
           "src/proxy-capture/store.sqlite.test.ts",
           "test/scripts/android-version.test.ts",
+          "test/scripts/resolve-openclaw-ref.test.ts",
         ],
         watchMode: false,
       },
@@ -880,13 +881,33 @@ describe("test-projects args", () => {
           "test/helpers/temp-dir.test.ts",
           "test/scripts/android-pin-version.test.ts",
           "test/scripts/bench-cli-startup.test.ts",
+          "test/scripts/check-package-dist-imports.test.ts",
+          "test/scripts/ci-hydrate-testbox-env.test.ts",
+          "test/scripts/clawhub-fixture-server.test.ts",
+          "test/scripts/codex-install-assertions.test.ts",
+          "test/scripts/config-reload-mutate-metadata.test.ts",
+          "test/scripts/control-ui-i18n.test.ts",
+          "test/scripts/docs-list.test.ts",
+          "test/scripts/doctor-install-switch-wrapper.test.ts",
+          "test/scripts/e2e-text-file-utils.test.ts",
+          "test/scripts/fixture-common.test.ts",
+          "test/scripts/fixture-plugin-commands.test.ts",
+          "test/scripts/incremental-line-reader.test.ts",
           "test/scripts/ios-configure-signing.test.ts",
           "test/scripts/ios-pin-version.test.ts",
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
-          "test/scripts/openai-chat-tools-client.test.ts",
+          "test/scripts/onboard-config-fixtures.test.ts",
+          "test/scripts/parallels-lib-helpers.test.ts",
+          "test/scripts/parallels-smoke-model.test.ts",
+          "test/scripts/plugin-package-dependencies.test.ts",
+          "test/scripts/plugins-assertions.test.ts",
+          "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
+          "test/scripts/proxy-install-ca.test.ts",
+          "test/scripts/release-preflight.test.ts",
           "test/scripts/report-test-temp-creations.test.ts",
+          "test/scripts/test-install-sh-docker.test.ts",
           "test/scripts/test-projects.test.ts",
           "test/test-env.test.ts",
           "test/vitest-scoped-config.test.ts",
@@ -912,6 +933,7 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/e2e/qa-lab/plugins/plugin-lifecycle-probe.e2e.test.ts",
+          "test/e2e/qa-lab/runtime/openai-compatible-chat-tools.e2e.test.ts",
           "test/openclaw-launcher.e2e.test.ts",
         ],
         includePatterns: null,
@@ -1014,12 +1036,12 @@ describe("test-projects args", () => {
     ).toStrictEqual([]);
   });
 
-  it("routes auth setup script changes to the focused tooling planner test", () => {
+  it("routes auth setup script changes to the focused auth monitor test", () => {
     const changedPaths = ["scripts/setup-auth-system.sh"];
 
     expect(resolveChangedTestTargetPlan(changedPaths)).toEqual({
       mode: "targets",
-      targets: ["test/scripts/test-projects.test.ts"],
+      targets: ["test/scripts/auth-monitor.test.ts"],
     });
     expect(
       buildVitestRunPlans(["--changed=origin/main"], process.cwd(), () => changedPaths),
@@ -1027,7 +1049,7 @@ describe("test-projects args", () => {
       {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
-        includePatterns: ["test/scripts/test-projects.test.ts"],
+        includePatterns: ["test/scripts/auth-monitor.test.ts"],
         watchMode: false,
       },
     ]);

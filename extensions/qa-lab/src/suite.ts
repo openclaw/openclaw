@@ -2,6 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  createOpenClawCrablineChannelReportNotes,
+  runOpenClawCrablineChannelDriverSmoke,
+  type OpenClawCrablineChannelDriverSelection,
+} from "crabline";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -12,7 +17,7 @@ import {
   type QaReportScenario,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { QaSuiteArtifactError } from "./errors.js";
+import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
 import { buildQaSuiteEvidenceSummary, QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
@@ -55,7 +60,7 @@ import {
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
+import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import {
   applyQaMergePatch,
   collectQaSuiteGatewayConfigPatch,
@@ -105,12 +110,34 @@ type QaSuiteEnvironment = {
 
 export type QaSuiteStartLabFn = (params?: QaLabServerStartParams) => Promise<QaLabServerHandle>;
 
+async function createQaSuiteTransportAdapter(params: {
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
+  outputDir: string;
+  state: QaLabServerHandle["state"];
+  transportId: QaTransportId;
+}) {
+  if (params.channelDriverSelection) {
+    const { createQaCrablineTransportAdapter } = await import("./crabline-transport.js");
+    return await createQaCrablineTransportAdapter({
+      outputDir: params.outputDir,
+      selection: params.channelDriverSelection,
+      state: params.state,
+    });
+  }
+  return createQaTransportAdapter({
+    id: params.transportId,
+    state: params.state,
+  });
+}
+
 export type QaSuiteRunParams = {
   evidenceMode?: QaScorecardEvidenceMode;
   repoRoot?: string;
   outputDir?: string;
   providerMode?: QaProviderMode;
   transportId?: QaTransportId;
+  channelDriver?: QaScorecardChannelDriver;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
@@ -394,6 +421,7 @@ function buildRuntimeParityScenarioResult(params: {
 
 function createQaSuiteReportNotes(params: {
   transport: QaTransportAdapter;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -401,7 +429,10 @@ function createQaSuiteReportNotes(params: {
   concurrency: number;
   isolatedWorkers?: boolean;
 }) {
-  return params.transport.createReportNotes(params);
+  return [
+    ...params.transport.createReportNotes(params),
+    ...createOpenClawCrablineChannelReportNotes(params.channelDriverSelection),
+  ];
 }
 
 function buildQaIsolatedScenarioWorkerParams(params: {
@@ -409,6 +440,8 @@ function buildQaIsolatedScenarioWorkerParams(params: {
   outputDir: string;
   providerMode: QaProviderMode;
   transportId: QaTransportId;
+  channelDriver?: QaScorecardChannelDriver;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   primaryModel: string;
   alternateModel: string;
   fastMode: boolean;
@@ -421,6 +454,8 @@ function buildQaIsolatedScenarioWorkerParams(params: {
     outputDir: params.outputDir,
     providerMode: params.providerMode,
     transportId: params.transportId,
+    channelDriver: params.channelDriver,
+    channelDriverSelection: params.channelDriverSelection,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,
@@ -526,6 +561,8 @@ export type QaSuiteSummaryJsonParams = {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  channelDriver?: QaScorecardChannelDriver | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
 };
@@ -585,6 +622,10 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       alternateModelName: alternateSplit?.model ?? null,
       fastMode: params.fastMode,
       concurrency: params.concurrency,
+      channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver ?? null,
+      channel: params.channelDriverSelection?.channel ?? null,
+      channelCapabilityMatrixPath: params.channelDriverSelection?.capabilityMatrixPath ?? null,
+      channelDriverSmokePath: params.channelDriverSelection?.smokeArtifactPath ?? null,
       scenarioIds:
         params.scenarioIds && params.scenarioIds.length > 0 ? [...params.scenarioIds] : null,
       runtimePair: params.runtimePair ?? null,
@@ -605,6 +646,8 @@ async function runQaRuntimeParitySuite(params: {
   thinkingDefault?: QaThinkingLevel;
   claudeCliAuthMode?: QaCliBackendAuthMode;
   enabledPluginIds?: string[];
+  channelDriver?: QaScorecardChannelDriver | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   concurrency: number;
   selectedScenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   startLab?: QaSuiteStartLabFn;
@@ -623,9 +666,11 @@ async function runQaRuntimeParitySuite(params: {
       port: 0,
       embeddedGateway: "disabled",
     }));
-  const transport = createQaTransportAdapter({
-    id: params.transportId,
+  const transport = await createQaSuiteTransportAdapter({
+    channelDriverSelection: params.channelDriverSelection,
+    outputDir: params.outputDir,
     state: lab.state,
+    transportId: params.transportId,
   });
   const liveScenarioOutcomes: QaLabScenarioOutcome[] = params.selectedScenarios.map((scenario) => ({
     id: scenario.id,
@@ -677,6 +722,8 @@ async function runQaRuntimeParitySuite(params: {
               outputDir: cellOutputDir,
               providerMode: params.providerMode,
               transportId: params.transportId,
+              channelDriver: params.channelDriver ?? undefined,
+              channelDriverSelection: params.channelDriverSelection,
               primaryModel: remapModelRefForForcedRuntime({
                 modelRef: params.primaryModel,
                 providerMode: params.providerMode,
@@ -778,6 +825,8 @@ async function runQaRuntimeParitySuite(params: {
       alternateModel: params.alternateModel,
       fastMode: params.fastMode,
       concurrency: params.concurrency,
+      channelDriver: params.channelDriver,
+      channelDriverSelection: params.channelDriverSelection,
       scenarioIds:
         params.scenarioIds && params.scenarioIds.length > 0
           ? params.selectedScenarios.map((scenario) => scenario.id)
@@ -806,6 +855,7 @@ async function runQaRuntimeParitySuite(params: {
       watchUrl: lab.baseUrl,
     } satisfies QaSuiteResult;
   } finally {
+    await transport.cleanup?.();
     if (ownsLab) {
       await lab.stop();
     }
@@ -830,6 +880,8 @@ async function writeQaSuiteArtifacts(params: {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  channelDriver?: QaScorecardChannelDriver | null;
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection | null;
   isolatedWorkers?: boolean;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
@@ -837,6 +889,25 @@ async function writeQaSuiteArtifacts(params: {
   const reportPath = path.join(params.outputDir, "qa-suite-report.md");
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
+  const crablineChannelDriverSelection = params.channelDriverSelection;
+  const crablineChannelDriverSmoke = crablineChannelDriverSelection
+    ? await runOpenClawCrablineChannelDriverSmoke({
+        outputDir: params.outputDir,
+        selection: crablineChannelDriverSelection,
+      })
+    : undefined;
+  const crablineChannelDriverArtifactPaths = crablineChannelDriverSelection
+    ? [
+        {
+          kind: "channel-capability-matrix",
+          path: crablineChannelDriverSelection.capabilityMatrixPath,
+        },
+        {
+          kind: "channel-driver-smoke",
+          path: crablineChannelDriverSelection.smokeArtifactPath,
+        },
+      ]
+    : [];
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
     startedAt: params.startedAt,
@@ -856,9 +927,11 @@ async function writeQaSuiteArtifacts(params: {
           artifactPaths: [
             { kind: "summary", path: path.basename(summaryPath) },
             { kind: "report", path: path.basename(reportPath) },
+            ...crablineChannelDriverArtifactPaths,
           ],
           evidenceMode: params.evidenceMode,
-          channelId: params.transport.id,
+          channelId: params.channelDriverSelection?.channel ?? params.transport.id,
+          channelDriver: params.channelDriver ?? params.channelDriverSelection?.channelDriver,
           env: process.env,
           generatedAt: params.finishedAt.toISOString(),
           primaryModel: params.primaryModel,
@@ -867,6 +940,40 @@ async function writeQaSuiteArtifacts(params: {
           scenarioResults: params.scenarios,
         })
       : undefined;
+  if (crablineChannelDriverSelection && crablineChannelDriverSmoke) {
+    await fs.writeFile(
+      path.join(params.outputDir, crablineChannelDriverSelection.capabilityMatrixPath),
+      `${JSON.stringify(
+        {
+          version: 1,
+          source: "openclaw/crabline",
+          channelDriver: crablineChannelDriverSelection.channelDriver,
+          selectedChannel: crablineChannelDriverSelection.channel,
+          manifestPath: crablineChannelDriverSmoke.manifestPath,
+          report: crablineChannelDriverSmoke.capabilityReport,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(params.outputDir, crablineChannelDriverSelection.smokeArtifactPath),
+      `${JSON.stringify(
+        {
+          version: 1,
+          source: "openclaw/crabline",
+          channelDriver: crablineChannelDriverSelection.channelDriver,
+          selectedChannel: crablineChannelDriverSelection.channel,
+          manifestPath: crablineChannelDriverSmoke.manifestPath,
+          smoke: crablineChannelDriverSmoke.smoke,
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
   await fs.writeFile(reportPath, report, "utf8");
   if (evidence) {
     await fs.writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
@@ -882,21 +989,6 @@ async function writeQaSuiteArtifacts(params: {
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
   }
   return { evidencePath, report, reportPath, summaryPath };
-}
-
-async function assertQaSuiteArtifactWritten(
-  kind: "evidence" | "report" | "summary",
-  filePath: string,
-) {
-  try {
-    await fs.access(filePath);
-  } catch (error) {
-    throw new QaSuiteArtifactError(
-      `${kind}_missing`,
-      `QA suite did not produce ${kind} artifact at ${filePath}: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
-  }
 }
 
 function buildQaSuiteRuntimeMetrics(params: {
@@ -1054,6 +1146,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     scenarioIds: params?.scenarioIds,
     providerMode,
     primaryModel,
+    channelDriver: params?.channelDriver ?? params?.channelDriverSelection?.channelDriver,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
   const enabledPluginIds = [
@@ -1070,7 +1163,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
     selectedScenarios.length,
-    defaultQaSuiteConcurrencyForTransport(transportId),
+    params?.channelDriverSelection ? 1 : defaultQaSuiteConcurrencyForTransport(transportId),
   );
   const progressEnabled = shouldLogQaSuiteProgress();
   const gatewayHeapCheckpointsEnabled = shouldCaptureGatewayHeapCheckpoints();
@@ -1093,6 +1186,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       startedAt,
       providerMode,
       transportId,
+      channelDriverSelection: params?.channelDriverSelection,
+      channelDriver: params?.channelDriver,
       primaryModel,
       alternateModel,
       fastMode,
@@ -1120,9 +1215,11 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         port: 0,
         embeddedGateway: "disabled",
       }));
-    const transport = createQaTransportAdapter({
-      id: transportId,
+    const transport = await createQaSuiteTransportAdapter({
+      channelDriverSelection: params?.channelDriverSelection,
+      outputDir,
       state: lab.state,
+      transportId,
     });
     const liveScenarioOutcomes: QaLabScenarioOutcome[] = selectedScenarios.map((scenario) => ({
       id: scenario.id,
@@ -1166,6 +1263,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
             alternateModel,
             fastMode,
             concurrency,
+            channelDriver: params?.channelDriver,
+            channelDriverSelection: params?.channelDriverSelection,
             isolatedWorkers: true,
             scenarioIds:
               params?.scenarioIds && params.scenarioIds.length > 0
@@ -1214,6 +1313,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
                 outputDir: scenarioOutputDir,
                 providerMode,
                 transportId,
+                channelDriver: params?.channelDriver,
+                channelDriverSelection: params?.channelDriverSelection,
                 primaryModel,
                 alternateModel,
                 fastMode,
@@ -1311,6 +1412,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         alternateModel,
         fastMode,
         concurrency,
+        channelDriver: params?.channelDriver,
+        channelDriverSelection: params?.channelDriverSelection,
         isolatedWorkers: true,
         // When the caller supplied an explicit non-empty --scenario filter,
         // record the executed (post-selectQaFlowSuiteScenarios-normalized) ids
@@ -1342,6 +1445,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         watchUrl: lab.baseUrl,
       } satisfies QaSuiteResult;
     } finally {
+      await transport.cleanup?.();
       await disposeRegisteredAgentHarnesses();
       if (ownsLab) {
         await lab.stop();
@@ -1362,9 +1466,11 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     }));
   writeQaSuiteProgress(progressEnabled, `lab ready: ${sanitizeQaSuiteProgressValue(lab.baseUrl)}`);
   await waitForQaLabReadyOrStopOwned({ lab, ownsLab });
-  const transport = createQaTransportAdapter({
-    id: transportId,
+  const transport = await createQaSuiteTransportAdapter({
+    channelDriverSelection: params?.channelDriverSelection,
+    outputDir,
     state: lab.state,
+    transportId,
   });
   writeQaSuiteProgress(progressEnabled, `provider start: ${providerMode}`);
   const mock = await startQaProviderServer(providerMode);
@@ -1576,6 +1682,8 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       alternateModel,
       fastMode,
       concurrency,
+      channelDriver: params?.channelDriver,
+      channelDriverSelection: params?.channelDriverSelection,
       isolatedWorkers: false,
       // Same "filtered → executed list, unfiltered → null" convention as
       // the concurrent-path writeQaSuiteArtifacts call above.
@@ -1615,6 +1723,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
       keepTemp,
       preserveToDir: keepTemp ? undefined : preserveGatewayRuntimeDir,
     });
+    await transport.cleanup?.();
     await disposeRegisteredAgentHarnesses();
     await mock?.stop();
     if (ownsLab) {

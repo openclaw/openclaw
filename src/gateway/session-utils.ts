@@ -25,6 +25,7 @@ import {
 } from "../agents/agent-scope.js";
 import { lookupContextTokens, resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveFastModeState } from "../agents/fast-mode.js";
 import {
   findModelCatalogEntry,
   modelSupportsInput,
@@ -60,6 +61,7 @@ import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import {
   buildGroupDisplayName,
   getSessionStoreCacheVersion,
+  isTerminalSessionStatus,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
@@ -89,6 +91,7 @@ import {
   isWorkspaceRelativeAvatarPath,
   resolveAvatarMime,
 } from "../shared/avatar-policy.js";
+import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
@@ -107,7 +110,6 @@ import type {
   GatewayAgentRow,
   GatewaySessionRow,
   GatewaySessionsDefaults,
-  SessionRunStatus,
   SessionsListResult,
 } from "./session-utils.types.js";
 
@@ -273,10 +275,6 @@ function resolvePositiveNumber(value: number | null | undefined): number | undef
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
-function resolveNonNegativeNumber(value: number | null | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
 type SessionCompactionCheckpointEntry = NonNullable<SessionEntry["compactionCheckpoints"]>[number];
 
 function isProjectableCompactionCheckpoint(
@@ -421,10 +419,6 @@ const SINGLE_ROW_CONTEXT_CACHE_MAX_ENTRIES = 64;
 
 function isFinitePositiveTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
-}
-
-function isTerminalSessionStatus(status: unknown): status is Exclude<SessionRunStatus, "running"> {
-  return status === "done" || status === "failed" || status === "killed" || status === "timeout";
 }
 
 function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean {
@@ -2186,6 +2180,18 @@ export function buildGatewaySessionRow(params: {
   });
   const thinkingLevels = thinkingMetadata.levels;
   const thinkingDefault = thinkingMetadata.defaultLevel;
+  const fastModeState = resolveFastModeState({
+    cfg,
+    provider: selectedOrRuntimeModelProvider ?? DEFAULT_PROVIDER,
+    model: selectedOrRuntimeModel ?? DEFAULT_MODEL,
+    agentId: sessionAgentId,
+    sessionEntry:
+      entry?.fastMode !== undefined
+        ? {
+            fastMode: entry.fastMode,
+          }
+        : undefined,
+  });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
 
@@ -2218,6 +2224,9 @@ export function buildGatewaySessionRow(params: {
     thinkingOptions: thinkingLevels.map((level) => level.label),
     thinkingDefault,
     fastMode: entry?.fastMode,
+    effectiveFastMode: fastModeState.mode,
+    effectiveFastModeSource: fastModeState.source,
+    fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
     verboseLevel: entry?.verboseLevel,
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,

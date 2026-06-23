@@ -213,6 +213,55 @@ describe("gateway-cli coverage", () => {
     });
   });
 
+  it("scopes usage-cost to a specific agent via --agent", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand(["gateway", "usage-cost", "--agent", "alpha", "--days", "7", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const costCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
+    expect(costCall?.method).toBe("usage.cost");
+    expect(costCall?.params).toEqual({ days: 7, agentId: "alpha" });
+  });
+
+  it("omits agentId from usage-cost when --agent is absent or blank", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand(["gateway", "usage-cost", "--agent", "  ", "--days", "7", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const costCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
+    expect(costCall?.method).toBe("usage.cost");
+    expect(costCall?.params).toEqual({ days: 7 });
+  });
+
+  it("aggregates usage-cost across agents via --all-agents", async () => {
+    callGateway.mockClear();
+
+    await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const costCall = firstMockArg(callGateway) as { method?: string; params?: unknown };
+    expect(costCall?.method).toBe("usage.cost");
+    expect(costCall?.params).toEqual({ days: 7, agentScope: "all" });
+  });
+
+  it("rejects combining --agent with --all-agents for usage-cost", async () => {
+    callGateway.mockClear();
+
+    await expectGatewayExit([
+      "gateway",
+      "usage-cost",
+      "--agent",
+      "alpha",
+      "--all-agents",
+      "--json",
+    ]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Use --agent or --all-agents, not both");
+  });
+
   it("writes JSON for gateway health transport failures in JSON mode", async () => {
     const error = new Error("gateway closed (1006)");
     const payload = {

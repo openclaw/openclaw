@@ -285,6 +285,18 @@ async function resolveActiveWakeWithRetries(
       outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
       continue;
     }
+    if (
+      outcome.reason === "source_reply_delivery_mode_mismatch" &&
+      currentOptions.sourceReplyDeliveryMode !== undefined
+    ) {
+      // Active requester runs own their final delivery mode. Direct-completion
+      // policy must not make an already-running automatic parent unreachable.
+      const activeRunOptions = { ...currentOptions };
+      delete activeRunOptions.sourceReplyDeliveryMode;
+      currentOptions = activeRunOptions;
+      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      continue;
+    }
     if (outcome.reason === "compacting") {
       const remainingDeliveryTimeoutMs =
         compactionDeadlineMs === undefined ? undefined : compactionDeadlineMs - Date.now();

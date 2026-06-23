@@ -229,6 +229,8 @@ async function deliverDiscordDirectMessageCompletion(params: {
   callGateway: typeof runtimeCallGateway;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  isActive?: boolean;
+  queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceTool?: string;
 }) {
   const origin = {
@@ -240,10 +242,13 @@ async function deliverDiscordDirectMessageCompletion(params: {
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
-      isActive: false,
+      isActive: params.isActive === true,
     }),
     getRuntimeConfig: () => ({}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
+    ...(params.queueEmbeddedAgentMessageWithOutcome
+      ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
+      : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -4784,6 +4789,58 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("retries active direct subagent completion wake without forced message-tool mode", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+      },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "source_reply_delivery_mode_mismatch",
+      true,
+    ]);
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      isActive: true,
+      queueEmbeddedAgentMessageWithOutcome,
+      sourceTool: "subagent_announce",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "direct completion active wake",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "steered",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(queueEmbeddedAgentMessageWithOutcome, 0, 2), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      waitForTranscriptCommit: true,
+    });
+    const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
+    expectRecordFields(retryOptions, {
+      waitForTranscriptCommit: true,
+    });
+    expect(
+      (retryOptions as { sourceReplyDeliveryMode?: unknown }).sourceReplyDeliveryMode,
+    ).toBeUndefined();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("falls back to the external requester route when completion origin is internal", async () => {

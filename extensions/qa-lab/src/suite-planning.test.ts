@@ -10,6 +10,7 @@ import {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
@@ -239,6 +240,47 @@ describe("qa suite planning helpers", () => {
         primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["third", "first"]);
+  });
+
+  it("resolves driver channels from scenario execution with explicit and default fallbacks", () => {
+    expect(
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        scenarios: [makeQaSuiteTestScenario("plain")],
+      }),
+    ).toBe("telegram");
+    expect(
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        scenarios: [
+          makeQaSuiteTestScenario("plain"),
+          makeQaSuiteTestScenario("slack-flow", { channel: "slack" }),
+        ],
+      }),
+    ).toBe("slack");
+    expect(
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        explicitChannel: "slack",
+        scenarios: [makeQaSuiteTestScenario("slack-flow", { channel: "slack" })],
+      }),
+    ).toBe("slack");
+    expect(() =>
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        explicitChannel: "telegram",
+        scenarios: [makeQaSuiteTestScenario("slack-flow", { channel: "slack" })],
+      }),
+    ).toThrow("--channel telegram conflicts with selected scenario execution.channel slack.");
+    expect(() =>
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        scenarios: [
+          makeQaSuiteTestScenario("slack-flow", { channel: "slack" }),
+          makeQaSuiteTestScenario("telegram-flow", { channel: "telegram" }),
+        ],
+      }),
+    ).toThrow("Selected QA scenarios require multiple channels");
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
@@ -484,6 +526,54 @@ describe("qa suite planning helpers", () => {
         primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "live-only"]);
+  });
+
+  it("filters channel-driver-specific scenarios from implicit suite selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("qa-channel-only", {
+        config: { requiredChannelDriver: "qa-channel" },
+      }),
+      makeQaSuiteTestScenario("crabline-only", {
+        config: { requiredChannelDriver: "crabline" },
+      }),
+    ];
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "qa-channel-only"]);
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "crabline",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "crabline-only"]);
+  });
+
+  it("keeps explicitly requested channel-driver-specific scenarios", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("qa-channel-only", {
+        config: { requiredChannelDriver: "qa-channel" },
+      }),
+    ];
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["qa-channel-only"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "crabline",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["qa-channel-only"]);
   });
 
   it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {

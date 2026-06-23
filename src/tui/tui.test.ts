@@ -2,6 +2,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
@@ -22,7 +23,7 @@ import {
   isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
-  resolveLocalAuthSpawnOptions,
+  resolveLocalAuthSpawnInvocation,
   resolveTuiCtrlCAction,
   resolveTuiFooterHostLabel,
   resolveTuiShutdownHardExitMs,
@@ -235,6 +236,14 @@ describe("resolveTuiShutdownHardExitMs", () => {
   it("ignores partial local run shutdown grace values", () => {
     withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456abc" }, () => {
       expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(122000);
+    });
+  });
+
+  it("clamps oversized local run shutdown grace values", () => {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(
+        MAX_TIMER_TIMEOUT_MS + 2000,
+      );
     });
   });
 });
@@ -643,38 +652,50 @@ describe("resolveLocalAuthCliInvocation", () => {
   });
 });
 
-describe("resolveLocalAuthSpawnOptions", () => {
-  it("enables shell mode for Windows cmd shims", () => {
+describe("resolveLocalAuthSpawnInvocation", () => {
+  it("wraps Windows cmd shims through cmd.exe", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toEqual({ shell: true });
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd login"],
+      options: { windowsHide: true, windowsVerbatimArguments: true },
+    });
   });
 
-  it("enables shell mode for Windows bat shims", () => {
+  it("wraps spaced Windows bat shim paths with outer command-line quoting", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
-        command: "C:\\tools\\codex.bat",
+      resolveLocalAuthSpawnInvocation({
+        command: "C:\\Program Files\\Codex\\codex.bat",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toEqual({ shell: true });
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", '""C:\\Program Files\\Codex\\codex.bat" login"'],
+      options: { windowsHide: true, windowsVerbatimArguments: true },
+    });
   });
 
   it("keeps direct execution for non-wrapper commands", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "/usr/local/bin/codex",
+        args: ["login"],
         platform: "linux",
       }),
-    ).toStrictEqual({});
+    ).toStrictEqual({ command: "/usr/local/bin/codex", args: ["login"], options: {} });
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "C:\\tools\\codex.exe",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toStrictEqual({});
+    ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
   });
 });
 

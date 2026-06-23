@@ -1,63 +1,6 @@
 // Ios Version script supports OpenClaw repository automation.
-import path from "node:path";
 import { resolveIosVersion } from "./lib/ios-version.ts";
-
-type CliOptions = {
-  field: string | null;
-  format: "json" | "shell";
-  help: boolean;
-  rootDir: string;
-};
-
-function parseArgs(argv: string[]): CliOptions {
-  let field: string | null = null;
-  let format: "json" | "shell" = "json";
-  let help = false;
-  let rootDir = path.resolve(".");
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    switch (arg) {
-      case "--field": {
-        field = readOptionValue(argv, index, "--field");
-        index += 1;
-        break;
-      }
-      case "--json": {
-        format = "json";
-        break;
-      }
-      case "--shell": {
-        format = "shell";
-        break;
-      }
-      case "--root": {
-        const value = readOptionValue(argv, index, "--root");
-        rootDir = path.resolve(value);
-        index += 1;
-        break;
-      }
-      case "-h":
-      case "--help": {
-        help = true;
-        break;
-      }
-      default: {
-        throw new Error(`Unknown argument: ${arg}`);
-      }
-    }
-  }
-
-  return { field, format, help, rootDir };
-}
-
-function readOptionValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
-    throw new Error(`Missing value for ${flag}.`);
-  }
-  return value;
-}
+import { parseVersionQueryArgs } from "./lib/version-script-args.ts";
 
 function printUsage(): void {
   process.stdout.write(
@@ -66,7 +9,7 @@ function printUsage(): void {
 }
 
 function main(argv = process.argv.slice(2)): number {
-  const options = parseArgs(argv);
+  const options = parseVersionQueryArgs(argv);
   if (options.help) {
     printUsage();
     return 0;

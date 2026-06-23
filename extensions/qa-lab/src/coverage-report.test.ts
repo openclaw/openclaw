@@ -7,7 +7,7 @@ import {
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { buildQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
+import { buildQaScorecardTaxonomyReport, type QaMaturityTaxonomy } from "./scorecard-taxonomy.js";
 
 const TEST_EXECUTABLE_CATEGORY_ID = "agent-runtime-and-provider-execution.agent-turn-execution";
 const TEST_EXECUTABLE_COVERAGE_ID = "channels.dm";
@@ -22,25 +22,28 @@ function testMaturityTaxonomy(params?: {
   featureCoverageIds?: readonly (readonly string[])[];
   includeAllCategories?: boolean;
   profileCategoryIds?: readonly string[];
-}) {
+}): QaMaturityTaxonomy {
   const categoryId = params?.categoryId ?? TEST_EXECUTABLE_CATEGORY_ID;
   const firstDot = categoryId.indexOf(".");
   const surfaceId = firstDot === -1 ? categoryId : categoryId.slice(0, firstDot);
   const categoryLocalId = firstDot === -1 ? categoryId : categoryId.slice(firstDot + 1);
   return {
-    version: 1,
+    version: 1 as const,
     title: "Test taxonomy",
+    levels: [],
     profiles: [
       {
         id: "smoke-ci",
         description: "Test smoke profile.",
         includeAllCategories: false,
-        categoryIds: [],
+        channelDriver: "crabline" as const,
+        categoryIds: [categoryId],
       },
       {
         id: "release",
         description: "Test release profile.",
         includeAllCategories: params?.includeAllCategories ?? false,
+        channelDriver: "qa-channel" as const,
         categoryIds: [
           ...(params?.includeAllCategories ? [] : (params?.profileCategoryIds ?? [categoryId])),
         ],
@@ -50,10 +53,15 @@ function testMaturityTaxonomy(params?: {
       {
         id: surfaceId,
         name: "Test surface",
+        family: "test",
+        level: "experimental",
         categories: [
           {
             id: categoryLocalId,
             name: "Test category",
+            category_note: "test-category.md",
+            docs: [],
+            search_anchors: [],
             features: (
               params?.featureCoverageIds ??
               (params?.coverageIds ?? [TEST_EXECUTABLE_COVERAGE_ID]).map((coverageId) => [
@@ -128,6 +136,17 @@ describe("qa coverage report", () => {
       "whatsapp",
     ]);
     expect(inventory.scorecardTaxonomy.profileCount).toBe(2);
+    expect(
+      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "smoke-ci"),
+    ).toMatchObject({
+      channelDriver: "crabline",
+      evidenceMode: "slim",
+    });
+    expect(
+      inventory.scorecardTaxonomy.profiles.find((profile) => profile.id === "release"),
+    ).toMatchObject({
+      channelDriver: "live",
+    });
     expect(inventory.scorecardTaxonomy.categoryCount).toBeGreaterThan(200);
     expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeGreaterThan(0);
     expect(inventory.scorecardTaxonomy.requiredCategoryCount).toBeLessThanOrEqual(

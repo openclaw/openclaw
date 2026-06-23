@@ -73,9 +73,10 @@ pnpm openclaw qa run \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
 
-Use `smoke-ci` for deterministic no-live-service proof and `release` for the
-Stable/LTS proof lane. When a command also needs an OpenClaw root profile, put
-the root profile before the QA command:
+Use `smoke-ci` for deterministic profile proof with mock model providers and
+Crabline fake provider servers. Use `release` for Stable/LTS proof against live
+channels. When a command also needs an OpenClaw root profile, put the root
+profile before the QA command:
 
 ```bash
 pnpm openclaw --profile work qa run --qa-profile smoke-ci
@@ -197,7 +198,10 @@ witness video when `MANTIS_DISCORD_VIEWER_CHROME_PROFILE_DIR` or
 environment. That viewer profile is only for visual capture; the pass/fail
 decision still comes from the Discord REST oracle.
 
-CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`. Scheduled and default manual runs execute the fast Matrix profile with live frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans out into the five profile shards so the exhaustive catalog can run in parallel while keeping one artifact directory per shard.
+CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`.
+Scheduled and default manual runs execute the fast Matrix profile with live
+frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`.
+Manual `matrix_profile=all` fans out into the five profile shards.
 
 For transport-real Telegram, Discord, Slack, and WhatsApp smoke lanes:
 
@@ -302,13 +306,13 @@ Live transport runners should import the shared scenario ids, baseline
 coverage helpers, and scenario-selection helper from
 `openclaw/plugin-sdk/qa-live-transport-scenarios`.
 
-| Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
-| -------- | ------ | -------------- | ---------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
-| Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |
-| Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
-| Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
-| Slack    | x      | x              | x          | x               | x               | x              | x                | x                |                      |              |                             |
-| WhatsApp | x      | x              |            | x               | x               | x              |                  |                  | x                    | x            |                             |
+| Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Quote reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
+| -------- | ------ | -------------- | ---------- | --------------- | --------------- | ----------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
+| Matrix   | x      | x              | x          | x               | x               |             | x              | x                | x                | x                    |              |                             |
+| Telegram | x      | x              | x          |                 |                 |             |                |                  |                  |                      | x            |                             |
+| Discord  | x      | x              | x          |                 |                 |             |                |                  |                  |                      |              | x                           |
+| Slack    | x      | x              | x          | x               | x               |             | x              | x                | x                |                      |              |                             |
+| WhatsApp | x      | x              |            | x               | x               | x           | x              |                  |                  | x                    | x            |                             |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and other live transports share one explicit transport-contract checklist.
@@ -731,8 +735,9 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
   `whatsapp-whoami-command`, `whatsapp-context-command`,
   `whatsapp-native-new-command`.
 - Reply and final-output behavior: `whatsapp-tool-only-usage-footer`,
-  `whatsapp-reply-to-message`, `whatsapp-reply-context-isolation`,
-  `whatsapp-reply-delivery-shape`, `whatsapp-stream-final-message-accounting`.
+  `whatsapp-reply-to-message`, `whatsapp-group-reply-to-message`,
+  `whatsapp-reply-context-isolation`, `whatsapp-reply-delivery-shape`,
+  `whatsapp-stream-final-message-accounting`.
 - Inbound media and structured messages: `whatsapp-inbound-image-caption`,
   `whatsapp-audio-preflight`, `whatsapp-inbound-structured-messages`,
   `whatsapp-group-audio-gating`. These send real WhatsApp image, audio,
@@ -749,9 +754,9 @@ Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.
   `whatsapp-approval-plugin-native`.
 - Status reactions: `whatsapp-status-reactions`.
 
-The catalog currently contains 35 scenarios. The `live-frontier` default lane is
-kept small at 8 scenarios for fast smoke coverage. The `mock-openai` default
-lane runs 29 deterministic scenarios through the real WhatsApp transport while
+The catalog currently contains 36 scenarios. The `live-frontier` default lane is
+kept small at 10 scenarios for fast smoke coverage. The `mock-openai` default
+lane runs 31 deterministic scenarios through the real WhatsApp transport while
 mocking only model output. Approval scenarios and a few heavier/blocking checks
 remain explicit by scenario id.
 
@@ -856,7 +861,10 @@ provider names.
 
 ## Transport adapters
 
-`qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is the first adapter on that seam, but the design target is wider: future real or synthetic channels should plug into the same suite runner instead of adding a transport-specific QA runner.
+`qa-lab` owns a generic transport seam for YAML QA scenarios. `qa-channel` is
+the synthetic default. `crabline` starts local provider-shaped servers and runs
+OpenClaw's normal channel plugins against them. `live` is reserved for real
+provider credentials and external channels.
 
 At the architecture level, the split is:
 
@@ -866,10 +874,10 @@ At the architecture level, the split is:
 
 ### Adding a channel
 
-Adding a channel to the YAML QA system requires exactly two things:
-
-1. A transport adapter for the channel.
-2. A scenario pack that exercises the channel contract.
+Adding a channel to the YAML QA system requires the channel implementation plus
+a scenario pack that exercises the channel contract. For smoke CI coverage, add
+the matching Crabline fake provider server and expose it through the `crabline`
+driver.
 
 Do not add a new top-level QA command root when the shared `qa-lab` host can own the flow.
 

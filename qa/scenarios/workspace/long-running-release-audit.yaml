@@ -219,11 +219,14 @@ flow:
             expr: "JSON.stringify(report).includes('verified')"
             message:
               expr: "`report did not include a verification field: ${reportText}`"
-        - call: waitForCondition
+        - call: waitForAgentHistoryReply
           saveAs: outbound
           args:
+            - ref: env
+            - ref: sessionKey
             - lambda:
-                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text.trim() === 'RELEASE-AUDIT-COMPLETE').at(-1)"
+                params: [text]
+                expr: "text.trim() === 'RELEASE-AUDIT-COMPLETE'"
             - expr: liveTurnTimeoutMs(env, 45000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - call: readRawQaSessionStore

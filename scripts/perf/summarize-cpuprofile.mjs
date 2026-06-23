@@ -13,9 +13,28 @@ export function usage() {
 }
 
 export function shouldPrintHelp(argv) {
-  for (const arg of argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
     if (arg === "--") {
       return false;
+    }
+    if (arg === "--limit") {
+      const value = argv[index + 1];
+      try {
+        parsePositiveInt(value, "--limit");
+      } catch {
+        return false;
+      }
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--limit=")) {
+      try {
+        parsePositiveInt(arg.slice("--limit=".length), "--limit");
+      } catch {
+        return false;
+      }
+      continue;
     }
     if (arg === "--help" || arg === "-h") {
       return true;

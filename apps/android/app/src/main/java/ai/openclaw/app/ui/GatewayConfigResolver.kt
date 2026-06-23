@@ -206,9 +206,6 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
   }
 }
 
-/** Extracts a setup code from QR scanner text when the embedded endpoint is valid. */
-internal fun resolveScannedSetupCode(rawInput: String): String? = resolveScannedSetupCodeResult(rawInput).setupCode
-
 /** Resolves QR scanner text to setup-code or validation error for UI copy. */
 internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetupCodeResult {
   val setupCode =
