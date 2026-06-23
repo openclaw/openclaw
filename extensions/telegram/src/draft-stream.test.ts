@@ -690,6 +690,22 @@ describe("createTelegramDraftStream", () => {
     expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
+  it("skips rich entity detection for draft text with provider-prefixed email addresses", async () => {
+    const api = createMockDraftApi();
+    const stream = createDraftStream(api, { richMessages: true });
+
+    stream.update("OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)");
+    await stream.flush();
+
+    expect(api.raw.sendRichMessage).toHaveBeenCalledWith({
+      chat_id: 123,
+      rich_message: {
+        html: "OAuth profile: openai:keshavbotagent@gmail.com (keshavbotagent@gmail.com)",
+        skip_entity_detection: true,
+      },
+    });
+  });
+
   it("keeps rich preview html out of plain preview gating", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true, minInitialChars: 10 });
