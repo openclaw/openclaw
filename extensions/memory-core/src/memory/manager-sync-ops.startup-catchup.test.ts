@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { emitSessionTranscriptUpdate } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
 import {
   resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
@@ -15,6 +14,10 @@ import type {
   MemorySyncParams,
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
