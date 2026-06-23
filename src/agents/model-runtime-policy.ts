@@ -107,11 +107,15 @@ function resolvePolicyMatch(
   matches: AgentModelRuntimePolicyMatch[],
   callerProvider: string,
 ): AgentModelRuntimePolicyResolution {
-  const [first] = matches;
+  const providerMatches = callerProvider
+    ? matches.filter((match) => match.provider === callerProvider)
+    : [];
+  const candidates = providerMatches.length > 0 ? providerMatches : matches;
+  const [first] = candidates;
   if (!first) {
     return {};
   }
-  if (!callerProvider && matches.some((match) => match.provider !== first.provider)) {
+  if (!callerProvider && candidates.some((match) => match.provider !== first.provider)) {
     return { ambiguous: true };
   }
   return {

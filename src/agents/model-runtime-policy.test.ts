@@ -265,6 +265,31 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
+  it("prefers provider-qualified agent entries over bare entries for inferred providers", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "",
+        modelId: "anthropic/claude-opus-4-7",
+      }),
+    ).toEqual({
+      policy: { id: "claude-cli" },
+      source: "model",
+      matchedProvider: "anthropic",
+    });
+  });
+
   it("prefers agent provider wildcard runtime policy over provider runtime policy", () => {
     const config = {
       agents: {
