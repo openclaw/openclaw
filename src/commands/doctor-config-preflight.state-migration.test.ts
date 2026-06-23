@@ -19,6 +19,7 @@ const readConfigFileSnapshot = vi.hoisted(() =>
     valid: true,
     config: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
     sourceConfig: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
+    parsed: { gateway: { mode: "local", port: 19091 } } as Record<string, unknown>,
     legacyIssues: [] as Array<{ path: string; message: string }>,
     warnings: [] as Array<{ path: string; message: string }>,
     issues: [] as Array<{ path: string; message: string }>,
@@ -142,12 +143,83 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
   });
 
+  it("runs plugin state migrations with resolved legacy config before config repair removes retired paths", async () => {
+    const parsedConfig = { $include: "memory-search.json" };
+    const resolvedConfig = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: "/custom/memory-{agentId}.sqlite",
+              vector: { enabled: false },
+            },
+          },
+        },
+        list: [{ id: "main" }],
+      },
+    };
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      exists: true,
+      valid: false,
+      config: resolvedConfig,
+      sourceConfig: resolvedConfig,
+      parsed: parsedConfig,
+      legacyIssues: [
+        {
+          path: "agents.defaults.memorySearch.store.path",
+          message:
+            "agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database.",
+        },
+      ],
+      warnings: [],
+      issues: [],
+    });
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+
+    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            memorySearch: {
+              store: {
+                vector: { enabled: false },
+              },
+            },
+          }),
+          list: [{ id: "main" }],
+        }),
+      }),
+    });
+    expect(autoMigrateLegacyState).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        agents: expect.objectContaining({
+          defaults: expect.objectContaining({
+            memorySearch: {
+              store: {
+                vector: { enabled: false },
+              },
+            },
+          }),
+          list: [{ id: "main" }],
+        }),
+      }),
+      pluginDoctorConfig: resolvedConfig,
+      env: process.env,
+      recoverCorruptTargetStore: undefined,
+    });
+  });
+
   it("limits invalid-config preflight to config-independent state migration", async () => {
     readConfigFileSnapshot.mockResolvedValueOnce({
       exists: true,
       valid: false,
       config: { cron: { store: "/tmp/legacy-cron.json" } },
       sourceConfig: { cron: { store: "/tmp/legacy-cron.json" } },
+      parsed: { cron: { store: "/tmp/legacy-cron.json" } },
       legacyIssues: [],
       warnings: [],
       issues: [{ path: "gateway", message: "invalid" }],

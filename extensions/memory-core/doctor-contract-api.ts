@@ -57,6 +57,7 @@ type LegacySource = {
 type LegacyMemorySidecarSource = {
   agentId: string;
   legacyPath: string;
+  stateDir: string;
   agentDatabasePath: string;
 };
 
@@ -94,9 +95,11 @@ type LegacyMemorySidecarImportResult = {
   sources: number;
   chunks: number;
   cacheEntries: number;
-  vectorEntries: number;
+  vectorEntries: number | undefined;
   vectorEntriesImported: boolean;
 };
+
+type MemoryFtsTokenizer = "unicode61" | "trigram";
 
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
   return Boolean(db.prepare(`SELECT 1 FROM ${schema}.sqlite_master WHERE name = ?`).get(tableName));
@@ -155,17 +158,27 @@ function tableRowCount(db: DatabaseSync, schema: string, tableName: string): num
 function readLegacySidecarCounts(
   db: DatabaseSync,
   schema: string,
+  options: { copyVectorRows: boolean },
 ): Pick<LegacyMemorySidecarImportResult, "sources" | "chunks" | "cacheEntries" | "vectorEntries"> {
+  const vectorEntries = options.copyVectorRows
+    ? hasLegacyVectorTable(db, schema)
+      ? tableRowCount(db, schema, LEGACY_MEMORY_VECTOR_TABLE)
+      : 0
+    : tableExists(db, schema, LEGACY_MEMORY_VECTOR_TABLE)
+      ? undefined
+      : 0;
   return {
     sources: tableRowCount(db, schema, "files"),
     chunks: tableRowCount(db, schema, "chunks"),
     cacheEntries: hasLegacyEmbeddingCacheTable(db, schema)
       ? tableRowCount(db, schema, "embedding_cache")
       : 0,
-    vectorEntries: hasLegacyVectorTable(db, schema)
-      ? tableRowCount(db, schema, LEGACY_MEMORY_VECTOR_TABLE)
-      : 0,
+    vectorEntries,
   };
+}
+
+function formatLegacyVectorRows(count: number | undefined): string {
+  return count === undefined ? "legacy vector rows" : `${count} vector row(s)`;
 }
 
 function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
@@ -267,6 +280,20 @@ function ensureCanonicalVectorTableForLegacyRows(db: DatabaseSync, schema: strin
     }
     return;
   }
+  const canonicalMetaDimensions = readMemoryIndexMetaVectorDimensions(
+    db,
+    "main",
+    MEMORY_INDEX_META_TABLE,
+  );
+  if (
+    Number.isSafeInteger(canonicalMetaDimensions) &&
+    Number(canonicalMetaDimensions) > 0 &&
+    Number(canonicalMetaDimensions) !== Number(dimensions)
+  ) {
+    throw new Error(
+      `legacy memory chunks_vec dimensions ${Number(dimensions)} do not match canonical memory chunks_vec dimensions ${Number(canonicalMetaDimensions)}`,
+    );
+  }
   db.exec(
     `CREATE VIRTUAL TABLE IF NOT EXISTS main.${MEMORY_INDEX_VECTOR_TABLE} USING vec0(\n` +
       `  id TEXT PRIMARY KEY,\n` +
@@ -283,11 +310,23 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
   if (!tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE)) {
     return;
   }
+  assertLegacyRowsCopied(
+    db,
+    `SELECT COUNT(*) AS missing
+     FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
+     JOIN main.${MEMORY_INDEX_VECTOR_TABLE} AS canonical ON canonical.id = legacy.id
+     WHERE canonical.embedding IS NOT legacy.embedding`,
+    LEGACY_MEMORY_VECTOR_TABLE,
+  );
   db.exec(`
     INSERT OR IGNORE INTO main.${MEMORY_INDEX_VECTOR_TABLE} (id, embedding)
     SELECT legacy.id, legacy.embedding
     FROM ${schema}.${LEGACY_MEMORY_VECTOR_TABLE} AS legacy
-    JOIN main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk ON chunk.id = legacy.id;
+    JOIN main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk ON chunk.id = legacy.id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM main.${MEMORY_INDEX_VECTOR_TABLE} AS canonical
+      WHERE canonical.id = legacy.id
+    );
   `);
   assertLegacyRowsCopied(
     db,
@@ -297,6 +336,7 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
      WHERE NOT EXISTS (
        SELECT 1 FROM main.${MEMORY_INDEX_VECTOR_TABLE} AS canonical
        WHERE canonical.id = legacy.id
+         AND canonical.embedding IS legacy.embedding
      )`,
     LEGACY_MEMORY_VECTOR_TABLE,
   );
@@ -350,16 +390,6 @@ function copyLegacyMemoryIndexRows(
     SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
     FROM ${schema}.chunks;
   `);
-  assertLegacyRowsCopied(
-    db,
-    `SELECT COUNT(*) AS missing
-     FROM ${schema}.meta AS legacy
-     WHERE NOT EXISTS (
-       SELECT 1 FROM main.${MEMORY_INDEX_META_TABLE} AS canonical
-       WHERE canonical.key = legacy.key AND canonical.value IS legacy.value
-     )`,
-    "meta",
-  );
   assertLegacyRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
@@ -465,7 +495,9 @@ function importLegacyMemorySidecarIndex(params: {
         vectorEntriesImported: true,
       };
     }
-    const counts = readLegacySidecarCounts(params.db, LEGACY_MEMORY_SIDECAR_SCHEMA);
+    const counts = readLegacySidecarCounts(params.db, LEGACY_MEMORY_SIDECAR_SCHEMA, {
+      copyVectorRows: params.copyVectorRows,
+    });
     params.db.exec("SAVEPOINT import_legacy_sidecar_memory_index");
     try {
       copyLegacyMemoryIndexRows(params.db, LEGACY_MEMORY_SIDECAR_SCHEMA, {
@@ -509,19 +541,65 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
-function readMemorySearchVectorExtensionPath(config: unknown, agentId: string): string | undefined {
+function readAgentMemorySearch(
+  config: unknown,
+  agentId: string,
+): Record<string, unknown> | undefined {
   const agents = asRecord(asRecord(config)?.agents);
-  const defaultsMemorySearch = asRecord(asRecord(agents?.defaults)?.memorySearch);
-  const defaultVector = asRecord(asRecord(defaultsMemorySearch?.store)?.vector);
   const entries = Array.isArray(agents?.list) ? agents.list : [];
-  const agentMemorySearch = entries
-    .map(asRecord)
-    .find(
-      (entry) => normalizeAgentId(typeof entry?.id === "string" ? entry.id : undefined) === agentId,
-    )?.memorySearch;
-  const agentVector = asRecord(asRecord(asRecord(agentMemorySearch)?.store)?.vector);
-  const raw = agentVector?.extensionPath ?? defaultVector?.extensionPath;
+  return asRecord(
+    entries
+      .map(asRecord)
+      .find(
+        (entry) =>
+          normalizeAgentId(typeof entry?.id === "string" ? entry.id : undefined) === agentId,
+      )?.memorySearch,
+  );
+}
+
+function readDefaultMemorySearch(config: unknown): Record<string, unknown> | undefined {
+  const agents = asRecord(asRecord(config)?.agents);
+  return asRecord(asRecord(agents?.defaults)?.memorySearch);
+}
+
+function readTopLevelMemorySearch(config: unknown): Record<string, unknown> | undefined {
+  return asRecord(asRecord(config)?.memorySearch);
+}
+
+function readMemorySearchVectorExtensionPath(config: unknown, agentId: string): string | undefined {
+  const defaultVector = asRecord(asRecord(readDefaultMemorySearch(config)?.store)?.vector);
+  const agentVector = asRecord(asRecord(readAgentMemorySearch(config, agentId)?.store)?.vector);
+  const topLevelVector = asRecord(asRecord(readTopLevelMemorySearch(config)?.store)?.vector);
+  const raw =
+    agentVector?.extensionPath ?? defaultVector?.extensionPath ?? topLevelVector?.extensionPath;
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function readLegacyMemorySearchStorePath(config: unknown, agentId: string): string | undefined {
+  const agentStore = asRecord(readAgentMemorySearch(config, agentId)?.store);
+  const defaultsStore = asRecord(readDefaultMemorySearch(config)?.store);
+  const topLevelStore = asRecord(readTopLevelMemorySearch(config)?.store);
+  const raw = agentStore?.path ?? defaultsStore?.path ?? topLevelStore?.path;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function readMemorySearchFtsTokenizer(
+  config: unknown,
+  agentId: string,
+): MemoryFtsTokenizer | undefined {
+  const agentFts = asRecord(asRecord(readAgentMemorySearch(config, agentId)?.store)?.fts);
+  const defaultsFts = asRecord(asRecord(readDefaultMemorySearch(config)?.store)?.fts);
+  const topLevelFts = asRecord(asRecord(readTopLevelMemorySearch(config)?.store)?.fts);
+  const raw = agentFts?.tokenizer ?? defaultsFts?.tokenizer ?? topLevelFts?.tokenizer;
+  return raw === "unicode61" || raw === "trigram" ? raw : undefined;
+}
+
+function resolveLegacyMemorySearchStorePath(
+  rawPath: string,
+  agentId: string,
+  env: NodeJS.ProcessEnv,
+): string {
+  return resolveUserPath(rawPath.replaceAll("{agentId}", agentId), env);
 }
 
 async function collectLegacyMemorySidecarSources(params: {
@@ -535,23 +613,41 @@ async function collectLegacyMemorySidecarSources(params: {
     const entries = await fs.readdir(legacyDir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isFile() && entry.name.endsWith(".sqlite")) {
-        agentIds.add(normalizeAgentId(entry.name.slice(0, -".sqlite".length)));
+        const rawAgentId = entry.name.slice(0, -".sqlite".length);
+        const agentId = normalizeAgentId(rawAgentId);
+        if (rawAgentId === agentId) {
+          agentIds.add(agentId);
+        }
       }
     }
   } catch {}
 
   const migrationEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
   const sources: LegacyMemorySidecarSource[] = [];
-  for (const agentId of agentIds) {
-    const legacyPath = path.join(legacyDir, `${agentId}.sqlite`);
-    if (!(await fileExists(legacyPath))) {
-      continue;
+  const seen = new Set<string>();
+  async function addSource(agentId: string, legacyPath: string): Promise<void> {
+    const normalizedPath = path.resolve(legacyPath);
+    const key = `${agentId}\0${normalizedPath}`;
+    if (seen.has(key) || !(await fileExists(normalizedPath))) {
+      return;
     }
+    seen.add(key);
     sources.push({
       agentId,
-      legacyPath,
+      legacyPath: normalizedPath,
+      stateDir: params.stateDir,
       agentDatabasePath: resolveOpenClawAgentSqlitePath({ agentId, env: migrationEnv }),
     });
+  }
+  for (const agentId of agentIds) {
+    const configuredPath = readLegacyMemorySearchStorePath(params.config, agentId);
+    if (configuredPath) {
+      await addSource(
+        agentId,
+        resolveLegacyMemorySearchStorePath(configuredPath, agentId, migrationEnv),
+      );
+    }
+    await addSource(agentId, path.join(legacyDir, `${agentId}.sqlite`));
   }
   return sources;
 }
@@ -615,20 +711,77 @@ async function archiveLegacyMemorySidecar(params: {
   );
 }
 
+async function preserveLegacyMemorySidecarRetryPath(params: {
+  source: LegacyMemorySidecarSource;
+  changes: string[];
+  warnings: string[];
+}): Promise<void> {
+  const retryPath = path.join(params.source.stateDir, "memory", `${params.source.agentId}.sqlite`);
+  if (path.resolve(retryPath) === path.resolve(params.source.legacyPath)) {
+    return;
+  }
+  const existingTargets = (
+    await Promise.all(
+      LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
+        const targetPath = `${retryPath}${suffix}`;
+        return (await fileExists(targetPath)) ? targetPath : null;
+      }),
+    )
+  ).filter((targetPath): targetPath is string => targetPath !== null);
+  if (existingTargets.length > 0) {
+    params.warnings.push(
+      `Left custom Memory Core legacy memory index sidecar retry path at ${params.source.legacyPath} because ${existingTargets[0]} already exists`,
+    );
+    return;
+  }
+  const existingSources = (
+    await Promise.all(
+      LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
+        const sourcePath = `${params.source.legacyPath}${suffix}`;
+        return (await fileExists(sourcePath))
+          ? { sourcePath, targetPath: `${retryPath}${suffix}` }
+          : null;
+      }),
+    )
+  ).filter((entry): entry is { sourcePath: string; targetPath: string } => entry !== null);
+  if (existingSources.length === 0) {
+    return;
+  }
+  await fs.mkdir(path.dirname(retryPath), { recursive: true });
+  const copied: string[] = [];
+  try {
+    for (const entry of existingSources) {
+      await fs.copyFile(entry.sourcePath, entry.targetPath, fs.constants.COPYFILE_EXCL);
+      copied.push(entry.targetPath);
+    }
+  } catch (err) {
+    for (const targetPath of copied) {
+      try {
+        await fs.rm(targetPath, { force: true });
+      } catch {}
+    }
+    params.warnings.push(
+      `Failed copying Memory Core legacy memory index sidecar retry path ${params.source.legacyPath} -> ${retryPath}: ${String(err)}`,
+    );
+    return;
+  }
+  params.changes.push(`Copied Memory Core legacy memory index sidecar retry path -> ${retryPath}`);
+}
+
 async function migrateLegacyMemorySidecarSource(params: {
   source: LegacyMemorySidecarSource;
   config: unknown;
   env: NodeJS.ProcessEnv;
   changes: string[];
   warnings: string[];
-}): Promise<void> {
+}): Promise<{ archiveReady: boolean }> {
   await fs.mkdir(path.dirname(params.source.agentDatabasePath), { recursive: true });
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(params.source.agentDatabasePath, { allowExtension: true });
   try {
     const migrationEnv = {
       ...params.env,
-      OPENCLAW_STATE_DIR: path.dirname(path.dirname(params.source.legacyPath)),
+      OPENCLAW_STATE_DIR: params.source.stateDir,
     };
     ensureOpenClawAgentDatabaseSchema(db, {
       agentId: params.source.agentId,
@@ -636,7 +789,8 @@ async function migrateLegacyMemorySidecarSource(params: {
       path: params.source.agentDatabasePath,
       register: true,
     });
-    ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+    const ftsTokenizer = readMemorySearchFtsTokenizer(params.config, params.source.agentId);
+    ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true, ftsTokenizer });
     const vectorExtensionPath = readMemorySearchVectorExtensionPath(
       params.config,
       params.source.agentId,
@@ -658,31 +812,47 @@ async function migrateLegacyMemorySidecarSource(params: {
       params.warnings.push(
         `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because legacy rows could not be imported: ${String(err)}`,
       );
-      return;
+      return { archiveReady: false };
     }
     if (result.reason === "legacy-schema-missing") {
       params.warnings.push(
         `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because the sidecar schema is not a legacy memory index`,
       );
-      return;
+      return { archiveReady: false };
     }
     if (!result.imported) {
-      return;
+      return { archiveReady: false };
     }
-    ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
+    ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true, ftsTokenizer });
     params.changes.push(
       `Migrated Memory Core legacy memory index for agent ${params.source.agentId} -> per-agent SQLite (${result.sources} source(s), ${result.chunks} chunk(s), ${result.cacheEntries} cache row(s))`,
     );
     if (!result.vectorEntriesImported) {
+      await preserveLegacyMemorySidecarRetryPath(params);
       params.warnings.push(
-        `Left Memory Core legacy memory index sidecar in place for agent ${params.source.agentId} because ${result.vectorEntries} vector row(s) still require sqlite-vec: ${loadedVector.error ?? "unknown sqlite-vec load error"}`,
+        `Left Memory Core legacy memory index sidecar in place for agent ${params.source.agentId} because ${formatLegacyVectorRows(result.vectorEntries)} still require sqlite-vec: ${loadedVector.error ?? "unknown sqlite-vec load error"}`,
       );
-      return;
+      return { archiveReady: false };
     }
-    await archiveLegacyMemorySidecar(params);
+    return { archiveReady: true };
   } finally {
     db.close();
   }
+}
+
+function groupLegacyMemorySidecarSourcesByPath(
+  sources: LegacyMemorySidecarSource[],
+): LegacyMemorySidecarSource[][] {
+  const groups = new Map<string, LegacyMemorySidecarSource[]>();
+  for (const source of sources) {
+    const group = groups.get(source.legacyPath);
+    if (group) {
+      group.push(source);
+    } else {
+      groups.set(source.legacyPath, [source]);
+    }
+  }
+  return [...groups.values()];
 }
 
 function resolveConfiguredWorkspaces(config: unknown, env: NodeJS.ProcessEnv): string[] {
@@ -939,23 +1109,38 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     async migrateLegacyState(params) {
       const changes: string[] = [];
       const warnings: string[] = [];
-      for (const source of await collectLegacyMemorySidecarSources({
-        config: params.config,
-        env: params.env,
-        stateDir: params.stateDir,
-      })) {
-        try {
-          await migrateLegacyMemorySidecarSource({
-            source,
-            config: params.config,
-            env: params.env,
+      const groups = groupLegacyMemorySidecarSourcesByPath(
+        await collectLegacyMemorySidecarSources({
+          config: params.config,
+          env: params.env,
+          stateDir: params.stateDir,
+        }),
+      );
+      for (const sources of groups) {
+        let archiveReady = true;
+        for (const source of sources) {
+          try {
+            const result = await migrateLegacyMemorySidecarSource({
+              source,
+              config: params.config,
+              env: params.env,
+              changes,
+              warnings,
+            });
+            archiveReady &&= result.archiveReady;
+          } catch (err) {
+            archiveReady = false;
+            warnings.push(
+              `Skipped Memory Core legacy memory index import for agent ${source.agentId} because the sidecar could not be imported: ${String(err)}`,
+            );
+          }
+        }
+        if (archiveReady && sources[0]) {
+          await archiveLegacyMemorySidecar({
+            source: sources[0],
             changes,
             warnings,
           });
-        } catch (err) {
-          warnings.push(
-            `Skipped Memory Core legacy memory index import for agent ${source.agentId} because the sidecar could not be imported: ${String(err)}`,
-          );
         }
       }
       return { changes, warnings };

@@ -3886,17 +3886,19 @@ async function collectChannelLegacyStateMigrationPlans(params: {
 
 async function collectPluginDoctorStateMigrationPlans(params: {
   cfg: OpenClawConfig;
+  pluginDoctorConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
   oauthDir: string;
 }): Promise<DetectedPluginDoctorStateMigrationPlan[]> {
   const plans: DetectedPluginDoctorStateMigrationPlan[] = [];
+  const config = params.pluginDoctorConfig ?? params.cfg;
   for (const entry of listPluginDoctorStateMigrationEntries({
-    config: params.cfg,
+    config,
     env: params.env,
   })) {
     const detected = await entry.migration.detectLegacyState({
-      config: params.cfg,
+      config,
       env: params.env,
       stateDir: params.stateDir,
       oauthDir: params.oauthDir,
@@ -3929,6 +3931,7 @@ function createPluginDoctorStateMigrationContext(
 
 export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
+  pluginDoctorConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
 }): Promise<LegacyStateDetection> {
@@ -4049,6 +4052,7 @@ export async function detectLegacyStateMigrations(params: {
       ? []
       : await collectPluginDoctorStateMigrationPlans({
           cfg: params.cfg,
+          pluginDoctorConfig: params.pluginDoctorConfig,
           env,
           stateDir,
           oauthDir,
@@ -5030,6 +5034,7 @@ function resolveStorePathFromTemplate(
 
 export async function autoMigrateLegacyState(params: {
   cfg: OpenClawConfig;
+  pluginDoctorConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   log?: MigrationLogger;
@@ -5086,6 +5091,7 @@ export async function autoMigrateLegacyState(params: {
 
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
+    pluginDoctorConfig: params.pluginDoctorConfig,
     env,
     homedir: params.homedir,
   });
@@ -5133,7 +5139,7 @@ export async function autoMigrateLegacyState(params: {
     );
     const pluginPlans = await runPluginDoctorStateMigrationPlans({
       detected,
-      config: params.cfg,
+      config: params.pluginDoctorConfig ?? params.cfg,
     });
     const changes = [
       ...stateDirResult.changes,
@@ -5284,7 +5290,7 @@ export async function autoMigrateLegacyState(params: {
   );
   const pluginPlans = await runPluginDoctorStateMigrationPlans({
     detected,
-    config: params.cfg,
+    config: params.pluginDoctorConfig ?? params.cfg,
   });
   const sessions = await migrateLegacySessions(detected, now, {
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,
