@@ -1,10 +1,8 @@
 name: QA Lab Smoke Profile
 
-run-name: ${{ format('QA Lab Smoke Profile smoke-ci {0}', github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.ref) }}
+run-name: ${{ format('QA Lab Smoke Profile smoke-ci {0}', inputs.ref) }}
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   workflow_dispatch:
     inputs:
       ref:
@@ -22,14 +20,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: qa-lab-smoke-profile-${{ github.event.pull_request.number || inputs.expected_sha || inputs.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: qa-lab-smoke-profile-${{ inputs.expected_sha || inputs.ref }}
+  cancel-in-progress: false
 
 jobs:
   smoke_ci_profile_evidence:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
-      ref: ${{ github.event_name == 'pull_request' && (startsWith(github.event.pull_request.base.ref, 'release/') && github.event.pull_request.base.ref || github.event.pull_request.base.sha) || inputs.ref }}
-      expected_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.expected_sha }}
+      ref: ${{ inputs.ref }}
+      expected_sha: ${{ inputs.expected_sha }}
       qa_profile: smoke-ci
