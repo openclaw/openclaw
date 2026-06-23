@@ -303,6 +303,7 @@ function registerEventHandlers(
       recordProcessedMessage: recordProcessedFeishuMessage,
       getBotOpenId: (id) => botOpenIds.get(id),
       getBotName: (id) => botNames.get(id),
+      fetchMessage: getMessageFeishu,
       resolveSequentialKey: getFeishuSequentialKey,
     }),
     "im.message.message_read_v1": async () => {

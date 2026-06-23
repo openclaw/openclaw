@@ -35,8 +35,10 @@ import {
   normalizeMentions,
   parseMergeForwardContent,
   parseMessageContent,
+  resolveConfiguredFeishuGroupSessionScope,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
+  type FeishuGroupSessionScope,
 } from "./bot-content.js";
 import {
   evaluateSupplementalContextVisibility,
@@ -85,8 +87,6 @@ const groupNameCache = new Map<string, { name: string; expiresAt: number }>();
 const GROUP_NAME_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const GROUP_NAME_CACHE_MAX_SIZE = 500; // hard cap
 
-type FeishuGroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
-
 function shouldSendNoVisibleReplyFallback(dispatchResult: {
   counts: { final?: number };
   failedCounts?: { final?: number };
@@ -106,25 +106,6 @@ function shouldSendNoVisibleReplyFallback(dispatchResult: {
     dispatchResult.sendPolicyDenied !== true &&
     dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" &&
     (emptyEligibleDispatch || queuedFinalFailed)
-  );
-}
-
-function resolveConfiguredFeishuGroupSessionScope(params: {
-  groupConfig?: {
-    groupSessionScope?: FeishuGroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-  };
-  feishuCfg?: {
-    groupSessionScope?: FeishuGroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-  };
-}): FeishuGroupSessionScope {
-  const legacyTopicSessionMode =
-    params.groupConfig?.topicSessionMode ?? params.feishuCfg?.topicSessionMode ?? "disabled";
-  return (
-    params.groupConfig?.groupSessionScope ??
-    params.feishuCfg?.groupSessionScope ??
-    (legacyTopicSessionMode === "enabled" ? "group_topic" : "group")
   );
 }
 
@@ -583,7 +564,7 @@ export async function handleFeishuMessage(params: {
     ? resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId })
     : undefined;
   const groupSessionScope = isGroup
-    ? resolveConfiguredFeishuGroupSessionScope({ groupConfig, feishuCfg })
+    ? resolveConfiguredFeishuGroupSessionScope({ groupConfig, feishuCfg, chatType: ctx.chatType })
     : null;
   let effectiveThreadId = ctx.threadId;
   if (
