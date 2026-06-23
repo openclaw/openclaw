@@ -1,5 +1,7 @@
 // Msteams tests cover welcome card plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { redactOutboundMSTeamsCard, redactOutboundMSTeamsText } from "./dlp.js";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 
@@ -123,5 +125,33 @@ describe("buildGroupWelcomeText", () => {
   it("defaults to OpenClaw", () => {
     const text = buildGroupWelcomeText();
     expect(text).toContain("OpenClaw");
+  });
+});
+
+describe("welcome path DLP (#16)", () => {
+  const cfg = {
+    channels: { msteams: { dlp: { enabled: true } } },
+  } as unknown as OpenClawConfig;
+
+  it("redacts a secret embedded in a configured prompt-starter on the welcome card", () => {
+    // The welcome card is built from config-authored prompt-starters; without redaction on this
+    // outbound boundary a secret in a starter would leak (the DLP bypass this change closes).
+    const card = redactOutboundMSTeamsCard(
+      buildWelcomeCard({
+        promptStarters: ["use token sk-abcdefghijklmnopqrstuvwx please"],
+      }),
+      cfg,
+    );
+    const actions = card.actions as Array<{ title: string }>;
+    expect(actions[0]?.title).toBe("use token [REDACTED:secret] please");
+  });
+
+  it("redacts a secret in the group welcome text", () => {
+    const text = redactOutboundMSTeamsText(
+      buildGroupWelcomeText("sk-abcdefghijklmnopqrstuvwx"),
+      cfg,
+    );
+    expect(text).toContain("[REDACTED:secret]");
+    expect(text).not.toContain("sk-abcdefghijklmnopqrstuvwx");
   });
 });

@@ -1,7 +1,7 @@
 // Voice Call plugin module implements events behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
+import { isAllowlistedCaller } from "../allowlist.js";
 import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
@@ -45,12 +45,13 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
 
     case "allowlist":
     case "pairing": {
-      const normalized = normalizePhoneNumber(from);
-      if (!normalized) {
+      if (!from) {
         console.log("[voice-call] Inbound call rejected: missing caller ID");
         return false;
       }
-      const allowed = isAllowlistedCaller(normalized, allowFrom);
+      // Pass the raw caller id so AAD callers (msteams) match by exact id, not
+      // phone digits.
+      const allowed = isAllowlistedCaller(from, allowFrom);
       const status = allowed ? "accepted" : "rejected";
       console.log(
         `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,
@@ -69,6 +70,7 @@ function createWebhookCall(params: {
   direction: "inbound" | "outbound";
   from: string;
   to: string;
+  threadId?: string;
 }): CallRecord {
   const callId = crypto.randomUUID();
   const effective = resolveVoiceCallEffectiveConfig(
@@ -89,6 +91,7 @@ function createWebhookCall(params: {
       config: effectiveConfig,
       callId,
       phone: params.direction === "outbound" ? params.to : params.from,
+      threadId: params.threadId,
     }),
     startedAt: Date.now(),
     transcript: [],
@@ -196,6 +199,8 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       direction: eventDirection === "outbound" ? "outbound" : "inbound",
       from: event.from || "unknown",
       to: event.to || ctx.config.fromNumber || "unknown",
+      // Conversation thread (e.g. Teams chat thread) for sessionScope "per-thread".
+      threadId: event.threadId,
     });
 
     // Normalize event to internal ID for downstream consumers.

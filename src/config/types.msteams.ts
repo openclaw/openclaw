@@ -204,4 +204,30 @@ export type MSTeamsConfig = {
   };
   /** Bot Framework OAuth SSO (signin/tokenExchange + signin/verifyState) settings. */
   sso?: MSTeamsSsoConfig;
+  /**
+   * Transcribe inbound voice/audio messages (#13). When on, an audio attachment in a chat is
+   * transcribed (media-understanding STT) and the text is folded into the message so the agent
+   * reads what was said. Off by default — it incurs an STT call per voice message.
+   */
+  transcribeVoiceMessages?: boolean;
+  /**
+   * DLP-aware outbound redaction (#16). When enabled, sensitive values (card numbers, national
+   * IDs, secrets, …) are scrubbed from text the bot sends to Teams so the agent can't leak data
+   * into a chat. Off by default.
+   */
+  dlp?: {
+    enabled?: boolean;
+    /** Built-in categories to redact (awsKey, secret, iban, email, ssn, creditCard, phone). Omitted = all. */
+    categories?: string[];
+    /** Extra org-specific regex rules; each match is redacted like a built-in category. */
+    customPatterns?: Array<{ name: string; pattern: string }>;
+    /** Replacement template; "{category}" is substituted. Default "[REDACTED:{category}]". */
+    placeholder?: string;
+  };
+  /**
+   * Audit log channel (#15). When set to a Teams conversation target (e.g. "conversation:19:…" or
+   * "user:<aad-id>"), a compact DLP-redacted line of each agent reply is mirrored there so admins
+   * have a governance trail. The bot must have received ≥1 message from that conversation first.
+   */
+  auditChannel?: string;
 };

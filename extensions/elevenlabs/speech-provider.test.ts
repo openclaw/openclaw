@@ -28,6 +28,20 @@ function parseRequestBody(init: RequestInit | undefined): Record<string, unknown
   return body as Record<string, unknown>;
 }
 
+/** Successful `/with-timestamps` JSON payload — telephony synthesis hits that endpoint first. */
+function withTimestampsResponse(options?: {
+  audio?: Uint8Array;
+  alignment?: { characters: string[]; character_start_times_seconds: number[] };
+}): Response {
+  return new Response(
+    JSON.stringify({
+      audio_base64: Buffer.from(options?.audio ?? new Uint8Array([1, 2, 3])).toString("base64"),
+      ...(options?.alignment ? { alignment: options.alignment } : {}),
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
 describe("elevenlabs speech provider", () => {
   const originalFetch = globalThis.fetch;
 
@@ -127,7 +141,7 @@ describe("elevenlabs speech provider", () => {
   it("applies provider overrides to telephony synthesis", async () => {
     const provider = buildElevenLabsSpeechProvider();
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      expect(url).toContain("/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM");
+      expect(url).toContain("/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM/with-timestamps");
       expect(url).toContain("output_format=pcm_22050");
       const body = parseRequestBody(init);
       expect(body).toEqual({
@@ -144,7 +158,7 @@ describe("elevenlabs speech provider", () => {
           speed: 1.2,
         },
       });
-      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      return withTimestampsResponse();
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -166,11 +180,56 @@ describe("elevenlabs speech provider", () => {
           speed: 1.2,
         },
       },
+      withTimestamps: true,
       timeoutMs: 1_000,
     });
 
     expect(result?.outputFormat).toBe("pcm_22050");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces character alignment from telephony synthesis", async () => {
+    const provider = buildElevenLabsSpeechProvider();
+    const fetchMock = vi.fn(async () =>
+      withTimestampsResponse({
+        alignment: { characters: ["h", "i"], character_start_times_seconds: [0, 0.4] },
+      }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await provider.synthesizeTelephony?.({
+      text: "hi",
+      cfg: {} as never,
+      providerConfig: { apiKey: "xi-test" },
+      withTimestamps: true,
+      timeoutMs: 1_000,
+    });
+
+    expect(result?.alignment).toEqual({ characters: ["h", "i"], startTimesSeconds: [0, 0.4] });
+    expect(result?.sampleRate).toBe(22_050);
+  });
+
+  it("falls back to plain telephony synthesis when with-timestamps fails", async () => {
+    const provider = buildElevenLabsSpeechProvider();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("/with-timestamps")) {
+        return new Response("not found", { status: 404 });
+      }
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await provider.synthesizeTelephony?.({
+      text: "hi",
+      cfg: {} as never,
+      providerConfig: { apiKey: "xi-test" },
+      withTimestamps: true,
+      timeoutMs: 1_000,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result?.audioBuffer.equals(Buffer.from([1, 2, 3]))).toBe(true);
+    expect(result?.alignment).toBeUndefined();
   });
 
   it("drops out-of-range voice settings before synthesis", async () => {
@@ -184,7 +243,7 @@ describe("elevenlabs speech provider", () => {
         use_speaker_boost: true,
         speed: 1,
       });
-      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      return withTimestampsResponse();
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -205,6 +264,7 @@ describe("elevenlabs speech provider", () => {
           speed: 0.1,
         },
       },
+      withTimestamps: true,
       timeoutMs: 1_000,
     });
 
@@ -216,7 +276,7 @@ describe("elevenlabs speech provider", () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       const body = parseRequestBody(init);
       expect(body).not.toHaveProperty("seed");
-      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      return withTimestampsResponse();
     });
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
@@ -230,6 +290,7 @@ describe("elevenlabs speech provider", () => {
       providerOverrides: {
         seed: Number.POSITIVE_INFINITY,
       },
+      withTimestamps: true,
       timeoutMs: 1_000,
     });
 

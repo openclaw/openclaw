@@ -18,6 +18,7 @@ import {
   type RuntimeEnv,
 } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import { buildMSTeamsAuditLine, resolveMSTeamsAuditTarget } from "./audit.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import {
@@ -38,6 +39,7 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
+import { sendMessageMSTeams } from "./send.js";
 
 export { pickInformativeStatusText } from "./reply-stream-controller.js";
 
@@ -252,6 +254,30 @@ export function createMSTeamsReplyDispatcher(params: {
     pendingMessages.push(...messages);
   };
 
+  // Audit mirror (#15): post a compact, DLP-redacted line of each reply to the audit channel.
+  // Runs at the DELIVERY choke point — on the payload BEFORE the stream controller decides which
+  // path carries it — so natively-streamed replies (the default for personal chats) land in the
+  // trail too, not only block deliveries. Fire-and-forget so it never blocks or fails
+  // the user-facing reply. The audit send goes through sendMessageMSTeams (not this dispatcher),
+  // so it can't recurse; the loop guard skips replies that are themselves in the audit channel.
+  const mirrorReplyToAudit = (payload: ReplyPayload) => {
+    const auditTo = resolveMSTeamsAuditTarget(params.cfg, params.conversationRef.conversation?.id);
+    if (auditTo && payload.text?.trim()) {
+      void sendMessageMSTeams({
+        cfg: params.cfg,
+        to: auditTo,
+        text: buildMSTeamsAuditLine({
+          cfg: params.cfg,
+          sourceConversationId: params.conversationRef.conversation?.id,
+          senderName: params.conversationRef.user?.name,
+          text: payload.text,
+        }),
+      }).catch((err: unknown) => {
+        params.log.debug?.("audit mirror failed", { error: formatUnknownError(err) });
+      });
+    }
+  };
+
   const flushPendingMessages = async () => {
     if (pendingMessages.length === 0) {
       return;
@@ -314,6 +340,7 @@ export function createMSTeamsReplyDispatcher(params: {
     },
     typingCallbacks,
     deliver: async (payload) => {
+      mirrorReplyToAudit(payload);
       const preparedPayload = streamController.preparePayload(payload);
       if (!preparedPayload) {
         return;

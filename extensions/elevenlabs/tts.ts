@@ -69,7 +69,17 @@ type ElevenLabsTtsRequestParams = {
   timeoutMs: number;
 };
 
-function prepareElevenLabsTtsRequest(params: ElevenLabsTtsRequestParams & { stream: boolean }): {
+type ElevenLabsTtsRequestVariant = "tts" | "stream" | "with-timestamps";
+
+const ELEVENLABS_TTS_VARIANT_PATH_SUFFIX: Record<ElevenLabsTtsRequestVariant, string> = {
+  tts: "",
+  stream: "/stream",
+  "with-timestamps": "/with-timestamps",
+};
+
+function prepareElevenLabsTtsRequest(
+  params: ElevenLabsTtsRequestParams & { variant: ElevenLabsTtsRequestVariant },
+): {
   url: URL;
   normalizedBaseUrl: string;
   acceptHeader?: string;
@@ -97,7 +107,7 @@ function prepareElevenLabsTtsRequest(params: ElevenLabsTtsRequestParams & { stre
   const normalizedBaseUrl = normalizeElevenLabsBaseUrl(baseUrl);
   const normalizedLatencyTier = normalizeElevenLabsLatencyTier(latencyTier);
   const url = new URL(
-    `${normalizedBaseUrl}/v1/text-to-speech/${voiceId}${params.stream ? "/stream" : ""}`,
+    `${normalizedBaseUrl}/v1/text-to-speech/${voiceId}${ELEVENLABS_TTS_VARIANT_PATH_SUFFIX[params.variant]}`,
   );
   if (outputFormat) {
     url.searchParams.set("output_format", outputFormat);
@@ -106,7 +116,12 @@ function prepareElevenLabsTtsRequest(params: ElevenLabsTtsRequestParams & { stre
   if (normalizedLatencyTier !== undefined && supportsStreamingLatency) {
     url.searchParams.set("optimize_streaming_latency", normalizedLatencyTier.toString());
   }
-  const acceptHeader = resolveElevenLabsAcceptHeader(outputFormat);
+  // The with-timestamps endpoint responds with JSON (base64 audio + character alignment),
+  // not raw audio bytes.
+  const acceptHeader =
+    params.variant === "with-timestamps"
+      ? "application/json"
+      : resolveElevenLabsAcceptHeader(outputFormat);
   return {
     url,
     normalizedBaseUrl,
@@ -132,7 +147,7 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
   const { apiKey, timeoutMs } = params;
   const { url, normalizedBaseUrl, acceptHeader, body } = prepareElevenLabsTtsRequest({
     ...params,
-    stream: false,
+    variant: "tts",
   });
 
   const { response, release } = await fetchWithSsrFGuard({
@@ -159,6 +174,95 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
   }
 }
 
+/** Per-character speech timing parsed from a `/with-timestamps` response alignment block. */
+export type ElevenLabsTtsAlignment = {
+  characters: string[];
+  startTimesSeconds: number[];
+};
+
+function parseElevenLabsAlignment(raw: unknown): ElevenLabsTtsAlignment | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const { characters, character_start_times_seconds: starts } = raw as {
+    characters?: unknown;
+    character_start_times_seconds?: unknown;
+  };
+  if (!Array.isArray(characters) || !Array.isArray(starts)) {
+    return undefined;
+  }
+  const n = Math.min(characters.length, starts.length);
+  const outChars: string[] = [];
+  const outTimes: number[] = [];
+  for (let i = 0; i < n; i++) {
+    const c = characters[i];
+    const t = starts[i];
+    if (typeof c !== "string" || typeof t !== "number" || !Number.isFinite(t) || t < 0) {
+      return undefined;
+    }
+    outChars.push(c);
+    outTimes.push(t);
+  }
+  return outChars.length > 0 ? { characters: outChars, startTimesSeconds: outTimes } : undefined;
+}
+
+/**
+ * Synthesize via `/v1/text-to-speech/{voiceId}/with-timestamps`: same request shape as
+ * {@link elevenLabsTTS} but the response is JSON carrying base64 audio plus per-character
+ * alignment. `normalized_alignment` (timing for the text as actually spoken, after number and
+ * abbreviation expansion) is preferred over `alignment`; a malformed or absent alignment block
+ * degrades to audio-only rather than failing the synthesis.
+ */
+export async function elevenLabsTTSWithTimestamps(params: ElevenLabsTtsRequestParams): Promise<{
+  audioBuffer: Buffer;
+  alignment?: ElevenLabsTtsAlignment;
+}> {
+  const { apiKey, timeoutMs } = params;
+  const { url, normalizedBaseUrl, acceptHeader, body } = prepareElevenLabsTtsRequest({
+    ...params,
+    variant: "with-timestamps",
+  });
+
+  const { response, release } = await fetchWithSsrFGuard({
+    url: url.toString(),
+    init: {
+      method: "POST",
+      headers: {
+        "xi-api-key": apiKey,
+        "Content-Type": "application/json",
+        ...(acceptHeader ? { Accept: acceptHeader } : {}),
+      },
+      body,
+    },
+    timeoutMs,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
+    auditContext: "elevenlabs.tts.with-timestamps",
+  });
+  try {
+    await assertOkOrThrowProviderError(response, "ElevenLabs API error");
+    const payload = (await response.json()) as {
+      audio_base64?: unknown;
+      alignment?: unknown;
+      normalized_alignment?: unknown;
+    };
+    if (typeof payload.audio_base64 !== "string" || payload.audio_base64.length === 0) {
+      throw new Error("ElevenLabs API response missing audio (with-timestamps)");
+    }
+    const audioBuffer = Buffer.from(payload.audio_base64, "base64");
+    if (audioBuffer.length === 0) {
+      throw new Error("ElevenLabs API response audio decoded empty (with-timestamps)");
+    }
+    return {
+      audioBuffer,
+      alignment:
+        parseElevenLabsAlignment(payload.normalized_alignment) ??
+        parseElevenLabsAlignment(payload.alignment),
+    };
+  } finally {
+    await release();
+  }
+}
+
 export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): Promise<{
   audioStream: ReadableStream<Uint8Array>;
   release: () => Promise<void>;
@@ -166,7 +270,7 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
   const { apiKey, timeoutMs } = params;
   const { url, normalizedBaseUrl, acceptHeader, body } = prepareElevenLabsTtsRequest({
     ...params,
-    stream: true,
+    variant: "stream",
   });
 
   const { response, release } = await fetchWithSsrFGuard({

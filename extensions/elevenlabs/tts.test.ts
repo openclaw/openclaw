@@ -1,7 +1,7 @@
 // Elevenlabs tests cover tts plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
-import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
+import { elevenLabsTTS, elevenLabsTTSStream, elevenLabsTTSWithTimestamps } from "./tts.js";
 
 describe("elevenlabs tts diagnostics", () => {
   const originalFetch = globalThis.fetch;
@@ -209,6 +209,101 @@ describe("elevenlabs tts diagnostics", () => {
     expect(url.searchParams.get("optimize_streaming_latency")).toBe("2");
     expect(result.audioStream).toBeInstanceOf(ReadableStream);
     await result.release();
+  });
+
+  it("uses the with-timestamps endpoint with a JSON Accept header and parses alignment", async () => {
+    const audio = Buffer.from("pcm-audio");
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            audio_base64: audio.toString("base64"),
+            alignment: {
+              characters: ["h", "i"],
+              character_start_times_seconds: [0, 0.4],
+            },
+            normalized_alignment: {
+              characters: ["h", "e", "y"],
+              character_start_times_seconds: [0, 0.2, 0.5],
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await elevenLabsTTSWithTimestamps({
+      ...createDefaultTtsRequest(),
+      outputFormat: "pcm_22050",
+    });
+
+    const url = getUrlFromFirstFetchCall(fetchMock);
+    expect(url.pathname).toBe("/v1/text-to-speech/pMsXgVXv3BLzUgSXRplE/with-timestamps");
+    expect(url.searchParams.get("output_format")).toBe("pcm_22050");
+    expect(getHeadersFromFirstFetchCall(fetchMock).get("accept")).toBe("application/json");
+    expect(result.audioBuffer.equals(audio)).toBe(true);
+    // normalized_alignment (post text-normalization timing) wins over raw alignment
+    expect(result.alignment).toEqual({
+      characters: ["h", "e", "y"],
+      startTimesSeconds: [0, 0.2, 0.5],
+    });
+  });
+
+  it("falls back to the raw alignment when normalized_alignment is absent", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            audio_base64: Buffer.from("pcm").toString("base64"),
+            alignment: {
+              characters: ["h", "i"],
+              character_start_times_seconds: [0, 0.4],
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await elevenLabsTTSWithTimestamps(createDefaultTtsRequest());
+
+    expect(result.alignment).toEqual({ characters: ["h", "i"], startTimesSeconds: [0, 0.4] });
+  });
+
+  it("returns audio without alignment when the alignment block is malformed", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            audio_base64: Buffer.from("pcm").toString("base64"),
+            alignment: {
+              characters: ["h", "i"],
+              character_start_times_seconds: [0, "bad"],
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await elevenLabsTTSWithTimestamps(createDefaultTtsRequest());
+
+    expect(result.audioBuffer.length).toBeGreaterThan(0);
+    expect(result.alignment).toBeUndefined();
+  });
+
+  it("rejects with-timestamps responses missing base64 audio", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ alignment: null }), {
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(elevenLabsTTSWithTimestamps(createDefaultTtsRequest())).rejects.toThrow(
+      "ElevenLabs API response missing audio (with-timestamps)",
+    );
   });
 
   it("rejects JSON success stream responses as malformed audio", async () => {

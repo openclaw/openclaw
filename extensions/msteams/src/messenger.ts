@@ -14,6 +14,7 @@ import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { MarkdownTableMode, MSTeamsReplyStyle, OpenClawConfig } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
+import { redactOutboundMSTeamsText } from "./dlp.js";
 import { classifyMSTeamsSendError } from "./errors.js";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
@@ -221,6 +222,7 @@ export function renderReplyPayloadsToMessages(
   const chunkText = options.chunkText !== false;
   const chunkMode = options.chunkMode ?? "length";
   const mediaMode = options.mediaMode ?? "split";
+  const cfg = getMSTeamsRuntime().config.current() as OpenClawConfig;
   const tableMode =
     options.tableMode ??
     getMSTeamsRuntime().channel.text.resolveMarkdownTableMode({
@@ -230,7 +232,11 @@ export function renderReplyPayloadsToMessages(
 
   for (const payload of replies) {
     const reply = resolveSendableOutboundReplyParts(payload, {
-      text: getMSTeamsRuntime().channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+      // DLP (#16): scrub sensitive values out of the agent's reply before it is chunked/sent.
+      text: redactOutboundMSTeamsText(
+        getMSTeamsRuntime().channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+        cfg,
+      ),
     });
 
     if (!reply.hasContent) {

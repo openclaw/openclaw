@@ -12,6 +12,30 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "transcribeVoiceMessages": { "type": "boolean" },
+      "auditChannel": { "type": "string" },
+      "dlp": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "categories": { "type": "array", "items": { "type": "string" } },
+          "customPatterns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string" },
+                "pattern": { "type": "string" }
+              },
+              "required": ["name", "pattern"]
+            }
+          },
+          "placeholder": { "type": "string" }
+        }
+      }
+    }
   }
 }

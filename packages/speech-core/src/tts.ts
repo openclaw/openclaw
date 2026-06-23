@@ -197,6 +197,8 @@ export type TtsTelephonyResult = {
   attempts?: TtsProviderAttempt[];
   outputFormat?: string;
   sampleRate?: number;
+  /** Per-character timing when the provider returned alignment (e.g. ElevenLabs with-timestamps). */
+  alignment?: { characters: string[]; startTimesSeconds: number[] };
 };
 
 type TtsStatusEntry = {
@@ -1761,6 +1763,8 @@ export async function textToSpeechTelephony(params: {
   prefsPath?: string;
   overrides?: TtsDirectiveOverrides;
   timeoutMs?: number;
+  /** Opt in to provider character alignment (e.g. ElevenLabs with-timestamps) for viseme/lip-sync. */
+  withTimestamps?: boolean;
 }): Promise<TtsTelephonyResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
@@ -1838,6 +1842,7 @@ export async function textToSpeechTelephony(params: {
         providerConfig: prepared.providerConfig,
         providerOverrides: prepared.providerOverrides,
         timeoutMs,
+        withTimestamps: params.withTimestamps,
       });
       const latencyMs = Date.now() - providerStart;
       attempts.push({
@@ -1862,6 +1867,7 @@ export async function textToSpeechTelephony(params: {
         attempts,
         outputFormat: synthesis.outputFormat,
         sampleRate: synthesis.sampleRate,
+        alignment: synthesis.alignment,
       };
     } catch (err) {
       const errorMsg = formatTtsProviderError(provider, err);

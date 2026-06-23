@@ -1681,6 +1681,22 @@ export const MSTeamsConfigSchema = z
       })
       .strict()
       .optional(),
+    // #13: transcribe inbound voice/audio messages (media-understanding STT).
+    transcribeVoiceMessages: z.boolean().optional(),
+    // #16: DLP-aware outbound redaction.
+    dlp: z
+      .object({
+        enabled: z.boolean().optional(),
+        categories: z.array(z.string()).optional(),
+        customPatterns: z
+          .array(z.object({ name: z.string(), pattern: z.string() }).strict())
+          .optional(),
+        placeholder: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    // #15: audit log channel — mirror agent replies to a Teams conversation.
+    auditChannel: z.string().optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

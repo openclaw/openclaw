@@ -251,4 +251,49 @@ describe("msteams adaptive card action invoke", () => {
     expect(ctxPayload.BodyForAgent).toBe(JSON.stringify(payload));
     expect(ctxPayload.CommandBody).toBe(JSON.stringify(payload));
   });
+
+  it("message action in a group chat dispatches despite mention-gating (B8)", async () => {
+    // "Ask OpenClaw about this" produces a synthetic message with no @mention. In a group chat
+    // (requireMention defaults true) the dispatch was silently mention-gated right after the
+    // "On it" ack — the reply never came. The invoke wrapper now stamps a bot-mention entity.
+    const deps = createDeps();
+    deps.cfg = {
+      channels: { msteams: { groupPolicy: "open" } },
+    } as unknown as OpenClawConfig;
+    const handler = createActivityHandler();
+    const registered = registerMSTeamsHandlers(handler, deps) as MSTeamsActivityHandler & {
+      run: NonNullable<MSTeamsActivityHandler["run"]>;
+    };
+
+    await registered.run({
+      activity: {
+        id: "invoke-2",
+        type: "invoke",
+        name: "composeExtension/submitAction",
+        channelId: "msteams",
+        serviceUrl: "https://service.example.test",
+        from: { id: "user-bf", aadObjectId: "user-aad", name: "User" },
+        recipient: { id: "bot-id", name: "Bot" },
+        conversation: { id: "19:group-chat-id@thread.v2", conversationType: "groupChat" },
+        channelData: {},
+        attachments: [],
+        value: {
+          commandId: "askOpenClaw",
+          messagePayload: {
+            body: { content: "please review the Q3 numbers", contentType: "text" },
+            from: { user: { displayName: "Sara" } },
+          },
+        },
+      },
+      sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+      sendActivities: async () => [],
+    } as unknown as MSTeamsTurnContext);
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+    const dispatched = runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mock
+      .calls[0]?.[0] as { ctxPayload?: Record<string, unknown> } | undefined;
+    expect(String(dispatched?.ctxPayload?.BodyForAgent)).toContain("please review the Q3 numbers");
+  });
 });
