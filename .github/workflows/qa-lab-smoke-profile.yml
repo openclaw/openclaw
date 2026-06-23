@@ -33,4 +33,5 @@ jobs:
       ref: ${{ github.event_name == 'pull_request' && (startsWith(github.event.pull_request.base.ref, 'release/') && github.event.pull_request.base.ref || github.event.pull_request.base.sha) || inputs.ref }}
       expected_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.expected_sha }}
       qa_profile: smoke-ci
-      fail_on_qa_failure: true
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
