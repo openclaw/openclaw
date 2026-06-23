@@ -1399,7 +1399,10 @@ export class QmdMemoryManager implements MemorySearchManager {
             signal: searchSignal,
           });
         }
-        const collectionGroups = await this.resolveCollectionSearchGroups(collectionNames);
+        const collectionGroups = await this.resolveCollectionSearchGroups(
+          collectionNames,
+          searchSignal,
+        );
         if (collectionGroups.length > 1) {
           return await this.runQueryAcrossCollectionGroups(
             trimmed,
@@ -1427,7 +1430,10 @@ export class QmdMemoryManager implements MemorySearchManager {
             `qmd ${qmdSearchCommand} does not support configured flags; retrying search with qmd query`,
           );
           try {
-            const collectionGroups = await this.resolveCollectionSearchGroups(collectionNames);
+            const collectionGroups = await this.resolveCollectionSearchGroups(
+              collectionNames,
+              searchSignal,
+            );
             if (collectionGroups.length > 1) {
               return await this.runQueryAcrossCollectionGroups(
                 trimmed,
@@ -3361,28 +3367,39 @@ export class QmdMemoryManager implements MemorySearchManager {
     ]);
   }
 
-  private async resolveCollectionSearchGroups(collectionNames: string[]): Promise<string[][]> {
+  private async resolveCollectionSearchGroups(
+    collectionNames: string[],
+    signal?: AbortSignal,
+  ): Promise<string[][]> {
     if (collectionNames.length <= 1) {
       return [collectionNames];
     }
-    if (!(await this.supportsQmdMultiCollectionFilters())) {
+    if (!(await this.supportsQmdMultiCollectionFilters(signal))) {
       return collectionNames.map((collectionName) => [collectionName]);
     }
     return this.groupCollectionNamesBySource(collectionNames);
   }
 
-  private async supportsQmdMultiCollectionFilters(): Promise<boolean> {
+  private async supportsQmdMultiCollectionFilters(signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) {
+      throw asAbortError(signal);
+    }
     if (this.multiCollectionFilterSupported !== null) {
       return this.multiCollectionFilterSupported;
     }
     try {
       const result = await this.runQmd(["--help"], {
         timeoutMs: Math.min(this.qmd.limits.timeoutMs, 5_000),
+        signal,
       });
       const helpText = `${result.stdout}\n${result.stderr}`;
       this.multiCollectionFilterSupported =
         /\b(?:one or more collections|collection\(s\)|multiple -c flags)\b/i.test(helpText);
     } catch (err) {
+      // Cancellation says nothing about QMD capabilities; leave the probe uncached.
+      if (signal?.aborted) {
+        throw asAbortError(signal);
+      }
       this.multiCollectionFilterSupported = false;
       log.debug(`qmd multi-collection filter probe failed: ${String(err)}`);
     }
