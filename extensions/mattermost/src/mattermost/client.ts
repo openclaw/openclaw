@@ -1,6 +1,9 @@
 // Mattermost plugin module implements client behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
@@ -13,6 +16,14 @@ import {
 import { z } from "zod";
 
 const MATTERMOST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+// Mattermost REST control-plane JSON (posts, users, channels, file-upload
+// results) stays well under a megabyte; cap successful JSON the same way the
+// shared provider path is capped so an untrusted/self-hosted homeserver cannot
+// stream an unbounded body into the runtime before parsing.
+const MATTERMOST_JSON_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
+// Non-JSON success bodies are a rare fallback (the API is JSON-first); keep a
+// generous text budget but still bound it instead of buffering the whole stream.
+const MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES = 64 * 1024;
 const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -214,9 +225,11 @@ export function createMattermostClient(params: {
 
     const contentType = res.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
-      return (await res.json()) as T;
+      return await readProviderJsonResponse<T>(res, `Mattermost API ${path}`, {
+        maxBytes: MATTERMOST_JSON_RESPONSE_LIMIT_BYTES,
+      });
     }
-    return (await res.text()) as T;
+    return (await readResponseTextLimited(res, MATTERMOST_TEXT_RESPONSE_LIMIT_BYTES)) as T;
   };
 
   return { baseUrl, apiBaseUrl, token, request, fetchImpl };
@@ -679,7 +692,11 @@ export async function uploadMattermostFile(
     const detail = await readMattermostError(res);
     throw new Error(`Mattermost API ${res.status} ${res.statusText}: ${detail || "unknown error"}`);
   }
-  const data = (await res.json()) as { file_infos?: MattermostFileInfo[] };
+  const data = await readProviderJsonResponse<{ file_infos?: MattermostFileInfo[] }>(
+    res,
+    "Mattermost API /files",
+    { maxBytes: MATTERMOST_JSON_RESPONSE_LIMIT_BYTES },
+  );
   const info = data.file_infos?.[0];
   if (!info?.id) {
     throw new Error("Mattermost file upload failed");
