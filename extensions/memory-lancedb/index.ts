@@ -1577,7 +1577,10 @@ export default definePluginEntry({
           const text = results
             .map(({ result, text: memoryText }, i) => {
               const escapedText = escapeMemoryForPrompt(memoryText);
-              return `${i + 1}. [${result.entry.category}] ${escapedText} (${(result.score * 100).toFixed(0)}%)`;
+              // Include the UUID so the model can round-trip recalled entries
+              // into memory_forget(memoryId=<uuid>). details.memories is
+              // stripped before provider replay per docs/concepts/messages.md.
+              return `${i + 1}. [${result.entry.category}] ${escapedText} (${(result.score * 100).toFixed(0)}%) (id: ${result.entry.id})`;
             })
             .join("\n");
 
@@ -1713,6 +1716,46 @@ export default definePluginEntry({
             const results = await db.search(vector, 5, 0.7);
 
             if (results.length === 0) {
+              // Embedding search missed the target — fall back to a simple
+              // word-overlap scan of recent entries so a user can still find
+              // and delete a memory whose text they remember but whose
+              // embedding drifted below the 0.7 threshold (e.g. the query
+              // adds keywords the stored text does not share literally).
+              const queryWords = query
+                .toLowerCase()
+                .split(/\s+/)
+                .filter((w) => w.length > 1);
+              if (queryWords.length > 0) {
+                const recent = await db.list(100, { orderByCreatedAt: true });
+                const textMatches = recent.filter((entry) =>
+                  queryWords.every((word) => entry.text.toLowerCase().includes(word)),
+                );
+                if (textMatches.length > 0) {
+                  const list = textMatches
+                    .map(
+                      (entry) =>
+                        `- [${entry.id}] ${entry.text.slice(0, 60)}${entry.text.length > 60 ? "..." : ""}`,
+                    )
+                    .join("\n");
+                  return {
+                    content: [
+                      {
+                        type: "text",
+                        text: `Found ${textMatches.length} candidate(s) by text match. Specify memoryId:\n${list}`,
+                      },
+                    ],
+                    details: {
+                      action: "candidates",
+                      candidates: textMatches.map((entry) => ({
+                        id: entry.id,
+                        text: entry.text,
+                        category: entry.category,
+                      })),
+                    },
+                  };
+                }
+              }
+
               return {
                 content: [{ type: "text", text: "No matching memories found." }],
                 details: { found: 0 },
