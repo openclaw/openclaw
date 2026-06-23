@@ -366,13 +366,6 @@ export function shouldPreferExplicitConfigApiKeyAuth(
   );
 }
 
-export function isInlineProviderApiKeyAuth(auth: ResolvedProviderAuth | null | undefined): boolean {
-  if (!auth || auth.mode !== "api-key") {
-    return false;
-  }
-  return isInlineProviderApiKeySource(auth.source);
-}
-
 function isInlineProviderApiKeySource(source: string): boolean {
   return (
     source === "models.json" ||
