@@ -117,6 +117,25 @@ async function closeOpenBrowserContexts(): Promise<void> {
   await Promise.all([...openBrowserContexts].map((context) => closeBrowserContext(context)));
 }
 
+async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
+  return page.locator(".chat-thread").evaluate((element) => {
+    const thread = element as HTMLElement;
+    const viewport = thread.getBoundingClientRect();
+    return Array.from(thread.querySelectorAll(".chat-bubble"))
+      .filter((candidate) => {
+        const rect = candidate.getBoundingClientRect();
+        return (
+          rect.height > 0 &&
+          rect.width > 0 &&
+          rect.bottom > viewport.top &&
+          rect.top < viewport.bottom
+        );
+      })
+      .map((candidate) => candidate.textContent?.trim() ?? "")
+      .filter(Boolean);
+  });
+}
+
 async function controlUiEventPayloads(
   page: Page,
   event: string,
@@ -873,6 +892,115 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBeLessThanOrEqual(4);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("shows persisted user messages after opening History and scrolling mixed history", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const currentSessionMessages = [
+      {
+        content: [{ text: "Current session placeholder", type: "text" }],
+        role: "assistant",
+        timestamp: baseTs - 1,
+      },
+    ];
+    const historyMessages = Array.from({ length: 70 }, (_, index) => ({
+      content: [
+        {
+          text: `${index % 2 === 0 ? "User history question" : "Assistant history answer"} ${index}\n${"history detail line\n".repeat(4)}`,
+          type: index % 2 === 0 ? "input_text" : "output_text",
+        },
+      ],
+      role: index % 2 === 0 ? "user" : "assistant",
+      timestamp: baseTs + index,
+    }));
+    const gateway = await installMockGateway(page, {
+      historyMessages: currentSessionMessages,
+      methodResponses: {
+        "chat.history": {
+          cases: [
+            {
+              match: { sessionKey: "agent:main:session-b" },
+              response: {
+                messages: historyMessages,
+                sessionId: "control-ui-e2e-history-session-b",
+                thinkingLevel: null,
+              },
+            },
+            {
+              match: { sessionKey: "agent:main:session-a" },
+              response: {
+                messages: currentSessionMessages,
+                sessionId: "control-ui-e2e-history-session-a",
+                thinkingLevel: null,
+              },
+            },
+          ],
+        },
+        "sessions.list": chatSessionListResponse(),
+      },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Current session placeholder").waitFor({ timeout: 10_000 });
+
+      await page.getByRole("button", { name: "Chat session" }).click();
+      await page.getByRole("option", { name: /Session B/ }).click();
+      const historyRequest = await gateway.waitForRequest("chat.history");
+      expect(requireRecord(historyRequest.params)).toMatchObject({
+        sessionKey: "agent:main:session-b",
+      });
+      await page.locator(".chat-thread").getByText("User history question 68").waitFor({
+        timeout: 10_000,
+      });
+      await page.locator(".chat-thread").getByText("Assistant history answer 69").waitFor({
+        timeout: 10_000,
+      });
+      await expect
+        .poll(
+          async () => {
+            const texts = await visibleChatBubbleTexts(page);
+            return (
+              texts.some((text) => text.includes("User history question 68")) &&
+              texts.some((text) => text.includes("Assistant history answer 69"))
+            );
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(true);
+
+      await waitForChatScrollIdle(page);
+      await scrollChatThreadToTop(page);
+      await page.locator(".chat-thread").getByText("User history question 10").waitFor({
+        timeout: 10_000,
+      });
+      await scrollChatThreadToTop(page);
+      await page.locator(".chat-thread").getByText("User history question 0").waitFor({
+        timeout: 10_000,
+      });
+      await scrollChatThreadToTop(page);
+      await expect
+        .poll(
+          async () => {
+            const texts = await visibleChatBubbleTexts(page);
+            return (
+              texts.some((text) => text.includes("User history question 0")) &&
+              texts.some((text) => text.includes("Assistant history answer 1"))
+            );
+          },
+          { timeout: 10_000 },
+        )
+        .toBe(true);
     } finally {
       await closeBrowserContext(context);
     }

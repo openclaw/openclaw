@@ -172,6 +172,22 @@ function Check-Node {
 }
 
 function Get-WindowsPortableArchitecture {
+    # Native ARM64 Windows may run Windows PowerShell under x64 emulation, so
+    # process env vars can report AMD64 even when the host CPU is ARM64.
+    try {
+        $processor = Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1
+        if ($processor -and $processor.Architecture -eq 12) {
+            return "arm64"
+        }
+    } catch {}
+
+    try {
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop | Select-Object -First 1
+        if ($computerSystem -and $computerSystem.SystemType -match "ARM64") {
+            return "arm64"
+        }
+    } catch {}
+
     foreach ($architecture in @($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE)) {
         if ($architecture -match "ARM64") {
             return "arm64"
@@ -1262,6 +1278,7 @@ function Install-OpenClawFromGit {
     $prevPnpmWorkspaceConcurrency = $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY
     $prevPnpmVerifyDepsBeforeRun = $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN
     $prevPnpmSideEffectsCache = $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE
+    $prevNodeLlamaPostinstall = $env:NODE_LLAMA_CPP_POSTINSTALL
     $prevNodeOptions = $env:NODE_OPTIONS
     $pnpmCommand = Get-PnpmCommandPath
     if (-not $pnpmCommand) {
@@ -1273,6 +1290,7 @@ function Install-OpenClawFromGit {
     $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = "1"
     $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"
     $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = "false"
+    $env:NODE_LLAMA_CPP_POSTINSTALL = "skip"
     $pushedRepoLocation = $false
     try {
         Push-Location -LiteralPath $RepoDir
@@ -1320,6 +1338,7 @@ function Install-OpenClawFromGit {
         $env:PNPM_CONFIG_WORKSPACE_CONCURRENCY = $prevPnpmWorkspaceConcurrency
         $env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = $prevPnpmVerifyDepsBeforeRun
         $env:PNPM_CONFIG_SIDE_EFFECTS_CACHE = $prevPnpmSideEffectsCache
+        $env:NODE_LLAMA_CPP_POSTINSTALL = $prevNodeLlamaPostinstall
         $env:NODE_OPTIONS = $prevNodeOptions
     }
 

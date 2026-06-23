@@ -21,6 +21,8 @@ import {
   isSessionArchiveArtifactName,
   isUsageCountedSessionTranscriptFileName,
   listSessionFilesForAgent,
+  parseCanonicalSessionSyncTargetFromPath,
+  resolveSessionFileForSyncTarget,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
@@ -36,9 +38,12 @@ import {
   retryTransientMemoryRead,
   runWithConcurrency,
   type MemorySource,
+  type MemorySessionSyncTarget,
+  type MemorySyncParams,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
@@ -308,6 +313,7 @@ export abstract class MemoryManagerSyncOps {
   private readonly memoryWatchPressureWarning: MemoryWatchPressureWarningState = { shown: false };
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
+  protected sessionPendingTargets = new Map<string, MemorySessionSyncTarget>();
   protected sessionDeltas = new Map<string, MemorySessionDeltaState>();
   protected vectorDegradedWriteWarningShown = false;
   private lastMetaSerialized: string | null = null;
@@ -316,13 +322,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract db: DatabaseSync;
   protected abstract computeProviderKey(): string;
   protected abstract resolveProviderIndexIdentities(): MemoryIndexProviderIdentity[];
-  protected abstract sync(params?: {
-    reason?: string;
-    force?: boolean;
-    forceSessions?: boolean;
-    sessionFile?: string;
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }): Promise<void>;
+  protected abstract sync(params?: MemorySyncParams): Promise<void>;
   protected abstract withTimeout<T>(
     promise: Promise<T>,
     timeoutMs: number,
@@ -1430,6 +1430,11 @@ export abstract class MemoryManagerSyncOps {
       if (!this.isSessionFileForAgent(sessionFile)) {
         return;
       }
+      const target = this.resolveSessionTranscriptUpdateSyncTarget(update);
+      if (target) {
+        this.scheduleSessionDirty(target);
+        return;
+      }
       this.scheduleSessionDirty(sessionFile);
     });
   }
@@ -1501,8 +1506,12 @@ export abstract class MemoryManagerSyncOps {
     return dirtyFiles;
   }
 
-  private scheduleSessionDirty(sessionFile: string) {
-    this.sessionPendingFiles.add(sessionFile);
+  private scheduleSessionDirty(target: string | MemorySessionSyncTarget) {
+    if (typeof target === "string") {
+      this.sessionPendingFiles.add(target);
+    } else {
+      this.sessionPendingTargets.set(this.memorySessionSyncTargetKey(target), target);
+    }
     if (this.sessionWatchTimer) {
       return;
     }
@@ -1515,11 +1524,14 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private async processSessionDeltaBatch(): Promise<void> {
-    if (this.sessionPendingFiles.size === 0) {
+    if (this.sessionPendingFiles.size === 0 && this.sessionPendingTargets.size === 0) {
       return;
     }
     const pending = Array.from(this.sessionPendingFiles);
+    const pendingTargets = Array.from(this.sessionPendingTargets.values());
     this.sessionPendingFiles.clear();
+    this.sessionPendingTargets.clear();
+    pending.push(...Array.from(this.resolveSessionFilesForSyncTargets(pendingTargets)));
     let shouldSync = false;
     for (const sessionFile of pending) {
       // Usage-counted session archives (`.jsonl.reset.<iso>` and
@@ -1691,6 +1703,27 @@ export abstract class MemoryManagerSyncOps {
     return resolvedFile.startsWith(`${resolvedDir}${path.sep}`);
   }
 
+  private resolveSessionTranscriptUpdateSyncTarget(update: {
+    agentId?: string;
+    sessionFile: string;
+    sessionKey?: string;
+  }): MemorySessionSyncTarget | null {
+    const parsed = parseCanonicalSessionSyncTargetFromPath(update.sessionFile);
+    if (!parsed || isSessionArchiveArtifactName(path.basename(update.sessionFile))) {
+      return null;
+    }
+    const agentId = update.agentId?.trim() || parsed.agentId;
+    if (!agentId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
+      return null;
+    }
+    const sessionKey = update.sessionKey?.trim();
+    return {
+      agentId,
+      sessionId: parsed.sessionId,
+      ...(sessionKey ? { sessionKey } : {}),
+    };
+  }
+
   private normalizeTargetSessionFiles(sessionFiles?: string[]): Set<string> | null {
     if (!sessionFiles || sessionFiles.length === 0) {
       return null;
@@ -1702,11 +1735,78 @@ export abstract class MemoryManagerSyncOps {
         continue;
       }
       const resolved = path.resolve(trimmed);
-      if (this.isSessionFileForAgent(resolved)) {
+      if (
+        this.isSessionFileForAgent(resolved) &&
+        parseCanonicalSessionSyncTargetFromPath(resolved)
+      ) {
         normalized.add(resolved);
       }
     }
     return normalized.size > 0 ? normalized : null;
+  }
+
+  private normalizeTargetSessions(
+    sessions?: MemorySessionSyncTarget[],
+  ): Map<string, MemorySessionSyncTarget> | null {
+    if (!sessions || sessions.length === 0) {
+      return null;
+    }
+    const normalized = new Map<string, MemorySessionSyncTarget>();
+    for (const session of sessions) {
+      const sessionId = session.sessionId.trim();
+      const agentId = session.agentId?.trim() || this.agentId;
+      if (!sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
+        continue;
+      }
+      const sessionKey = session.sessionKey?.trim();
+      const target = {
+        agentId,
+        sessionId,
+        ...(sessionKey ? { sessionKey } : {}),
+      };
+      normalized.set(this.memorySessionSyncTargetKey(target), target);
+    }
+    return normalized.size > 0 ? normalized : null;
+  }
+
+  private resolveSessionFilesForSyncTargets(
+    sessions?: Iterable<MemorySessionSyncTarget> | null,
+  ): Set<string> {
+    const files = new Set<string>();
+    for (const session of sessions ?? []) {
+      const resolved = resolveSessionFileForSyncTarget(session, this.agentId);
+      if (!resolved || normalizeAgentId(resolved.agentId) !== normalizeAgentId(this.agentId)) {
+        continue;
+      }
+      const sessionFile = path.resolve(resolved.sessionFile);
+      if (
+        this.isSessionFileForAgent(sessionFile) &&
+        parseCanonicalSessionSyncTargetFromPath(sessionFile)
+      ) {
+        files.add(sessionFile);
+      }
+    }
+    return files;
+  }
+
+  private combineTargetSessionFiles(params: {
+    sessions?: MemorySessionSyncTarget[];
+    sessionFiles?: string[];
+  }): Set<string> | null {
+    const files = new Set<string>();
+    for (const file of this.normalizeTargetSessionFiles(params.sessionFiles) ?? []) {
+      files.add(file);
+    }
+    for (const file of this.resolveSessionFilesForSyncTargets(
+      this.normalizeTargetSessions(params.sessions)?.values(),
+    )) {
+      files.add(file);
+    }
+    return files.size > 0 ? files : null;
+  }
+
+  private memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
+    return [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0");
   }
 
   protected ensureIntervalSync() {
@@ -1750,10 +1850,7 @@ export abstract class MemoryManagerSyncOps {
     }, this.settings.sync.watchDebounceMs);
   }
 
-  private shouldSyncSessions(
-    params?: { reason?: string; force?: boolean; sessionFiles?: string[] },
-    needsFullReindex = false,
-  ) {
+  private shouldSyncSessions(params?: MemorySyncParams, needsFullReindex = false) {
     return shouldSyncSessionsForReindex({
       hasSessionSource: this.sources.has("sessions"),
       sessionsDirty: this.sessionsDirty,
@@ -2181,12 +2278,7 @@ export abstract class MemoryManagerSyncOps {
     );
   }
 
-  protected async runSync(params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }) {
+  protected async runSync(params?: MemorySyncParams) {
     // Guard: if an embedding provider is configured but currently unavailable,
     // abort sync to prevent silently degrading an existing semantic vector index
     // to fts-only and wiping existing semantic vectors.
@@ -2204,8 +2296,14 @@ export abstract class MemoryManagerSyncOps {
     }
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
-    const targetSessionFiles = this.normalizeTargetSessionFiles(params?.sessionFiles);
+    const targetSessionFiles = this.combineTargetSessionFiles({
+      sessions: params?.sessions,
+      sessionFiles: params?.sessionFiles,
+    });
     const hasTargetSessionFiles = targetSessionFiles !== null;
+    if (this.hasRequestedTargetSessionSync(params) && !hasTargetSessionFiles) {
+      return;
+    }
     if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
@@ -2369,6 +2467,13 @@ export abstract class MemoryManagerSyncOps {
 
   protected shouldFallbackOnError(err: unknown): boolean {
     return isMemoryEmbeddingOperationError(err);
+  }
+
+  private hasRequestedTargetSessionSync(params?: MemorySyncParams): boolean {
+    return Boolean(
+      params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
+      params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0),
+    );
   }
 
   protected resolveBatchConfig(): {

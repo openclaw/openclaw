@@ -97,6 +97,45 @@ function selectQaFlowSuiteScenarios(params: {
   );
 }
 
+function listQaSuiteScenarioChannels(
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+) {
+  return [
+    ...new Set(
+      scenarios
+        .map((scenario) => scenario.execution.channel?.trim().toLowerCase())
+        .filter((channel): channel is string => Boolean(channel)),
+    ),
+  ];
+}
+
+function resolveQaSuiteScenarioChannel(params: {
+  defaultChannel: string;
+  explicitChannel?: string | null;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  const scenarioChannels = listQaSuiteScenarioChannels(params.scenarios);
+  const explicitChannel = params.explicitChannel?.trim().toLowerCase();
+  if (explicitChannel) {
+    const conflictingChannels = scenarioChannels.filter((channel) => channel !== explicitChannel);
+    if (conflictingChannels.length > 0) {
+      throw new Error(
+        `--channel ${explicitChannel} conflicts with selected scenario execution.channel ${conflictingChannels.join(", ")}.`,
+      );
+    }
+    return explicitChannel;
+  }
+  if (scenarioChannels.length === 0) {
+    return params.defaultChannel;
+  }
+  if (scenarioChannels.length === 1) {
+    return scenarioChannels[0];
+  }
+  throw new Error(
+    `Selected QA scenarios require multiple channels (${scenarioChannels.join(", ")}); split the run by channel.`,
+  );
+}
+
 function collectQaSuitePluginIds(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
@@ -277,6 +316,7 @@ export {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,

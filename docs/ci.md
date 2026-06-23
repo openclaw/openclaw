@@ -83,7 +83,7 @@ Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests
 - **CI workflow edits** validate the Node CI graph plus workflow linting, but do not force Windows, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
-- **TUI PTY** is a focused workflow for TUI changes. It runs `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` on Linux Node 24 for `src/tui/**`, the watch harness, package script, lockfile, and workflow edits. The required lane uses a deterministic `TuiBackend` fixture; the slower `tui --local` smoke is opt-in with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` and mocks only the external model endpoint.
+- **TUI PTY** runs in the `checks-node-core-runtime-tui-pty` Linux Node shard for TUI changes. The shard runs `test/vitest/vitest.tui-pty.config.ts` with `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1`, so it covers both the deterministic `TuiBackend` fixture lane and the slower `tui --local` smoke that mocks only the external model endpoint.
 - **CI routing-only edits, selected cheap core-test fixture edits, and narrow plugin contract helper/test-routing edits** use a fast Node-only manifest path: `preflight`, security, and a single `checks-fast-core` task. That path skips build artifacts, Node 22 compatibility, channel contracts, full core shards, bundled-plugin shards, and additional guard matrices when the change is limited to the routing or helper surfaces the fast task exercises directly.
 - **Windows Node checks** are scoped to Windows-specific process/path wrappers, npm/pnpm/UI runner helpers, package manager config, and the CI workflow surfaces that execute that lane; unrelated source, plugin, install-smoke, and test-only changes stay on the Linux Node lanes.
 
@@ -155,7 +155,7 @@ pnpm check:timed                              # same gate with per-stage timings
 pnpm build:strict-smoke
 pnpm check:architecture
 pnpm test:gateway:watch-regression
-node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
+OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
 pnpm test                                     # vitest tests
 pnpm test:changed                             # cheap smart changed Vitest targets
 pnpm test:channels

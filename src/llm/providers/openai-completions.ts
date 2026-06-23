@@ -33,7 +33,6 @@ import type {
   Model,
   OpenAICompletionsCompat,
   SimpleStreamOptions,
-  StopReason,
   StreamFunction,
   StreamOptions,
   TextContent,
@@ -50,6 +49,7 @@ import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
@@ -372,7 +372,7 @@ export const streamOpenAICompletions: StreamFunction<
         }
 
         if (choice.finish_reason) {
-          const finishReasonResult = mapStopReason(choice.finish_reason);
+          const finishReasonResult = mapOpenAIStopReason(choice.finish_reason);
           output.stopReason = finishReasonResult.stopReason;
           if (finishReasonResult.errorMessage) {
             output.errorMessage = finishReasonResult.errorMessage;
@@ -1241,34 +1241,6 @@ function parseChunkUsage(
   };
   calculateCost(model, usage);
   return usage;
-}
-
-function mapStopReason(reason: string): {
-  stopReason: StopReason;
-  errorMessage?: string;
-} {
-  if (reason === null) {
-    return { stopReason: "stop" };
-  }
-  switch (reason) {
-    case "stop":
-    case "end":
-      return { stopReason: "stop" };
-    case "length":
-      return { stopReason: "length" };
-    case "function_call":
-    case "tool_calls":
-      return { stopReason: "toolUse" };
-    case "content_filter":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
-    case "network_error":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
-    default:
-      return {
-        stopReason: "error",
-        errorMessage: `Provider finish_reason: ${reason}`,
-      };
-  }
 }
 
 /**

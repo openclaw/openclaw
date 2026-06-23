@@ -137,6 +137,7 @@ describe("buildChannelInboundEventContext", () => {
       From: "test:user:u1",
       To: "test:room:room-1",
       SessionKey: "agent:main:test:group:room-1",
+      AgentId: "main",
       AccountId: "acct",
       ParentSessionKey: "agent:main:test:group",
       ModelParentSessionKey: "agent:main:test:model",
@@ -209,6 +210,20 @@ describe("buildChannelInboundEventContext", () => {
     );
 
     expect(ctx.CommandAuthorized).toBe(false);
+  });
+
+  it("carries the routed agent for unscoped session keys", async () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        route: {
+          agentId: "bound-agent",
+          routeSessionKey: "feishu:direct:ou_user1",
+        },
+      }),
+    );
+
+    expect(ctx.AgentId).toBe("bound-agent");
+    expect(ctx.SessionKey).toBe("feishu:direct:ou_user1");
   });
 
   it("carries room event semantics into the finalized context", async () => {

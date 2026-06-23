@@ -324,7 +324,7 @@ async function startAgentRun(
       message: params.message,
       deliver: true,
       channel: delivery.channel,
-      to: target,
+      to: delivery.to ?? target,
       replyChannel: delivery.replyChannel,
       replyTo: delivery.replyTo,
       ...(params.threadId ? { threadId: params.threadId } : {}),

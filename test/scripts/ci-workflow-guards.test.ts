@@ -15,6 +15,10 @@ function readWorkflowSanityWorkflow() {
   return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
 }
 
+function readRealBehaviorProofWorkflow() {
+  return parse(readFileSync(".github/workflows/real-behavior-proof.yml", "utf8"));
+}
+
 function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
@@ -82,6 +86,18 @@ describe("ci workflow guards", () => {
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
+  });
+
+  it("runs real behavior proof from the trusted workflow revision", () => {
+    const workflow = readRealBehaviorProofWorkflow();
+    const source = readFileSync(".github/workflows/real-behavior-proof.yml", "utf8");
+    const checkout = workflow.jobs["real-behavior-proof"].steps.find(
+      (step) => step.uses === CHECKOUT_V6,
+    );
+
+    expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkout.with.ref).not.toBe("${{ github.event.pull_request.base.sha }}");
+    expect(source).toContain("Old PR events can carry a stale base SHA");
   });
 
   it("keeps docs-change detection fail-safe and fixture-aware", () => {
@@ -465,6 +481,10 @@ describe("ci workflow guards", () => {
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
+    expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
+    expect(runStep.run).toContain("env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON");
+    expect(runStep.run).toContain('if (plan.env && typeof plan.env === "object"');
+    expect(runStep.run).toContain("childEnv[key] = value");
   });
 
   it("uploads a CI timing summary after the run lanes finish", () => {

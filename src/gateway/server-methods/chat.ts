@@ -283,6 +283,26 @@ function shouldIncludeChatSendAckServerTiming(client?: {
   return isOperatorUiClient(client);
 }
 
+const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
+
+function resolveControlUiReconnectResumeParams(
+  params: unknown,
+  clientInfo?: { id?: string | null; mode?: string | null },
+): { params: unknown; resumeRequested: boolean } {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return { params, resumeRequested: false };
+  }
+  const record = params as Record<string, unknown>;
+  const resumeRequested =
+    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
+  if (!resumeRequested) {
+    return { params, resumeRequested: false };
+  }
+  const validatedParams = { ...record };
+  delete validatedParams[CONTROL_UI_RECONNECT_RESUME_PARAM];
+  return { params: validatedParams, resumeRequested: true };
+}
+
 function emitOperatorChatSendServerTiming(params: {
   context: Pick<GatewayRequestContext, "broadcastToConnIds">;
   client?: GatewayClient | null;
@@ -3110,7 +3130,9 @@ export const chatHandlers: GatewayRequestHandlers = {
   },
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();
-    if (!validateChatSendParams(params)) {
+    const clientInfo = client?.connect?.client;
+    const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
+    if (!validateChatSendParams(controlUiReconnectResume.params)) {
       respond(
         false,
         undefined,
@@ -3121,7 +3143,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as {
+    const p = controlUiReconnectResume.params as {
       sessionKey: string;
       agentId?: string;
       sessionId?: string;
@@ -3364,7 +3386,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const clientInfo = client?.connect?.client;
     const chatSendTraceAttributes = {
       runId: clientRunId,
       sessionKey,
@@ -3957,6 +3978,8 @@ export const chatHandlers: GatewayRequestHandlers = {
                     }),
                   }
                 : {}),
+              requestedSessionId,
+              resumeRequestedSession: controlUiReconnectResume.resumeRequested,
               abortSignal: activeRunAbort.controller.signal,
               images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,

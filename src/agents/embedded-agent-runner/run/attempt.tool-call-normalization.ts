@@ -1174,8 +1174,12 @@ export function sanitizeReplayToolCallIdsForStream(params: {
 
 /** Downgrades OpenAI Responses replay turns into the stream format expected by runtime callers. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
+  const repaired = sanitizeToolUseResultPairing(messages, {
+    erroredAssistantResultPolicy: "drop",
+    missingToolResultText: "aborted",
+  });
   return downgradeOpenAIFunctionCallReasoningPairs(
-    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(messages)),
+    normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(repaired)),
   );
 }
 
@@ -1214,10 +1218,19 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
       allowedToolNames,
       allowProviderOwnedThinkingReplay,
     );
+    const isOpenAIResponsesApi =
+      (model as { api?: unknown }).api === "openai-responses" ||
+      (model as { api?: unknown }).api === "openai-chatgpt-responses" ||
+      (model as { api?: unknown }).api === "azure-openai-responses";
     const replayInputsChanged = sanitized.messages !== messages;
-    let nextMessages = replayInputsChanged
-      ? sanitizeToolUseResultPairing(sanitized.messages)
-      : sanitized.messages;
+    let nextMessages = isOpenAIResponsesApi
+      ? sanitizeToolUseResultPairing(sanitized.messages, {
+          erroredAssistantResultPolicy: "drop",
+          missingToolResultText: "aborted",
+        })
+      : replayInputsChanged
+        ? sanitizeToolUseResultPairing(sanitized.messages)
+        : sanitized.messages;
     let strippedTrailingAssistantPrefill = false;
     if (transcriptPolicy?.validateAnthropicTurns) {
       nextMessages = sanitizeAnthropicReplayToolResults(nextMessages, {

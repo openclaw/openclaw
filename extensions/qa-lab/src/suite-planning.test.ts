@@ -10,6 +10,7 @@ import {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
@@ -239,6 +240,47 @@ describe("qa suite planning helpers", () => {
         primaryModel: "openai/gpt-5.5",
       }).map((scenario) => scenario.id),
     ).toEqual(["third", "first"]);
+  });
+
+  it("resolves driver channels from scenario execution with explicit and default fallbacks", () => {
+    expect(
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        scenarios: [makeQaSuiteTestScenario("plain")],
+      }),
+    ).toBe("telegram");
+    expect(
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        scenarios: [
+          makeQaSuiteTestScenario("plain"),
+          makeQaSuiteTestScenario("slack-flow", { channel: "slack" }),
+        ],
+      }),
+    ).toBe("slack");
+    expect(
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        explicitChannel: "slack",
+        scenarios: [makeQaSuiteTestScenario("slack-flow", { channel: "slack" })],
+      }),
+    ).toBe("slack");
+    expect(() =>
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        explicitChannel: "telegram",
+        scenarios: [makeQaSuiteTestScenario("slack-flow", { channel: "slack" })],
+      }),
+    ).toThrow("--channel telegram conflicts with selected scenario execution.channel slack.");
+    expect(() =>
+      resolveQaSuiteScenarioChannel({
+        defaultChannel: "telegram",
+        scenarios: [
+          makeQaSuiteTestScenario("slack-flow", { channel: "slack" }),
+          makeQaSuiteTestScenario("telegram-flow", { channel: "telegram" }),
+        ],
+      }),
+    ).toThrow("Selected QA scenarios require multiple channels");
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {

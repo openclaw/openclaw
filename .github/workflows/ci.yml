@@ -305,6 +305,7 @@ jobs:
                 shard_name: shard.shardName,
                 groups: shard.groups,
                 configs: shard.configs,
+                env: shard.env,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
@@ -1237,6 +1238,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
+          OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
@@ -1255,6 +1257,7 @@ jobs:
             ? groups
             : [{
                 configs: JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]"),
+                env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON ?? "null"),
                 includePatterns: JSON.parse(
                   process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
                 ),
@@ -1270,6 +1273,13 @@ jobs:
               ...process.env,
               ...(plan.shard_name ? { OPENCLAW_VITEST_SHARD_NAME: plan.shard_name } : {}),
             };
+            if (plan.env && typeof plan.env === "object" && !Array.isArray(plan.env)) {
+              for (const [key, value] of Object.entries(plan.env)) {
+                if (typeof value === "string") {
+                  childEnv[key] = value;
+                }
+              }
+            }
             if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
               const includeFile = join(
                 process.env.RUNNER_TEMP ?? ".",

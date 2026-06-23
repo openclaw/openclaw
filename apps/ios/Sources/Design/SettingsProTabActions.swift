@@ -819,8 +819,11 @@ extension SettingsProTab {
 
     var notificationRelayDetail: String {
         if PushBuildConfig.current.usesOpenClawHostedRelay {
+            let host = PushBuildConfig.current.relayBaseURL.flatMap {
+                URLComponents(url: $0, resolvingAgainstBaseURL: false)?.host
+            } ?? "ios-push-relay.openclaw.ai"
             return """
-            This build uses OpenClaw's hosted push relay at ios-push-relay.openclaw.ai for notification \
+            This build uses OpenClaw's hosted push relay at \(host) for notification \
             delivery data.
             """
         }

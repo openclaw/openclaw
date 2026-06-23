@@ -230,7 +230,8 @@ export async function markRestartAbortedMainSessions(params: {
               (entry.status === "running" ||
                 run.observedAt === undefined ||
                 normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
-                entry.updatedAt < run.observedAt) &&
+                (entry.updatedAt < run.observedAt &&
+                  run.lifecycleGeneration !== currentLifecycleGeneration)) &&
               params.isActiveRun?.(run) !== false,
           );
           if (
