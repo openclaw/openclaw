@@ -169,8 +169,8 @@ function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boole
   }
   const connection = isGatewayTransportError(error)
     ? error.connectionDetails
-    : buildGatewayConnectionDetails();
-  return isImplicitLoopbackGatewayConnection(connection);
+    : buildLogsGatewayConnectionDetailsForClassification();
+  return connection !== undefined && isImplicitLoopbackGatewayConnection(connection);
 }
 
 function buildLogsTailGatewayExtra(opts: LogsCliOptions, showProgress: boolean) {
@@ -190,7 +190,18 @@ function shouldUsePassiveLocalLogsClient(opts: LogsCliOptions): boolean {
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
     return false;
   }
-  return isImplicitLoopbackGatewayConnection(buildGatewayConnectionDetails());
+  const connection = buildLogsGatewayConnectionDetailsForClassification();
+  return connection !== undefined && isImplicitLoopbackGatewayConnection(connection);
+}
+
+function buildLogsGatewayConnectionDetailsForClassification():
+  | GatewayConnectionDetails
+  | undefined {
+  try {
+    return buildGatewayConnectionDetails({ allowConfiguredSshTransport: true });
+  } catch {
+    return undefined;
+  }
 }
 
 function isImplicitLoopbackGatewayConnection(connection: GatewayConnectionDetails): boolean {
@@ -451,7 +462,9 @@ async function emitGatewayError(
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = formatErrorMessage(err);
 
-  const details = buildGatewayConnectionDetails({ url: opts.url });
+  const details = isGatewayTransportError(err)
+    ? err.connectionDetails
+    : buildGatewayConnectionDetails({ url: opts.url, allowConfiguredSshTransport: true });
   if (mode === "json") {
     if (
       !emitJsonLine(
