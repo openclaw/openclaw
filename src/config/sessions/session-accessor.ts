@@ -559,10 +559,26 @@ type TemporarySessionMappingSnapshot =
     }
   | {
       canRestore: true;
-      entry?: SessionEntry;
-      hadEntry: boolean;
+      hadEntry: false;
       sessionKey: string;
       storePath: string;
+    }
+  | {
+      canRestore: true;
+      entry: SessionEntry;
+      hadEntry: true;
+      sessionKey: string;
+      storePath: string;
+    };
+
+type TemporarySessionMappingOperationResult<T> =
+  | {
+      ok: true;
+      result: T;
+    }
+  | {
+      error: unknown;
+      ok: false;
     };
 
 export type SessionEntryCreateWithTranscriptContext = {
@@ -1429,23 +1445,20 @@ export async function preserveTemporarySessionMapping<T>(
   operation: () => Promise<T> | T,
 ): Promise<TemporarySessionMappingPreservationResult<T>> {
   const snapshot = snapshotTemporarySessionMapping(scope);
-  let operationResult: T | undefined;
-  let operationError: unknown;
-  let operationThrew = false;
+  let operationResult: TemporarySessionMappingOperationResult<T>;
   try {
-    operationResult = await operation();
+    operationResult = { ok: true, result: await operation() };
   } catch (err) {
-    operationError = err;
-    operationThrew = true;
+    operationResult = { error: err, ok: false };
   }
 
   const restoreFailure = await restoreTemporarySessionMapping(snapshot);
-  if (operationThrew) {
-    throw operationError;
+  if (!operationResult.ok) {
+    throw operationResult.error;
   }
 
   return {
-    result: operationResult as T,
+    result: operationResult.result,
     ...(snapshot.canRestore ? {} : { snapshotFailure: snapshot.snapshotFailure }),
     ...(restoreFailure ? { restoreFailure } : {}),
   };
@@ -2606,7 +2619,7 @@ async function restoreTemporarySessionMapping(
     await updateSessionStore(
       snapshot.storePath,
       (store) => {
-        if (snapshot.hadEntry && snapshot.entry) {
+        if (snapshot.hadEntry) {
           store[snapshot.sessionKey] = structuredClone(snapshot.entry);
           return;
         }
