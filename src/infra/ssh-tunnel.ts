@@ -176,7 +176,7 @@ export async function startSshPortForward(opts: {
     if (child.killed || typeof child.pid !== "number") {
       return;
     }
-    let signaled = false;
+    let signaled: boolean;
     try {
       signaled = child.kill("SIGTERM");
     } catch {

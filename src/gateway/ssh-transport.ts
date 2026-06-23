@@ -4,6 +4,7 @@ import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startSshPortForward, type SshTunnel } from "../infra/ssh-tunnel.js";
 import type { GatewayConnectionDetails } from "./connection-details.js";
+import { isGatewayRemoteSshTransport } from "./ssh-transport-config.js";
 
 export type GatewaySshTunnelConnection = {
   url: string;
@@ -12,12 +13,6 @@ export type GatewaySshTunnelConnection = {
 };
 
 const DEFAULT_SSH_TUNNEL_TIMEOUT_MS = 5_000;
-
-export function isGatewayRemoteSshTransport(
-  remote: { transport?: "ssh" | "direct" } | undefined,
-): boolean {
-  return Boolean(remote) && remote?.transport !== "direct";
-}
 
 function parseExplicitUrlPort(rawUrl: string): number | undefined {
   try {

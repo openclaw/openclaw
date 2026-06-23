@@ -411,7 +411,9 @@ describe("serveAcpGateway startup", () => {
         expect(mockState.gatewayStopAndWait).toHaveBeenCalledTimes(1);
       });
       expect(sshTunnelStop).toHaveBeenCalledTimes(1);
-      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(settled).toBe(false);
 
       resolveTunnelStop();

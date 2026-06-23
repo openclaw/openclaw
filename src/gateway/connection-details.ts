@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isSecureWebSocketUrl } from "./net.js";
-import { isGatewayRemoteSshTransport } from "./ssh-transport.js";
+import { isGatewayRemoteSshTransport } from "./ssh-transport-config.js";
 
 /** Resolved gateway target plus redacted display text for diagnostics. */
 export type GatewayConnectionDetails = {
