@@ -4,7 +4,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { Insertable, Selectable } from "kysely";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
+import {
+  listSessionEntries,
+  patchSessionEntry,
+  type SessionEntrySummary,
+} from "../../config/sessions/session-accessor.js";
 import {
   mergeSessionEntry,
   type AcpSessionRuntimeOptions,
@@ -43,30 +47,24 @@ type AcpSessionsTable = OpenClawStateKyselyDatabase["acp_sessions"];
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
 type AcpSessionRow = Selectable<AcpSessionsTable>;
 
-let sessionStoreRuntimePromise:
-  | Promise<typeof import("../../config/sessions/store.runtime.js")>
-  | undefined;
-
-function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
-}
-
-function resolveStoreSessionKey(store: Record<string, SessionEntry>, sessionKey: string): string {
+function resolveStoreSessionKey(
+  entries: readonly SessionEntrySummary[],
+  sessionKey: string,
+): string {
   const normalized = sessionKey.trim();
   if (!normalized) {
     return "";
   }
-  if (store[normalized]) {
+  if (entries.some((entry) => entry.sessionKey === normalized)) {
     return normalized;
   }
   const lower = normalizeLowercaseStringOrEmpty(normalized);
-  if (store[lower]) {
+  if (entries.some((entry) => entry.sessionKey === lower)) {
     return lower;
   }
-  for (const key of Object.keys(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === lower) {
-      return key;
+  for (const entry of entries) {
+    if (normalizeLowercaseStringOrEmpty(entry.sessionKey) === lower) {
+      return entry.sessionKey;
     }
   }
   return lower;
@@ -371,12 +369,13 @@ function readSessionEntryFromStore(params: {
     env: params.env,
   });
   try {
-    const store = loadSessionStore(
+    const entries = listSessionEntries({
       storePath,
-      params.clone === false ? { clone: false } : undefined,
-    );
-    const storeSessionKey = resolveStoreSessionKey(store, params.sessionKey);
-    return { cfg, storePath, storeSessionKey, entry: store[storeSessionKey] };
+      ...(params.clone === false ? { clone: false } : {}),
+    });
+    const storeSessionKey = resolveStoreSessionKey(entries, params.sessionKey);
+    const entry = entries.find((candidate) => candidate.sessionKey === storeSessionKey)?.entry;
+    return { cfg, storePath, storeSessionKey, entry };
   } catch {
     return {
       cfg,
@@ -437,14 +436,19 @@ export async function listAcpSessionEntries(params: {
       cfg,
       env: params.env,
     });
-    let store: Record<string, SessionEntry>;
+    let sessionEntries: SessionEntrySummary[];
     try {
-      store = loadSessionStore(storePath, params.clone === false ? { clone: false } : undefined);
+      sessionEntries = listSessionEntries({
+        storePath,
+        ...(params.clone === false ? { clone: false } : {}),
+      });
     } catch {
       continue;
     }
-    const storeSessionKey = resolveStoreSessionKey(store, sessionKey);
-    const entry = store[storeSessionKey];
+    const storeSessionKey = resolveStoreSessionKey(sessionEntries, sessionKey);
+    const entry = sessionEntries.find(
+      (candidate) => candidate.sessionKey === storeSessionKey,
+    )?.entry;
     if (!entry || !acpSessionRowMatchesEntry(row, entry)) {
       continue;
     }
@@ -548,33 +552,52 @@ export async function upsertAcpSessionMeta(params: {
     if (!entry) {
       return null;
     }
-    const { updateSessionStore } = await loadSessionStoreRuntime();
-    return await updateSessionStore(
-      storeEntry.storePath,
-      (store) => {
-        const storeSessionKey = resolveStoreSessionKey(store, storageSessionKey);
-        const next = { ...(store[storeSessionKey] ?? entry) };
+    return await patchSessionEntry(
+      { storePath: storeEntry.storePath, sessionKey: storageSessionKey },
+      (currentEntry) => {
+        const next = { ...currentEntry };
         delete next.acp;
-        store[storeSessionKey] = next;
         return next;
       },
-      sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
+      {
+        ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
+        replaceEntry: true,
+      },
     );
   }
-  const { updateSessionStore } = await loadSessionStoreRuntime();
-  const persisted = await updateSessionStore(
-    storeEntry.storePath,
-    (store) => {
-      const storeSessionKey = resolveStoreSessionKey(store, storageSessionKey);
-      const next = mergeSessionEntry(store[storeSessionKey], {
+  const persisted = await patchSessionEntry(
+    { storePath: storeEntry.storePath, sessionKey: storageSessionKey },
+    (currentEntry) => {
+      const next = mergeSessionEntry(currentEntry, {
         sessionId: preparedEntry?.sessionId,
         updatedAt,
       });
       delete next.acp;
-      store[storeSessionKey] = next;
       return next;
     },
-    sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
+    {
+      ...sessionStoreUpdateOptions({ ...params, sessionKey: storageSessionKey }),
+      fallbackEntry: preparedEntry,
+      replaceEntry: true,
+    },
   );
-  return mergeAcpForReturn(persisted, nextMeta);
+  if (persisted) {
+    const persistedStoreEntry = readSessionEntryFromStore({
+      sessionKey: storageSessionKey,
+      cfg: storeEntry.cfg,
+      env: params.env,
+      clone: false,
+    });
+    if (persistedStoreEntry.entry && persistedStoreEntry.storeSessionKey !== storageSessionKey) {
+      repairAcpSessionMetaKeyForMigration({
+        sessionKey: persistedStoreEntry.storeSessionKey,
+        candidateSessionKeys: [storageSessionKey, sessionKey],
+        entry: persistedStoreEntry.entry,
+        env: params.env,
+        databasePath: params.databasePath,
+        now: params.now,
+      });
+    }
+  }
+  return persisted ? mergeAcpForReturn(persisted, nextMeta) : null;
 }

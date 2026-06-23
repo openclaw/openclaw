@@ -325,8 +325,14 @@ export type SessionEntryPatchOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   /** Keep the previous updatedAt value when the patch should not count as activity. */
   preserveActivity?: boolean;
+  /** Throw when best-effort store recovery cannot confirm the requested write. */
+  requireWriteSuccess?: boolean;
   /** Replace the whole entry instead of merging the returned patch. */
   replaceEntry?: boolean;
+  /** Skip prune/cap/rotation maintenance for specialized internal updates. */
+  skipMaintenance?: boolean;
+  /** Let the writer cache retain the updated object without cloning. */
+  takeCacheOwnership?: boolean;
 };
 
 export type SessionEntryPatchContext = {
@@ -509,7 +515,10 @@ export async function patchSessionEntry(
     fallbackEntry: options.fallbackEntry,
     maintenanceConfig: options.maintenanceConfig,
     preserveActivity: options.preserveActivity,
+    requireWriteSuccess: options.requireWriteSuccess,
     replaceEntry: options.replaceEntry,
+    skipMaintenance: options.skipMaintenance,
+    takeCacheOwnership: options.takeCacheOwnership,
     update,
   });
 }

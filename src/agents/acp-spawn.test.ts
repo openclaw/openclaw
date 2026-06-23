@@ -134,6 +134,69 @@ vi.mock("../config/sessions/store.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
 }));
 
+vi.mock("../config/sessions/session-accessor.js", () => {
+  const resolveMockStorePath = (scope: {
+    agentId?: string;
+    env?: NodeJS.ProcessEnv;
+    storePath?: string;
+  }): string =>
+    scope.storePath ??
+    hoisted.resolveStorePathMock(undefined, {
+      agentId: scope.agentId,
+      env: scope.env,
+    });
+  const loadMockEntry = (scope: {
+    agentId?: string;
+    env?: NodeJS.ProcessEnv;
+    sessionKey: string;
+    storePath?: string;
+  }): SessionEntry | undefined => {
+    const store = hoisted.loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+      string,
+      SessionEntry
+    >;
+    return store[scope.sessionKey];
+  };
+  return {
+    listSessionEntries: (
+      scope: {
+        agentId?: string;
+        env?: NodeJS.ProcessEnv;
+        storePath?: string;
+      } = {},
+    ) => {
+      const store = hoisted.loadSessionStoreMock(resolveMockStorePath(scope)) as Record<
+        string,
+        SessionEntry
+      >;
+      return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
+    },
+    loadSessionEntry: loadMockEntry,
+    resolveSessionTranscriptRuntimeTarget: async (scope: {
+      agentId: string;
+      sessionId: string;
+      sessionKey: string;
+      storePath?: string;
+      threadId?: string | number;
+    }) => {
+      const store = scope.storePath
+        ? (hoisted.loadSessionStoreMock(scope.storePath) as Record<string, SessionEntry>)
+        : undefined;
+      const resolved = await hoisted.resolveSessionTranscriptFileMock({
+        ...scope,
+        ...(store ? { sessionStore: store } : {}),
+        sessionEntry: loadMockEntry(scope),
+      });
+      return {
+        agentId: scope.agentId,
+        sessionFile: resolved.sessionFile,
+        sessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+      };
+    },
+  };
+});
+
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: hoisted.loadSessionStoreMock,
   resolveStorePath: hoisted.resolveStorePathMock,

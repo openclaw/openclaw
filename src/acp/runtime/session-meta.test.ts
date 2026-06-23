@@ -152,6 +152,21 @@ describe("ACP session metadata SQLite store", () => {
         })?.acp?.runtimeSessionName,
       ).toBe("codex-normalized");
       expect(loadSessionStore(storePath)[storeSessionKey]?.acp).toBeUndefined();
+      const legacyEmbeddedEntry = loadSessionStore(storePath)[storeSessionKey];
+      expect(legacyEmbeddedEntry).toBeDefined();
+      await writeSessionStoreForTestAsync(storePath, {
+        [storeSessionKey]: {
+          ...legacyEmbeddedEntry!,
+          acp: {
+            backend: "acpx",
+            agent: "codex",
+            runtimeSessionName: "legacy-embedded",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 120,
+          },
+        },
+      });
 
       await upsertAcpSessionMeta({
         cfg,
@@ -170,6 +185,54 @@ describe("ACP session metadata SQLite store", () => {
           sessionKey: storeSessionKey,
         })?.acp,
       ).toBeUndefined();
+      expect(loadSessionStore(storePath)[storeSessionKey]?.acp).toBeUndefined();
+    });
+  });
+
+  it("keeps SQLite ACP metadata visible when legacy store keys are canonicalized", async () => {
+    await withTempDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const databasePath = path.join(dir, "state", "openclaw.sqlite");
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const legacyStoreSessionKey = "agent:CODEX:acp:legacy-runtime";
+      const canonicalSessionKey = "agent:codex:acp:legacy-runtime";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [legacyStoreSessionKey]: {
+            sessionId: "sess-acp",
+            updatedAt: 100,
+          },
+        }),
+        "utf8",
+      );
+
+      await upsertAcpSessionMeta({
+        cfg,
+        databasePath,
+        sessionKey: canonicalSessionKey,
+        now: () => 200,
+        mutate: () => ({
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-canonicalized",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        }),
+      });
+
+      const store = loadSessionStore(storePath);
+      expect(store[legacyStoreSessionKey]).toBeUndefined();
+      expect(store[canonicalSessionKey]?.sessionId).toBe("sess-acp");
+      expect(
+        readAcpSessionEntry({
+          cfg,
+          databasePath,
+          sessionKey: canonicalSessionKey,
+        })?.acp?.runtimeSessionName,
+      ).toBe("codex-canonicalized");
+      expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
     });
   });
 

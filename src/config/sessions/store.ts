@@ -1763,7 +1763,10 @@ export async function patchSessionEntry(
     sessionKey: string;
     fallbackEntry?: SessionEntry;
     preserveActivity?: boolean;
+    requireWriteSuccess?: boolean;
     replaceEntry?: boolean;
+    skipMaintenance?: boolean;
+    takeCacheOwnership?: boolean;
     update: (
       entry: SessionEntry,
       context: { existingEntry?: SessionEntry },
@@ -1795,8 +1798,10 @@ export async function patchSessionEntry(
       resolved,
       next,
       maintenanceConfig: params.maintenanceConfig,
-      takeCacheOwnership: true,
-      returnDetached: true,
+      requireWriteSuccess: params.requireWriteSuccess,
+      skipMaintenance: params.skipMaintenance,
+      takeCacheOwnership: params.takeCacheOwnership ?? true,
+      returnDetached: params.takeCacheOwnership !== true,
     });
   });
 }
