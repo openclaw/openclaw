@@ -252,6 +252,14 @@ describe("getTelegramSequentialKey", () => {
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "please do not do that" }) },
       "telegram:123",
     ],
+    [
+      {
+        update: {
+          message_reaction_count: { chat: { id: -1001234567890 } },
+        },
+      },
+      "telegram:-1001234567890",
+    ],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toBe(expected);
   });

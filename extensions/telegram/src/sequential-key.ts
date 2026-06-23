@@ -39,6 +39,7 @@ type TelegramSequentialKeyContext = {
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
     message_reaction?: { chat?: { id?: number } };
+    message_reaction_count?: { chat?: { id?: number } };
   };
 };
 
@@ -102,6 +103,10 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const reaction = ctx.update?.message_reaction;
   if (reaction?.chat?.id) {
     return `telegram:${reaction.chat.id}`;
+  }
+  const reactionCount = ctx.update?.message_reaction_count;
+  if (reactionCount?.chat?.id) {
+    return `telegram:${reactionCount.chat.id}`;
   }
   const msg =
     ctx.message ??

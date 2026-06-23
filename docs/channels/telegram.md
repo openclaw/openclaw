@@ -793,10 +793,12 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   <Accordion title="Reaction notifications">
     Telegram reactions arrive as `message_reaction` updates (separate from message payloads).
+    Anonymous aggregate reaction totals arrive as separate `message_reaction_count` updates.
 
     When enabled, OpenClaw enqueues system events like:
 
     - `Telegram reaction added: 👍 by Alice (@alice) on msg 42`
+    - `Telegram reaction counts changed: 👍 x3, 🔥 x2 on msg 42`
 
     Config:
 
@@ -807,11 +809,13 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - `own` means user reactions to bot-sent messages only (best-effort via sent-message cache).
     - Reaction events still respect Telegram access controls (`dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`); unauthorized senders are dropped.
+    - Telegram only delivers reaction updates when the Bot API can expose them to the bot. In practice, bots must be administrators in the chat, so reactions in 1:1 private DMs may not arrive even when `reactionNotifications` is enabled.
+    - `message_reaction_count` has no actor identity. OpenClaw treats it as a chat-level aggregate event for allowed groups; private chats and sender-only allowlist matches are ignored.
     - Telegram does not provide thread IDs in reaction updates.
       - non-forum groups route to group chat session
       - forum groups route to the group general-topic session (`:topic:1`), not the exact originating topic
 
-    `allowed_updates` for polling/webhook include `message_reaction` automatically.
+    `allowed_updates` for polling/webhook include both `message_reaction` and `message_reaction_count` automatically.
 
   </Accordion>
 

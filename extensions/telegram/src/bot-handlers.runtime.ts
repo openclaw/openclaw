@@ -1,6 +1,6 @@
 // Telegram plugin module implements bot handlers behavior.
 import { randomUUID } from "node:crypto";
-import type { Message, ReactionTypeEmoji } from "grammy/types";
+import type { Message, ReactionCount, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import {
@@ -1613,6 +1613,18 @@ export const registerTelegramHandlers = ({
   type TelegramEventAuthorizationContext = TelegramGroupAllowContext & { dmPolicy: DmPolicy };
   const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
 
+  const formatTelegramReactionCount = (reaction: ReactionCount): string => {
+    const total = reaction.total_count;
+    const kind = reaction.type;
+    if (kind.type === "emoji") {
+      return `${kind.emoji} x${total}`;
+    }
+    if (kind.type === "custom_emoji") {
+      return `custom_emoji:${kind.custom_emoji_id} x${total}`;
+    }
+    return `paid x${total}`;
+  };
+
   const TELEGRAM_EVENT_AUTH_RULES: Record<
     TelegramEventAuthorizationMode,
     {
@@ -1968,6 +1980,98 @@ export const registerTelegramHandlers = ({
       }
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
+      throw err;
+    }
+  });
+
+  // Handle aggregate anonymous reaction counts. Telegram exposes this as a
+  // separate update type from per-user message_reaction changes.
+  bot.on("message_reaction_count", async (ctx) => {
+    try {
+      const reactionCount = ctx.messageReactionCount;
+      if (!reactionCount) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+
+      const chatId = reactionCount.chat.id;
+      const messageId = reactionCount.message_id;
+      const isGroup =
+        reactionCount.chat.type === "group" || reactionCount.chat.type === "supergroup";
+      if (!isGroup) {
+        logVerbose(
+          `telegram: skipped anonymous reaction count on msg ${messageId} in non-group chat ${chatId}`,
+        );
+        return;
+      }
+      const isForum = reactionCount.chat.is_forum === true;
+      const reactionMode = telegramCfg.reactionNotifications ?? "own";
+      if (reactionMode === "off") {
+        return;
+      }
+      if (reactionMode === "own" && !telegramDeps.wasSentByBot(chatId, messageId, cfg)) {
+        logVerbose(
+          `telegram: skipped reaction count on msg ${messageId} in chat ${chatId} (own mode, not sent by bot)`,
+        );
+        return;
+      }
+
+      const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        chatId,
+        isGroup,
+        isForum,
+      });
+      const groupAccess = evaluateTelegramGroupPolicyAccess({
+        isGroup,
+        chatId,
+        cfg,
+        telegramCfg,
+        topicConfig: eventAuthContext.topicConfig,
+        groupConfig: eventAuthContext.groupConfig,
+        effectiveGroupAllow: eventAuthContext.effectiveGroupAllow,
+        senderId: "",
+        senderUsername: "",
+        resolveGroupPolicy,
+        enforcePolicy: true,
+        useTopicAndGroupOverrides: true,
+        enforceAllowlistAuthorization: true,
+        allowEmptyAllowlistEntries: false,
+        requireSenderForAllowlistAuthorization: false,
+        checkChatAllowlist: true,
+      });
+      if (!groupAccess.allowed) {
+        logVerbose(
+          `Blocked telegram anonymous reaction count in group ${chatId} (${groupAccess.reason})`,
+        );
+        return;
+      }
+
+      const summary =
+        reactionCount.reactions.length > 0
+          ? reactionCount.reactions.map(formatTelegramReactionCount).join(", ")
+          : "none";
+      const resolvedThreadId = isForum
+        ? resolveTelegramForumThreadId({ isForum, messageThreadId: undefined })
+        : undefined;
+      const peerId = buildTelegramGroupPeerId(chatId, resolvedThreadId);
+      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+      const route = resolveAgentRoute({
+        cfg: telegramDeps.getRuntimeConfig(),
+        channel: "telegram",
+        accountId,
+        peer: { kind: "group", id: peerId },
+        parentPeer,
+      });
+      const text = `Telegram reaction counts changed: ${summary} on msg ${messageId}`;
+      telegramDeps.enqueueSystemEvent(text, {
+        sessionKey: route.sessionKey,
+        contextKey: `telegram:reaction:count:${chatId}:${messageId}:${reactionCount.date}`,
+      });
+      logVerbose(`telegram: reaction count event enqueued: ${text}`);
+    } catch (err) {
+      runtime.error?.(danger(`telegram reaction count handler failed: ${String(err)}`));
       throw err;
     }
   });
