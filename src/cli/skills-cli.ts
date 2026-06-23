@@ -1,6 +1,10 @@
 // Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -69,6 +73,10 @@ type ResolveSkillsWorkspaceOptions = {
   cwd?: string;
 };
 
+type ResolvedSkillsWorkspace = ReturnType<typeof resolveSkillsWorkspace>;
+
+const GATEWAY_SKILLS_STATUS_TIMEOUT_MS = 1_500;
+
 function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   config: ReturnType<typeof getRuntimeConfig>;
   workspaceDir: string;
@@ -95,12 +103,37 @@ function resolveAgentOption(
   return resolveOptionFromCommand<string>(command, "agent") ?? opts?.agent;
 }
 
+async function loadGatewaySkillsStatusReport(
+  resolved: ResolvedSkillsWorkspace,
+): Promise<SkillStatusReport | null> {
+  try {
+    const { callGateway } = await import("../gateway/call.js");
+    return await callGateway<SkillStatusReport>({
+      config: resolved.config,
+      method: "skills.status",
+      params: { agentId: resolved.agentId },
+      timeoutMs: GATEWAY_SKILLS_STATUS_TIMEOUT_MS,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
-  const { config, workspaceDir, agentId } = resolveSkillsWorkspace(options);
+  const resolved = resolveSkillsWorkspace(options);
+  const gatewayReport = await loadGatewaySkillsStatusReport(resolved);
+  if (gatewayReport) {
+    return gatewayReport;
+  }
   const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-  return buildWorkspaceSkillStatus(workspaceDir, { config, agentId });
+  return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+    config: resolved.config,
+    agentId: resolved.agentId,
+  });
 }
 
 async function runSkillsAction(
@@ -116,10 +149,6 @@ async function runSkillsAction(
   }
 }
 
-function resolveActiveWorkspaceDir(options?: ResolveSkillsWorkspaceOptions): string {
-  return resolveSkillsWorkspace(options).workspaceDir;
-}
-
 function resolveSkillsWorkspaceForCommand(
   command: Command | null | undefined,
   opts?: { agent?: string },
@@ -131,6 +160,13 @@ function resolveClawHubTargetWorkspaceDir(
   command: Command | undefined,
   opts: { agent?: string; global?: boolean },
 ): string | undefined {
+  return resolveClawHubTargetWorkspace(command, opts)?.workspaceDir;
+}
+
+function resolveClawHubTargetWorkspace(
+  command: Command | undefined,
+  opts: { agent?: string; global?: boolean },
+): Pick<ResolvedSkillsWorkspace, "config" | "workspaceDir"> | undefined {
   const agentId = resolveAgentOption(command, opts);
   if (opts.global && normalizeOptionalString(agentId)) {
     defaultRuntime.error("Use either --global or --agent, not both.");
@@ -138,9 +174,9 @@ function resolveClawHubTargetWorkspaceDir(
     return undefined;
   }
   if (opts.global) {
-    return CONFIG_DIR;
+    return { config: getRuntimeConfig(), workspaceDir: CONFIG_DIR };
   }
-  return resolveActiveWorkspaceDir({ agentId });
+  return resolveSkillsWorkspace({ agentId });
 }
 
 function shouldFailSkillVerification(result: ClawHubSkillVerificationResponse): boolean {
@@ -405,22 +441,23 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
-          const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
-          if (!workspaceDir) {
+          const target = resolveClawHubTargetWorkspace(command, opts);
+          if (!target) {
             return;
           }
-          const tracked = await readTrackedClawHubSkillSlugs(workspaceDir);
+          const tracked = await readTrackedClawHubSkillSlugs(target.workspaceDir);
           if (opts.all && tracked.length === 0) {
             defaultRuntime.log("No tracked ClawHub skills to update.");
             return;
           }
           const results = await updateSkillsFromClawHub({
-            workspaceDir,
+            workspaceDir: target.workspaceDir,
             slug,
             ...(opts.forceInstall ? { forceInstall: true } : {}),
             logger: {
               info: (message) => defaultRuntime.log(message),
             },
+            config: target.config,
           });
           let failed = false;
           for (const result of results) {

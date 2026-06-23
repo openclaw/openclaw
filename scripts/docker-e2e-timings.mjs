@@ -12,7 +12,7 @@ function usage() {
 function parseArgs(argv) {
   const options = { file: "", help: false, limit: 12 };
   const readLimit = (raw) => {
-    if (!raw || raw.startsWith("--")) {
+    if (!raw || raw.startsWith("-")) {
       throw new Error("--limit requires a value");
     }
     return parsePositiveInt(raw, "--limit");

@@ -538,7 +538,7 @@ export type AgentCompactionConfig = {
    * Explicit ["Session Startup", "Red Lines"] preserves legacy fallback headings.
    */
   postCompactionSections?: string[];
-  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").
+  /** Optional provider/model or configured bare alias for compaction summarization.
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;

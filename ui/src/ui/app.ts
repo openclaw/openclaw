@@ -262,6 +262,7 @@ export class OpenClawApp extends LitElement {
   chatSessionMessageSubscriptionKey: string | null = null;
   chatSessionMessageSubscriptionRequestedKey: string | null = null;
   currentSessionId: string | null = null;
+  reconnectResumeSessionId: string | null = null;
   @state() chatLoading = false;
   @state() chatSending = false;
   @state() chatMessage = "";

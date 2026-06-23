@@ -69,6 +69,14 @@
       "destination": "/gateway/external-apps"
     },
     {
+      "source": "/reference/maturity-scorecard",
+      "destination": "/maturity/scorecard"
+    },
+    {
+      "source": "/reference/maturity-taxonomy",
+      "destination": "/maturity/taxonomy"
+    },
+    {
       "source": "/mcp",
       "destination": "/cli/mcp"
     },
@@ -315,6 +323,10 @@
     {
       "source": "/providers/zalo",
       "destination": "/channels/zalo"
+    },
+    {
+      "source": "/channels/openclaw-zaloclawbot",
+      "destination": "/channels/zaloclawbot"
     },
     {
       "source": "/providers/whatsapp",
@@ -1118,6 +1130,7 @@
                   "channels/mattermost",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/raft",
                   "channels/tlon",
                   "channels/synology-chat",
                   "channels/twitch"
@@ -1132,6 +1145,7 @@
                   "channels/feishu",
                   "channels/yuanbao",
                   "channels/zalo",
+                  "channels/zaloclawbot",
                   "channels/zalouser"
                 ]
               },
@@ -1846,6 +1860,8 @@
               {
                 "group": "Release and CI",
                 "pages": [
+                  "maturity/scorecard",
+                  "maturity/taxonomy",
                   "reference/RELEASING",
                   "reference/full-release-validation",
                   "reference/release-performance-sweep",

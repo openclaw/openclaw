@@ -1,11 +1,11 @@
 // Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeConfiguredProviderCatalogModelId } from "@openclaw/model-catalog-core/provider-model-id-normalization";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "../utils.js";
 import { applyMergePatch } from "./merge-patch.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
 const OPEN_DM_POLICY_ALLOW_FROM_RE =
@@ -370,6 +370,7 @@ function preserveAuthoredAgentParams(params: {
   if (!isRecord(models)) {
     return next;
   }
+  const nextModels = getPathValue(params.nextConfig, ["agents", "defaults", "models"]);
   for (const [modelId, modelEntry] of Object.entries(models)) {
     if (!isRecord(modelEntry) || !Object.hasOwn(modelEntry, "params")) {
       continue;
@@ -380,6 +381,14 @@ function preserveAuthoredAgentParams(params: {
       "models",
       normalizeAgentModelRefForConfig(modelId) || modelId,
     ];
+    const normalizedModelId = modelPath.at(-1);
+    if (
+      isRecord(nextModels) &&
+      normalizedModelId &&
+      !Object.hasOwn(nextModels, normalizedModelId)
+    ) {
+      continue;
+    }
     const paramsPath = [...modelPath, "params"];
     if (modelPath.at(-1) !== modelId) {
       next = deletePathValue(next, ["agents", "defaults", "models", modelId]);

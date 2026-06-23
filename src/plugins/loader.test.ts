@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { listAgentHarnessIds } from "../agents/harness/registry.js";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
@@ -31,7 +31,7 @@ import { withEnv } from "../test-utils/env.js";
 import { buildPluginApi } from "./api-builder.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
-import { listCompactionProviderIds } from "./compaction-provider.js";
+import { getCompactionProvider } from "./compaction-provider.js";
 import {
   getEmbeddingProvider,
   listEmbeddingProviders,
@@ -53,6 +53,7 @@ import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
+import { warnWhenAllowlistIsOpen } from "./loader-provenance.js";
 import {
   testing,
   clearPluginLoaderCache,
@@ -115,6 +116,10 @@ type PluginStartupTraceDetail = {
   name: string;
   metrics: ReadonlyArray<readonly [string, number | string]>;
 };
+
+function listRegisteredAgentHarnessIdsForTest(): string[] {
+  return listRegisteredAgentHarnesses().map((entry) => entry.harness.id);
+}
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -2775,7 +2780,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
       onlyPluginIds: ["codex-harness"],
     });
-    expect(listAgentHarnessIds()).toEqual(["codex"]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toEqual(["codex"]);
 
     loadOpenClawPlugins({
       cache: false,
@@ -2786,7 +2791,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       },
     });
-    expect(listAgentHarnessIds()).toStrictEqual([]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
   });
 
   it("rejects malformed plugin agent harness registrations", () => {
@@ -2817,7 +2822,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: ["bad-harness"],
     });
 
-    expect(listAgentHarnessIds()).toStrictEqual([]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
     const diagnostic = registry.diagnostics.find(
       (entry) =>
         entry.level === "error" &&
@@ -5008,7 +5013,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
             pluginId: "compaction-provider-malformed",
             message: 'compaction provider "broken-compaction" registration missing summarize',
           });
-          expect(listCompactionProviderIds()).not.toContain("broken-compaction");
+          expect(getCompactionProvider("broken-compaction")).toBeUndefined();
         },
       },
       {
@@ -8620,6 +8625,207 @@ module.exports = {
         label: scenario.label,
       });
     });
+  });
+
+  it("warns when plugins.allow entries do not match any discovered plugin ids", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-mismatch-allow-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          // User configured a channel-style id that does not match the real plugin id.
+          allow: ["warn-mismatch-allow-channel"],
+        },
+      },
+    });
+    const emptyWarnings = warnings.filter((msg) => msg.includes("plugins.allow is empty"));
+    const mismatchWarnings = warnings.filter((msg) =>
+      msg.includes("do not match any discovered plugin ids"),
+    );
+    expect(emptyWarnings, "should not emit empty-allowlist warning").toHaveLength(0);
+    expect(mismatchWarnings, "should emit mismatch warning once").toHaveLength(1);
+    expect(mismatchWarnings[0]).toContain(`"warn-mismatch-allow-channel"`);
+    expect(mismatchWarnings[0]).toContain("warn-mismatch-allow-plugin");
+    expect(mismatchWarnings[0]).toContain("Use the plugin id");
+  });
+
+  it("stays quiet when plugins.allow contains at least one matching plugin id", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-partial-allow-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          // Allow contains one real plugin id plus a stray channel-style entry.
+          allow: ["warn-partial-allow-plugin", "warn-partial-allow-channel"],
+        },
+      },
+    });
+    const openAllowWarnings = warnings.filter(
+      (msg) =>
+        msg.includes("plugins.allow is empty") ||
+        msg.includes("do not match any discovered plugin ids"),
+    );
+    expect(openAllowWarnings, "should not emit allowlist warning when one id matches").toHaveLength(
+      0,
+    );
+  });
+
+  it("stays quiet when plugins.allow matches only bundled plugin ids, even while workspace/global plugins are present", () => {
+    // Regression for Codex P2 feedback on #68389: the mismatch warning should be computed
+    // against the full discovered plugin set (bundled + workspace + global), not only the
+    // workspace/global subset that the warning talks about. An allowlist that intentionally
+    // trusts bundled ids like ["telegram"] is valid and must not trip the mismatch path just
+    // because some unrelated non-bundled plugin happens to be auto-discoverable.
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    writeBundledPlugin({
+      id: "warn-bundled-allow-only-plugin",
+      body: simplePluginBody("warn-bundled-allow-only-plugin"),
+    });
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-noise-workspace-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          // Allowlist intentionally only trusts a bundled plugin id.
+          allow: ["warn-bundled-allow-only-plugin"],
+        },
+      },
+    });
+    const openAllowWarnings = warnings.filter(
+      (msg) =>
+        msg.includes("plugins.allow is empty") ||
+        msg.includes("do not match any discovered plugin ids"),
+    );
+    expect(
+      openAllowWarnings,
+      "bundled-only allowlists should not trip the mismatch warning",
+    ).toHaveLength(0);
+  });
+
+  it("includes actionable plugins.allow remediation hints in the open allowlist warning", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-open-allow-remediation",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    const openAllowWarning = warnings.find((msg) => msg.includes("plugins.allow is empty"));
+    expect(openAllowWarning).toBeDefined();
+    expect(openAllowWarning).toContain('"warn-open-allow-remediation"');
+    expect(openAllowWarning).toContain('"plugins": { "allow": [');
+    expect(openAllowWarning).toContain("openclaw plugins list --enabled --verbose");
+    expect(openAllowWarning).toContain("openclaw plugins inspect warn-open-allow-remediation");
+  });
+
+  it("includes actionable plugins.allow remediation hints in the untracked-provenance warning", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const globalDir = path.join(stateDir, "extensions", "warn-untracked-remediation");
+      mkdirSafe(globalDir);
+      writePlugin({
+        id: "warn-untracked-remediation",
+        body: simplePluginBody("warn-untracked-remediation"),
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const warnings: string[] = [];
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+      });
+
+      const untrackedWarning = warnings.find(
+        (msg) =>
+          msg.includes("warn-untracked-remediation") &&
+          msg.includes("loaded without install/load-path provenance"),
+      );
+      expect(untrackedWarning).toBeDefined();
+      expect(untrackedWarning).toContain('"warn-untracked-remediation"');
+      expect(untrackedWarning).toContain("openclaw plugins inspect warn-untracked-remediation");
+      expect(untrackedWarning).toContain("reinstall from a trusted source");
+
+      const diagnostic = registry.diagnostics.find(
+        (entry) =>
+          entry.pluginId === "warn-untracked-remediation" &&
+          entry.message.includes("loaded without install/load-path provenance"),
+      );
+      expect(diagnostic?.message).toContain('"warn-untracked-remediation"');
+      expect(diagnostic?.message).toContain("openclaw plugins inspect warn-untracked-remediation");
+      expect(diagnostic?.message).toContain("reinstall from a trusted source");
+    });
+  });
+
+  it("omits the truncated plugins.allow snippet when more than six plugins are discovered", () => {
+    const ids = Array.from({ length: 8 }, (_, index) => `discovered-plugin-${index + 1}`);
+    const warnings: string[] = [];
+    const seenWarningKeys = new Set<string>();
+    const cache = {
+      hasOpenAllowlistWarning(key: string) {
+        return seenWarningKeys.has(key);
+      },
+      recordOpenAllowlistWarning(key: string) {
+        seenWarningKeys.add(key);
+      },
+    };
+    warnWhenAllowlistIsOpen({
+      emitWarning: true,
+      logger: createWarningLogger(warnings),
+      pluginsEnabled: true,
+      allow: [],
+      warningCacheKey: "truncated",
+      warningCache: cache,
+      discoverablePlugins: ids.map((id) => ({ id, source: `/tmp/${id}`, origin: "global" })),
+    });
+
+    expect(warnings).toHaveLength(1);
+    const message = warnings[0] ?? "";
+    expect(message).toContain("plugins.allow is empty");
+    expect(message).toContain("(+2 more)");
+    expect(message).not.toContain('"plugins": { "allow": [');
+    expect(message).toContain("openclaw plugins list --enabled --verbose");
+    expect(message).toContain("openclaw plugins inspect <id>");
   });
 
   it("handles workspace-discovered plugins according to trust and precedence", () => {

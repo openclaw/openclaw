@@ -570,10 +570,13 @@ async function readAvatarProbeBuffer(
   response: Response,
   timeoutPromise?: Promise<never>,
 ): Promise<Buffer> {
-  const contentLength = Number(response.headers.get("content-length") ?? 0);
-  if (Number.isFinite(contentLength) && contentLength > AVATAR_PROBE_MAX_BYTES) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+  const contentLengthRaw = response.headers.get("content-length");
+  if (contentLengthRaw && /^\d+$/u.test(contentLengthRaw)) {
+    const contentLength = Number(contentLengthRaw);
+    if (!Number.isSafeInteger(contentLength) || contentLength > AVATAR_PROBE_MAX_BYTES) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+    }
   }
 
   const reader = response.body?.getReader?.();

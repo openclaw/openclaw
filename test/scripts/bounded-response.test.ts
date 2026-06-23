@@ -98,4 +98,39 @@ describe("scripts bounded response reader", () => {
       expect(canceled).toBe(true);
     },
   );
+
+  it.each(helpers)(
+    "rejects unsafe decimal %s content-length values before reading",
+    async (_name, read) => {
+      let readStarted = false;
+      let canceled = false;
+      const response = {
+        headers: new Headers({ "content-length": "9007199254740993" }),
+        body: {
+          async cancel() {
+            canceled = true;
+          },
+          getReader() {
+            return {
+              async read() {
+                readStarted = true;
+                return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
+              },
+              async cancel() {
+                canceled = true;
+              },
+              releaseLock() {},
+            };
+          },
+        },
+      } as unknown as Response;
+
+      await expect(read(response, "probe", 16)).rejects.toThrow(
+        "probe response body exceeded 16 bytes",
+      );
+
+      expect(readStarted).toBe(false);
+      expect(canceled).toBe(true);
+    },
+  );
 });

@@ -720,6 +720,36 @@ describe("node exec events", () => {
     });
   });
 
+  it("stores sandbox relay APNs registrations from node events", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "node-relay-sandbox", {
+      event: "push.apns.register",
+      payloadJSON: JSON.stringify({
+        transport: "relay",
+        relayHandle: "relay-handle-123",
+        sendGrant: "send-grant-123",
+        gatewayDeviceId: "gateway-device-1",
+        installationId: "install-123",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        distribution: "official",
+        tokenDebugSuffix: "abcd1234",
+      }),
+    });
+
+    expect(registerApnsRegistrationVi).toHaveBeenCalledWith({
+      nodeId: "node-relay-sandbox",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      distribution: "official",
+      tokenDebugSuffix: "abcd1234",
+    });
+  });
+
   it("rejects relay registrations bound to a different gateway identity", async () => {
     const ctx = buildCtx();
     await handleNodeEvent(ctx, "node-relay", {

@@ -56,6 +56,14 @@ const QR_IMPORT_DOCKER_E2E_PATH = "scripts/e2e/qr-import-docker.sh";
 const MULTI_NODE_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/multi-node-update-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
   "scripts/e2e/bundled-plugin-install-uninstall-docker.sh";
+const AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH =
+  "scripts/e2e/agent-bundle-mcp-tools-docker.sh";
+const COMMITMENTS_SAFETY_DOCKER_E2E_PATH = "scripts/e2e/commitments-safety-docker.sh";
+const CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH = "scripts/e2e/crestodian-first-run-docker.sh";
+const CRESTODIAN_PLANNER_DOCKER_E2E_PATH = "scripts/e2e/crestodian-planner-docker.sh";
+const CRESTODIAN_RESCUE_DOCKER_E2E_PATH = "scripts/e2e/crestodian-rescue-docker.sh";
+const SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH =
+  "scripts/e2e/session-runtime-context-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
   "scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_PROBE_PATH =
@@ -78,6 +86,8 @@ const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
 const PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH = "scripts/e2e/plugin-lifecycle-matrix-docker.sh";
 const DOCTOR_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/doctor-install-switch-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
+const DOCTOR_SWITCH_LOGINCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/loginctl";
+const DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/systemctl";
 const PACKAGE_COMPAT_PATH = "scripts/e2e/lib/package-compat.mjs";
 const UPGRADE_SURVIVOR_DOCKER_E2E_PATH = "scripts/e2e/upgrade-survivor-docker.sh";
 const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
@@ -415,9 +425,15 @@ print_log_tail "$LOG_PATH"
     };
 
     const invalid = runProbe("12mb");
+    const overlarge = runProbe("9999999999");
+    const overprecise = runProbe("12.1234567");
     const decimal = runProbe("12.5");
     expect(invalid.status).toBe(2);
     expect(invalid.stderr).toContain("invalid OPENCLAW_SAMPLE_RESOURCE_LIMIT: 12mb");
+    expect(overlarge.status).toBe(2);
+    expect(overlarge.stderr).toContain("invalid OPENCLAW_SAMPLE_RESOURCE_LIMIT: 9999999999");
+    expect(overprecise.status).toBe(2);
+    expect(overprecise.stderr).toContain("invalid OPENCLAW_SAMPLE_RESOURCE_LIMIT: 12.1234567");
     expect(decimal.status).toBe(0);
     expect(decimal.stdout.trimEnd()).toBe("12.5");
   });
@@ -549,9 +565,10 @@ printf '%s\\n' "$count" >"$TMPDIR/docker-count"
 printf '%s\\n' "$$" >"$TMPDIR/docker.pid"
 printf 'rpc error: code = Unavailable\\n'
 trap 'printf "term\\n" >"$TMPDIR/docker.term"; exit 0' TERM
+mkfifo "$TMPDIR/docker.block"
 printf 'ready\\n' >"$TMPDIR/docker.ready"
 while true; do
-  /bin/sleep 1
+  read -r -t 1 _ <> "$TMPDIR/docker.block" || true
 done
 `,
       );
@@ -600,6 +617,7 @@ docker_build_run e2e-build -t demo-image .
         rmSync(join(workDir, "docker.pid"), { force: true });
         rmSync(join(workDir, "docker.term"), { force: true });
         rmSync(join(workDir, "docker.ready"), { force: true });
+        rmSync(join(workDir, "docker.block"), { force: true });
         rmSync(join(workDir, "docker-count"), { force: true });
         const runner = spawn(join(workDir, "runner.sh"), {
           env: { ...process.env, TMPDIR: workDir },
@@ -2340,6 +2358,26 @@ fi
     );
   });
 
+  it("keeps upgrade survivor auto-auth success summary set -u safe", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+
+    const summaryDefaultIndex = runner.indexOf('startup_summary="n/a"');
+    const autoAuthIndex = runner.indexOf(
+      'if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then',
+      summaryDefaultIndex,
+    );
+    const manualSummaryIndex = runner.indexOf('startup_summary="${start_seconds}s"', autoAuthIndex);
+    const successIndex = runner.indexOf(
+      "startup=${startup_summary} status=${status_seconds}s",
+      manualSummaryIndex,
+    );
+
+    expect(summaryDefaultIndex).toBeGreaterThan(-1);
+    expect(autoAuthIndex).toBeGreaterThan(summaryDefaultIndex);
+    expect(manualSummaryIndex).toBeGreaterThan(autoAuthIndex);
+    expect(successIndex).toBeGreaterThan(manualSummaryIndex);
+  });
+
   it.each([
     ["start budget", "OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS", "90s"],
     ["status budget", "OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS", "30s"],
@@ -3020,7 +3058,7 @@ export ROOT_DIR TMPDIR
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
-output="$(run_logged_print_heartbeat plugins-run 1 bash -c 'printf "captured container log\\\\n"; /bin/sleep 2')"
+output="$(run_logged_print_heartbeat plugins-run 1 bash -c 'printf "captured container log\\\\n"; /bin/sleep 4')"
 [[ "$output" = *"still running plugins-run ("* ]]
 [[ "$output" = *"log bytes captured"* ]]
 [[ "$output" = *"captured container log"* ]]
@@ -3195,28 +3233,18 @@ output="$(run_logged_print_heartbeat plugins-run 30 bash -c 'printf "quick conta
   });
 
   it("normalizes zero-padded Docker E2E log heartbeat intervals", () => {
-    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-zero-heartbeat-"));
-
-    try {
-      const rootDir = process.cwd();
-      const script = `
+    const rootDir = process.cwd();
+    const script = `
 set -euo pipefail
 ROOT_DIR=${shellQuote(rootDir)}
-TMPDIR=${shellQuote(workDir)}
-export ROOT_DIR TMPDIR
+export ROOT_DIR
 
 source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
 
-output="$(run_logged_print_heartbeat plugins-run 08 bash -c 'printf "captured container log\\\\n"; /bin/sleep 9')"
-[[ "$output" = *"still running plugins-run (8s elapsed,"* ]]
-[[ "$output" = *"log bytes captured"* ]]
-[[ "$output" = *"captured container log"* ]]
+[[ "$(docker_e2e_normalize_positive_int_value 'Docker E2E log heartbeat interval' 08)" = "8" ]]
 `;
 
-      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
-    } finally {
-      rmSync(workDir, { recursive: true, force: true });
-    }
+    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
 
   it("normalizes zero-padded Docker E2E stats heartbeat intervals", () => {
@@ -3340,6 +3368,31 @@ output="$(cat "$sampler_log")"
     }
   });
 
+  it("keeps captured Docker E2E run log replay bounded", () => {
+    for (const path of [
+      AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH,
+      COMMITMENTS_SAFETY_DOCKER_E2E_PATH,
+      CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH,
+      CRESTODIAN_PLANNER_DOCKER_E2E_PATH,
+      CRESTODIAN_RESCUE_DOCKER_E2E_PATH,
+      PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH,
+      SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH,
+    ]) {
+      const runner = readFileSync(path, "utf8");
+
+      expect(runner, path).toContain('RUN_LOG="$(mktemp');
+      expect(runner, path).toContain('docker_e2e_print_log "$RUN_LOG"');
+      expect(runner, path).not.toContain('cat "$RUN_LOG"');
+    }
+
+    const pluginBinding = readFileSync(PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH, "utf8");
+    expect(pluginBinding).toContain("const scanBytes = 65536");
+    expect(pluginBinding).toContain("fs.statSync(logPath)");
+    expect(pluginBinding).toContain("fs.readSync(fd, buffer, 0, length, stat.size - length)");
+    expect(pluginBinding).not.toContain("process.env.OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES");
+    expect(pluginBinding).not.toContain('readFileSync(logPath, "utf8")');
+  });
+
   it("keeps Open WebUI Docker E2E resource-guarded", () => {
     const runner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
 
@@ -3437,6 +3490,7 @@ output="$(cat "$sampler_log")"
     [MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH, "OPENCLAW_MCP_CODE_MODE_LIVE_GATEWAY_PORT", "0"],
     [CODEX_MEDIA_PATH_DOCKER_E2E_PATH, "OPENCLAW_CODEX_MEDIA_PATH_PORT", "18790tcp"],
     [OPENAI_CHAT_TOOLS_DOCKER_E2E_PATH, "OPENCLAW_OPENAI_CHAT_TOOLS_PORT", "0"],
+    [OPENAI_WEB_SEARCH_MINIMAL_E2E_PATH, "OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_PORT", "18789tcp"],
   ])("rejects invalid Docker E2E ports before setup", (scriptPath, envName, value) => {
     const result = spawnSync("bash", [scriptPath], {
       encoding: "utf8",
@@ -3851,6 +3905,8 @@ output="$(cat "$sampler_log")"
     const pluginUpdateProbe = readFileSync(PLUGIN_UPDATE_PROBE_PATH, "utf8");
     const updateChannelAssertions = readFileSync(UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH, "utf8");
     const packageCompat = readFileSync(PACKAGE_COMPAT_PATH, "utf8");
+    const doctorLoginctlShim = readFileSync(DOCTOR_SWITCH_LOGINCTL_SHIM_PATH, "utf8");
+    const doctorSystemctlShim = readFileSync(DOCTOR_SWITCH_SYSTEMCTL_SHIM_PATH, "utf8");
     const scripts = [
       doctorScenario,
       updateChannel,
@@ -3866,6 +3922,11 @@ output="$(cat "$sampler_log")"
     expect(readFileSync(DOCTOR_SWITCH_DOCKER_E2E_PATH, "utf8")).toContain(
       "scripts/e2e/lib/doctor-install-switch/scenario.sh",
     );
+    expect(doctorScenario).toContain("cp scripts/e2e/lib/doctor-install-switch/shims/systemctl");
+    expect(doctorScenario).toContain("cp scripts/e2e/lib/doctor-install-switch/shims/loginctl");
+    expect(doctorLoginctlShim).toContain("Linger=yes");
+    expect(doctorSystemctlShim).toContain("ActiveState=inactive");
+    expect(doctorSystemctlShim).toContain('unit_path="$HOME/.config/systemd/user/${unit}"');
     expect(readFileSync(PLUGINS_DOCKER_E2E_PATH, "utf8")).toContain(
       "scripts/e2e/lib/plugins/sweep.sh",
     );
@@ -4126,6 +4187,13 @@ output="$(cat "$sampler_log")"
     const scenario = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_SCENARIO_PATH, "utf8");
     const client = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_CLIENT_PATH, "utf8");
 
+    expect(runner).toContain(
+      "PORT=\"$(docker_e2e_read_tcp_port_env OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_PORT 18789)\"",
+    );
+    expect(runner).toContain('MOCK_PORT="80"');
+    expect(runner).not.toContain("OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_MOCK_PORT");
+    expect(runner).toContain('-e "PORT=$PORT"');
+    expect(runner).toContain('-e "MOCK_PORT=$MOCK_PORT"');
     expect(runner).toContain("scripts/e2e/lib/openai-web-search-minimal/scenario.sh");
     expect(scenario).toContain("scripts/e2e/lib/openai-web-search-minimal/client.mjs");
     expect(client).toContain("const callGateway = await loadCallGateway();");

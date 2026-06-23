@@ -1,5 +1,6 @@
 // Plugin Sdk Surface Report tests cover plugin sdk surface report script behavior.
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 function runSurfaceReport(env: Record<string, string>) {
@@ -13,7 +14,43 @@ function runSurfaceReport(env: Record<string, string>) {
   });
 }
 
+function readDefaultPublicFunctionExportBudget() {
+  const source = readFileSync("scripts/plugin-sdk-surface-report.mjs", "utf8");
+  const match =
+    /publicFunctionExports:\s*readBudgetEnv\("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",\s*(\d+)\)/u.exec(
+      source,
+    );
+  if (match === null || match[1] === undefined) {
+    throw new Error("failed to read default public function export budget");
+  }
+  return Number(match[1]);
+}
+
 describe("plugin SDK surface report", () => {
+  it("rejects unknown CLI options before collecting SDK stats", () => {
+    const result = spawnSync(process.execPath, ["scripts/plugin-sdk-surface-report.mjs", "--chekc"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown plugin SDK surface report option: --chekc");
+    expect(result.stderr).not.toContain("at ");
+  });
+
+  it("prints help before collecting SDK stats", () => {
+    const result = spawnSync(process.execPath, ["scripts/plugin-sdk-surface-report.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage: node scripts/plugin-sdk-surface-report.mjs");
+    expect(result.stderr).toBe("");
+    expect(result.stdout).not.toContain("all SDK entrypoints:");
+  });
+
   it("rejects loose numeric budget env vars before collecting SDK stats", () => {
     const result = runSurfaceReport({
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS: "1e9",
@@ -47,6 +84,16 @@ describe("plugin SDK surface report", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
+  });
+
+  it("keeps generated package declarations out of source surface counts", () => {
+    const budget = readDefaultPublicFunctionExportBudget();
+    const result = runSurfaceReport({
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(budget - 1),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`public callable exports ${budget} > ${budget - 1}`);
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {

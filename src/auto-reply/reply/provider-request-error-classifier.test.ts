@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyProviderRequestError,
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+  PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
   PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
 } from "./provider-request-error-classifier.js";
 
@@ -25,12 +26,20 @@ describe("provider request error classifier", () => {
       "alternating role ordering mismatch",
       "messages: roles must alternate between user and assistant",
     ],
+    [
+      "local replay invariant guard",
+      "invalid_replay_transcript: OpenAI Responses replay contains dangling_tool_call toolCallId=call_1 at message index 4",
+    ],
   ])("classifies %s as provider conversation-state errors", (_label, message) => {
     expect(classifyProviderRequestError(new Error(message))).toEqual({
       code: "provider_conversation_state_error",
       userMessage: PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
       technicalMessage: message,
     });
+  });
+
+  it("leaves bare no-body 400 provider failures unclassified", () => {
+    expect(classifyProviderRequestError(new Error("400 status code (no body)"))).toBeUndefined();
   });
 
   it("leaves explicit HTTP 429 rate-limit failures on the existing rate-limit path", () => {
@@ -58,5 +67,28 @@ describe("provider request error classifier", () => {
     expect(
       classifyProviderRequestError(new Error("INVALID_ARGUMENT: some other failure")),
     ).toBeUndefined();
+  });
+
+  it("surfaces provider internal errors without suggesting session reset", () => {
+    expect(
+      classifyProviderRequestError(
+        new Error("The AI service returned an internal error. Please try again in a moment."),
+      ),
+    ).toEqual({
+      code: "provider_internal_error",
+      userMessage: PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
+      technicalMessage: "The AI service returned an internal error. Please try again in a moment.",
+    });
+  });
+
+  it("classifies generic server_error provider payloads as internal errors", () => {
+    const message =
+      "server_error: An error occurred while processing your request. Please include the request ID req_123.";
+
+    expect(classifyProviderRequestError(new Error(message))).toEqual({
+      code: "provider_internal_error",
+      userMessage: PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
+      technicalMessage: message,
+    });
   });
 });

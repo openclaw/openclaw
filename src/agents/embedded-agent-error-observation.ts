@@ -13,8 +13,6 @@ import {
 } from "./embedded-agent-helpers.js";
 import { stableStringify } from "./stable-stringify.js";
 
-export { sanitizeForConsole } from "./console-sanitize.js";
-
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
 const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;
 const RAW_ERROR_PREVIEW_MAX_CHARS = 400;

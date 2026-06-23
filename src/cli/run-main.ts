@@ -50,6 +50,7 @@ import {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
+import { createGatewayStartupTrace } from "./startup-trace.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
@@ -65,8 +66,6 @@ export {
   shouldUseSecretsHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-
-type Awaitable<T> = T | Promise<T>;
 
 const CLI_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -86,40 +85,6 @@ const loadManifestCommandAliasesRuntimeModule = async () =>
 const loadProxyLifecycleModule = async () => await import("../infra/net/proxy/proxy-lifecycle.js");
 const loadCrestodianModule = async () => await import("../crestodian/crestodian.js");
 const loadProgressModule = async () => await import("./progress.js");
-
-function createGatewayCliMainStartupTrace(argv: string[]) {
-  // Startup trace is scoped to gateway invocations to avoid routine CLI stderr noise.
-  const enabled =
-    isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
-    argv.slice(2).includes("gateway");
-  const started = performance.now();
-  let last = started;
-  const emit = (name: string, durationMs: number, totalMs: number) => {
-    if (!enabled) {
-      return;
-    }
-    process.stderr.write(
-      `[gateway] startup trace: cli.main.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
-    );
-  };
-  return {
-    mark(name: string) {
-      const now = performance.now();
-      emit(name, now - last, now - started);
-      last = now;
-    },
-    async measure<T>(name: string, run: () => Awaitable<T>): Promise<T> {
-      const before = performance.now();
-      try {
-        return await run();
-      } finally {
-        const now = performance.now();
-        emit(name, now - before, now - started);
-        last = now;
-      }
-    },
-  };
-}
 
 function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
   return primary === "agent" && !argv.includes("--local");
@@ -177,7 +142,7 @@ function isGatewayRunInvocationArgv(argv: string[]): boolean {
 
 async function tryRunGatewayRunFastPath(
   argv: string[],
-  startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
 ): Promise<boolean> {
   if (!isGatewayRunFastPathArgv(argv)) {
     return false;
@@ -288,9 +253,9 @@ async function closeCliMemoryManagers(): Promise<void> {
 
 async function disposeCliAgentHarnesses(): Promise<void> {
   try {
-    const { listAgentHarnessIds, disposeRegisteredAgentHarnesses } =
+    const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =
       await import("../agents/harness/registry.js");
-    if (listAgentHarnessIds().length === 0) {
+    if (listRegisteredAgentHarnesses().length === 0) {
       return;
     }
     await disposeRegisteredAgentHarnesses();
@@ -623,7 +588,7 @@ async function resolveUnownedCliPrimaryMessage(params: {
 }
 
 async function bootstrapCliProxyCaptureAndDispatcher(
-  startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+  startupTrace: ReturnType<typeof createGatewayStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
   const [
@@ -644,7 +609,7 @@ async function bootstrapCliProxyCaptureAndDispatcher(
 
 export async function runCli(argv: string[] = process.argv) {
   const originalArgv = normalizeWindowsArgv(argv);
-  const startupTrace = createGatewayCliMainStartupTrace(originalArgv);
+  const startupTrace = createGatewayStartupTrace(originalArgv, "cli.main");
   const parsedContainer = parseCliContainerArgs(originalArgv);
   if (!parsedContainer.ok) {
     throw new Error(parsedContainer.error);

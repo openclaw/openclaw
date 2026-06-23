@@ -42,8 +42,8 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
-import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
@@ -462,6 +462,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       action: string;
       params: Record<string, unknown>;
       accountId?: string;
+      requesterAccountId?: string;
       requesterSenderId?: string;
       senderIsOwner?: boolean;
       sessionKey?: string;
@@ -541,6 +542,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           cfg,
           params: request.params,
           accountId,
+          requesterAccountId: normalizeOptionalString(request.requesterAccountId) ?? undefined,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
           senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
             ? request.senderIsOwner === true

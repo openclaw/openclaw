@@ -7,6 +7,7 @@ import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   buildTtsSupplementMediaPayload,
@@ -150,7 +151,7 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import type { ChatRunTiming } from "../server-chat-state.js";
+import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { resolveSessionHistoryTailReadOptions } from "../session-history-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
@@ -280,6 +281,26 @@ function shouldIncludeChatSendAckServerTiming(client?: {
   mode?: string | null;
 }): boolean {
   return isOperatorUiClient(client);
+}
+
+const CONTROL_UI_RECONNECT_RESUME_PARAM = "__controlUiReconnectResume";
+
+function resolveControlUiReconnectResumeParams(
+  params: unknown,
+  clientInfo?: { id?: string | null; mode?: string | null },
+): { params: unknown; resumeRequested: boolean } {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return { params, resumeRequested: false };
+  }
+  const record = params as Record<string, unknown>;
+  const resumeRequested =
+    record[CONTROL_UI_RECONNECT_RESUME_PARAM] === true && isOperatorUiClient(clientInfo);
+  if (!resumeRequested) {
+    return { params, resumeRequested: false };
+  }
+  const validatedParams = { ...record };
+  delete validatedParams[CONTROL_UI_RECONNECT_RESUME_PARAM];
+  return { params: validatedParams, resumeRequested: true };
 }
 
 function emitOperatorChatSendServerTiming(params: {
@@ -2551,7 +2572,8 @@ function readChatHistoryMessageId(message: unknown): string | undefined {
 async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   sessionId: string;
   storePath: string | undefined;
-  sessionFile: string | undefined;
+  sessionEntry?: { sessionFile?: string; sessionId?: string };
+  sessionKey: string;
   agentId?: string;
   messageId: string;
   sessionStartedAt?: number;
@@ -2563,8 +2585,9 @@ async function isChatMessageIdVisibleAfterHistoryFilters(params: {
   const messages = await readSessionMessagesAsync(
     {
       agentId: params.agentId,
-      sessionFile: params.sessionFile,
+      sessionEntry: params.sessionEntry,
       sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
       storePath: params.storePath,
     },
     {
@@ -2683,8 +2706,9 @@ async function handleChatHistoryRequest({
       ? await readRecentSessionMessagesAsync(
           {
             agentId: sessionAgentId,
-            sessionFile: entry?.sessionFile,
+            sessionEntry: entry,
             sessionId,
+            sessionKey: canonicalKey,
             storePath,
           },
           {
@@ -2876,8 +2900,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const resolved = await readSessionMessageByIdAsync(
       {
         agentId: sessionAgentId,
-        sessionFile: entry?.sessionFile,
+        sessionEntry: entry,
         sessionId,
+        sessionKey,
         storePath,
       },
       messageId,
@@ -2890,7 +2915,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const visible = await isChatMessageIdVisibleAfterHistoryFilters({
       sessionId,
       storePath,
-      sessionFile: entry?.sessionFile,
+      sessionEntry: entry,
+      sessionKey,
       agentId: sessionAgentId,
       messageId,
       sessionStartedAt:
@@ -3104,7 +3130,9 @@ export const chatHandlers: GatewayRequestHandlers = {
   },
   "chat.send": async ({ params, respond, context, client }) => {
     const chatSendReceivedAtMs = performance.now();
-    if (!validateChatSendParams(params)) {
+    const clientInfo = client?.connect?.client;
+    const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
+    if (!validateChatSendParams(controlUiReconnectResume.params)) {
       respond(
         false,
         undefined,
@@ -3115,13 +3143,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const p = params as {
+    const p = controlUiReconnectResume.params as {
       sessionKey: string;
       agentId?: string;
       sessionId?: string;
       message: string;
       thinking?: string;
-      fastMode?: boolean;
+      fastMode?: FastMode;
+      fastAutoOnSeconds?: number;
       deliver?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
@@ -3326,8 +3355,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const abortedAt = context.chatAbortedRuns.get(clientRunId);
-    if (abortedAt !== undefined) {
+    const abortMarker = context.chatAbortedRuns.get(clientRunId);
+    if (abortMarker !== undefined) {
+      const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
       const payload = buildAbortedChatSendPayload({
         runId: clientRunId,
         endedAt: abortedAt,
@@ -3356,7 +3386,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const clientInfo = client?.connect?.client;
     const chatSendTraceAttributes = {
       runId: clientRunId,
       sessionKey,
@@ -3675,6 +3704,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               body: commandBody,
             },
         MessageSid: clientRunId,
+        ApprovalReviewerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
         ...(!isOperatorUiClient(clientInfo)
           ? {
               SenderId: clientInfo?.id,
@@ -3948,12 +3978,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                     }),
                   }
                 : {}),
+              requestedSessionId,
+              resumeRequestedSession: controlUiReconnectResume.resumeRequested,
               abortSignal: activeRunAbort.controller.signal,
               images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
               thinkingLevelOverride: p.thinking,
               fastModeOverride: p.fastMode,
               userTurnTranscriptRecorder: userTurnRecorder,
+              fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 emitServerTiming(

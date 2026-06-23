@@ -249,9 +249,10 @@ Shared defaults for bounded runtime context surfaces.
 - `toolResultMaxChars`: advanced live tool-result ceiling used for persisted
   results and overflow recovery. Leave unset for the model-context auto cap:
   `16000` chars below 100K tokens, `32000` chars at 100K+ tokens, and `64000`
-  chars at 200K+ tokens. The effective cap is still limited to about 30% of the
-  model context window. `openclaw doctor --deep` prints the effective cap, and
-  doctor warns only when an explicit override is stale or has no effect.
+  chars at 200K+ tokens. Explicit values up to `1000000` are accepted for
+  long-context models, but the effective cap is still limited to about 30% of
+  the model context window. `openclaw doctor --deep` prints the effective cap,
+  and doctor warns only when an explicit override is stale or has no effect.
 - `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
   refresh injection.
 
@@ -668,7 +669,7 @@ Periodic heartbeat runs.
 - `qualityGuard`: retry-on-malformed-output checks for safeguard summaries. Enabled by default in safeguard mode; set `enabled: false` to skip the audit.
 - `midTurnPrecheck`: optional tool-loop pressure check. When `enabled: true`, OpenClaw checks context pressure after tool results are appended and before the next model call. If the context no longer fits, it aborts the current attempt before submitting the prompt and reuses the existing precheck recovery path to truncate tool results or compact and retry. Works with both `default` and `safeguard` compaction modes. Default: disabled.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Reinjection is disabled when unset or set to `[]`. Explicitly setting `["Session Startup", "Red Lines"]` enables that pair and preserves the legacy `Every Session`/`Safety` fallback. Enable this only when the extra context is worth the risk of duplicating project guidance already captured in the compaction summary.
-- `model`: optional `provider/model-id` override for compaction summarization only. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
+- `model`: optional `provider/model-id` or bare alias from `agents.defaults.models` for compaction summarization only. Bare aliases resolve before dispatch; configured literal model IDs retain precedence on collisions. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
 - `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when the active JSONL grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
 - `notifyUser`: when `true`, sends brief notices to the user when compaction starts and when it completes (for example, "Compacting context..." and "Compaction complete"). Disabled by default to keep compaction silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. Skipped when workspace is read-only.
@@ -1098,10 +1099,11 @@ for provider examples and precedence.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
-- `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
+- `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Applies when no per-message or session fast-mode override is set.
 - `models`: optional per-agent model catalog/runtime overrides keyed by full `provider/model` ids. Use `models["provider/model"].agentRuntime` for per-agent runtime exceptions.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
+- Local workspace-relative `identity.avatar` image files are limited to 2 MB. `http(s)` URLs and `data:` URIs are not checked with the local file-size limit.
 - `identity` derives defaults: `ackReaction` from `emoji`, `mentionPatterns` from `name`/`emoji`.
 - `subagents.allowAgents`: allowlist of configured agent ids for explicit `sessions_spawn.agentId` targets (`["*"]` = any configured target; default: same agent only). Include the requester id when self-targeted `agentId` calls should be allowed. Stale entries whose agent config was deleted are rejected by `sessions_spawn` and omitted from `agents_list`; run `openclaw doctor --fix` to clean them up, or add a minimal `agents.list[]` entry if that target should remain spawnable while inheriting defaults.
 - Sandbox inheritance guard: if the requester session is sandboxed, `sessions_spawn` rejects targets that would run unsandboxed.

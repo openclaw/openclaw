@@ -243,17 +243,6 @@ openclaw_e2e_install_package() {
     exit 1
   fi
 }
-openclaw_e2e_assert_package_extensions() {
-  local root="$1"
-  shift
-  local extension
-  for extension in "$@"; do
-    [ -d "$root/dist/extensions/$extension" ] || {
-      echo "Missing packaged extension: $extension" >&2
-      exit 1
-    }
-  done
-}
 openclaw_e2e_find_dep_package() {
   local dep_path="$1"
   shift
@@ -401,9 +390,6 @@ openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-lo
 openclaw_e2e_gateway_log_port_from_text() {
   sed -nE 's/.*(127\.0\.0\.1|localhost):([0-9]+).*/\2/p' | tail -n 1
 }
-openclaw_e2e_gateway_log_port() {
-  grep '\[gateway\] ready' "$1" 2>/dev/null | openclaw_e2e_gateway_log_port_from_text
-}
 openclaw_e2e_wait_gateway_ready() {
   local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
   local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
@@ -474,14 +460,16 @@ openclaw_e2e_probe_http() {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let exitCode = 1;
+    let response;
     try {
-      const response = await fetch(process.argv[1], { signal: controller.signal });
+      response = await fetch(process.argv[1], { signal: controller.signal });
       const passed = expected === "ok" ? response.ok : response.status === Number(expected);
       exitCode = passed ? 0 : 1;
     } catch {
       exitCode = 1;
     } finally {
       clearTimeout(timer);
+      await response?.body?.cancel?.().catch(() => undefined);
     }
     process.exit(exitCode);
   ' "$1" "${2:-ok}" "${3:-400}"

@@ -67,7 +67,7 @@ import {
   isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
-} from "./live-tool-probe-utils.js";
+} from "./live-tool-probe.test-helpers.js";
 import { startGatewayServer } from "./server.impl.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntry } from "./session-utils.js";
@@ -344,7 +344,11 @@ function isGatewayLiveProbeTimeout(error: string): boolean {
 }
 
 function isGatewayLiveModelTimeout(error: string): boolean {
-  return /model timeout after \d+ms/i.test(error);
+  return (
+    /model timeout after \d+ms/i.test(error) ||
+    (/\bagent\.wait timeout for runId=/i.test(error) &&
+      /\btimeoutPhase=(?:preflight|provider|post_turn)\b/i.test(error))
+  );
 }
 
 function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
@@ -889,6 +893,24 @@ describe("resolveGatewayLiveAgentWaitTimeoutMs", () => {
 describe("resolveGatewayLiveProviderTimeoutSeconds", () => {
   it("matches provider timeout config to the harness model budget", () => {
     expect(resolveGatewayLiveProviderTimeoutSeconds(180_001)).toBe(181);
+  });
+});
+
+describe("isGatewayLiveModelTimeout", () => {
+  it("matches provider-attributed agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=provider, providerStarted=true, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match wait-layer agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=queue, providerStarted=false, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(false);
   });
 });
 
@@ -2127,8 +2149,9 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   }
   const messages = await readSessionMessagesAsync(
     {
-      sessionFile: entry.sessionFile,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey,
       storePath,
     },
     {

@@ -25,6 +25,7 @@ describe("sanitizePendingFinalDeliveryText", () => {
 
   it("drops silent reply sentinel payloads", () => {
     expect(sanitizePendingFinalDeliveryText(" NO_REPLY ")).toBe("");
+    expect(sanitizePendingFinalDeliveryText('"NO_REPLY"')).toBe("");
     expect(sanitizePendingFinalDeliveryText('{"action":"NO_REPLY"}')).toBe("");
   });
 

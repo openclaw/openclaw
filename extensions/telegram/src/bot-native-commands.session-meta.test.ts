@@ -657,6 +657,68 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it("resolves /think menu choices against the runtime catalog for live-discovered models", async () => {
+    const cfg = {
+      agents: { defaults: { models: { "ollama/*": {} } } },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        providerOverride: "ollama",
+        modelOverride: "glm-5.2:cloud",
+        modelOverrideSource: "user",
+        updatedAt: 0,
+      },
+    });
+    const runtimeCatalog = [
+      { provider: "ollama", id: "glm-5.2:cloud", name: "glm-5.2:cloud", reasoning: true },
+    ];
+    agentRuntimeMocks.loadModelCatalog.mockClear().mockResolvedValue(runtimeCatalog);
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think" && params.provider === "ollama",
+    )?.[0];
+    const menuRecord = expectRecordFields(
+      menuCall,
+      { provider: "ollama", model: "glm-5.2:cloud" },
+      "ollama thinking menu call",
+    );
+    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalled();
+    expect(menuRecord.catalog).toEqual(runtimeCatalog);
+  });
+
+  it("loads the runtime catalog for /think when no session model override is set", async () => {
+    const cfg = {
+      agents: { defaults: { model: "ollama/glm-5.2:cloud", models: { "ollama/*": {} } } },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({});
+    const runtimeCatalog = [
+      { provider: "ollama", id: "glm-5.2:cloud", name: "glm-5.2:cloud", reasoning: true },
+    ];
+    agentRuntimeMocks.loadModelCatalog.mockClear().mockResolvedValue(runtimeCatalog);
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    expect(agentRuntimeMocks.loadModelCatalog).toHaveBeenCalled();
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "think",
+    )?.[0];
+    const menuRecord = expectRecordFields(menuCall, {}, "default-model thinking menu call");
+    expect(menuRecord.provider).toBeUndefined();
+    expect(menuRecord.catalog).toEqual(runtimeCatalog);
+  });
+
   it("inherits the parent session model when building DM thread native argument menus", async () => {
     const cfg: OpenClawConfig = {};
     sessionMocks.loadSessionStore.mockReturnValue({
@@ -735,6 +797,64 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       requireReplyMarkup: true,
       label: "default model thinking menu",
     });
+    expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+  });
+
+  it("uses configured model defaults instead of runtime auth metadata for the fast menu", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {
+              params: { fastMode: "auto", fastAutoOnSeconds: 30 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:main": {
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        updatedAt: 0,
+      },
+    });
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "fast",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    const menuCall = commandAuthMocks.resolveCommandArgMenu.mock.calls.find(
+      ([params]) => params.command.key === "fast",
+    )?.[0];
+    expectRecordFields(menuCall, { cfg }, "fast menu call");
+    expect(
+      commandAuthMocks.resolveCommandArgMenu.mock.calls.some(
+        ([params]) =>
+          params.command.key === "fast" &&
+          params.provider === "openai" &&
+          params.model === "gpt-5.5",
+      ),
+    ).toBe(true);
+    const options = expectSendMessageCall({
+      sendMessage,
+      chatId: 100,
+      textIncludes:
+        "Current fast mode: auto (30 sec) (default: model).\nOptions: on, off, auto (30 sec), default, status.",
+      requireReplyMarkup: true,
+      label: "fast menu",
+    });
+    const replyMarkup = options.reply_markup as
+      | { inline_keyboard?: Array<Array<{ text?: string }>> }
+      | undefined;
+    const labels = (replyMarkup?.inline_keyboard ?? []).flatMap((row) =>
+      row.map((button) => button.text),
+    );
+    expect(labels).toContain("auto (30 sec)");
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
@@ -855,6 +975,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramPrivateCommandContext({ match: "high" }));
 
     expect(sessionMocks.loadSessionStore).not.toHaveBeenCalled();
+    expect(agentRuntimeMocks.loadModelCatalog).not.toHaveBeenCalled();
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 

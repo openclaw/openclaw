@@ -1,6 +1,7 @@
 /**
  * Shared parameter types for embedded-agent run orchestration.
  */
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
@@ -13,6 +14,7 @@ import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ImageContent } from "../../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
+import type { PluginHookChannelContext } from "../../../plugins/hook-types.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
@@ -25,6 +27,7 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "../../embedded-agent-subscribe.shared-types.js";
+import type { FastModeAutoProgressState } from "../../fast-mode.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
@@ -83,8 +86,14 @@ export type RunEmbeddedAgentParams = {
   senderE164?: string | null;
   /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
+  /** Device-scoped operator session allowed to review approvals initiated by this run. */
+  approvalReviewerDeviceId?: string;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
+  /** Transport-native chat/conversation ID for hook identity context. */
+  chatId?: string;
+  /** Channel-specific identity metadata surfaced to plugin hooks. */
+  channelContext?: PluginHookChannelContext;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -142,7 +151,15 @@ export type RunEmbeddedAgentParams = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
+  fastModeStartedAtMs?: number;
+  /** Effective auto fast-mode cutoff for this run, in seconds. */
+  fastModeAutoOnSeconds?: number;
+  /** Shared notification state for nested harnesses that can observe the same tool boundary. */
+  fastModeAutoProgressState?: FastModeAutoProgressState;
+  /** True when the outer model fallback loop has reached its final candidate. */
+  isFinalFallbackAttempt?: boolean;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
@@ -220,6 +237,7 @@ export type RunEmbeddedAgentParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  onToolStreamBoundary?: () => void | Promise<void>;
   /**
    * Emit lifecycle "finishing" when the attempt ends; the caller owns the
    * final lifecycle "end" or "error" after fallback and post-turn work settle.
@@ -238,6 +256,8 @@ export type RunEmbeddedAgentParams = {
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+  /** Skip per-chunk live visible-text parsing when no live stream consumer exists (e.g. subagents). */
+  suppressLiveStreamOutput?: boolean;
   /**
    * Treat a clean empty assistant stop as an intentional silent reply.
    * Only set when the caller's prompt policy already allows an exact NO_REPLY

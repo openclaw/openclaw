@@ -230,7 +230,8 @@ export async function markRestartAbortedMainSessions(params: {
               (entry.status === "running" ||
                 run.observedAt === undefined ||
                 normalizeFiniteTimestamp(entry.updatedAt) === undefined ||
-                entry.updatedAt < run.observedAt) &&
+                (entry.updatedAt < run.observedAt &&
+                  run.lifecycleGeneration !== currentLifecycleGeneration)) &&
               params.isActiveRun?.(run) !== false,
           );
           if (
@@ -805,8 +806,9 @@ async function recoverStore(params: {
       messages = await readSessionMessagesAsync(
         {
           agentId: resolveAgentIdFromSessionKey(sessionKey),
-          sessionFile: entry.sessionFile,
+          sessionEntry: entry,
           sessionId: entry.sessionId,
+          sessionKey,
           storePath: params.storePath,
         },
         {
