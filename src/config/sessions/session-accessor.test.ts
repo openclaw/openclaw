@@ -2606,6 +2606,16 @@ describe("session accessor file-backed seam", () => {
     expect(result?.lines).toEqual(transcriptLines.slice(-3));
   });
 
+  it("returns null for missing transcript tail targets", async () => {
+    const result = await readTranscriptTailLines({
+      sessionFile: path.join(tempDir, "missing.jsonl"),
+      sessionId: "session-1",
+      maxLines: 3,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("keeps read and write runtime targets aligned for new topic sessions", async () => {
     const scope = {
       agentId: "main",

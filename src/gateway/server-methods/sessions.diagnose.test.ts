@@ -174,6 +174,34 @@ test("sessions.diagnose marks terminal sessions with partial delivery route as u
   });
 });
 
+test("sessions.diagnose reports missing transcript files as unresolved", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        sessionFile: path.join(dir, "missing.jsonl"),
+      }),
+    },
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {
+    key: "agent:main:main",
+  });
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    transcript: {
+      resolved: false,
+      source: "sessionFile",
+    },
+    findings: expect.arrayContaining([
+      expect.objectContaining({
+        code: "transcript_unresolved",
+      }),
+    ]),
+  });
+});
+
 test("sessions.diagnose excludes global and unknown fallback rows unless opted in", async () => {
   await createSessionStoreDir();
   await writeSessionStore({

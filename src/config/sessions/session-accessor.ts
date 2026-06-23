@@ -1832,6 +1832,13 @@ export async function readTranscriptTailLines(
   const lines: string[] = [];
   try {
     const transcript = resolveSessionTranscriptReadTarget(scope);
+    const stat = await fs.promises.stat(transcript.sessionFile);
+    if (!stat.isFile()) {
+      return null;
+    }
+    if (stat.size <= 0) {
+      return { lines };
+    }
     for await (const line of streamSessionTranscriptLinesReverse(transcript.sessionFile)) {
       lines.push(line);
       if (lines.length >= maxLines) {
