@@ -86,6 +86,22 @@ describe("ApiClient", () => {
         hostnameAllowlist: ["qqbot.test"],
         allowRfc2544BenchmarkRange: true,
       },
+      timeoutMs: 30_000,
+      capture: false,
+    });
+  });
+
+  it("preserves timeout classification from guarded fetch timeouts", async () => {
+    const timeout = new Error("request timed out");
+    timeout.name = "TimeoutError";
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(timeout);
+
+    const client = new ApiClient({ baseUrl: "https://qqbot.test", defaultTimeoutMs: 1234 });
+
+    await expect(client.request("token-1", "GET", "/v2/users/@me")).rejects.toMatchObject({
+      message: "Request timeout [/v2/users/@me]: exceeded 1234ms",
+      httpStatus: 0,
+      path: "/v2/users/@me",
     });
   });
 });

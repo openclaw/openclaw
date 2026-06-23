@@ -13,6 +13,7 @@ import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
+import { formatQQBotNetworkError } from "../utils/setup-guidance.js";
 
 const DEFAULT_BASE_URL = "https://api.sgroup.qq.com";
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -24,6 +25,10 @@ function resolveQqbotApiSsrfPolicy(url: string): SsrFPolicy {
     hostnameAllowlist: [new URL(url).hostname],
     allowRfc2544BenchmarkRange: true,
   };
+}
+
+function isRequestTimeoutError(err: unknown): boolean {
+  return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
 }
 
 interface RequestOptions {
@@ -135,19 +140,21 @@ export class ApiClient {
       const guarded = await fetchWithSsrFGuard({
         url,
         init: fetchInit,
-        auditContext: "qqbot-api",
+        timeoutMs: timeout,
         policy: resolveQqbotApiSsrfPolicy(url),
+        capture: false,
+        auditContext: "qqbot-api",
       });
       res = guarded.response;
       release = guarded.release;
     } catch (err) {
       clearTimeout(timeoutId);
-      if (err instanceof Error && err.name === "AbortError") {
+      if (isRequestTimeoutError(err)) {
         this.logger?.error?.(`[qqbot:api] <<< Timeout after ${timeout}ms`);
         throw new ApiError(`Request timeout [${path}]: exceeded ${timeout}ms`, 0, path);
       }
       this.logger?.error?.(`[qqbot:api] <<< Network error: ${formatErrorMessage(err)}`);
-      throw new ApiError(`Network error [${path}]: ${formatErrorMessage(err)}`, 0, path);
+      throw new ApiError(formatQQBotNetworkError(path, formatErrorMessage(err)), 0, path);
     } finally {
       clearTimeout(timeoutId);
     }

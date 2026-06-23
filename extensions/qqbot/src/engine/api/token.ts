@@ -16,6 +16,10 @@ import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
+import {
+  formatQQBotAccessTokenError,
+  formatQQBotNetworkError,
+} from "../utils/setup-guidance.js";
 
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
 const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 7200;
@@ -260,9 +264,8 @@ export class TokenManager {
       release = guarded.release;
     } catch (err) {
       this.logger?.error?.(`[qqbot:token:${appId}] Network error: ${formatErrorMessage(err)}`);
-      throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
-        cause: err,
-      });
+      const message = formatQQBotNetworkError("/app/getAppAccessToken", formatErrorMessage(err));
+      throw new Error(`${message} access_token retryable token fetch failure.`, { cause: err });
     }
 
     try {
@@ -290,7 +293,7 @@ export class TokenManager {
       }
 
       if (!data.access_token) {
-        throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
+        throw new Error(formatQQBotAccessTokenError(JSON.stringify(data)));
       }
 
       const nowMs = asDateTimestampMs(Date.now());

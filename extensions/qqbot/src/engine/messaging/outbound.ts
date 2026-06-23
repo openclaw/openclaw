@@ -39,6 +39,7 @@ import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { decodeCronPayload } from "../utils/payload.js";
+import { formatQQBotNotConfiguredMessage } from "../utils/setup-guidance.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -274,7 +275,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
   }
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
+    return { channel: "qqbot", error: formatQQBotNotConfiguredMessage(account.accountId) };
   }
 
   try {
@@ -311,7 +312,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   initApiConfig(account.appId, { markdownSupport: account.markdownSupport });
 
   if (!account.appId || !account.clientSecret) {
-    return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
+    return { channel: "qqbot", error: formatQQBotNotConfiguredMessage(account.accountId) };
   }
   if (!ctx.mediaUrl) {
     return { channel: "qqbot", error: "mediaUrl is required for sendMedia" };

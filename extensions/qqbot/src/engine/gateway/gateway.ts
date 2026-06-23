@@ -29,6 +29,7 @@ import type {
   RefAttachmentSummary,
 } from "./types.js";
 import { TypingKeepAlive, TYPING_INPUT_SECOND } from "./typing-keepalive.js";
+import { formatQQBotNotConfiguredMessage } from "../utils/setup-guidance.js";
 
 export type { CoreGatewayContext } from "./types.js";
 
@@ -39,7 +40,7 @@ export async function startGateway(ctx: CoreGatewayContext): Promise<void> {
   initCommands(adapters.commands);
 
   if (!account.appId || !account.clientSecret) {
-    throw new Error("QQBot not configured (missing appId or clientSecret)");
+    throw new Error(formatQQBotNotConfiguredMessage(account.accountId));
   }
 
   const diag = await runDiagnostics();
