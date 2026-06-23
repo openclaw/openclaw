@@ -64,6 +64,7 @@ import {
 import {
   evaluateMattermostMentionGate,
   mapMattermostChannelTypeToChatType,
+  resolveMattermostReplyToBot,
   resolveMattermostTrustedChatKind,
 } from "./monitor-gating.js";
 import {
@@ -878,6 +879,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     sendTypingIndicator,
     resolveChannelInfo,
     resolveUserInfo,
+    resolvePostInfo,
     updateModelPickerPost,
   } = createMattermostMonitorResources({
     accountId: account.accountId,
@@ -1484,7 +1486,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           : { triggered: false, stripped: rawText };
         const oncharTriggered = oncharResult.triggered;
         const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
-        const mentionDecision = evaluateMattermostMentionGate({
+        const mentionGateBase = {
           kind,
           cfg,
           accountId: account.accountId,
@@ -1498,7 +1500,25 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           oncharEnabled,
           oncharTriggered,
           canDetectMention,
-        });
+        };
+        let mentionDecision = evaluateMattermostMentionGate(mentionGateBase);
+        // Reply-to-bot auto-engage (parity with Slack/Telegram): when a non-mentioned thread
+        // reply would be gated, treat it as addressing the bot if the bot authored the thread
+        // root. The root author is absent from the websocket payload, so resolve it (cached) only
+        // in this drop case — which also skips the lookup once the thread is otherwise engaged.
+        if (mentionDecision.dropReason !== null && threadRootId && !wasMentioned) {
+          const replyToBot = await resolveMattermostReplyToBot({
+            threadRootId,
+            botUserId,
+            fetchRootPost: resolvePostInfo,
+          });
+          if (replyToBot) {
+            mentionDecision = evaluateMattermostMentionGate({
+              ...mentionGateBase,
+              replyToBot: true,
+            });
+          }
+        }
         const { shouldRequireMention, shouldBypassMention } = mentionDecision;
 
         if (mentionDecision.dropReason === "onchar-not-triggered") {

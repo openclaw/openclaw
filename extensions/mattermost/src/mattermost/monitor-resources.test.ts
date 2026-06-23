@@ -2,6 +2,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchMattermostChannel = vi.hoisted(() => vi.fn());
+const fetchMattermostPost = vi.hoisted(() => vi.fn());
 const fetchMattermostUser = vi.hoisted(() => vi.fn());
 const sendMattermostTyping = vi.hoisted(() => vi.fn());
 const updateMattermostPost = vi.hoisted(() => vi.fn());
@@ -9,6 +10,7 @@ const buildButtonProps = vi.hoisted(() => vi.fn());
 
 vi.mock("./client.js", () => ({
   fetchMattermostChannel,
+  fetchMattermostPost,
   fetchMattermostUser,
   sendMattermostTyping,
   updateMattermostPost,
@@ -27,6 +29,7 @@ describe("mattermost monitor resources", () => {
 
   beforeEach(() => {
     fetchMattermostChannel.mockReset();
+    fetchMattermostPost.mockReset();
     fetchMattermostUser.mockReset();
     sendMattermostTyping.mockReset();
     updateMattermostPost.mockReset();
@@ -81,6 +84,7 @@ describe("mattermost monitor resources", () => {
   it("caches channel and user lookups and falls back to empty picker props", async () => {
     fetchMattermostChannel.mockResolvedValue({ id: "chan-1", name: "town-square" });
     fetchMattermostUser.mockResolvedValue({ id: "user-1", username: "alice" });
+    fetchMattermostPost.mockResolvedValue({ id: "post-1", user_id: "bot-1" });
     buildButtonProps.mockReturnValue(undefined);
 
     const resources = createMattermostMonitorResources({
@@ -109,9 +113,18 @@ describe("mattermost monitor resources", () => {
       id: "user-1",
       username: "alice",
     });
+    await expect(resources.resolvePostInfo("post-1")).resolves.toEqual({
+      id: "post-1",
+      user_id: "bot-1",
+    });
+    await expect(resources.resolvePostInfo("post-1")).resolves.toEqual({
+      id: "post-1",
+      user_id: "bot-1",
+    });
 
     expect(fetchMattermostChannel).toHaveBeenCalledTimes(1);
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
+    expect(fetchMattermostPost).toHaveBeenCalledTimes(1);
 
     await resources.updateModelPickerPost({
       channelId: "chan-1",

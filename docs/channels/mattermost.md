@@ -197,6 +197,7 @@ Notes:
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs recommended).
 - `channels.mattermost.groupAllowFrom` accepts `accessGroup:<name>` entries. See [Access groups](/channels/access-groups).
 - Per-channel mention overrides live under `channels.mattermost.groups.<channelId>.requireMention` or `channels.mattermost.groups["*"].requireMention` for a default.
+- Replies to the bot's own thread auto-engage: when a user replies in a thread whose root post the bot authored, OpenClaw treats it as addressing the bot and responds even if `requireMention` is on or `chatmode` is `onchar`. This is on by default (parity with Slack and Telegram) and needs no config.
 - `@username` matching is mutable and only enabled when `channels.mattermost.dangerouslyAllowNameMatching: true`.
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
 - Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
