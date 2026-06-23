@@ -3872,6 +3872,85 @@ describe("chat session controls", () => {
     await vi.waitFor(() => expect(state.chatSessionPickerSavingKey).toBeNull());
   });
 
+  it("does not overwrite newer search results with the rename-triggered picker refresh", async () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    let rows: GatewaySessionRow[] = [
+      { key: "agent:main:main", kind: "direct", label: "Main chat", updatedAt: 6 },
+      { key: "agent:main:work", kind: "direct", label: "Main work", updatedAt: 5 },
+    ];
+    const initialResult = createSessionsResultFromRows(rows);
+    // The newer search result would be produced while the rename refresh is in flight.
+    const newerResult = createSessionsResultFromRows(
+      [{ key: "agent:main:sprint", kind: "direct", label: "Sprint planning", updatedAt: 1 }],
+      { totalCount: 1 },
+    );
+    let listCallCount = 0;
+    const request = vi.fn(async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === "sessions.patch") {
+        const key = typeof params.key === "string" ? params.key : "";
+        rows = rows.map((row) =>
+          row.key === key ? { ...row, label: "Ops notes" } : row,
+        );
+        return { ok: true, key };
+      }
+      if (method === "sessions.list") {
+        listCallCount += 1;
+        // First sessions.list call is the rename-triggered refresh; return the
+        // stale result after a tick so the search can race ahead of it.
+        if (listCallCount === 1) {
+          await Promise.resolve();
+          return initialResult;
+        }
+        // Second sessions.list call is the newer search.
+        return newerResult;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows(rows);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    container
+      .querySelector<HTMLButtonElement>('[data-chat-session-rename-edit="agent:main:work"]')!
+      .click();
+    await flushTasks();
+    render(renderChatSessionSelect(state), container);
+
+    const input = container.querySelector<HTMLInputElement>(
+      '[data-chat-session-rename-input="agent:main:work"]',
+    );
+    input!.value = "Ops notes";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+
+    // Initiate a newer search while the rename save (and its refresh) is
+    // still in flight — this simulates the race.
+    state.chatSessionPickerQuery = "sprint";
+    state.chatSessionPickerAppliedQuery = "sprint";
+    render(renderChatSessionSelect(state), container);
+
+    // Now fire the rename save.  Its triggered refresh races with the newer
+    // search already in progress.
+    container
+      .querySelector<HTMLButtonElement>('[data-chat-session-rename-save="agent:main:work"]')!
+      .click();
+
+    await vi.waitFor(
+      () => expect(request).toHaveBeenCalledWith("sessions.patch", expect.objectContaining({})),
+    );
+    // Wait for the sessions.list round-trips to resolve.
+    await vi.waitFor(() => expect(listCallCount).toBeGreaterThanOrEqual(2));
+    await flushTasks();
+
+    // The newer search result must win — not the stale rename refresh.
+    expect(state.chatSessionPickerResult?.sessions[0]?.label).toBe("Sprint planning");
+  });
+
   it("does not render Invalid Date for Date-invalid session picker timestamps", () => {
     const { state } = createChatHeaderState();
     state.sessionKey = "agent:main:main";

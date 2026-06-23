@@ -319,6 +319,16 @@ async function refreshChatSessionPickerAfterRename(state: AppViewState) {
   if (!state.client || !state.connected || !state.chatSessionPickerOpen || !result) {
     return;
   }
+  // Tie the refresh to the picker request-generation counter so that a newer
+  // search arriving while the rename-triggered sessions.list is in flight
+  // is not overwritten by the stale refresh response.
+  const requestId =
+    beginChatSessionPickerSearchRequest(
+      state,
+      createChatSessionPickerRequestSignature({
+        query: normalizeOptionalString(state.chatSessionPickerAppliedQuery) ?? "",
+      }),
+    ) ?? invalidateChatSessionPickerSearchRequests(state);
   const query = normalizeOptionalString(state.chatSessionPickerAppliedQuery) ?? "";
   const limit =
     typeof result.nextOffset === "number" && Number.isFinite(result.nextOffset)
@@ -328,17 +338,18 @@ async function refreshChatSessionPickerAfterRename(state: AppViewState) {
         : typeof result.limitApplied === "number" && Number.isFinite(result.limitApplied)
           ? Math.max(1, Math.floor(result.limitApplied))
           : Math.max(1, result.sessions.length);
-  const page = projectChatSessionPickerResult(
-    state,
-    await state.client.request<SessionsListResult>(
-      "sessions.list",
-      createChatSessionPickerRequestParams(state, {
-        query,
-        limit,
-      }),
-    ),
+  const listResult = await state.client.request<SessionsListResult>(
+    "sessions.list",
+    createChatSessionPickerRequestParams(state, {
+      query,
+      limit,
+    }),
   );
-  state.chatSessionPickerResult = page;
+  if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
+    return;
+  }
+  state.chatSessionPickerResult = projectChatSessionPickerResult(state, listResult);
+  finishChatSessionPickerSearchRequest(state, requestId);
 }
 
 async function saveChatSessionPickerRename(
