@@ -65,10 +65,15 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import {
   applySessionPatchProjection,
   createSessionEntryWithTranscript,
+  listSessionEntries,
   preflightSessionTranscriptForManualCompact,
   readTranscriptTailLines,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
+import {
+  resolveAgentSessionStoreTargetsSync,
+  resolveAllAgentSessionStoreTargetsSync,
+} from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -881,6 +886,7 @@ type DiagnoseTarget = {
 };
 
 type DiagnoseFinding = SessionsDiagnoseResult["findings"][number];
+type DiagnoseCandidate = Omit<DiagnoseTarget, "chosenBecause">;
 type DiagnoseRow = {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
@@ -1027,6 +1033,72 @@ function scoreDiagnoseCandidatePreselect(params: {
   return score;
 }
 
+function buildDiagnoseCandidate(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  entry: SessionEntry;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  fallbackAgentId?: string;
+}): DiagnoseCandidate {
+  return {
+    key: params.key,
+    entry: params.entry,
+    row: buildDiagnoseRow(params.key, params.entry),
+    storePath: params.storePath,
+    store: params.store,
+    agentId:
+      resolveStoredSessionOwnerAgentId({
+        cfg: params.cfg,
+        agentId: params.fallbackAgentId ?? resolveDefaultAgentId(params.cfg),
+        sessionKey: params.key,
+      }) ?? params.fallbackAgentId,
+  };
+}
+
+function listExplicitDiagnoseCandidateRows(params: {
+  cfg: OpenClawConfig;
+  p: DiagnoseParams;
+}): DiagnoseCandidate[] {
+  const { cfg, p } = params;
+  const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
+  const targets = requestedAgentId
+    ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
+    : resolveAllAgentSessionStoreTargetsSync(cfg);
+  const candidates: DiagnoseCandidate[] = [];
+  for (const target of targets) {
+    const entries = listSessionEntries({ clone: false, storePath: target.storePath });
+    const store = Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+    for (const { sessionKey, entry } of entries) {
+      if (!entry?.sessionId) {
+        continue;
+      }
+      if (p.label && entry.label !== p.label) {
+        continue;
+      }
+      if (p.sessionId && entry.sessionId !== p.sessionId) {
+        continue;
+      }
+      const key = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId: target.agentId,
+        sessionKey,
+      });
+      candidates.push(
+        buildDiagnoseCandidate({
+          cfg,
+          key,
+          entry,
+          storePath: target.storePath,
+          store,
+          fallbackAgentId: target.agentId,
+        }),
+      );
+    }
+  }
+  return candidates;
+}
+
 function listDiagnoseCandidateRows(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
@@ -1072,19 +1144,16 @@ function listDiagnoseCandidateRows(params: {
       return activePriority || (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
     })
     .slice(0, DEFAULT_DIAGNOSE_SCAN_LIMIT)
-    .map(({ key, entry }) => ({
-      key,
-      entry,
-      row: buildDiagnoseRow(key, entry),
-      storePath,
-      store,
-      agentId:
-        resolveStoredSessionOwnerAgentId({
-          cfg,
-          agentId: p.agentId ?? resolveDefaultAgentId(cfg),
-          sessionKey: key,
-        }) ?? p.agentId,
-    }));
+    .map(({ key, entry }) =>
+      buildDiagnoseCandidate({
+        cfg,
+        key,
+        entry,
+        storePath,
+        store,
+        ...(p.agentId ? { fallbackAgentId: p.agentId } : {}),
+      }),
+    );
   return { storePath, store, candidates };
 }
 
@@ -1173,15 +1242,8 @@ async function resolveDiagnoseTarget(params: {
     };
   }
 
-  const listed = listDiagnoseCandidateRows({ cfg, context, p });
-  let candidates = listed.candidates;
-  if (p.sessionId) {
-    candidates = candidates.filter((candidate) => candidate.row.sessionId === p.sessionId);
-  }
-  if (p.label) {
-    candidates = candidates.filter((candidate) => candidate.row.label === p.label);
-  }
   if (p.sessionId || p.label) {
+    const candidates = listExplicitDiagnoseCandidateRows({ cfg, p });
     if (candidates.length > 1) {
       throw new Error(
         p.sessionId
@@ -1197,6 +1259,9 @@ async function resolveDiagnoseTarget(params: {
         }
       : null;
   }
+
+  const listed = listDiagnoseCandidateRows({ cfg, context, p });
+  const candidates = listed.candidates;
   if (candidates.length === 0) {
     return null;
   }
