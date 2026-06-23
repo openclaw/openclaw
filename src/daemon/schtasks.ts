@@ -100,9 +100,10 @@ function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vb
 function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
   const primaryPath = resolveStartupEntryPath(env);
   const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
-  // Hidden VBS launchers supersede cmd launchers, but uninstall must remove the
-  // legacy cmd path from older installs too.
-  return uniqueStrings([primaryPath, legacyCmdPath]);
+  const hiddenLauncherPath = resolveStartupEntryPath(env, "vbs");
+  // Hidden VBS launchers supersede cmd launchers, but lifecycle operations must
+  // discover both variants even when the caller env lacks the persisted marker.
+  return uniqueStrings([primaryPath, legacyCmdPath, hiddenLauncherPath]);
 }
 
 // `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
