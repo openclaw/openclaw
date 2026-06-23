@@ -196,9 +196,9 @@
       }
     },
     "node_modules/@clack/core": {
-      "version": "1.4.1",
-      "resolved": "https://registry.npmjs.org/@clack/core/-/core-1.4.1.tgz",
-      "integrity": "sha512-FILJa1gGKEFTGZAJE9RpVhrjKz3c3h4ar60dSv6cGuDqufQ84YEIS3GAGvZiN+H6yaLbbvTFNejjCC4tXpZEuw==",
+      "version": "1.3.1",
+      "resolved": "https://registry.npmjs.org/@clack/core/-/core-1.3.1.tgz",
+      "integrity": "sha512-fT1qHVGAag4IEkrupZ6lRRbNCs1vS9P01KB/sG8zKgvUztbYtFBtQpjSITNwooDZ83tpsPzP0mRNs1/KVszCRA==",
       "license": "MIT",
       "dependencies": {
         "fast-wrap-ansi": "^0.2.0",
@@ -209,12 +209,12 @@
       }
     },
     "node_modules/@clack/prompts": {
-      "version": "1.5.1",
-      "resolved": "https://registry.npmjs.org/@clack/prompts/-/prompts-1.5.1.tgz",
-      "integrity": "sha512-zccHj2z2oCCO4yrDiRSlFOxWerGqRiysP7a5jPK6uoI9URKAquwY42Dd/iUP8JWHxEzdRe4TlbvZCo8z1/mhrw==",
+      "version": "1.4.0",
+      "resolved": "https://registry.npmjs.org/@clack/prompts/-/prompts-1.4.0.tgz",
+      "integrity": "sha512-S0My7XPGIgpRWMDG8uRqalbgT+a6FmCUdOW+HaIOVVpUPHOb7RrpvjTjiODadKp06fsrVDJZlIzc6yCTp4AnxA==",
       "license": "MIT",
       "dependencies": {
-        "@clack/core": "1.4.1",
+        "@clack/core": "1.3.1",
         "fast-string-width": "^3.0.2",
         "fast-wrap-ansi": "^0.2.0",
         "sisteransi": "^1.0.5"
@@ -858,15 +858,6 @@
         "zod": "^3.25.0 || ^4.0.0"
       }
     },
-    "node_modules/acpx/node_modules/commander": {
-      "version": "15.0.0",
-      "resolved": "https://registry.npmjs.org/commander/-/commander-15.0.0.tgz",
-      "integrity": "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=22.12.0"
-      }
-    },
     "node_modules/ajv": {
       "version": "8.20.0",
       "resolved": "https://registry.npmjs.org/ajv/-/ajv-8.20.0.tgz",
@@ -1068,12 +1059,12 @@
       }
     },
     "node_modules/commander": {
-      "version": "14.0.3",
-      "resolved": "https://registry.npmjs.org/commander/-/commander-14.0.3.tgz",
-      "integrity": "sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==",
+      "version": "15.0.0",
+      "resolved": "https://registry.npmjs.org/commander/-/commander-15.0.0.tgz",
+      "integrity": "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==",
       "license": "MIT",
       "engines": {
-        "node": ">=20"
+        "node": ">=22.12.0"
       }
     },
     "node_modules/content-disposition": {
