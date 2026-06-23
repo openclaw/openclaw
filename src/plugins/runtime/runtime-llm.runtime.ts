@@ -295,25 +295,7 @@ function resolvePluginLlmOverridePolicy(
   const normalized = normalizePluginsConfig(cfg.plugins);
   const pluginEntry = normalized.entries[pluginId];
   const entry = pluginEntry?.llm;
-  if (entry) {
-    return buildPolicyFromEntry(entry);
-  }
-  // When a plugin entry has config.summaryModel but no explicit llm policy,
-  // infer the policy so the context engine compaction override works without
-  // requiring the user to manually set llm.allowModelOverride. This mirrors
-  // ensureLosslessLlmPolicy which previously only ran during doctor --fix.
-  const pluginConfig = pluginEntry?.config as Record<string, unknown> | undefined;
-  const summaryModel =
-    typeof pluginConfig?.summaryModel === "string" && pluginConfig.summaryModel.trim()
-      ? pluginConfig.summaryModel.trim()
-      : undefined;
-  if (summaryModel) {
-    return buildPolicyFromEntry({
-      allowModelOverride: true,
-      allowedModels: [summaryModel],
-    });
-  }
-  return undefined;
+  return entry ? buildPolicyFromEntry(entry) : undefined;
 }
 
 function resolveAuthorityModelPolicy(
