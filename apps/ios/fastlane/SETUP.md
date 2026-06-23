@@ -112,12 +112,9 @@ Upload to App Store Connect:
 pnpm ios:release:upload
 ```
 
-Direct Fastlane entry point:
-
-```bash
-cd apps/ios
-fastlane ios release_upload
-```
+Direct Fastlane TestFlight upload is disabled. Use the package script so the
+release wrapper, App Store push mode, and exported-IPA validation gate all run
+in the same path.
 
 Maintainer recovery path for a fresh clone on the same Mac:
 

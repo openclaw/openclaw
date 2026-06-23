@@ -51,5 +51,5 @@ done
 
 (
   cd "${ROOT_DIR}/apps/ios"
-  IOS_RELEASE_BUILD_NUMBER="${BUILD_NUMBER}" run_ios_fastlane ios release_upload
+  OPENCLAW_IOS_RELEASE_WRAPPER=1 IOS_RELEASE_BUILD_NUMBER="${BUILD_NUMBER}" run_ios_fastlane ios release_upload
 )

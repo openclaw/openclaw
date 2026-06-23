@@ -983,7 +983,14 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/ios-release-archive.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/ios-release-prepare.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/ios-release-signing.mjs", ["test/scripts/ios-release-signing.test.ts"]],
-  ["scripts/ios-release-upload.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  ["apps/ios/fastlane/Fastfile", ["test/scripts/ios-release-fastlane-gates.test.ts"]],
+  [
+    "scripts/ios-release-upload.sh",
+    [
+      "test/scripts/ios-release-wrapper-args.test.ts",
+      "test/scripts/ios-release-fastlane-gates.test.ts",
+    ],
+  ],
   ["scripts/ios-validate-app-store-ipa.sh", ["test/scripts/ios-validate-app-store-ipa.test.ts"]],
   ["scripts/lib/restart-mac-gateway.sh", ["test/scripts/restart-mac.test.ts"]],
   [

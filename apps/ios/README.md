@@ -70,7 +70,6 @@ Release behavior:
 - App Store release also switches the app to `OpenClawPushMode=appStore`, which derives relay transport, official distribution, the canonical production relay, production APNs, production relay profile, `appleStrict` proof, and the App-Attest-capable entitlement file.
 - `pnpm ios:release:upload` generates App Store screenshots and uploads release notes before archiving and uploading the IPA.
 - The release archive is validated before upload by inspecting the exported IPA's signed entitlements, embedded App Store profile, and push mode. The upload fails if the IPA is not an App Store production relay build.
-- `pnpm ios:release` remains a compatibility alias for `pnpm ios:release:upload`; prefer the explicit upload command in new release docs and automation.
 - App Review submission is manual in App Store Connect. The release lane uploads a build and metadata, but does not submit for review.
 - The release flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
 - `apps/ios/version.json` is the pinned iOS release version source.
