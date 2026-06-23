@@ -188,6 +188,7 @@ type NativeHookRelayProviderAdapter = {
   renderPermissionDecisionResponse: (
     decision: NativeHookRelayPermissionDecision,
     message?: string,
+    updatedInput?: Record<string, JsonValue>,
   ) => NativeHookRelayProcessResponse;
 };
 
@@ -387,13 +388,13 @@ const nativeHookRelayProviderAdapters: Record<
       stderr: "",
       exitCode: 0,
     }),
-    renderPermissionDecisionResponse: (decision, message) => ({
+    renderPermissionDecisionResponse: (decision, message, updatedInput) => ({
       stdout: `${JSON.stringify({
         hookSpecificOutput: {
           hookEventName: "PermissionRequest",
           decision:
             decision === "allow"
-              ? { behavior: "allow" }
+              ? { behavior: "allow", updatedInput: updatedInput ?? {} }
               : {
                   behavior: "deny",
                   message: message?.trim() || "Denied by OpenClaw",
@@ -1484,7 +1485,7 @@ async function runNativeHookRelayPermissionRequest(params: {
     request,
   });
   if (hasNativeHookRelayPermissionAllowAlways(allowAlwaysKey)) {
-    return params.adapter.renderPermissionDecisionResponse("allow");
+    return params.adapter.renderPermissionDecisionResponse("allow", undefined, request.toolInput);
   }
   const pendingApproval = pendingPermissionApprovals.get(approvalKey);
   try {
@@ -1495,11 +1496,11 @@ async function runNativeHookRelayPermissionRequest(params: {
         request,
       }));
     if (decision === "allow") {
-      return params.adapter.renderPermissionDecisionResponse("allow");
+      return params.adapter.renderPermissionDecisionResponse("allow", undefined, request.toolInput);
     }
     if (decision === "allow-always") {
       rememberNativeHookRelayPermissionAllowAlways(allowAlwaysKey);
-      return params.adapter.renderPermissionDecisionResponse("allow");
+      return params.adapter.renderPermissionDecisionResponse("allow", undefined, request.toolInput);
     }
     if (decision === "deny") {
       return params.adapter.renderPermissionDecisionResponse("deny", "Denied by user");
