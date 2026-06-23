@@ -372,7 +372,7 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("does not rotate harness-owned assistant errors classified as timeout", () => {
+  it("rotates harness-owned assistant timeouts when fallback is configured", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "assistant",
@@ -389,7 +389,8 @@ describe("resolveRunFailoverDecision", () => {
         profileRotated: false,
       }),
     ).toEqual({
-      action: "continue_normal",
+      action: "rotate_profile",
+      reason: "timeout",
     });
   });
 
@@ -563,7 +564,7 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("surfaces harness-owned prompt timeouts instead of falling back", () => {
+  it("falls back on harness-owned prompt timeouts when fallback is configured", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "prompt",
@@ -576,7 +577,7 @@ describe("resolveRunFailoverDecision", () => {
         profileRotated: true,
       }),
     ).toEqual({
-      action: "surface_error",
+      action: "fallback_model",
       reason: "timeout",
     });
   });

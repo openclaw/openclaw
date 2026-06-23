@@ -122,7 +122,7 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   const timeoutFailure = isAssistantTimeoutFailure(params);
   const harnessOwnedTimeout =
     params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
-  if (harnessOwnedTimeout && !isConcreteNonTimeoutAssistantFailure(params)) {
+  if (harnessOwnedTimeout && !isConcreteNonTimeoutAssistantFailure(params) && !params.fallbackConfigured) {
     return false;
   }
   return (!params.aborted && params.failoverFailure) || timeoutFailure;
@@ -178,7 +178,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
         reason: params.failoverReason,
       };
     }
-    if (params.harnessOwnsTransport && params.failoverReason === "timeout") {
+    if (params.harnessOwnsTransport && params.failoverReason === "timeout" && !params.fallbackConfigured) {
       return {
         action: "surface_error",
         reason: params.failoverReason,
