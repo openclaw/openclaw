@@ -234,4 +234,156 @@ describe("status.scan.config-shared", () => {
 
     expect(result.secretDiagnostics).toStrictEqual([]);
   });
+
+  it("adds a status diagnostic when HTTP_PROXY is set but tools.web.fetch.useTrustedEnvProxy is not enabled (#95560)", async () => {
+    const sourceConfig = {};
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readConfigSnapshot,
+      resolveConfig,
+      env: { VITEST: "true", HTTP_PROXY: "http://127.0.0.1:7897" },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toHaveLength(1);
+    expect(result.secretDiagnostics[0]).toContain("HTTP_PROXY");
+    expect(result.secretDiagnostics[0]).toContain("tools.web.fetch.useTrustedEnvProxy");
+  });
+
+  it("includes both token and proxy diagnostics when both conflicts are present (#95560)", async () => {
+    const sourceConfig = { gateway: { auth: { token: "config-token" } } };
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readConfigSnapshot,
+      resolveConfig,
+      env: {
+        VITEST: "true",
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        HTTPS_PROXY: "http://127.0.0.1:7897",
+      },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toHaveLength(2);
+    expect(result.secretDiagnostics[0]).toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(result.secretDiagnostics[1]).toContain("HTTPS_PROXY");
+  });
+
+  it("does not add a proxy diagnostic when useTrustedEnvProxy is true (#95560)", async () => {
+    const sourceConfig = {
+      tools: { web: { fetch: { useTrustedEnvProxy: true } } },
+    };
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readConfigSnapshot,
+      resolveConfig,
+      env: {
+        VITEST: "true",
+        HTTP_PROXY: "http://127.0.0.1:7897",
+        HTTPS_PROXY: "http://127.0.0.1:7897",
+      },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toStrictEqual([]);
+  });
+
+  it("adds a status diagnostic when lowercase http_proxy is set without useTrustedEnvProxy (#95560)", async () => {
+    const sourceConfig = {};
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readConfigSnapshot,
+      resolveConfig,
+      env: { VITEST: "true", http_proxy: "http://127.0.0.1:7897" },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toHaveLength(1);
+    expect(result.secretDiagnostics[0]).toContain("http_proxy");
+    expect(result.secretDiagnostics[0]).toContain("tools.web.fetch.useTrustedEnvProxy");
+  });
+
+  it("does not add a proxy diagnostic when empty lowercase http_proxy shadows uppercase HTTP_PROXY (#95560)", async () => {
+    const sourceConfig = {};
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readConfigSnapshot,
+      resolveConfig,
+      env: {
+        VITEST: "true",
+        HTTP_PROXY: "http://127.0.0.1:7897",
+        http_proxy: "",
+      },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toStrictEqual([]);
+  });
+
+  it("does not add a proxy diagnostic when only ALL_PROXY is set (#95560)", async () => {
+    const sourceConfig = {};
+    const readConfigSnapshot = vi.fn(async () => ({
+      config: sourceConfig,
+      sourceConfig,
+    }));
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readConfigSnapshot,
+      resolveConfig,
+      env: { VITEST: "true", ALL_PROXY: "socks5://127.0.0.1:7897" },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toStrictEqual([]);
+  });
 });

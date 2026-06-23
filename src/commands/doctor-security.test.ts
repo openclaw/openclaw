@@ -28,6 +28,12 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
   let prevServiceKind: string | undefined;
+  let prevHttpProxy: string | undefined;
+  let prevHttpsProxy: string | undefined;
+  let prevHttpProxyLower: string | undefined;
+  let prevHttpsProxyLower: string | undefined;
+  let prevAllProxy: string | undefined;
+  let prevAllProxyLower: string | undefined;
 
   beforeEach(() => {
     note.mockClear();
@@ -38,9 +44,21 @@ describe("noteSecurityWarnings gateway exposure", () => {
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     prevHome = process.env.HOME;
     prevServiceKind = process.env.OPENCLAW_SERVICE_KIND;
+    prevHttpProxy = process.env.HTTP_PROXY;
+    prevHttpsProxy = process.env.HTTPS_PROXY;
+    prevHttpProxyLower = process.env.http_proxy;
+    prevHttpsProxyLower = process.env.https_proxy;
+    prevAllProxy = process.env.ALL_PROXY;
+    prevAllProxyLower = process.env.all_proxy;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     delete process.env.OPENCLAW_SERVICE_KIND;
+    delete process.env.HTTP_PROXY;
+    delete process.env.HTTPS_PROXY;
+    delete process.env.http_proxy;
+    delete process.env.https_proxy;
+    delete process.env.ALL_PROXY;
+    delete process.env.all_proxy;
   });
 
   afterEach(() => {
@@ -63,6 +81,36 @@ describe("noteSecurityWarnings gateway exposure", () => {
       delete process.env.OPENCLAW_SERVICE_KIND;
     } else {
       process.env.OPENCLAW_SERVICE_KIND = prevServiceKind;
+    }
+    if (prevHttpProxy === undefined) {
+      delete process.env.HTTP_PROXY;
+    } else {
+      process.env.HTTP_PROXY = prevHttpProxy;
+    }
+    if (prevHttpsProxy === undefined) {
+      delete process.env.HTTPS_PROXY;
+    } else {
+      process.env.HTTPS_PROXY = prevHttpsProxy;
+    }
+    if (prevHttpProxyLower === undefined) {
+      delete process.env.http_proxy;
+    } else {
+      process.env.http_proxy = prevHttpProxyLower;
+    }
+    if (prevHttpsProxyLower === undefined) {
+      delete process.env.https_proxy;
+    } else {
+      process.env.https_proxy = prevHttpsProxyLower;
+    }
+    if (prevAllProxy === undefined) {
+      delete process.env.ALL_PROXY;
+    } else {
+      process.env.ALL_PROXY = prevAllProxy;
+    }
+    if (prevAllProxyLower === undefined) {
+      delete process.env.all_proxy;
+    } else {
+      process.env.all_proxy = prevAllProxyLower;
     }
   });
 
@@ -222,6 +270,97 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     const message = lastMessage();
     expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+  });
+
+  it("warns when HTTP_PROXY is set but tools.web.fetch.useTrustedEnvProxy is not enabled (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("HTTP_PROXY");
+    expect(message).toContain("tools.web.fetch.useTrustedEnvProxy");
+    expect(message).toContain("web_fetch will use direct connections");
+  });
+
+  it("warns when HTTPS_PROXY is set but tools.web.fetch.useTrustedEnvProxy is not enabled (#95560)", async () => {
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7897";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("HTTPS_PROXY");
+    expect(message).toContain("tools.web.fetch.useTrustedEnvProxy");
+  });
+
+  it("does not warn about web_fetch proxy env when useTrustedEnvProxy is true (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7897";
+    const cfg = {
+      tools: { web: { fetch: { useTrustedEnvProxy: true } } },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+  });
+
+  it("does not warn about web_fetch proxy env when no proxy env is set (#95560)", async () => {
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+  });
+
+  it("warns when lowercase http_proxy is set but tools.web.fetch.useTrustedEnvProxy is not enabled (#95560)", async () => {
+    process.env.http_proxy = "http://127.0.0.1:7897";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("http_proxy");
+    expect(message).toContain("tools.web.fetch.useTrustedEnvProxy");
+    expect(message).toContain("web_fetch will use direct connections");
+  });
+
+  it("warns when lowercase https_proxy is set but tools.web.fetch.useTrustedEnvProxy is not enabled (#95560)", async () => {
+    process.env.https_proxy = "http://127.0.0.1:7897";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("https_proxy");
+    expect(message).toContain("tools.web.fetch.useTrustedEnvProxy");
+  });
+
+  it("does not warn when empty lowercase http_proxy shadows uppercase HTTP_PROXY (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    process.env.http_proxy = "";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+  });
+
+  it("does not warn when only ALL_PROXY is set (web_fetch dispatcher does not honor ALL_PROXY) (#95560)", async () => {
+    process.env.ALL_PROXY = "socks5://127.0.0.1:7897";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+  });
+
+  it("does not warn when only lowercase all_proxy is set (#95560)", async () => {
+    process.env.all_proxy = "socks5://127.0.0.1:7897";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+  });
+
+  it("warns about HTTP_PROXY but omits ALL_PROXY from the env list when both are set (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    process.env.ALL_PROXY = "socks5://127.0.0.1:7897";
+    const cfg = {} as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("HTTP_PROXY set without tools.web.fetch.useTrustedEnvProxy");
+    expect(message).not.toContain("ALL_PROXY");
   });
 
   it("treats whitespace token as missing", async () => {

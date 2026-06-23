@@ -185,4 +185,109 @@ describe("security audit gateway config findings", () => {
 
     expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
   });
+
+  it("warns when HTTP_PROXY is set but tools.web.fetch.useTrustedEnvProxy is not enabled (#95560)", () => {
+    const cfg: OpenClawConfig = {};
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      HTTP_PROXY: "http://127.0.0.1:7897",
+    });
+
+    expect(
+      hasFindingWithSeverity(
+        "tools.web.fetch.env_proxy_without_use_trusted_env_proxy",
+        "warn",
+        findings,
+      ),
+    ).toBe(true);
+  });
+
+  it("warns when HTTPS_PROXY is set but tools.web.fetch.useTrustedEnvProxy is not enabled (#95560)", () => {
+    const cfg: OpenClawConfig = {};
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      HTTPS_PROXY: "http://127.0.0.1:7897",
+    });
+
+    expect(hasFinding("tools.web.fetch.env_proxy_without_use_trusted_env_proxy", findings)).toBe(
+      true,
+    );
+  });
+
+  it("does not warn about web_fetch proxy env when useTrustedEnvProxy is true (#95560)", () => {
+    const cfg: OpenClawConfig = {
+      tools: { web: { fetch: { useTrustedEnvProxy: true } } },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      HTTP_PROXY: "http://127.0.0.1:7897",
+      HTTPS_PROXY: "http://127.0.0.1:7897",
+    });
+
+    expect(hasFinding("tools.web.fetch.env_proxy_without_use_trusted_env_proxy", findings)).toBe(
+      false,
+    );
+  });
+
+  it("does not warn about web_fetch proxy env when no proxy env is set (#95560)", () => {
+    const cfg: OpenClawConfig = {};
+    const findings = collectGatewayConfigFindings(cfg, cfg, {});
+
+    expect(hasFinding("tools.web.fetch.env_proxy_without_use_trusted_env_proxy", findings)).toBe(
+      false,
+    );
+  });
+
+  it("warns when lowercase http_proxy is set but tools.web.fetch.useTrustedEnvProxy is not enabled (#95560)", () => {
+    const cfg: OpenClawConfig = {};
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      http_proxy: "http://127.0.0.1:7897",
+    });
+
+    expect(hasFinding("tools.web.fetch.env_proxy_without_use_trusted_env_proxy", findings)).toBe(
+      true,
+    );
+  });
+
+  it("warns when lowercase https_proxy is set but tools.web.fetch.useTrustedEnvProxy is not enabled (#95560)", () => {
+    const cfg: OpenClawConfig = {};
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      https_proxy: "http://127.0.0.1:7897",
+    });
+
+    expect(hasFinding("tools.web.fetch.env_proxy_without_use_trusted_env_proxy", findings)).toBe(
+      true,
+    );
+  });
+
+  it("does not warn when empty lowercase http_proxy shadows uppercase HTTP_PROXY (#95560)", () => {
+    const cfg: OpenClawConfig = {};
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      HTTP_PROXY: "http://127.0.0.1:7897",
+      http_proxy: "",
+    });
+
+    expect(hasFinding("tools.web.fetch.env_proxy_without_use_trusted_env_proxy", findings)).toBe(
+      false,
+    );
+  });
+
+  it("does not warn when only ALL_PROXY is set (web_fetch dispatcher does not honor ALL_PROXY) (#95560)", () => {
+    const cfg: OpenClawConfig = {};
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      ALL_PROXY: "socks5://127.0.0.1:7897",
+    });
+
+    expect(hasFinding("tools.web.fetch.env_proxy_without_use_trusted_env_proxy", findings)).toBe(
+      false,
+    );
+  });
+
+  it("does not warn when only lowercase all_proxy is set (#95560)", () => {
+    const cfg: OpenClawConfig = {};
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      all_proxy: "socks5://127.0.0.1:7897",
+    });
+
+    expect(hasFinding("tools.web.fetch.env_proxy_without_use_trusted_env_proxy", findings)).toBe(
+      false,
+    );
+  });
 });
