@@ -94,8 +94,12 @@ export async function resolveMattermostOpaqueTarget(params: {
   } catch (err) {
     if (parseMattermostApiStatus(err) === 404) {
       mattermostOpaqueTargetCache.set(key, false);
+      return { kind: "channel", id: input, to: `channel:${input}` };
     }
-    return { kind: "channel", id: input, to: `channel:${input}` };
+    // Transient errors (5xx, network) or other non-404 responses should not
+    // classify the input as a channel id — let the caller fall through to
+    // parseMattermostTarget and resolveTargetChannelId for proper validation.
+    return null;
   }
 }
 

@@ -26,6 +26,7 @@ const mockState = vi.hoisted(() => ({
   createMattermostDirectChannel: vi.fn(),
   createMattermostDirectChannelWithRetry: vi.fn(),
   createMattermostPost: vi.fn(),
+  fetchMattermostChannel: vi.fn(),
   fetchMattermostChannelByName: vi.fn(),
   fetchMattermostMe: vi.fn(),
   fetchMattermostUser: vi.fn(),
@@ -157,6 +158,7 @@ vi.mock("./client.js", () => ({
   createMattermostDirectChannel: mockState.createMattermostDirectChannel,
   createMattermostDirectChannelWithRetry: mockState.createMattermostDirectChannelWithRetry,
   createMattermostPost: mockState.createMattermostPost,
+  fetchMattermostChannel: mockState.fetchMattermostChannel,
   fetchMattermostChannelByName: mockState.fetchMattermostChannelByName,
   fetchMattermostMe: mockState.fetchMattermostMe,
   fetchMattermostUser: mockState.fetchMattermostUser,
@@ -205,6 +207,7 @@ describe("sendMessageMattermost", () => {
     mockState.createMattermostDirectChannel.mockReset();
     mockState.createMattermostDirectChannelWithRetry.mockReset();
     mockState.createMattermostPost.mockReset();
+    mockState.fetchMattermostChannel.mockReset();
     mockState.fetchMattermostChannelByName.mockReset();
     mockState.fetchMattermostMe.mockReset();
     mockState.fetchMattermostUser.mockReset();
@@ -216,6 +219,9 @@ describe("sendMessageMattermost", () => {
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-1" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-user" });
     mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
+    mockState.fetchMattermostChannel.mockImplementation(
+      (_client: unknown, channelId: string) => Promise.resolve({ id: channelId }),
+    );
     mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
     ({ parseMattermostTarget, sendMessageMattermost } = await import("./send.js"));

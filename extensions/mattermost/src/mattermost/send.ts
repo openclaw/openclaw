@@ -18,6 +18,7 @@ import {
   createMattermostClient,
   createMattermostDirectChannelWithRetry,
   createMattermostPost,
+  fetchMattermostChannel,
   fetchMattermostChannelByName,
   fetchMattermostMe,
   fetchMattermostUserByUsername,
@@ -299,7 +300,27 @@ function mergeDmRetryOptions(
 
 async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Promise<string> {
   if (params.target.kind === "channel") {
-    return params.target.id;
+    try {
+      const client = createMattermostClient({
+        baseUrl: params.baseUrl,
+        botToken: params.token,
+        allowPrivateNetwork: params.allowPrivateNetwork,
+      });
+      await fetchMattermostChannel(client, params.target.id);
+      return params.target.id;
+    } catch {
+      if (params.logger?.debug) {
+        params.logger.debug(
+          `mattermost channel ${params.target.id} not found by id, falling back to name lookup`,
+        );
+      }
+      return await resolveChannelIdByName({
+        baseUrl: params.baseUrl,
+        token: params.token,
+        name: params.target.id,
+        allowPrivateNetwork: params.allowPrivateNetwork,
+      });
+    }
   }
   if (params.target.kind === "channel-name") {
     return await resolveChannelIdByName({
