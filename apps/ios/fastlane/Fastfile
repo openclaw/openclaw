@@ -284,6 +284,7 @@ def normalize_watch_screenshot_status_bar(path)
   script = <<~SWIFT
     import AppKit
     import Foundation
+    import ImageIO
 
     let path = CommandLine.arguments[1]
     let timeText = CommandLine.arguments[2]
@@ -295,36 +296,37 @@ def normalize_watch_screenshot_status_bar(path)
       exit(2)
     }
 
-    let width = CGFloat(cgImage.width)
-    let height = CGFloat(cgImage.height)
-    guard let bitmap = NSBitmapImageRep(
-      bitmapDataPlanes: nil,
-      pixelsWide: Int(width),
-      pixelsHigh: Int(height),
-      bitsPerSample: 8,
-      samplesPerPixel: 4,
-      hasAlpha: true,
-      isPlanar: false,
-      colorSpaceName: .deviceRGB,
-      bytesPerRow: 0,
-      bitsPerPixel: 0),
-      let graphicsContext = NSGraphicsContext(bitmapImageRep: bitmap)
+    let width = cgImage.width
+    let height = cgImage.height
+    let drawWidth = CGFloat(width)
+    let drawHeight = CGFloat(height)
+    let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    guard let bitmapContext = CGContext(
+      data: nil,
+      width: width,
+      height: height,
+      bitsPerComponent: 8,
+      bytesPerRow: width * 4,
+      space: colorSpace,
+      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
     else {
       fputs("Failed to create normalized screenshot bitmap at \\(path)\\n", stderr)
       exit(3)
     }
 
-    bitmap.size = NSSize(width: width, height: height)
+    let graphicsContext = NSGraphicsContext(cgContext: bitmapContext, flipped: false)
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = graphicsContext
+    NSColor.black.setFill()
+    NSBezierPath(rect: NSRect(x: 0, y: 0, width: drawWidth, height: drawHeight)).fill()
     source.draw(
-      in: NSRect(x: 0, y: 0, width: width, height: height),
-      from: NSRect(x: 0, y: 0, width: width, height: height),
-      operation: .copy,
+      in: NSRect(x: 0, y: 0, width: drawWidth, height: drawHeight),
+      from: NSRect(x: 0, y: 0, width: drawWidth, height: drawHeight),
+      operation: .sourceOver,
       fraction: 1.0)
 
     NSColor.black.setFill()
-    NSBezierPath(rect: NSRect(x: width - 146, y: height - 92, width: 124, height: 70)).fill()
+    NSBezierPath(rect: NSRect(x: drawWidth - 146, y: drawHeight - 92, width: 124, height: 70)).fill()
 
     let paragraphStyle = NSMutableParagraphStyle()
     paragraphStyle.alignment = .right
@@ -334,17 +336,26 @@ def normalize_watch_screenshot_status_bar(path)
       .paragraphStyle: paragraphStyle,
     ]
     timeText.draw(
-      in: NSRect(x: width - 134, y: height - 82, width: 102, height: 44),
+      in: NSRect(x: drawWidth - 134, y: drawHeight - 82, width: 102, height: 44),
       withAttributes: attributes)
     NSGraphicsContext.restoreGraphicsState()
 
-    guard let png = bitmap.representation(using: .png, properties: [:])
+    guard let output = bitmapContext.makeImage(),
+          let destination = CGImageDestinationCreateWithURL(
+            URL(fileURLWithPath: path) as CFURL,
+            "public.png" as CFString,
+            1,
+            nil)
     else {
       fputs("Failed to encode normalized screenshot at \\(path)\\n", stderr)
       exit(4)
     }
 
-    try png.write(to: URL(fileURLWithPath: path))
+    CGImageDestinationAddImage(destination, output, nil)
+    guard CGImageDestinationFinalize(destination) else {
+      fputs("Failed to write normalized screenshot at \\(path)\\n", stderr)
+      exit(5)
+    }
   SWIFT
 
   Tempfile.create(["openclaw-watch-status-bar", ".swift"]) do |file|
