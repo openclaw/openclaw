@@ -24,6 +24,8 @@ import {
   runAgentEndSideEffects,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveCopilotAuth } from "./auth-bridge.js";
 import {
@@ -55,10 +57,12 @@ import {
 } from "./replay-shim.js";
 import type { ClientCreateOptions, CopilotClientPool, PoolKey, PooledClient } from "./runtime.js";
 import { createCopilotToolBridge } from "./tool-bridge.js";
+import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
 
 const SUPPORTED_PROVIDERS = new Set(["github-copilot"]);
 const BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS = 5_000;
+const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["ask_user", "builtin:ask_user"] as const;
 
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
@@ -73,6 +77,7 @@ export type CopilotSessionConfig = Pick<
   | "infiniteSessions"
   | "model"
   | "onPermissionRequest"
+  | "onUserInputRequest"
   | "reasoningEffort"
   | "systemMessage"
   | "tools"
@@ -403,6 +408,9 @@ export async function runCopilotAttempt(
   let handle: PooledClient | undefined;
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
+  let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
+  let userInputBridgeRef: ReturnType<typeof createCopilotUserInputBridge> | undefined;
+  let cleanupToolBridge: (() => void) | undefined;
   let releaseError: Error | undefined;
   let downgradedFromResume = false;
   let resumeFailureRecovered = false;
@@ -415,14 +423,22 @@ export async function runCopilotAttempt(
   // `src/agents/pi-embedded-runner/run/types.ts:139`.
   let yieldDetected = false;
 
-  const onAbort = () => {
+  const markExternalAbort = () => {
     abortRequested = true;
     externalAbort = true;
     aborted = true;
+  };
+
+  const abortActiveSession = () => {
+    markExternalAbort();
     if (settled || !sentTurnStarted || !session) {
       return;
     }
     void session.abort().catch(() => undefined);
+  };
+
+  const onAbort = () => {
+    abortActiveSession();
   };
 
   params.abortSignal?.addEventListener("abort", onAbort, { once: true });
@@ -575,6 +591,7 @@ export async function runCopilotAttempt(
             startedAt,
           }),
       });
+      cleanupToolBridge = toolBridge.cleanup;
       sdkTools = toolBridge.sdkTools;
     } catch (error: unknown) {
       const result = createResult(input, {
@@ -655,6 +672,11 @@ export async function runCopilotAttempt(
       });
     };
     const hasNativePromptHook = Boolean(attemptInput.hooksConfig?.onUserPromptSubmitted);
+    const userInputBridge = createCopilotUserInputBridge({
+      paramsForRun: attemptInput,
+      signal: params.abortSignal,
+    });
+    userInputBridgeRef = userInputBridge;
     const sessionConfig = createSessionConfig(
       attemptInput,
       modelRef.id,
@@ -663,6 +685,7 @@ export async function runCopilotAttempt(
       promptBuild.developerInstructions || undefined,
       effectiveWorkspaceDir,
       effectiveCwd,
+      userInputBridge.onUserInputRequest,
       hasNativePromptHook
         ? {
             onUserPromptSubmitted: ({ additionalContext, prompt }) =>
@@ -748,6 +771,29 @@ export async function runCopilotAttempt(
       isAborted: () => aborted,
     });
 
+    const activeRunHandle = {
+      kind: "embedded" as const,
+      queueMessage: async (text: string) => {
+        if (userInputBridge.handleQueuedMessage(text)) {
+          return;
+        }
+        throw new Error("Copilot runtime is not waiting for user input.");
+      },
+      isStreaming: () => !settled && !aborted,
+      isCompacting: () => bridge?.isCompacting() ?? false,
+      sourceReplyDeliveryMode: input.sourceReplyDeliveryMode,
+      cancel: () => {
+        userInputBridge.cancelPending();
+        abortActiveSession();
+      },
+      abort: () => {
+        userInputBridge.cancelPending();
+        abortActiveSession();
+      },
+    };
+    setActiveEmbeddedRun(input.sessionId, activeRunHandle, input.sessionKey, input.sessionFile);
+    activeRunHandleRef = activeRunHandle;
+
     const messageOptions = await createMessageOptions(attemptInput, {
       effectiveCwd,
       effectiveWorkspaceDir,
@@ -806,6 +852,16 @@ export async function runCopilotAttempt(
     }
   } finally {
     settled = true;
+    cleanupToolBridge?.();
+    userInputBridgeRef?.cancelPending();
+    if (activeRunHandleRef) {
+      clearActiveEmbeddedRun(
+        input.sessionId,
+        activeRunHandleRef,
+        input.sessionKey,
+        input.sessionFile,
+      );
+    }
     const retainSessionForDeferredCleanup =
       bridge?.hasObservedCompaction() || (timedOut && bridge?.hasObservedSessionIdle() === false);
     if (retainSessionForDeferredCleanup && bridge && session && handle) {
@@ -1118,6 +1174,7 @@ function createSessionConfig(
   systemMessageContent: string | undefined,
   effectiveWorkspaceDir: string | undefined,
   effectiveCwd: string | undefined,
+  onUserInputRequest: NonNullable<SessionConfig["onUserInputRequest"]>,
   hooksBridgeOptions?: Parameters<typeof createHooksBridge>[1],
 ): CopilotSessionConfig {
   const permissionPolicy = params.permissionPolicy ?? rejectAllPolicy;
@@ -1145,10 +1202,9 @@ function createSessionConfig(
     // tool wrapper, and the SDK gate is a safety net for kinds we
     // don't surface. See permission-bridge.ts and docs/plugins/copilot.md.
     onPermissionRequest: createPermissionBridge(permissionPolicy),
-    // `onUserInputRequest` is intentionally NOT registered: per the SDK
-    // contract, omitting the handler hides the `ask_user` tool from the
-    // model entirely. Interactive ask_user will need a real channel/TUI
-    // prompt bridge before this runtime can expose the handler.
+    // Registers the SDK ask_user bridge. The bridge itself owns pending
+    // reply routing so generic mid-run steering still fails closed.
+    onUserInputRequest,
     // Preserve the shipped native SDK hook contract. These callbacks expose
     // Copilot-specific events and decisions that generic lifecycle hooks do
     // not model.
@@ -1166,8 +1222,9 @@ function createSessionConfig(
     ...(infiniteSessions ? { infiniteSessions } : {}),
     reasoningEffort: params.reasoningEffort,
     tools: sdkTools,
-    // Restrict the SDK's tool catalog to exactly the bridged tool names
-    // returned by `createCopilotToolBridge`. Without this, the SDK
+    // Restrict the SDK's tool catalog to the bridged tool names returned
+    // by `createCopilotToolBridge` plus the built-in `ask_user` tool owned
+    // by `onUserInputRequest`. Without this, the SDK
     // would still expose its native read/write/shell/url/mcp/memory/
     // hook tools to the model alongside our overrides, which would
     // bypass OpenClaw's wrapped-tool enforcement under any permissive
@@ -1182,7 +1239,7 @@ function createSessionConfig(
     // `@github/copilot-sdk/dist/types.d.ts:1198` (it picks
     // `availableTools`, so the spread into `resumeSession` covers
     // the resume path too).
-    availableTools: sdkTools.map((tool) => tool.name),
+    availableTools: buildCopilotAvailableTools(sdkTools),
     workingDirectory:
       effectiveCwd ?? effectiveWorkspaceDir ?? readResolvedAttemptPath(params.workspaceDir),
     // When a task runs from a sub-cwd, keep SDK-native project docs
@@ -1226,6 +1283,10 @@ function createSessionConfig(
         }
       : {}),
   };
+}
+
+function buildCopilotAvailableTools(sdkTools: SdkTool[]): string[] {
+  return [...new Set([...sdkTools.map((tool) => tool.name), ...COPILOT_ASK_USER_AVAILABLE_TOOLS])];
 }
 
 async function createMessageOptions(
