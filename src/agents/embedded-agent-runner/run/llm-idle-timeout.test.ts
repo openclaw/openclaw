@@ -12,6 +12,7 @@ import type { StreamFn } from "../../runtime/index.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
+const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
 
 describe("resolveLlmIdleTimeoutMs", () => {
   it("returns default when config is undefined", () => {
@@ -41,8 +42,24 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 30_000 })).toBe(30_000);
   });
 
-  it("honors explicit cron run timeouts as the idle watchdog ceiling", () => {
-    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(600_000);
+  it("caps explicit cron run timeouts so stream stalls can reach model fallbacks", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(
+      CRON_LLM_IDLE_TIMEOUT_MS,
+    );
+  });
+
+  it("uses shorter explicit cron run timeouts as the idle watchdog ceiling", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 30_000 })).toBe(30_000);
+  });
+
+  it("honors explicit cron run timeouts for local provider model calls", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(600_000);
   });
 
   it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {

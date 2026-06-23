@@ -18,6 +18,9 @@ import type { EmbeddedRunTrigger } from "./params.js";
  * Default idle timeout for LLM streaming responses in milliseconds.
  */
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
+// Cron has its own outer watchdog; stream stalls must fail early enough for
+// the existing model fallback chain to try the next configured candidate.
+const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
 
 /**
  * Detects loopback / private-network / `.local` base URLs. Local providers
@@ -134,6 +137,10 @@ export function resolveLlmIdleTimeoutMs(params?: {
   const hasExplicitRunTimeout =
     typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0;
   const runTimeoutIsNoTimeout = hasExplicitRunTimeout && runTimeoutMs >= MAX_TIMER_TIMEOUT_MS;
+  const baseUrl = params?.model?.baseUrl;
+  const isLocalProvider =
+    typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
+  const isLocalRuntimeModel = isLocalProvider && !isOllamaCloudModel(params?.model);
   const timeoutBounds = [
     runTimeoutIsNoTimeout ? undefined : runTimeoutMs,
     hasExplicitRunTimeout ? undefined : agentTimeoutMs,
@@ -174,7 +181,10 @@ export function resolveLlmIdleTimeoutMs(params?: {
       return 0;
     }
     if (params?.trigger === "cron") {
-      return clampTimeoutMs(runTimeoutMs);
+      if (isLocalRuntimeModel) {
+        return clampTimeoutMs(runTimeoutMs);
+      }
+      return clampTimeoutMs(Math.min(runTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));
     }
     return clampImplicitTimeoutMs(runTimeoutMs);
   }
@@ -190,10 +200,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
   // baseUrl pointing at loopback / private-network / `.local`. Ollama cloud
   // models are still hosted remotely even when proxied through local Ollama, so
   // keep the cloud watchdog for `*:cloud` model ids.
-  const baseUrl = params?.model?.baseUrl;
-  const isLocalProvider =
-    typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl);
-  if (isLocalProvider && !isOllamaCloudModel(params?.model)) {
+  if (isLocalRuntimeModel) {
     return 0;
   }
 
