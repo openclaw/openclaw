@@ -51,7 +51,7 @@ export const SEARCH_COLUMNS = [
   "f.praiseNum",
 ] as const;
 
-export const SEARCH_LIMIT_MAX = 50;
+export const SEARCH_LIMIT_MAX = 500;
 export const SEARCH_LIMIT_DEFAULT = 20;
 
 /** Max buckets returned per stats dimension. */

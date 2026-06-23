@@ -116,7 +116,9 @@ describe("buildSearchQuery", () => {
 
   it("clamps limit into [1, SEARCH_LIMIT_MAX] with a default", () => {
     expect(buildSearchQuery({}, AUTH).sql).toContain(`LIMIT ${SEARCH_LIMIT_DEFAULT}`);
-    expect(buildSearchQuery({ limit: 500 }, AUTH).sql).toContain(`LIMIT ${SEARCH_LIMIT_MAX}`);
+    expect(buildSearchQuery({ limit: SEARCH_LIMIT_MAX + 1 }, AUTH).sql).toContain(
+      `LIMIT ${SEARCH_LIMIT_MAX}`,
+    );
     expect(buildSearchQuery({ limit: 0 }, AUTH).sql).toContain(`LIMIT ${SEARCH_LIMIT_DEFAULT}`);
     expect(buildSearchQuery({ limit: 5 }, AUTH).sql).toContain("LIMIT 5");
     expect(buildSearchQuery({ limit: Number.NaN }, AUTH).sql).toContain(
