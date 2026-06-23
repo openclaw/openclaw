@@ -3,6 +3,7 @@ import {
   allowedSessionStoreRuntimeFileBackedCompatExports,
   collectSessionStoreRuntimeFileBackedCompatExports,
   findGatewaySessionCreateLifecycleViolations,
+  findMemoryHostSessionCorpusBoundaryViolations,
   findSessionAccessorBoundaryViolations,
   findSessionCompactManualTrimBoundaryViolations,
   findSessionAccessorWriteBoundaryViolations,
@@ -10,6 +11,7 @@ import {
   findSessionStoreRuntimeFileBackedCompatExportViolations,
   findTranscriptWriterBoundaryViolations,
   migratedBundledPluginSessionAccessorFiles,
+  migratedMemoryHostSessionCorpusFiles,
   migratedSessionLifecycleCleanupFiles,
   migratedSessionCompactManualTrimFiles,
   migratedSessionAccessorFiles,
@@ -21,6 +23,7 @@ describe("session accessor boundary guard", () => {
   it("ratchets only the files migrated by the session accessor slices", () => {
     expect(migratedSessionAccessorFiles).toEqual(
       new Set([
+        "packages/memory-host-sdk/src/host/session-files.ts",
         "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
         "src/agents/embedded-agent-runner/run/attempt.ts",
         "src/agents/embedded-agent-runner/tool-result-truncation.ts",
@@ -133,6 +136,12 @@ describe("session accessor boundary guard", () => {
         "src/cron/session-reaper.ts",
         "src/infra/heartbeat-runner.ts",
       ]),
+    );
+  });
+
+  it("ratchets only memory-host session corpus files migrated to accessor entries", () => {
+    expect(migratedMemoryHostSessionCorpusFiles).toEqual(
+      new Set(["packages/memory-host-sdk/src/host/session-files.ts"]),
     );
   });
 
@@ -251,6 +260,43 @@ describe("session accessor boundary guard", () => {
       findSessionAccessorBoundaryViolations(`
         import { listSessionEntries } from "../config/sessions/session-accessor.js";
         listSessionEntries({ storePath });
+      `),
+    ).toEqual([]);
+  });
+
+  it("flags legacy memory-host corpus classification calls in migrated entrypoints", () => {
+    expect(
+      findMemoryHostSessionCorpusBoundaryViolations(`
+        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
+          return loadSessionTranscriptClassificationForSessionsDir(resolveSessionTranscriptsDirForAgent(agentId));
+        }
+        export async function listSessionFilesForAgent(agentId) {
+          return readSessionTranscriptClassificationStore("sessions.json");
+        }
+      `),
+    ).toEqual([
+      {
+        line: 3,
+        reason:
+          'calls legacy memory-host session corpus helper "loadSessionTranscriptClassificationForSessionsDir"',
+      },
+      {
+        line: 6,
+        reason:
+          'calls legacy memory-host session corpus helper "readSessionTranscriptClassificationStore"',
+      },
+    ]);
+  });
+
+  it("allows memory-host corpus entrypoints to use the accessor-backed corpus helper", () => {
+    expect(
+      findMemoryHostSessionCorpusBoundaryViolations(`
+        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
+          return listSessionEntries({ agentId });
+        }
+        export async function listSessionFilesForAgent(agentId) {
+          return (await listSessionTranscriptCorpusEntriesForAgent(agentId)).map((entry) => entry.sessionFile);
+        }
       `),
     ).toEqual([]);
   });
