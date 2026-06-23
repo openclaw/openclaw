@@ -118,6 +118,30 @@ function canonicalizePathForComparison(filePath: string): string {
   }
 }
 
+// Stale sessionFile values may point to legacy transcript files under the
+// OpenClaw-owned global sessions directory (e.g. ~/.openclaw/sessions/ from
+// before the per-agent filing overhaul). resolveSessionFilePath silently
+// normalizes those to a generated path for the current sessionId, so the raw
+// legacy file is never archived. Include the raw stale path as a candidate
+// only when it resolves under the known legacy root, with realpath-based
+// canonicalization to prevent symlink escape.
+function pushRawStaleLegacyCandidate(
+  sessionFile: string,
+  candidates: string[],
+  legacyDir: string,
+): void {
+  const trimmed = sessionFile.trim();
+  if (!trimmed) {
+    return;
+  }
+  const canonicalLegacyDir = canonicalizePathForComparison(legacyDir);
+  const resolved = canonicalizePathForComparison(trimmed);
+  const relative = path.relative(canonicalLegacyDir, resolved);
+  if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+    candidates.push(resolved);
+  }
+}
+
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -126,6 +150,8 @@ export function resolveSessionTranscriptCandidates(
 ): string[] {
   const candidates: string[] = [];
   const sessionFileState = classifySessionTranscriptCandidate(sessionId, sessionFile);
+  const home = resolveRequiredHomeDir(process.env, os.homedir);
+  const legacyDir = path.join(home, ".openclaw", "sessions");
   const pushCandidate = (resolve: () => string): void => {
     try {
       candidates.push(resolve());
@@ -146,11 +172,14 @@ export function resolveSessionTranscriptCandidates(
       pushCandidate(() =>
         resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
+      pushRawStaleLegacyCandidate(sessionFile, candidates, legacyDir);
     }
   } else if (sessionFile) {
     if (agentId) {
       if (sessionFileState !== "stale") {
         pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
+      } else {
+        pushRawStaleLegacyCandidate(sessionFile, candidates, legacyDir);
       }
     } else {
       const trimmed = sessionFile.trim();
@@ -164,13 +193,12 @@ export function resolveSessionTranscriptCandidates(
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
     if (sessionFile && sessionFileState === "stale") {
       pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
+      pushRawStaleLegacyCandidate(sessionFile, candidates, legacyDir);
     }
   }
 
   // Keep the legacy global sessions directory as a final candidate so tagged
   // upgrades can still find transcripts created before per-agent paths.
-  const home = resolveRequiredHomeDir(process.env, os.homedir);
-  const legacyDir = path.join(home, ".openclaw", "sessions");
   pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
 
   return uniqueStrings(candidates);

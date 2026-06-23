@@ -2363,6 +2363,18 @@ describe("resolveSessionTranscriptCandidates safety", () => {
     );
     expect(candidates).toContain(path.resolve(staleSessionFile));
   });
+
+  test("includes stale sessionFile under legacy transcript root", () => {
+    vi.stubEnv("OPENCLAW_HOME", "/srv/openclaw-home");
+    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
+    const sessionId = "11111111-1111-4111-8111-111111111111";
+    const legacyStalePath =
+      "/srv/openclaw-home/.openclaw/sessions/22222222-2222-4222-8222-222222222222.jsonl";
+
+    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, legacyStalePath);
+
+    expect(candidates.map((value) => path.resolve(value))).toContain(path.resolve(legacyStalePath));
+  });
 });
 
 describe("archiveSessionTranscripts", () => {
@@ -2439,6 +2451,96 @@ describe("archiveSessionTranscripts", () => {
       expect(archived[0]).toContain(".deleted.");
       expect(fs.existsSync(transcriptPath)).toBe(false);
     });
+  });
+
+  test("archives legacy-root stale transcript on reset", () => {
+    const oldSessionId = "22222222-2222-4222-8222-222222222222";
+    const currentSessionId = "11111111-1111-4111-8111-111111111111";
+    const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const stalePath = path.join(legacyDir, `${oldSessionId}.jsonl`);
+    fs.writeFileSync(stalePath, '{"type":"session"}\n', "utf-8");
+
+    const archived = archiveSessionTranscripts({
+      sessionId: currentSessionId,
+      storePath,
+      sessionFile: stalePath,
+      reason: "reset",
+    });
+
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toContain(".reset.");
+    expect(fs.existsSync(stalePath)).toBe(false);
+    expect(fs.existsSync(archived[0])).toBe(true);
+  });
+
+  test("archives legacy-root stale transcript on delete", () => {
+    const oldSessionId = "22222222-2222-4222-8222-222222222222";
+    const currentSessionId = "11111111-1111-4111-8111-111111111111";
+    const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const stalePath = path.join(legacyDir, `${oldSessionId}.jsonl`);
+    fs.writeFileSync(stalePath, '{"type":"session"}\n', "utf-8");
+
+    const archived = archiveSessionTranscripts({
+      sessionId: currentSessionId,
+      storePath,
+      sessionFile: stalePath,
+      reason: "deleted",
+    });
+
+    expect(archived).toHaveLength(1);
+    expect(archived[0]).toContain(".deleted.");
+    expect(fs.existsSync(stalePath)).toBe(false);
+    expect(fs.existsSync(archived[0])).toBe(true);
+  });
+
+  test("does not archive stale transcript outside legacy root", () => {
+    const oldSessionId = "22222222-2222-4222-8222-222222222222";
+    const currentSessionId = "11111111-1111-4111-8111-111111111111";
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-outside-root-"));
+    try {
+      const outsidePath = path.join(outsideDir, `${oldSessionId}.jsonl`);
+      fs.writeFileSync(outsidePath, '{"type":"session"}\n', "utf-8");
+
+      const archived = archiveSessionTranscripts({
+        sessionId: currentSessionId,
+        storePath,
+        sessionFile: outsidePath,
+        reason: "reset",
+      });
+
+      expect(archived).toStrictEqual([]);
+      expect(fs.existsSync(outsidePath)).toBe(true);
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  test("does not archive symlink under legacy root that resolves outside", () => {
+    const oldSessionId = "22222222-2222-4222-8222-222222222222";
+    const currentSessionId = "11111111-1111-4111-8111-111111111111";
+    const legacyDir = path.join(tmpDir, ".openclaw", "sessions");
+    fs.mkdirSync(legacyDir, { recursive: true });
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-symlink-target-"));
+    try {
+      const targetPath = path.join(outsideDir, "target.jsonl");
+      fs.writeFileSync(targetPath, '{"type":"session"}\n', "utf-8");
+      const symlinkPath = path.join(legacyDir, `${oldSessionId}.jsonl`);
+      fs.symlinkSync(targetPath, symlinkPath);
+
+      const archived = archiveSessionTranscripts({
+        sessionId: currentSessionId,
+        storePath,
+        sessionFile: symlinkPath,
+        reason: "reset",
+      });
+
+      expect(archived).toStrictEqual([]);
+      expect(fs.existsSync(targetPath)).toBe(true);
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
   });
 });
 
