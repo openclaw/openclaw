@@ -10,6 +10,7 @@ This file is generated from `docs/**/*.md` and `docs/**/*.mdx` headings to help 
 Do not edit it by hand; run `pnpm docs:map:gen`.
 
 ## agent-runtime-architecture.md
+
 - Route: /agent-runtime-architecture
 - Headings:
   - H2: Runtime Layout
@@ -19,6 +20,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## announcements/bluebubbles-imessage.md
+
 - Route: /announcements/bluebubbles-imessage
 - Headings:
   - H1: BlueBubbles removal and the imsg iMessage path
@@ -28,6 +30,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: See also
 
 ## auth-credential-semantics.md
+
 - Route: /auth-credential-semantics
 - Headings:
   - H2: Stable probe reason codes
@@ -44,16 +47,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## automation/auth-monitoring.md
+
 - Route: /automation/auth-monitoring
 - Headings:
   - H2: Related
 
 ## automation/clawflow.md
+
 - Route: /automation/clawflow
 - Headings:
   - H2: Related
 
 ## automation/cron-jobs.md
+
 - Route: /automation/cron-jobs
 - Headings:
   - H2: Quick start
@@ -80,16 +86,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## automation/cron-vs-heartbeat.md
+
 - Route: /automation/cron-vs-heartbeat
 - Headings:
   - H2: Related
 
 ## automation/gmail-pubsub.md
+
 - Route: /automation/gmail-pubsub
 - Headings:
   - H2: Related
 
 ## automation/hooks.md
+
 - Route: /automation/hooks
 - Headings:
   - H2: Choose the right surface
@@ -119,6 +128,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## automation/index.md
+
 - Route: /automation
 - Headings:
   - H2: Quick decision guide
@@ -135,11 +145,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## automation/poll.md
+
 - Route: /automation/poll
 - Headings:
   - H2: Related
 
 ## automation/standing-orders.md
+
 - Route: /automation/standing-orders
 - Headings:
   - H2: Why standing orders
@@ -158,6 +170,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## automation/taskflow.md
+
 - Route: /automation/taskflow
 - Headings:
   - H2: When to use Task Flow
@@ -172,6 +185,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## automation/tasks.md
+
 - Route: /automation/tasks
 - Headings:
   - H2: TL;DR
@@ -190,21 +204,25 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## automation/troubleshooting.md
+
 - Route: /automation/troubleshooting
 - Headings:
   - H2: Related
 
 ## automation/webhook.md
+
 - Route: /automation/webhook
 - Headings:
   - H2: Related
 
 ## brave-search.md
+
 - Route: /brave-search
 - Headings:
   - H2: Related
 
 ## channels/access-groups.md
+
 - Route: /channels/access-groups
 - Headings:
   - H2: Static message sender groups
@@ -216,6 +234,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
 
 ## channels/ambient-room-events.md
+
 - Route: /channels/ambient-room-events
 - Headings:
   - H2: Recommended setup
@@ -230,6 +249,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/bot-loop-protection.md
+
 - Route: /channels/bot-loop-protection
 - Headings:
   - H1: Bot loop protection
@@ -239,6 +259,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Channel support
 
 ## channels/broadcast-groups.md
+
 - Route: /channels/broadcast-groups
 - Headings:
   - H2: Overview
@@ -265,6 +286,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/channel-routing.md
+
 - Route: /channels/channel-routing
 - Headings:
   - H1: Channels & routing
@@ -282,6 +304,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/clickclack.md
+
 - Route: /channels/clickclack
 - Headings:
   - H2: Quick setup
@@ -291,6 +314,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
 
 ## channels/discord.md
+
 - Route: /channels/discord
 - Headings:
   - H2: Quick setup
@@ -314,6 +338,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/feishu.md
+
 - Route: /channels/feishu
 - Headings:
   - H2: Quick start
@@ -359,6 +384,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/googlechat.md
+
 - Route: /channels/googlechat
 - Headings:
   - H2: Install
@@ -377,6 +403,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/group-messages.md
+
 - Route: /channels/group-messages
 - Headings:
   - H2: Behavior
@@ -388,6 +415,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/groups.md
+
 - Route: /channels/groups
 - Headings:
   - H2: Beginner intro (2 minutes)
@@ -409,6 +437,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/imessage-from-bluebubbles.md
+
 - Route: /channels/imessage-from-bluebubbles
 - Headings:
   - H2: Migration checklist
@@ -424,6 +453,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/imessage.md
+
 - Route: /channels/imessage
 - Headings:
   - H2: Quick setup
@@ -447,6 +477,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/index.md
+
 - Route: /channels
 - Headings:
   - H2: Delivery notes
@@ -454,6 +485,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
 
 ## channels/irc.md
+
 - Route: /channels/irc
 - Headings:
   - H2: Quick start
@@ -470,6 +502,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/line.md
+
 - Route: /channels/line
 - Headings:
   - H2: Install
@@ -484,6 +517,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/location.md
+
 - Route: /channels/location
 - Headings:
   - H2: Text formatting
@@ -492,6 +526,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/matrix-migration.md
+
 - Route: /channels/matrix-migration
 - Headings:
   - H2: What the migration does automatically
@@ -508,6 +543,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/matrix-presentation.md
+
 - Route: /channels/matrix-presentation
 - Headings:
   - H2: Event content
@@ -518,6 +554,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Media messages
 
 ## channels/matrix-push-rules.md
+
 - Route: /channels/matrix-push-rules
 - Headings:
   - H2: Prerequisites
@@ -527,6 +564,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/matrix.md
+
 - Route: /channels/matrix
 - Headings:
   - H2: Install
@@ -581,6 +619,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/mattermost.md
+
 - Route: /channels/mattermost
 - Headings:
   - H2: Install
@@ -603,6 +642,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/msteams.md
+
 - Route: /channels/msteams
 - Headings:
   - H2: Bundled plugin
@@ -667,6 +707,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/nextcloud-talk.md
+
 - Route: /channels/nextcloud-talk
 - Headings:
   - H2: Bundled plugin
@@ -679,6 +720,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/nostr.md
+
 - Route: /channels/nostr
 - Headings:
   - H2: Bundled plugin
@@ -705,6 +747,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/pairing.md
+
 - Route: /channels/pairing
 - Headings:
   - H2: 1) DM pairing (inbound chat access)
@@ -720,6 +763,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## channels/qa-channel.md
+
 - Route: /channels/qa-channel
 - Headings:
   - H2: What it does
@@ -728,6 +772,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/qqbot.md
+
 - Route: /channels/qqbot
 - Headings:
   - H2: Install
@@ -744,6 +789,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/raft.md
+
 - Route: /channels/raft
 - Headings:
   - H2: Install
@@ -755,6 +801,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: References
 
 ## channels/signal.md
+
 - Route: /channels/signal
 - Headings:
   - H2: Prerequisites
@@ -779,6 +826,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/slack.md
+
 - Route: /channels/slack
 - Headings:
   - H2: Choosing Socket Mode or HTTP Request URLs
@@ -816,6 +864,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/sms.md
+
 - Route: /channels/sms
 - Headings:
   - H2: Before you begin
@@ -840,6 +889,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Messages arrive but the agent does not answer
 
 ## channels/synology-chat.md
+
 - Route: /channels/synology-chat
 - Headings:
   - H2: Bundled plugin
@@ -853,6 +903,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/telegram.md
+
 - Route: /channels/telegram
 - Headings:
   - H2: Quick setup
@@ -867,6 +918,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/tlon.md
+
 - Route: /channels/tlon
 - Headings:
   - H2: Bundled plugin
@@ -885,6 +937,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/troubleshooting.md
+
 - Route: /channels/troubleshooting
 - Headings:
   - H2: Command ladder
@@ -908,6 +961,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/twitch.md
+
 - Route: /channels/twitch
 - Headings:
   - H2: Bundled plugin
@@ -930,6 +984,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/wechat.md
+
 - Route: /channels/wechat
 - Headings:
   - H2: Naming
@@ -943,6 +998,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## channels/whatsapp.md
+
 - Route: /channels/whatsapp
 - Headings:
   - H2: Install (on demand)
@@ -968,6 +1024,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/yuanbao.md
+
 - Route: /channels/yuanbao
 - Headings:
   - H2: Quick start
@@ -1004,6 +1061,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/zalo.md
+
 - Route: /channels/zalo
 - Headings:
   - H2: Bundled plugin
@@ -1026,6 +1084,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## channels/zaloclawbot.md
+
 - Route: /channels/zaloclawbot
 - Headings:
   - H2: Compatibility
@@ -1041,6 +1100,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
 
 ## channels/zalouser.md
+
 - Route: /channels/zalouser
 - Headings:
   - H2: Bundled plugin
@@ -1059,6 +1119,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## ci.md
+
 - Route: /ci
 - Headings:
   - H2: Pipeline overview
@@ -1098,6 +1159,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## clawhub/cli.md
+
 - Route: /clawhub/cli
 - Headings:
   - H1: ClawHub CLI
@@ -1106,6 +1168,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## clawhub/publishing.md
+
 - Route: /clawhub/publishing
 - Headings:
   - H1: Publishing on ClawHub
@@ -1117,6 +1180,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Package scope must match selected owner
 
 ## cli/acp.md
+
 - Route: /cli/acp
 - Headings:
   - H2: What this is not
@@ -1135,6 +1199,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/agent.md
+
 - Route: /cli/agent
 - Headings:
   - H1: openclaw agent
@@ -1145,6 +1210,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/agents.md
+
 - Route: /cli/agents
 - Headings:
   - H1: openclaw agents
@@ -1165,6 +1231,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/approvals.md
+
 - Route: /cli/approvals
 - Headings:
   - H1: openclaw approvals
@@ -1178,6 +1245,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/backup.md
+
 - Route: /cli/backup
 - Headings:
   - H1: openclaw backup
@@ -1188,6 +1256,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/browser.md
+
 - Route: /cli/browser
 - Headings:
   - H1: openclaw browser
@@ -1206,6 +1275,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/channels.md
+
 - Route: /cli/channels
 - Headings:
   - H1: openclaw channels
@@ -1219,6 +1289,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/clawbot.md
+
 - Route: /cli/clawbot
 - Headings:
   - H1: openclaw clawbot
@@ -1226,6 +1297,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/commitments.md
+
 - Route: /cli/commitments
 - Headings:
   - H2: Usage
@@ -1235,6 +1307,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/completion.md
+
 - Route: /cli/completion
 - Headings:
   - H1: openclaw completion
@@ -1244,6 +1317,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/config.md
+
 - Route: /cli/config
 - Headings:
   - H2: Root options
@@ -1262,6 +1336,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/configure.md
+
 - Route: /cli/configure
 - Headings:
   - H1: openclaw configure
@@ -1270,6 +1345,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/crestodian.md
+
 - Route: /cli/crestodian
 - Headings:
   - H1: openclaw crestodian
@@ -1284,6 +1360,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/cron.md
+
 - Route: /cli/cron
 - Headings:
   - H1: openclaw cron
@@ -1311,6 +1388,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/daemon.md
+
 - Route: /cli/daemon
 - Headings:
   - H1: openclaw daemon
@@ -1321,12 +1399,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/dashboard.md
+
 - Route: /cli/dashboard
 - Headings:
   - H1: openclaw dashboard
   - H2: Related
 
 ## cli/devices.md
+
 - Route: /cli/devices
 - Headings:
   - H1: openclaw devices
@@ -1345,6 +1425,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/directory.md
+
 - Route: /cli/directory
 - Headings:
   - H1: openclaw directory
@@ -1358,6 +1439,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/dns.md
+
 - Route: /cli/dns
 - Headings:
   - H1: openclaw dns
@@ -1366,6 +1448,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/docs.md
+
 - Route: /cli/docs
 - Headings:
   - H1: openclaw docs
@@ -1377,6 +1460,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/doctor.md
+
 - Route: /cli/doctor
 - Headings:
   - H1: openclaw doctor
@@ -1391,6 +1475,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/flows.md
+
 - Route: /cli/flows
 - Headings:
   - H1: openclaw tasks flow
@@ -1400,6 +1485,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/gateway.md
+
 - Route: /cli/gateway
 - Headings:
   - H2: Run the Gateway
@@ -1422,6 +1508,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/health.md
+
 - Route: /cli/health
 - Headings:
   - H1: openclaw health
@@ -1429,6 +1516,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/hooks.md
+
 - Route: /cli/hooks
 - Headings:
   - H1: openclaw hooks
@@ -1448,6 +1536,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/index.md
+
 - Route: /cli
 - Headings:
   - H2: Command pages
@@ -1459,6 +1548,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/infer.md
+
 - Route: /cli/infer
 - Headings:
   - H2: Turn infer into a skill
@@ -1479,6 +1569,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/logs.md
+
 - Route: /cli/logs
 - Headings:
   - H1: openclaw logs
@@ -1489,6 +1580,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/mcp.md
+
 - Route: /cli/mcp
 - Headings:
   - H2: Choose the right MCP path
@@ -1519,6 +1611,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/memory.md
+
 - Route: /cli/memory
 - Headings:
   - H1: openclaw memory
@@ -1528,6 +1621,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/message.md
+
 - Route: /cli/message
 - Headings:
   - H1: openclaw message
@@ -1547,6 +1641,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/migrate.md
+
 - Route: /cli/migrate
 - Headings:
   - H1: openclaw migrate
@@ -1568,6 +1663,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/models.md
+
 - Route: /cli/models
 - Headings:
   - H1: openclaw models
@@ -1579,6 +1675,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/node.md
+
 - Route: /cli/node
 - Headings:
   - H1: openclaw node
@@ -1592,6 +1689,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/nodes.md
+
 - Route: /cli/nodes
 - Headings:
   - H1: openclaw nodes
@@ -1600,6 +1698,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/onboard.md
+
 - Route: /cli/onboard
 - Headings:
   - H1: openclaw onboard
@@ -1611,6 +1710,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Common follow-up commands
 
 ## cli/pairing.md
+
 - Route: /cli/pairing
 - Headings:
   - H1: openclaw pairing
@@ -1621,6 +1721,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/path.md
+
 - Route: /cli/path
 - Headings:
   - H1: openclaw path
@@ -1650,6 +1751,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/plugins.md
+
 - Route: /cli/plugins
 - Headings:
   - H2: Commands
@@ -1667,6 +1769,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/policy.md
+
 - Route: /cli/policy
 - Headings:
   - H1: openclaw policy
@@ -1695,6 +1798,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/proxy.md
+
 - Route: /cli/proxy
 - Headings:
   - H1: openclaw proxy
@@ -1705,6 +1809,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/qr.md
+
 - Route: /cli/qr
 - Headings:
   - H1: openclaw qr
@@ -1714,12 +1819,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/reset.md
+
 - Route: /cli/reset
 - Headings:
   - H1: openclaw reset
   - H2: Related
 
 ## cli/sandbox.md
+
 - Route: /cli/sandbox
 - Headings:
   - H2: Overview
@@ -1740,6 +1847,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/secrets.md
+
 - Route: /cli/secrets
 - Headings:
   - H1: openclaw secrets
@@ -1752,6 +1860,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/security.md
+
 - Route: /cli/security
 - Headings:
   - H1: openclaw security
@@ -1761,6 +1870,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/sessions.md
+
 - Route: /cli/sessions
 - Headings:
   - H1: openclaw sessions
@@ -1770,6 +1880,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/setup.md
+
 - Route: /cli/setup
 - Headings:
   - H1: openclaw setup
@@ -1780,6 +1891,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/skills.md
+
 - Route: /cli/skills
 - Headings:
   - H1: openclaw skills
@@ -1788,11 +1900,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/status.md
+
 - Route: /cli/status
 - Headings:
   - H2: Related
 
 ## cli/system.md
+
 - Route: /cli/system
 - Headings:
   - H1: openclaw system
@@ -1804,6 +1918,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/tasks.md
+
 - Route: /cli/tasks
 - Headings:
   - H2: Usage
@@ -1819,6 +1934,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/transcripts.md
+
 - Route: /cli/transcripts
 - Headings:
   - H1: openclaw transcripts
@@ -1829,6 +1945,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Configuration
 
 ## cli/tui.md
+
 - Route: /cli/tui
 - Headings:
   - H1: openclaw tui
@@ -1838,12 +1955,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/uninstall.md
+
 - Route: /cli/uninstall
 - Headings:
   - H1: openclaw uninstall
   - H2: Related
 
 ## cli/update.md
+
 - Route: /cli/update
 - Headings:
   - H1: openclaw update
@@ -1861,6 +1980,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/voicecall.md
+
 - Route: /cli/voicecall
 - Headings:
   - H1: openclaw voicecall
@@ -1884,6 +2004,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/webhooks.md
+
 - Route: /cli/webhooks
 - Headings:
   - H1: openclaw webhooks
@@ -1900,6 +2021,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/wiki.md
+
 - Route: /cli/wiki
 - Headings:
   - H1: openclaw wiki
@@ -1924,6 +2046,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## cli/workboard.md
+
 - Route: /cli/workboard
 - Headings:
   - H2: Usage
@@ -1940,6 +2063,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/active-memory.md
+
 - Route: /concepts/active-memory
 - Headings:
   - H2: Quick start
@@ -1969,6 +2093,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related pages
 
 ## concepts/agent-loop.md
+
 - Route: /concepts/agent-loop
 - Headings:
   - H2: Entry points
@@ -1990,6 +2115,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/agent-runtimes.md
+
 - Route: /concepts/agent-runtimes
 - Headings:
   - H2: Codex surfaces
@@ -2001,6 +2127,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/agent-workspace.md
+
 - Route: /concepts/agent-workspace
 - Headings:
   - H2: Default location
@@ -2014,6 +2141,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/agent.md
+
 - Route: /concepts/agent
 - Headings:
   - H2: Workspace (required)
@@ -2028,6 +2156,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/architecture.md
+
 - Route: /concepts/architecture
 - Headings:
   - H2: Overview
@@ -2046,6 +2175,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/channel-docking.md
+
 - Route: /concepts/channel-docking
 - Headings:
   - H2: Example
@@ -2057,6 +2187,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
 
 ## concepts/commitments.md
+
 - Route: /concepts/commitments
 - Headings:
   - H2: Enable commitments
@@ -2069,6 +2200,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/compaction.md
+
 - Route: /concepts/compaction
 - Headings:
   - H2: How it works
@@ -2087,6 +2219,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/context-engine.md
+
 - Route: /concepts/context-engine
 - Headings:
   - H2: Quick start
@@ -2106,6 +2239,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/context.md
+
 - Route: /concepts/context
 - Headings:
   - H2: Quick start (inspect context)
@@ -2124,6 +2258,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/delegate-architecture.md
+
 - Route: /concepts/delegate-architecture
 - Headings:
   - H2: What is a delegate?
@@ -2149,6 +2284,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/dreaming.md
+
 - Route: /concepts/dreaming
 - Headings:
   - H2: What dreaming writes
@@ -2167,6 +2303,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/experimental-features.md
+
 - Route: /concepts/experimental-features
 - Headings:
   - H2: Currently documented flags
@@ -2179,6 +2316,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/features.md
+
 - Route: /concepts/features
 - Headings:
   - H2: Highlights
@@ -2186,6 +2324,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/mantis-slack-desktop-runbook.md
+
 - Route: /concepts/mantis-slack-desktop-runbook
 - Headings:
   - H2: Storage model
@@ -2198,6 +2337,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/mantis.md
+
 - Route: /concepts/mantis
 - Headings:
   - H2: Goals
@@ -2218,6 +2358,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Open questions
 
 ## concepts/markdown-formatting.md
+
 - Route: /concepts/markdown-formatting
 - Headings:
   - H2: Goals
@@ -2233,6 +2374,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/memory-builtin.md
+
 - Route: /concepts/memory-builtin
 - Headings:
   - H2: What it provides
@@ -2245,6 +2387,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/memory-honcho.md
+
 - Route: /concepts/memory-honcho
 - Headings:
   - H2: What it provides
@@ -2259,6 +2402,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/memory-qmd.md
+
 - Route: /concepts/memory-qmd
 - Headings:
   - H2: What it adds over builtin
@@ -2278,6 +2422,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/memory-search.md
+
 - Route: /concepts/memory-search
 - Headings:
   - H2: Quick start
@@ -2294,6 +2439,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/memory.md
+
 - Route: /concepts/memory
 - Headings:
   - H2: How it works
@@ -2313,6 +2459,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/message-lifecycle-refactor.md
+
 - Route: /concepts/message-lifecycle-refactor
 - Headings:
   - H2: Problems
@@ -2351,6 +2498,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/messages.md
+
 - Route: /concepts/messages
 - Headings:
   - H2: Message flow (high level)
@@ -2368,6 +2516,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/model-failover.md
+
 - Route: /concepts/model-failover
 - Headings:
   - H2: Runtime flow
@@ -2390,6 +2539,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related config
 
 ## concepts/model-providers.md
+
 - Route: /concepts/model-providers
 - Headings:
   - H2: Quick rules
@@ -2423,6 +2573,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/models.md
+
 - Route: /concepts/models
 - Headings:
   - H2: How model selection works
@@ -2441,6 +2592,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/multi-agent.md
+
 - Route: /concepts/multi-agent
 - Headings:
   - H2: What is "one agent"?
@@ -2460,6 +2612,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/oauth.md
+
 - Route: /concepts/oauth
 - Headings:
   - H2: The token sink (why it exists)
@@ -2476,6 +2629,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/parallel-specialist-lanes.md
+
 - Route: /concepts/parallel-specialist-lanes
 - Headings:
   - H2: First principles
@@ -2487,6 +2641,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/personal-agent-benchmark-pack.md
+
 - Route: /concepts/personal-agent-benchmark-pack
 - Headings:
   - H2: Scenarios
@@ -2494,6 +2649,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Extending The Pack
 
 ## concepts/presence.md
+
 - Route: /concepts/presence
 - Headings:
   - H2: Presence fields (what shows up)
@@ -2512,6 +2668,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/progress-drafts.md
+
 - Route: /concepts/progress-drafts
 - Headings:
   - H2: Quick start
@@ -2525,6 +2682,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/qa-e2e-automation.md
+
 - Route: /concepts/qa-e2e-automation
 - Headings:
   - H2: Command surface
@@ -2547,6 +2705,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## concepts/qa-matrix.md
+
 - Route: /concepts/qa-matrix
 - Headings:
   - H2: Quick start
@@ -2563,6 +2722,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/queue-steering.md
+
 - Route: /concepts/queue-steering
 - Headings:
   - H2: Runtime boundary
@@ -2573,6 +2733,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/queue.md
+
 - Route: /concepts/queue
 - Headings:
   - H2: Why
@@ -2588,6 +2749,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/retry.md
+
 - Route: /concepts/retry
 - Headings:
   - H2: Goals
@@ -2601,6 +2763,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/session-pruning.md
+
 - Route: /concepts/session-pruning
 - Headings:
   - H2: Why it matters
@@ -2613,6 +2776,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/session-tool.md
+
 - Route: /concepts/session-tool
 - Headings:
   - H2: Available tools
@@ -2625,6 +2789,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/session.md
+
 - Route: /concepts/session
 - Headings:
   - H2: How messages are routed
@@ -2638,6 +2803,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/soul.md
+
 - Route: /concepts/soul
 - Headings:
   - H2: What belongs in SOUL.md
@@ -2648,6 +2814,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/streaming.md
+
 - Route: /concepts/streaming
 - Headings:
   - H2: Block streaming (channel messages)
@@ -2663,6 +2830,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/system-prompt.md
+
 - Route: /concepts/system-prompt
 - Headings:
   - H2: Structure
@@ -2675,6 +2843,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/timezone.md
+
 - Route: /concepts/timezone
 - Headings:
   - H2: Three timezone surfaces
@@ -2683,6 +2852,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/typebox.md
+
 - Route: /concepts/typebox
 - Headings:
   - H2: Mental model (30 seconds)
@@ -2700,6 +2870,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/typing-indicators.md
+
 - Route: /concepts/typing-indicators
 - Headings:
   - H2: Defaults
@@ -2709,6 +2880,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## concepts/usage-tracking.md
+
 - Route: /concepts/usage-tracking
 - Headings:
   - H2: What it is
@@ -2723,6 +2895,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## date-time.md
+
 - Route: /date-time
 - Headings:
   - H2: Message envelopes (local by default)
@@ -2735,6 +2908,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## debug/node-issue.md
+
 - Route: /debug/node-issue
 - Headings:
   - H1: Node + tsx "\\name is not a function" crash
@@ -2751,6 +2925,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## diagnostics/flags.md
+
 - Route: /diagnostics/flags
 - Headings:
   - H2: How it works
@@ -2764,6 +2939,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/authentication.md
+
 - Route: /gateway/authentication
 - Headings:
   - H2: Recommended setup (API key, any provider)
@@ -2783,6 +2959,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/background-process.md
+
 - Route: /gateway/background-process
 - Headings:
   - H2: exec tool
@@ -2792,6 +2969,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/bonjour.md
+
 - Route: /gateway/bonjour
 - Headings:
   - H2: Wide-area Bonjour (Unicast DNS-SD) over Tailscale
@@ -2815,6 +2993,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## gateway/bridge-protocol.md
+
 - Route: /gateway/bridge-protocol
 - Headings:
   - H2: Why it existed
@@ -2827,6 +3006,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/cli-backends.md
+
 - Route: /gateway/cli-backends
 - Headings:
   - H2: Beginner-friendly quick start
@@ -2848,6 +3028,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/config-agents.md
+
 - Route: /gateway/config-agents
 - Headings:
   - H2: Agent defaults
@@ -2896,6 +3077,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/config-channels.md
+
 - Route: /gateway/config-channels
 - Headings:
   - H2: Channels
@@ -2922,6 +3104,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/config-tools.md
+
 - Route: /gateway/config-tools
 - Headings:
   - H2: Tools
@@ -2948,6 +3131,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/configuration-examples.md
+
 - Route: /gateway/configuration-examples
 - Headings:
   - H2: Quick start
@@ -2967,6 +3151,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/configuration-reference.md
+
 - Route: /gateway/configuration-reference
 - Headings:
   - H2: Channels
@@ -3017,6 +3202,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/configuration.md
+
 - Route: /gateway/configuration
 - Headings:
   - H2: Minimal config
@@ -3033,6 +3219,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/diagnostics.md
+
 - Route: /gateway/diagnostics
 - Headings:
   - H2: Quick start
@@ -3045,6 +3232,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/discovery.md
+
 - Route: /gateway/discovery
 - Headings:
   - H2: Terms
@@ -3060,6 +3248,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/doctor.md
+
 - Route: /gateway/doctor
 - Headings:
   - H2: Quick start
@@ -3071,6 +3260,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/external-apps.md
+
 - Route: /gateway/external-apps
 - Headings:
   - H2: What is available today
@@ -3079,6 +3269,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/gateway-lock.md
+
 - Route: /gateway/gateway-lock
 - Headings:
   - H2: Why
@@ -3088,6 +3279,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/health.md
+
 - Route: /gateway/health
 - Headings:
   - H2: Quick checks
@@ -3100,6 +3292,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/heartbeat.md
+
 - Route: /gateway/heartbeat
 - Headings:
   - H2: Quick start (beginner)
@@ -3128,6 +3321,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/index.md
+
 - Route: /gateway
 - Headings:
   - H2: 5-minute local startup
@@ -3150,6 +3344,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/local-model-services.md
+
 - Route: /gateway/local-model-services
 - Headings:
   - H2: How it works
@@ -3161,6 +3356,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/local-models.md
+
 - Route: /gateway/local-models
 - Headings:
   - H2: Hardware floor
@@ -3175,6 +3371,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/logging.md
+
 - Route: /gateway/logging
 - Headings:
   - H1: Logging
@@ -3187,6 +3384,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/multiple-gateways.md
+
 - Route: /gateway/multiple-gateways
 - Headings:
   - H2: Best recommended setup
@@ -3202,11 +3400,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/network-model.md
+
 - Route: /gateway/network-model
 - Headings:
   - H2: Related
 
 ## gateway/openai-http-api.md
+
 - Route: /gateway/openai-http-api
 - Headings:
   - H2: Authentication
@@ -3230,6 +3430,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/openresponses-http-api.md
+
 - Route: /gateway/openresponses-http-api
 - Headings:
   - H2: Authentication, security, and routing
@@ -3250,6 +3451,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/openshell.md
+
 - Route: /gateway/openshell
 - Headings:
   - H2: Prerequisites
@@ -3271,6 +3473,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/opentelemetry.md
+
 - Route: /gateway/opentelemetry
 - Headings:
   - H2: How it fits together
@@ -3297,6 +3500,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/operator-scopes.md
+
 - Route: /gateway/operator-scopes
 - Headings:
   - H2: Roles
@@ -3307,6 +3511,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Shared-secret auth
 
 ## gateway/pairing.md
+
 - Route: /gateway/pairing
 - Headings:
   - H2: Concepts
@@ -3325,6 +3530,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/prometheus.md
+
 - Route: /gateway/prometheus
 - Headings:
   - H2: Quick start
@@ -3336,6 +3542,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/protocol.md
+
 - Route: /gateway/protocol
 - Headings:
   - H2: Transport
@@ -3367,6 +3574,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/remote-gateway-readme.md
+
 - Route: /gateway/remote-gateway-readme
 - Headings:
   - H1: Running OpenClaw.app with a Remote Gateway
@@ -3385,6 +3593,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/remote.md
+
 - Route: /gateway/remote
 - Headings:
   - H2: The core idea
@@ -3409,6 +3618,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/sandbox-vs-tool-policy-vs-elevated.md
+
 - Route: /gateway/sandbox-vs-tool-policy-vs-elevated
 - Headings:
   - H2: Quick debug
@@ -3423,6 +3633,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/sandboxing.md
+
 - Route: /gateway/sandboxing
 - Headings:
   - H2: What gets sandboxed
@@ -3445,6 +3656,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/secrets-plan-contract.md
+
 - Route: /gateway/secrets-plan-contract
 - Headings:
   - H2: Plan file shape
@@ -3459,6 +3671,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## gateway/secrets.md
+
 - Route: /gateway/secrets
 - Headings:
   - H2: Goals and runtime model
@@ -3484,11 +3697,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/security/audit-checks.md
+
 - Route: /gateway/security/audit-checks
 - Headings:
   - H2: Related
 
 ## gateway/security/exposure-runbook.md
+
 - Route: /gateway/security/exposure-runbook
 - Headings:
   - H2: Choose the exposure pattern
@@ -3503,6 +3718,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Review checklist
 
 ## gateway/security/index.md
+
 - Route: /gateway/security
 - Headings:
   - H2: Scope first: personal assistant security model
@@ -3578,6 +3794,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Reporting security issues
 
 ## gateway/security/secure-file-operations.md
+
 - Route: /gateway/security/secure-file-operations
 - Headings:
   - H2: Default: no Python helper
@@ -3586,6 +3803,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Plugin and core guidance
 
 ## gateway/security/shrinkwrap.md
+
 - Route: /gateway/security/shrinkwrap
 - Headings:
   - H2: The easy version
@@ -3593,6 +3811,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Technical details
 
 ## gateway/tailscale.md
+
 - Route: /gateway/tailscale
 - Headings:
   - H2: Modes
@@ -3609,6 +3828,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/tools-invoke-http-api.md
+
 - Route: /gateway/tools-invoke-http-api
 - Headings:
   - H2: Authentication
@@ -3620,6 +3840,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/troubleshooting.md
+
 - Route: /gateway/troubleshooting
 - Headings:
   - H2: Command ladder
@@ -3646,6 +3867,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## gateway/trusted-proxy-auth.md
+
 - Route: /gateway/trusted-proxy-auth
 - Headings:
   - H2: When to use
@@ -3666,6 +3888,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## help/debugging.md
+
 - Route: /help/debugging
 - Headings:
   - H2: Runtime debug overrides
@@ -3683,6 +3906,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## help/environment.md
+
 - Route: /help/environment
 - Headings:
   - H2: Precedence (highest → lowest)
@@ -3702,12 +3926,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## help/faq-first-run.md
+
 - Route: /help/faq-first-run
 - Headings:
   - H2: Quick start and first-run setup
   - H2: Related
 
 ## help/faq-models.md
+
 - Route: /help/faq-models
 - Headings:
   - H2: Models: defaults, selection, aliases, switching
@@ -3716,6 +3942,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## help/faq.md
+
 - Route: /help/faq
 - Headings:
   - H2: First 60 seconds if something is broken
@@ -3738,6 +3965,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## help/index.md
+
 - Route: /help
 - Headings:
   - H2: FAQ
@@ -3746,6 +3974,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Community and meta
 
 ## help/scripts.md
+
 - Route: /help/scripts
 - Headings:
   - H2: Conventions
@@ -3755,6 +3984,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## help/testing-live.md
+
 - Route: /help/testing-live
 - Headings:
   - H2: Live: local smoke commands
@@ -3783,6 +4013,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## help/testing-updates-plugins.md
+
 - Route: /help/testing-updates-plugins
 - Headings:
   - H2: What we protect
@@ -3795,6 +4026,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Failure triage
 
 ## help/testing.md
+
 - Route: /help/testing
 - Headings:
   - H2: Quick start
@@ -3826,6 +4058,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## help/troubleshooting.md
+
 - Route: /help/troubleshooting
 - Headings:
   - H2: First 60 seconds
@@ -3839,6 +4072,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## index.md
+
 - Route: /
 - Headings:
   - H1: OpenClaw 🦞
@@ -3852,6 +4086,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Learn more
 
 ## install/ansible.md
+
 - Route: /install/ansible
 - Headings:
   - H2: Prerequisites
@@ -3868,6 +4103,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/azure.md
+
 - Route: /install/azure
 - Headings:
   - H2: What you will do
@@ -3881,6 +4117,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/bun.md
+
 - Route: /install/bun
 - Headings:
   - H2: Install
@@ -3889,6 +4126,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/clawdock.md
+
 - Route: /install/clawdock
 - Headings:
   - H2: Install
@@ -3903,6 +4141,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/development-channels.md
+
 - Route: /install/development-channels
 - Headings:
   - H2: Switching channels
@@ -3915,6 +4154,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/digitalocean.md
+
 - Route: /install/digitalocean
 - Headings:
   - H2: Prerequisites
@@ -3926,6 +4166,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/docker-vm-runtime.md
+
 - Route: /install/docker-vm-runtime
 - Headings:
   - H2: Bake required binaries into the image
@@ -3935,6 +4176,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/docker.md
+
 - Route: /install/docker
 - Headings:
   - H2: Is Docker right for me?
@@ -3956,6 +4198,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/exe-dev.md
+
 - Route: /install/exe-dev
 - Headings:
   - H2: Beginner quick path
@@ -3973,6 +4216,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/fly.md
+
 - Route: /install/fly
 - Headings:
   - H2: What you need
@@ -3999,6 +4243,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/gcp.md
+
 - Route: /install/gcp
 - Headings:
   - H2: What are we doing (simple terms)?
@@ -4010,6 +4255,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/hetzner.md
+
 - Route: /install/hetzner
 - Headings:
   - H2: Goal
@@ -4021,6 +4267,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/hostinger.md
+
 - Route: /install/hostinger
 - Headings:
   - H2: Prerequisites
@@ -4032,6 +4279,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/index.md
+
 - Route: /install
 - Headings:
   - H2: System requirements
@@ -4048,6 +4296,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting: openclaw not found
 
 ## install/installer.md
+
 - Route: /install/installer
 - Headings:
   - H2: Quick commands
@@ -4066,6 +4315,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/kubernetes.md
+
 - Route: /install/kubernetes
 - Headings:
   - H2: Why not Helm?
@@ -4090,6 +4340,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/macos-vm.md
+
 - Route: /install/macos-vm
 - Headings:
   - H2: Recommended default (most users)
@@ -4113,6 +4364,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## install/migrating-claude.md
+
 - Route: /install/migrating-claude
 - Headings:
   - H2: Two ways to import
@@ -4126,6 +4378,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/migrating-hermes.md
+
 - Route: /install/migrating-hermes
 - Headings:
   - H2: Two ways to import
@@ -4139,6 +4392,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/migrating.md
+
 - Route: /install/migrating
 - Headings:
   - H2: Import from another agent system
@@ -4150,6 +4404,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/nix.md
+
 - Route: /install/nix
 - Headings:
   - H2: What you get
@@ -4161,6 +4416,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/node.md
+
 - Route: /install/node
 - Headings:
   - H2: Check your version
@@ -4171,6 +4427,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/northflank.mdx
+
 - Route: /install/northflank
 - Headings:
   - H1: Northflank
@@ -4180,6 +4437,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Next steps
 
 ## install/oracle.md
+
 - Route: /install/oracle
 - Headings:
   - H2: Prerequisites
@@ -4193,6 +4451,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/podman.md
+
 - Route: /install/podman
 - Headings:
   - H2: Prerequisites
@@ -4205,6 +4464,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/railway.mdx
+
 - Route: /install/railway
 - Headings:
   - H1: Railway
@@ -4220,6 +4480,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Next steps
 
 ## install/raspberry-pi.md
+
 - Route: /install/raspberry-pi
 - Headings:
   - H2: Hardware compatibility
@@ -4234,6 +4495,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/render.mdx
+
 - Route: /install/render
 - Headings:
   - H1: Render
@@ -4259,6 +4521,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Next steps
 
 ## install/uninstall.md
+
 - Route: /install/uninstall
 - Headings:
   - H2: Easy path (CLI still installed)
@@ -4272,6 +4535,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/updating.md
+
 - Route: /install/updating
 - Headings:
   - H2: Recommended: openclaw update
@@ -4291,6 +4555,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## install/upstash.md
+
 - Route: /install/upstash
 - Headings:
   - H2: Prerequisites
@@ -4304,6 +4569,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## logging.md
+
 - Route: /logging
 - Headings:
   - H2: Where logs live
@@ -4327,6 +4593,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## network.md
+
 - Route: /network
 - Headings:
   - H2: Core model
@@ -4337,6 +4604,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## nodes/audio.md
+
 - Route: /nodes/audio
 - Headings:
   - H2: What works
@@ -4355,6 +4623,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## nodes/camera.md
+
 - Route: /nodes/camera
 - Headings:
   - H2: iOS node
@@ -4376,6 +4645,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## nodes/images.md
+
 - Route: /nodes/images
 - Headings:
   - H2: Goals
@@ -4388,6 +4658,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## nodes/index.md
+
 - Route: /nodes
 - Headings:
   - H2: Pairing + status
@@ -4417,6 +4688,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Mac node mode
 
 ## nodes/location-command.md
+
 - Route: /nodes/location-command
 - Headings:
   - H2: TL;DR
@@ -4430,6 +4702,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## nodes/media-understanding.md
+
 - Route: /nodes/media-understanding
 - Headings:
   - H2: Goals
@@ -4450,6 +4723,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## nodes/talk.md
+
 - Route: /nodes/talk
 - Headings:
   - H2: Behavior (macOS)
@@ -4461,6 +4735,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## nodes/troubleshooting.md
+
 - Route: /nodes/troubleshooting
 - Headings:
   - H2: Command ladder
@@ -4472,6 +4747,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## nodes/voicewake.md
+
 - Route: /nodes/voicewake
 - Headings:
   - H2: Storage (Gateway host)
@@ -4486,6 +4762,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## openclaw-agent-runtime.md
+
 - Route: /openclaw-agent-runtime
 - Headings:
   - H2: Type checking and linting
@@ -4496,11 +4773,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## perplexity.md
+
 - Route: /perplexity
 - Headings:
   - H2: Related
 
 ## plan/codex-context-engine-harness.md
+
 - Route: /plan/codex-context-engine-harness
 - Headings:
   - H2: Status
@@ -4537,6 +4816,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Acceptance criteria
 
 ## plan/ui-channels.md
+
 - Route: /plan/ui-channels
 - Headings:
   - H2: Status
@@ -4553,6 +4833,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/android.md
+
 - Route: /platforms/android
 - Headings:
   - H2: Support snapshot
@@ -4575,11 +4856,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/digitalocean.md
+
 - Route: /platforms/digitalocean
 - Headings:
   - H2: Related
 
 ## platforms/easyrunner.md
+
 - Route: /platforms/easyrunner
 - Headings:
   - H2: Before you begin
@@ -4590,6 +4873,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
 
 ## platforms/index.md
+
 - Route: /platforms
 - Headings:
   - H2: Choose your OS
@@ -4599,6 +4883,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/ios.md
+
 - Route: /platforms/ios
 - Headings:
   - H2: What it does
@@ -4619,6 +4904,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## platforms/linux.md
+
 - Route: /platforms/linux
 - Headings:
   - H2: Beginner quick path (VPS)
@@ -4630,6 +4916,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/bundled-gateway.md
+
 - Route: /platforms/mac/bundled-gateway
 - Headings:
   - H2: Install the CLI (required for local mode)
@@ -4639,6 +4926,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/canvas.md
+
 - Route: /platforms/mac/canvas
 - Headings:
   - H2: Where Canvas lives
@@ -4651,6 +4939,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/child-process.md
+
 - Route: /platforms/mac/child-process
 - Headings:
   - H2: Default behavior (launchd)
@@ -4661,6 +4950,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/dev-setup.md
+
 - Route: /platforms/mac/dev-setup
 - Headings:
   - H1: macOS developer setup
@@ -4675,6 +4965,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/health.md
+
 - Route: /platforms/mac/health
 - Headings:
   - H1: Health Checks on macOS
@@ -4685,12 +4976,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/icon.md
+
 - Route: /platforms/mac/icon
 - Headings:
   - H1: Menu Bar Icon States
   - H2: Related
 
 ## platforms/mac/logging.md
+
 - Route: /platforms/mac/logging
 - Headings:
   - H1: Logging (macOS)
@@ -4701,6 +4994,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/menu-bar.md
+
 - Route: /platforms/mac/menu-bar
 - Headings:
   - H2: What is shown
@@ -4716,6 +5010,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/peekaboo.md
+
 - Route: /platforms/mac/peekaboo
 - Headings:
   - H2: What this is (and is not)
@@ -4728,6 +5023,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/permissions.md
+
 - Route: /platforms/mac/permissions
 - Headings:
   - H2: Requirements for stable permissions
@@ -4737,6 +5033,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/remote.md
+
 - Route: /platforms/mac/remote
 - Headings:
   - H2: Modes
@@ -4752,6 +5049,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/signing.md
+
 - Route: /platforms/mac/signing
 - Headings:
   - H1: mac signing (debug builds)
@@ -4762,6 +5060,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/skills.md
+
 - Route: /platforms/mac/skills
 - Headings:
   - H2: Data source
@@ -4771,6 +5070,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/voice-overlay.md
+
 - Route: /platforms/mac/voice-overlay
 - Headings:
   - H1: Voice Overlay Lifecycle (macOS)
@@ -4782,6 +5082,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/voicewake.md
+
 - Route: /platforms/mac/voicewake
 - Headings:
   - H1: Voice Wake & Push-to-Talk
@@ -4798,6 +5099,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/webchat.md
+
 - Route: /platforms/mac/webchat
 - Headings:
   - H2: Launch and debugging
@@ -4807,6 +5109,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/mac/xpc.md
+
 - Route: /platforms/mac/xpc
 - Headings:
   - H1: OpenClaw macOS IPC architecture
@@ -4820,6 +5123,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## platforms/macos.md
+
 - Route: /platforms/macos
 - Headings:
   - H2: What it does
@@ -4838,16 +5142,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## platforms/oracle.md
+
 - Route: /platforms/oracle
 - Headings:
   - H2: Related
 
 ## platforms/raspberry-pi.md
+
 - Route: /platforms/raspberry-pi
 - Headings:
   - H2: Related
 
 ## platforms/windows.md
+
 - Route: /platforms/windows
 - Headings:
   - H2: Recommended: Windows Hub
@@ -4869,6 +5176,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/adding-capabilities.md
+
 - Route: /plugins/adding-capabilities
 - Headings:
   - H2: When to create a capability
@@ -4882,6 +5190,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/admin-http-rpc.md
+
 - Route: /plugins/admin-http-rpc
 - Headings:
   - H2: Before you enable it
@@ -4897,11 +5206,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/agent-tools.md
+
 - Route: /plugins/agent-tools
 - Headings:
   - H2: Related
 
 ## plugins/architecture-internals.md
+
 - Route: /plugins/architecture-internals
 - Headings:
   - H2: Load pipeline
@@ -4931,6 +5242,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/architecture.md
+
 - Route: /plugins/architecture
 - Headings:
   - H2: Public capability model
@@ -4954,11 +5266,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/building-extensions.md
+
 - Route: /plugins/building-extensions
 - Headings:
   - H2: Related
 
 ## plugins/building-plugins.md
+
 - Route: /plugins/building-plugins
 - Headings:
   - H2: Requirements
@@ -4972,6 +5286,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/bundles.md
+
 - Route: /plugins/bundles
 - Headings:
   - H2: Why bundles exist
@@ -4992,6 +5307,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/cli-backend-plugins.md
+
 - Route: /plugins/cli-backend-plugins
 - Headings:
   - H2: What the plugin owns
@@ -5006,6 +5322,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/codex-computer-use.md
+
 - Route: /plugins/codex-computer-use
 - Headings:
   - H2: OpenClaw.app and Peekaboo
@@ -5023,6 +5340,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/codex-harness-reference.md
+
 - Route: /plugins/codex-harness-reference
 - Headings:
   - H2: Plugin config surface
@@ -5038,6 +5356,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/codex-harness-runtime.md
+
 - Route: /plugins/codex-harness-runtime
 - Headings:
   - H2: Overview
@@ -5053,6 +5372,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/codex-harness.md
+
 - Route: /plugins/codex-harness
 - Headings:
   - H2: Requirements
@@ -5074,6 +5394,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/codex-native-plugins.md
+
 - Route: /plugins/codex-native-plugins
 - Headings:
   - H2: Requirements
@@ -5088,6 +5409,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/community.md
+
 - Route: /plugins/community
 - Headings:
   - H2: Find plugins
@@ -5095,6 +5417,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/compatibility.md
+
 - Route: /plugins/compatibility
 - Headings:
   - H2: Compatibility registry
@@ -5107,6 +5430,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Release notes
 
 ## plugins/copilot.md
+
 - Route: /plugins/copilot
 - Headings:
   - H2: Requirements
@@ -5125,6 +5449,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/dependency-resolution.md
+
 - Route: /plugins/dependency-resolution
 - Headings:
   - H2: Responsibility split
@@ -5135,6 +5460,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Legacy cleanup
 
 ## plugins/google-meet.md
+
 - Route: /plugins/google-meet
 - Headings:
   - H2: Quick start
@@ -5163,6 +5489,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/hooks.md
+
 - Route: /plugins/hooks
 - Headings:
   - H2: Quick start
@@ -5180,6 +5507,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/install-overrides.md
+
 - Route: /plugins/install-overrides
 - Headings:
   - H2: Environment
@@ -5187,12 +5515,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Package E2E
 
 ## plugins/llama-cpp.md
+
 - Route: /plugins/llama-cpp
 - Headings:
   - H2: Configuration
   - H2: Native Runtime
 
 ## plugins/manage-plugins.md
+
 - Route: /plugins/manage-plugins
 - Headings:
   - H2: List and search plugins
@@ -5205,6 +5535,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/manifest.md
+
 - Route: /plugins/manifest
 - Headings:
   - H2: What this file does
@@ -5242,6 +5573,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/memory-lancedb.md
+
 - Route: /plugins/memory-lancedb
 - Headings:
   - H2: Installation
@@ -5260,6 +5592,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/memory-wiki.md
+
 - Route: /plugins/memory-wiki
 - Headings:
   - H2: What it adds
@@ -5286,6 +5619,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/message-presentation.md
+
 - Route: /plugins/message-presentation
 - Headings:
   - H2: Contract
@@ -5300,6 +5634,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/oc-path.md
+
 - Route: /plugins/oc-path
 - Headings:
   - H2: Why enable it
@@ -5312,6 +5647,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/plugin-inventory.md
+
 - Route: /plugins/plugin-inventory
 - Headings:
   - H1: Plugin inventory
@@ -5322,6 +5658,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Source checkout only
 
 ## plugins/plugin-permission-requests.md
+
 - Route: /plugins/plugin-permission-requests
 - Headings:
   - H2: Choose the right gate
@@ -5333,11 +5670,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/reference.md
+
 - Route: /plugins/reference
 - Headings:
   - H1: Plugin reference
 
 ## plugins/reference/acpx.md
+
 - Route: /plugins/reference/acpx
 - Headings:
   - H1: ACPx plugin
@@ -5346,6 +5685,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/admin-http-rpc.md
+
 - Route: /plugins/reference/admin-http-rpc
 - Headings:
   - H1: Admin Http Rpc plugin
@@ -5354,6 +5694,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/alibaba.md
+
 - Route: /plugins/reference/alibaba
 - Headings:
   - H1: Alibaba plugin
@@ -5362,6 +5703,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/amazon-bedrock-mantle.md
+
 - Route: /plugins/reference/amazon-bedrock-mantle
 - Headings:
   - H1: Amazon Bedrock Mantle plugin
@@ -5370,6 +5712,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/amazon-bedrock.md
+
 - Route: /plugins/reference/amazon-bedrock
 - Headings:
   - H1: Amazon Bedrock plugin
@@ -5378,6 +5721,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/anthropic-vertex.md
+
 - Route: /plugins/reference/anthropic-vertex
 - Headings:
   - H1: Anthropic Vertex plugin
@@ -5386,6 +5730,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Claude Fable 5
 
 ## plugins/reference/anthropic.md
+
 - Route: /plugins/reference/anthropic
 - Headings:
   - H1: Anthropic plugin
@@ -5394,6 +5739,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/arcee.md
+
 - Route: /plugins/reference/arcee
 - Headings:
   - H1: Arcee plugin
@@ -5402,6 +5748,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/azure-speech.md
+
 - Route: /plugins/reference/azure-speech
 - Headings:
   - H1: Azure Speech plugin
@@ -5410,6 +5757,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/bonjour.md
+
 - Route: /plugins/reference/bonjour
 - Headings:
   - H1: Bonjour plugin
@@ -5417,6 +5765,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/brave.md
+
 - Route: /plugins/reference/brave
 - Headings:
   - H1: Brave plugin
@@ -5425,6 +5774,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/browser.md
+
 - Route: /plugins/reference/browser
 - Headings:
   - H1: Browser plugin
@@ -5433,6 +5783,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/byteplus.md
+
 - Route: /plugins/reference/byteplus
 - Headings:
   - H1: BytePlus plugin
@@ -5440,6 +5791,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/canvas.md
+
 - Route: /plugins/reference/canvas
 - Headings:
   - H1: Canvas plugin
@@ -5447,6 +5799,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/cerebras.md
+
 - Route: /plugins/reference/cerebras
 - Headings:
   - H1: Cerebras plugin
@@ -5455,6 +5808,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/chutes.md
+
 - Route: /plugins/reference/chutes
 - Headings:
   - H1: Chutes plugin
@@ -5463,6 +5817,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/clickclack.md
+
 - Route: /plugins/reference/clickclack
 - Headings:
   - H1: Clickclack plugin
@@ -5471,6 +5826,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/cloudflare-ai-gateway.md
+
 - Route: /plugins/reference/cloudflare-ai-gateway
 - Headings:
   - H1: Cloudflare AI Gateway plugin
@@ -5479,6 +5835,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/codex-supervisor.md
+
 - Route: /plugins/reference/codex-supervisor
 - Headings:
   - H1: Codex Supervisor plugin
@@ -5487,6 +5844,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Session Listing
 
 ## plugins/reference/codex.md
+
 - Route: /plugins/reference/codex
 - Headings:
   - H1: Codex plugin
@@ -5495,6 +5853,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/cohere.md
+
 - Route: /plugins/reference/cohere
 - Headings:
   - H1: Cohere plugin
@@ -5503,6 +5862,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/comfy.md
+
 - Route: /plugins/reference/comfy
 - Headings:
   - H1: ComfyUI plugin
@@ -5511,6 +5871,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/copilot-proxy.md
+
 - Route: /plugins/reference/copilot-proxy
 - Headings:
   - H1: Copilot Proxy plugin
@@ -5518,6 +5879,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/copilot.md
+
 - Route: /plugins/reference/copilot
 - Headings:
   - H1: Copilot plugin
@@ -5526,6 +5888,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/deepgram.md
+
 - Route: /plugins/reference/deepgram
 - Headings:
   - H1: Deepgram plugin
@@ -5534,6 +5897,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/deepinfra.md
+
 - Route: /plugins/reference/deepinfra
 - Headings:
   - H1: DeepInfra plugin
@@ -5542,6 +5906,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/deepseek.md
+
 - Route: /plugins/reference/deepseek
 - Headings:
   - H1: DeepSeek plugin
@@ -5550,6 +5915,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/diagnostics-otel.md
+
 - Route: /plugins/reference/diagnostics-otel
 - Headings:
   - H1: Diagnostics OpenTelemetry plugin
@@ -5557,6 +5923,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/diagnostics-prometheus.md
+
 - Route: /plugins/reference/diagnostics-prometheus
 - Headings:
   - H1: Diagnostics Prometheus plugin
@@ -5564,6 +5931,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/diffs-language-pack.md
+
 - Route: /plugins/reference/diffs-language-pack
 - Headings:
   - H1: Diffs Language Pack plugin
@@ -5572,6 +5940,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Added languages
 
 ## plugins/reference/diffs.md
+
 - Route: /plugins/reference/diffs
 - Headings:
   - H1: Diffs plugin
@@ -5579,6 +5948,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/discord.md
+
 - Route: /plugins/reference/discord
 - Headings:
   - H1: Discord plugin
@@ -5587,6 +5957,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/document-extract.md
+
 - Route: /plugins/reference/document-extract
 - Headings:
   - H1: Document Extract plugin
@@ -5595,6 +5966,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/duckduckgo.md
+
 - Route: /plugins/reference/duckduckgo
 - Headings:
   - H1: DuckDuckGo plugin
@@ -5603,6 +5975,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/elevenlabs.md
+
 - Route: /plugins/reference/elevenlabs
 - Headings:
   - H1: Elevenlabs plugin
@@ -5611,6 +5984,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/exa.md
+
 - Route: /plugins/reference/exa
 - Headings:
   - H1: Exa plugin
@@ -5619,6 +5993,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/fal.md
+
 - Route: /plugins/reference/fal
 - Headings:
   - H1: fal plugin
@@ -5627,6 +6002,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/feishu.md
+
 - Route: /plugins/reference/feishu
 - Headings:
   - H1: Feishu plugin
@@ -5635,6 +6011,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/file-transfer.md
+
 - Route: /plugins/reference/file-transfer
 - Headings:
   - H1: File Transfer plugin
@@ -5642,6 +6019,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/firecrawl.md
+
 - Route: /plugins/reference/firecrawl
 - Headings:
   - H1: Firecrawl plugin
@@ -5650,6 +6028,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/fireworks.md
+
 - Route: /plugins/reference/fireworks
 - Headings:
   - H1: Fireworks plugin
@@ -5658,6 +6037,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/github-copilot.md
+
 - Route: /plugins/reference/github-copilot
 - Headings:
   - H1: GitHub Copilot plugin
@@ -5666,6 +6046,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/gmi.md
+
 - Route: /plugins/reference/gmi
 - Headings:
   - H1: Gmi plugin
@@ -5674,6 +6055,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/google-meet.md
+
 - Route: /plugins/reference/google-meet
 - Headings:
   - H1: Google Meet plugin
@@ -5682,6 +6064,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/google.md
+
 - Route: /plugins/reference/google
 - Headings:
   - H1: Google plugin
@@ -5690,6 +6073,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/googlechat.md
+
 - Route: /plugins/reference/googlechat
 - Headings:
   - H1: Google Chat plugin
@@ -5698,6 +6082,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/gradium.md
+
 - Route: /plugins/reference/gradium
 - Headings:
   - H1: Gradium plugin
@@ -5706,6 +6091,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/groq.md
+
 - Route: /plugins/reference/groq
 - Headings:
   - H1: Groq plugin
@@ -5714,6 +6100,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/huggingface.md
+
 - Route: /plugins/reference/huggingface
 - Headings:
   - H1: Hugging Face plugin
@@ -5722,6 +6109,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/imessage.md
+
 - Route: /plugins/reference/imessage
 - Headings:
   - H1: iMessage plugin
@@ -5730,6 +6118,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/inworld.md
+
 - Route: /plugins/reference/inworld
 - Headings:
   - H1: Inworld plugin
@@ -5738,6 +6127,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/irc.md
+
 - Route: /plugins/reference/irc
 - Headings:
   - H1: IRC plugin
@@ -5746,6 +6136,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/kilocode.md
+
 - Route: /plugins/reference/kilocode
 - Headings:
   - H1: Kilocode plugin
@@ -5754,6 +6145,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/kimi.md
+
 - Route: /plugins/reference/kimi
 - Headings:
   - H1: Kimi plugin
@@ -5762,6 +6154,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/line.md
+
 - Route: /plugins/reference/line
 - Headings:
   - H1: LINE plugin
@@ -5770,6 +6163,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/litellm.md
+
 - Route: /plugins/reference/litellm
 - Headings:
   - H1: LiteLLM plugin
@@ -5778,6 +6172,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/llama-cpp.md
+
 - Route: /plugins/reference/llama-cpp
 - Headings:
   - H1: Llama Cpp plugin
@@ -5786,6 +6181,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/llm-task.md
+
 - Route: /plugins/reference/llm-task
 - Headings:
   - H1: LLM Task plugin
@@ -5793,6 +6189,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/lmstudio.md
+
 - Route: /plugins/reference/lmstudio
 - Headings:
   - H1: LM Studio plugin
@@ -5801,6 +6198,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/lobster.md
+
 - Route: /plugins/reference/lobster
 - Headings:
   - H1: Lobster plugin
@@ -5808,6 +6206,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/matrix.md
+
 - Route: /plugins/reference/matrix
 - Headings:
   - H1: Matrix plugin
@@ -5816,6 +6215,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/mattermost.md
+
 - Route: /plugins/reference/mattermost
 - Headings:
   - H1: Mattermost plugin
@@ -5824,6 +6224,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/memory-core.md
+
 - Route: /plugins/reference/memory-core
 - Headings:
   - H1: Memory Core plugin
@@ -5831,6 +6232,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/memory-lancedb.md
+
 - Route: /plugins/reference/memory-lancedb
 - Headings:
   - H1: Memory Lancedb plugin
@@ -5839,6 +6241,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/memory-wiki.md
+
 - Route: /plugins/reference/memory-wiki
 - Headings:
   - H1: Memory Wiki plugin
@@ -5847,6 +6250,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/microsoft-foundry.md
+
 - Route: /plugins/reference/microsoft-foundry
 - Headings:
   - H1: Microsoft Foundry plugin
@@ -5858,6 +6262,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
 
 ## plugins/reference/microsoft.md
+
 - Route: /plugins/reference/microsoft
 - Headings:
   - H1: Microsoft plugin
@@ -5865,6 +6270,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/migrate-claude.md
+
 - Route: /plugins/reference/migrate-claude
 - Headings:
   - H1: Migrate Claude plugin
@@ -5872,6 +6278,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/migrate-hermes.md
+
 - Route: /plugins/reference/migrate-hermes
 - Headings:
   - H1: Migrate Hermes plugin
@@ -5879,6 +6286,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/minimax.md
+
 - Route: /plugins/reference/minimax
 - Headings:
   - H1: MiniMax plugin
@@ -5887,6 +6295,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/mistral.md
+
 - Route: /plugins/reference/mistral
 - Headings:
   - H1: Mistral plugin
@@ -5895,6 +6304,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/moonshot.md
+
 - Route: /plugins/reference/moonshot
 - Headings:
   - H1: Moonshot plugin
@@ -5903,6 +6313,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/msteams.md
+
 - Route: /plugins/reference/msteams
 - Headings:
   - H1: Microsoft Teams plugin
@@ -5911,6 +6322,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/nextcloud-talk.md
+
 - Route: /plugins/reference/nextcloud-talk
 - Headings:
   - H1: Nextcloud Talk plugin
@@ -5919,6 +6331,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/nostr.md
+
 - Route: /plugins/reference/nostr
 - Headings:
   - H1: Nostr plugin
@@ -5927,6 +6340,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/novita.md
+
 - Route: /plugins/reference/novita
 - Headings:
   - H1: Novita plugin
@@ -5935,6 +6349,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/nvidia.md
+
 - Route: /plugins/reference/nvidia
 - Headings:
   - H1: NVIDIA plugin
@@ -5943,6 +6358,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/oc-path.md
+
 - Route: /plugins/reference/oc-path
 - Headings:
   - H1: Oc Path plugin
@@ -5951,6 +6367,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/ollama.md
+
 - Route: /plugins/reference/ollama
 - Headings:
   - H1: Ollama plugin
@@ -5959,6 +6376,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/open-prose.md
+
 - Route: /plugins/reference/open-prose
 - Headings:
   - H1: Open Prose plugin
@@ -5966,6 +6384,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/openai.md
+
 - Route: /plugins/reference/openai
 - Headings:
   - H1: OpenAI plugin
@@ -5974,6 +6393,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/opencode-go.md
+
 - Route: /plugins/reference/opencode-go
 - Headings:
   - H1: OpenCode Go plugin
@@ -5982,6 +6402,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/opencode.md
+
 - Route: /plugins/reference/opencode
 - Headings:
   - H1: OpenCode plugin
@@ -5990,6 +6411,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/openrouter.md
+
 - Route: /plugins/reference/openrouter
 - Headings:
   - H1: OpenRouter plugin
@@ -5998,6 +6420,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/openshell.md
+
 - Route: /plugins/reference/openshell
 - Headings:
   - H1: Openshell plugin
@@ -6005,6 +6428,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/perplexity.md
+
 - Route: /plugins/reference/perplexity
 - Headings:
   - H1: Perplexity plugin
@@ -6013,6 +6437,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/pixverse.md
+
 - Route: /plugins/reference/pixverse
 - Headings:
   - H1: PixVerse plugin
@@ -6021,6 +6446,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/policy.md
+
 - Route: /plugins/reference/policy
 - Headings:
   - H1: Policy plugin
@@ -6030,6 +6456,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/qa-channel.md
+
 - Route: /plugins/reference/qa-channel
 - Headings:
   - H1: QA Channel plugin
@@ -6038,6 +6465,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/qa-lab.md
+
 - Route: /plugins/reference/qa-lab
 - Headings:
   - H1: QA Lab plugin
@@ -6045,6 +6473,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/qa-matrix.md
+
 - Route: /plugins/reference/qa-matrix
 - Headings:
   - H1: QA Matrix plugin
@@ -6052,6 +6481,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/qianfan.md
+
 - Route: /plugins/reference/qianfan
 - Headings:
   - H1: Qianfan plugin
@@ -6060,6 +6490,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/qqbot.md
+
 - Route: /plugins/reference/qqbot
 - Headings:
   - H1: QQ Bot plugin
@@ -6068,6 +6499,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/qwen.md
+
 - Route: /plugins/reference/qwen
 - Headings:
   - H1: Qwen plugin
@@ -6076,6 +6508,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/raft.md
+
 - Route: /plugins/reference/raft
 - Headings:
   - H1: Raft plugin
@@ -6084,6 +6517,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/runway.md
+
 - Route: /plugins/reference/runway
 - Headings:
   - H1: Runway plugin
@@ -6092,6 +6526,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/searxng.md
+
 - Route: /plugins/reference/searxng
 - Headings:
   - H1: SearXNG plugin
@@ -6099,6 +6534,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/senseaudio.md
+
 - Route: /plugins/reference/senseaudio
 - Headings:
   - H1: Senseaudio plugin
@@ -6107,6 +6543,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/sglang.md
+
 - Route: /plugins/reference/sglang
 - Headings:
   - H1: SGLang plugin
@@ -6115,6 +6552,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/signal.md
+
 - Route: /plugins/reference/signal
 - Headings:
   - H1: Signal plugin
@@ -6123,6 +6561,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/slack.md
+
 - Route: /plugins/reference/slack
 - Headings:
   - H1: Slack plugin
@@ -6131,6 +6570,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/sms.md
+
 - Route: /plugins/reference/sms
 - Headings:
   - H1: Sms plugin
@@ -6139,6 +6579,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/stepfun.md
+
 - Route: /plugins/reference/stepfun
 - Headings:
   - H1: StepFun plugin
@@ -6147,6 +6588,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/synology-chat.md
+
 - Route: /plugins/reference/synology-chat
 - Headings:
   - H1: Synology Chat plugin
@@ -6155,6 +6597,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/synthetic.md
+
 - Route: /plugins/reference/synthetic
 - Headings:
   - H1: Synthetic plugin
@@ -6163,6 +6606,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/tavily.md
+
 - Route: /plugins/reference/tavily
 - Headings:
   - H1: Tavily plugin
@@ -6171,6 +6615,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/telegram.md
+
 - Route: /plugins/reference/telegram
 - Headings:
   - H1: Telegram plugin
@@ -6179,6 +6624,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/tencent.md
+
 - Route: /plugins/reference/tencent
 - Headings:
   - H1: Tencent plugin
@@ -6187,6 +6633,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/tlon.md
+
 - Route: /plugins/reference/tlon
 - Headings:
   - H1: Tlon plugin
@@ -6195,6 +6642,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/together.md
+
 - Route: /plugins/reference/together
 - Headings:
   - H1: Together plugin
@@ -6203,6 +6651,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/tokenjuice.md
+
 - Route: /plugins/reference/tokenjuice
 - Headings:
   - H1: Tokenjuice plugin
@@ -6211,6 +6660,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/tts-local-cli.md
+
 - Route: /plugins/reference/tts-local-cli
 - Headings:
   - H1: TTS Local CLI plugin
@@ -6218,6 +6668,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/twitch.md
+
 - Route: /plugins/reference/twitch
 - Headings:
   - H1: Twitch plugin
@@ -6226,6 +6677,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/venice.md
+
 - Route: /plugins/reference/venice
 - Headings:
   - H1: Venice plugin
@@ -6234,6 +6686,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/vercel-ai-gateway.md
+
 - Route: /plugins/reference/vercel-ai-gateway
 - Headings:
   - H1: Vercel AI Gateway plugin
@@ -6242,6 +6695,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/vllm.md
+
 - Route: /plugins/reference/vllm
 - Headings:
   - H1: vLLM plugin
@@ -6250,6 +6704,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/voice-call.md
+
 - Route: /plugins/reference/voice-call
 - Headings:
   - H1: Voice Call plugin
@@ -6258,6 +6713,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/volcengine.md
+
 - Route: /plugins/reference/volcengine
 - Headings:
   - H1: Volcengine plugin
@@ -6266,6 +6722,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/voyage.md
+
 - Route: /plugins/reference/voyage
 - Headings:
   - H1: Voyage plugin
@@ -6273,6 +6730,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/vydra.md
+
 - Route: /plugins/reference/vydra
 - Headings:
   - H1: Vydra plugin
@@ -6281,6 +6739,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/web-readability.md
+
 - Route: /plugins/reference/web-readability
 - Headings:
   - H1: Web Readability plugin
@@ -6288,6 +6747,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
 
 ## plugins/reference/webhooks.md
+
 - Route: /plugins/reference/webhooks
 - Headings:
   - H1: Webhooks plugin
@@ -6296,6 +6756,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/whatsapp.md
+
 - Route: /plugins/reference/whatsapp
 - Headings:
   - H1: WhatsApp plugin
@@ -6304,6 +6765,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/workboard.md
+
 - Route: /plugins/reference/workboard
 - Headings:
   - H1: Workboard plugin
@@ -6312,6 +6774,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/xai.md
+
 - Route: /plugins/reference/xai
 - Headings:
   - H1: xAI plugin
@@ -6320,6 +6783,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/xiaomi.md
+
 - Route: /plugins/reference/xiaomi
 - Headings:
   - H1: Xiaomi plugin
@@ -6328,6 +6792,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/zai.md
+
 - Route: /plugins/reference/zai
 - Headings:
   - H1: Z.AI plugin
@@ -6336,6 +6801,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/zalo.md
+
 - Route: /plugins/reference/zalo
 - Headings:
   - H1: Zalo plugin
@@ -6344,6 +6810,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/reference/zalouser.md
+
 - Route: /plugins/reference/zalouser
 - Headings:
   - H1: Zalo Personal plugin
@@ -6352,6 +6819,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/sdk-agent-harness.md
+
 - Route: /plugins/sdk-agent-harness
 - Headings:
   - H2: When to use a harness
@@ -6370,12 +6838,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/sdk-channel-inbound.md
+
 - Route: /plugins/sdk-channel-inbound
 - Headings:
   - H2: Core Helpers
   - H2: Migration
 
 ## plugins/sdk-channel-ingress.md
+
 - Route: /plugins/sdk-channel-ingress
 - Headings:
   - H1: Channel ingress API
@@ -6388,10 +6858,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Verification
 
 ## plugins/sdk-channel-message.md
+
 - Route: /plugins/sdk-channel-message
 - Headings: none
 
 ## plugins/sdk-channel-outbound.md
+
 - Route: /plugins/sdk-channel-outbound
 - Headings:
   - H2: Adapter
@@ -6400,6 +6872,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Compatibility Dispatch
 
 ## plugins/sdk-channel-plugins.md
+
 - Route: /plugins/sdk-channel-plugins
 - Headings:
   - H2: How channel plugins work
@@ -6412,10 +6885,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/sdk-channel-turn.md
+
 - Route: /plugins/sdk-channel-turn
 - Headings: none
 
 ## plugins/sdk-entrypoints.md
+
 - Route: /plugins/sdk-entrypoints
 - Headings:
   - H2: defineToolPlugin
@@ -6427,6 +6902,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/sdk-migration.md
+
 - Route: /plugins/sdk-migration
 - Headings:
   - H2: What is changing
@@ -6441,6 +6917,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/sdk-overview.md
+
 - Route: /plugins/sdk-overview
 - Headings:
   - H2: Import convention
@@ -6462,6 +6939,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/sdk-provider-plugins.md
+
 - Route: /plugins/sdk-provider-plugins
 - Headings:
   - H2: Walkthrough
@@ -6472,6 +6950,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/sdk-runtime.md
+
 - Route: /plugins/sdk-runtime
 - Headings:
   - H2: Config loading and writes
@@ -6482,6 +6961,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/sdk-setup.md
+
 - Route: /plugins/sdk-setup
 - Headings:
   - H2: Package metadata
@@ -6501,6 +6981,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/sdk-subpaths.md
+
 - Route: /plugins/sdk-subpaths
 - Headings:
   - H2: Plugin entry
@@ -6509,6 +6990,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/sdk-testing.md
+
 - Route: /plugins/sdk-testing
 - Headings:
   - H2: Test utilities
@@ -6529,6 +7011,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/tool-plugins.md
+
 - Route: /plugins/tool-plugins
 - Headings:
   - H2: Requirements
@@ -6552,6 +7035,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: See also
 
 ## plugins/voice-call.md
+
 - Route: /plugins/voice-call
 - Headings:
   - H2: Quick start
@@ -6585,6 +7069,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/webhooks.md
+
 - Route: /plugins/webhooks
 - Headings:
   - H2: Where it runs
@@ -6598,6 +7083,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## plugins/workboard.md
+
 - Route: /plugins/workboard
 - Headings:
   - H2: Default state
@@ -6620,6 +7106,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## plugins/zalouser.md
+
 - Route: /plugins/zalouser
 - Headings:
   - H2: Naming
@@ -6633,6 +7120,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## prose.md
+
 - Route: /prose
 - Headings:
   - H2: Install
@@ -6646,6 +7134,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/alibaba.md
+
 - Route: /providers/alibaba
 - Headings:
   - H2: Getting started
@@ -6655,6 +7144,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/anthropic.md
+
 - Route: /providers/anthropic
 - Headings:
   - H2: Getting started
@@ -6665,6 +7155,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/arcee.md
+
 - Route: /providers/arcee
 - Headings:
   - H2: Install plugin
@@ -6675,6 +7166,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/azure-speech.md
+
 - Route: /providers/azure-speech
 - Headings:
   - H2: Getting started
@@ -6683,6 +7175,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/bedrock-mantle.md
+
 - Route: /providers/bedrock-mantle
 - Headings:
   - H2: Getting started
@@ -6693,6 +7186,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/bedrock.md
+
 - Route: /providers/bedrock
 - Headings:
   - H2: Getting started
@@ -6702,6 +7196,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/cerebras.md
+
 - Route: /providers/cerebras
 - Headings:
   - H2: Install plugin
@@ -6712,6 +7207,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/chutes.md
+
 - Route: /providers/chutes
 - Headings:
   - H2: Install plugin
@@ -6723,6 +7219,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/claude-max-api-proxy.md
+
 - Route: /providers/claude-max-api-proxy
 - Headings:
   - H2: Why use this?
@@ -6734,6 +7231,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/cloudflare-ai-gateway.md
+
 - Route: /providers/cloudflare-ai-gateway
 - Headings:
   - H2: Install plugin
@@ -6743,6 +7241,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/cohere.md
+
 - Route: /providers/cohere
 - Headings:
   - H2: Get started
@@ -6750,6 +7249,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/comfy.md
+
 - Route: /providers/comfy
 - Headings:
   - H2: What it supports
@@ -6761,6 +7261,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/deepgram.md
+
 - Route: /providers/deepgram
 - Headings:
   - H2: Getting started
@@ -6770,6 +7271,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/deepinfra.md
+
 - Route: /providers/deepinfra
 - Headings:
   - H2: Install plugin
@@ -6782,6 +7284,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/deepseek.md
+
 - Route: /providers/deepseek
 - Headings:
   - H2: Install plugin
@@ -6793,6 +7296,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/ds4.md
+
 - Route: /providers/ds4
 - Headings:
   - H2: Requirements
@@ -6805,6 +7309,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/elevenlabs.md
+
 - Route: /providers/elevenlabs
 - Headings:
   - H2: Authentication
@@ -6814,6 +7319,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/fal.md
+
 - Route: /providers/fal
 - Headings:
   - H2: Getting started
@@ -6823,6 +7329,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/fireworks.md
+
 - Route: /providers/fireworks
 - Headings:
   - H2: Getting started
@@ -6832,6 +7339,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/github-copilot.md
+
 - Route: /providers/github-copilot
 - Headings:
   - H2: Three ways to use Copilot in OpenClaw
@@ -6843,6 +7351,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/gmi.md
+
 - Route: /providers/gmi
 - Headings:
   - H2: Setup
@@ -6853,6 +7362,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/google.md
+
 - Route: /providers/google
 - Headings:
   - H2: Getting started
@@ -6867,6 +7377,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/gradium.md
+
 - Route: /providers/gradium
 - Headings:
   - H2: Install plugin
@@ -6879,6 +7390,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/groq.md
+
 - Route: /providers/groq
 - Headings:
   - H2: Install plugin
@@ -6890,6 +7402,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/huggingface.md
+
 - Route: /providers/huggingface
 - Headings:
   - H2: Getting started
@@ -6899,6 +7412,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/index.md
+
 - Route: /providers
 - Headings:
   - H2: Quick start
@@ -6908,6 +7422,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Community tools
 
 ## providers/inferrs.md
+
 - Route: /providers/inferrs
 - Headings:
   - H2: Getting started
@@ -6918,6 +7433,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/inworld.md
+
 - Route: /providers/inworld
 - Headings:
   - H2: Install plugin
@@ -6927,6 +7443,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/kilocode.md
+
 - Route: /providers/kilocode
 - Headings:
   - H2: Install plugin
@@ -6937,6 +7454,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/litellm.md
+
 - Route: /providers/litellm
 - Headings:
   - H2: Quick start
@@ -6948,6 +7466,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/lmstudio.md
+
 - Route: /providers/lmstudio
 - Headings:
   - H2: Quick start
@@ -6964,6 +7483,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/minimax.md
+
 - Route: /providers/minimax
 - Headings:
   - H2: Built-in catalog
@@ -6982,6 +7502,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/mistral.md
+
 - Route: /providers/mistral
 - Headings:
   - H2: Getting started
@@ -6992,6 +7513,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/models.md
+
 - Route: /providers/models
 - Headings:
   - H2: Quick start (two steps)
@@ -7000,6 +7522,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/moonshot.md
+
 - Route: /providers/moonshot
 - Headings:
   - H2: Built-in model catalog
@@ -7009,6 +7532,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/novita.md
+
 - Route: /providers/novita
 - Headings:
   - H2: Setup
@@ -7019,6 +7543,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/nvidia.md
+
 - Route: /providers/nvidia
 - Headings:
   - H2: Getting started
@@ -7030,6 +7555,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/ollama-cloud.md
+
 - Route: /providers/ollama-cloud
 - Headings:
   - H2: Setup
@@ -7041,6 +7567,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/ollama.md
+
 - Route: /providers/ollama
 - Headings:
   - H2: Auth rules
@@ -7058,6 +7585,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/openai.md
+
 - Route: /providers/openai
 - Headings:
   - H2: Quick choice
@@ -7080,6 +7608,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/opencode-go.md
+
 - Route: /providers/opencode-go
 - Headings:
   - H2: Built-in catalog
@@ -7089,6 +7618,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/opencode.md
+
 - Route: /providers/opencode
 - Headings:
   - H2: Getting started
@@ -7100,6 +7630,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/openrouter.md
+
 - Route: /providers/openrouter
 - Headings:
   - H2: Getting started
@@ -7116,6 +7647,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/perplexity-provider.md
+
 - Route: /providers/perplexity-provider
 - Headings:
   - H2: Install plugin
@@ -7126,6 +7658,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/pixverse.md
+
 - Route: /providers/pixverse
 - Headings:
   - H2: Getting started
@@ -7136,6 +7669,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/qianfan.md
+
 - Route: /providers/qianfan
 - Headings:
   - H2: Install plugin
@@ -7145,6 +7679,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/qwen-oauth.md
+
 - Route: /providers/qwen-oauth
 - Headings:
   - H2: Setup
@@ -7157,6 +7692,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/qwen.md
+
 - Route: /providers/qwen
 - Headings:
   - H2: Install plugin
@@ -7169,6 +7705,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/runway.md
+
 - Route: /providers/runway
 - Headings:
   - H2: Getting started
@@ -7178,6 +7715,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/senseaudio.md
+
 - Route: /providers/senseaudio
 - Headings:
   - H2: Getting started
@@ -7185,6 +7723,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/sglang.md
+
 - Route: /providers/sglang
 - Headings:
   - H2: Getting started
@@ -7194,6 +7733,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/stepfun.md
+
 - Route: /providers/stepfun
 - Headings:
   - H2: Install plugin
@@ -7204,6 +7744,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/synthetic.md
+
 - Route: /providers/synthetic
 - Headings:
   - H2: Getting started
@@ -7212,6 +7753,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/tencent.md
+
 - Route: /providers/tencent
 - Headings:
   - H2: Quick start
@@ -7222,6 +7764,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/together.md
+
 - Route: /providers/together
 - Headings:
   - H2: Getting started
@@ -7231,6 +7774,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/venice.md
+
 - Route: /providers/venice
 - Headings:
   - H2: Why Venice in OpenClaw
@@ -7250,6 +7794,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/vercel-ai-gateway.md
+
 - Route: /providers/vercel-ai-gateway
 - Headings:
   - H2: Getting started
@@ -7259,6 +7804,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/vllm.md
+
 - Route: /providers/vllm
 - Headings:
   - H2: Getting started
@@ -7269,6 +7815,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/volcengine.md
+
 - Route: /providers/volcengine
 - Headings:
   - H2: Getting started
@@ -7279,6 +7826,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/vydra.md
+
 - Route: /providers/vydra
 - Headings:
   - H2: Setup
@@ -7286,6 +7834,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/xai.md
+
 - Route: /providers/xai
 - Headings:
   - H2: Choose your setup path
@@ -7299,6 +7848,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/xiaomi.md
+
 - Route: /providers/xiaomi
 - Headings:
   - H2: Getting started
@@ -7309,6 +7859,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## providers/zai.md
+
 - Route: /providers/zai
 - Headings:
   - H2: GLM models
@@ -7319,10 +7870,12 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## refactor/access.md
+
 - Route: /refactor/access
 - Headings: none
 
 ## refactor/acp.md
+
 - Route: /refactor/acp
 - Headings:
   - H2: Goals
@@ -7345,6 +7898,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Success Criteria
 
 ## refactor/canvas.md
+
 - Route: /refactor/canvas
 - Headings:
   - H1: Canvas plugin refactor
@@ -7357,6 +7911,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Verification commands
 
 ## refactor/database-first.md
+
 - Route: /refactor/database-first
 - Headings:
   - H1: Database-First State Refactor
@@ -7390,6 +7945,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Done Criteria
 
 ## refactor/ingress-core.md
+
 - Route: /refactor/ingress-core
 - Headings:
   - H1: Ingress core deletion plan
@@ -7406,6 +7962,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Exit Criteria
 
 ## reference/AGENTS.default.md
+
 - Route: /reference/AGENTS.default
 - Headings:
   - H2: First run (recommended)
@@ -7423,6 +7980,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/RELEASING.md
+
 - Route: /reference/RELEASING
 - Headings:
   - H2: Version naming
@@ -7442,6 +8000,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/api-usage-costs.md
+
 - Route: /reference/api-usage-costs
 - Headings:
   - H2: Where costs show up (chat + CLI)
@@ -7461,6 +8020,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/application-modernization-plan.md
+
 - Route: /reference/application-modernization-plan
 - Headings:
   - H2: Goal
@@ -7475,6 +8035,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Frontend skill update
 
 ## reference/code-mode.md
+
 - Route: /reference/code-mode
 - Headings:
   - H2: What is this?
@@ -7516,6 +8077,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/credits.md
+
 - Route: /reference/credits
 - Headings:
   - H2: The name
@@ -7525,6 +8087,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/device-models.md
+
 - Route: /reference/device-models
 - Headings:
   - H2: Data source
@@ -7532,6 +8095,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/full-release-validation.md
+
 - Route: /reference/full-release-validation
 - Headings:
   - H2: Top-level stages
@@ -7544,6 +8108,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Workflow files
 
 ## reference/memory-config.md
+
 - Route: /reference/memory-config
 - Headings:
   - H2: Provider selection
@@ -7569,6 +8134,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/prompt-caching.md
+
 - Route: /reference/prompt-caching
 - Headings:
   - H2: Primary knobs
@@ -7600,6 +8166,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/release-performance-sweep.md
+
 - Route: /reference/release-performance-sweep
 - Headings:
   - H2: Snapshot
@@ -7615,6 +8182,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Supply-chain interpretation
 
 ## reference/rich-output-protocol.md
+
 - Route: /reference/rich-output-protocol
 - Headings:
   - H2: [embed ...]
@@ -7622,6 +8190,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/rpc.md
+
 - Route: /reference/rpc
 - Headings:
   - H2: Pattern A: HTTP daemon (signal-cli)
@@ -7630,6 +8199,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/secret-placeholder-conventions.md
+
 - Route: /reference/secret-placeholder-conventions
 - Headings:
   - H1: Secret placeholder conventions
@@ -7638,6 +8208,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Example
 
 ## reference/secretref-credential-surface.md
+
 - Route: /reference/secretref-credential-surface
 - Headings:
   - H2: Supported credentials
@@ -7647,6 +8218,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/session-management-compaction.md
+
 - Route: /reference/session-management-compaction
 - Headings:
   - H2: Source of truth: the Gateway
@@ -7671,6 +8243,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/templates/AGENTS.dev.md
+
 - Route: /reference/templates/AGENTS.dev
 - Headings:
   - H1: AGENTS.md - OpenClaw Workspace
@@ -7687,12 +8260,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/templates/BOOT.md
+
 - Route: /reference/templates/BOOT
 - Headings:
   - H1: BOOT.md
   - H2: Related
 
 ## reference/templates/BOOTSTRAP.md
+
 - Route: /reference/templates/BOOTSTRAP
 - Headings:
   - H1: BOOTSTRAP.md - Hello, World
@@ -7703,12 +8278,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/templates/HEARTBEAT.md
+
 - Route: /reference/templates/HEARTBEAT
 - Headings:
   - H1: HEARTBEAT.md template
   - H2: Related
 
 ## reference/templates/IDENTITY.dev.md
+
 - Route: /reference/templates/IDENTITY.dev
 - Headings:
   - H1: IDENTITY.md - Agent Identity
@@ -7720,12 +8297,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/templates/IDENTITY.md
+
 - Route: /reference/templates/IDENTITY
 - Headings:
   - H1: IDENTITY.md - Who Am I?
   - H2: Related
 
 ## reference/templates/SOUL.dev.md
+
 - Route: /reference/templates/SOUL.dev
 - Headings:
   - H1: SOUL.md - The Soul of C-3PO
@@ -7739,6 +8318,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/templates/SOUL.md
+
 - Route: /reference/templates/SOUL
 - Headings:
   - H1: SOUL.md - Who You Are
@@ -7749,6 +8329,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/templates/TOOLS.dev.md
+
 - Route: /reference/templates/TOOLS.dev
 - Headings:
   - H1: TOOLS.md - User Tool Notes (editable)
@@ -7758,6 +8339,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/templates/TOOLS.md
+
 - Route: /reference/templates/TOOLS
 - Headings:
   - H1: TOOLS.md - Local Notes
@@ -7767,12 +8349,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/templates/USER.dev.md
+
 - Route: /reference/templates/USER.dev
 - Headings:
   - H1: USER.md - User Profile
   - H2: Related
 
 ## reference/templates/USER.md
+
 - Route: /reference/templates/USER
 - Headings:
   - H1: USER.md - About Your Human
@@ -7780,6 +8364,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/test.md
+
 - Route: /reference/test
 - Headings:
   - H2: Local PR gate
@@ -7792,6 +8377,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/token-use.md
+
 - Route: /reference/token-use
 - Headings:
   - H2: How the system prompt is built
@@ -7806,6 +8392,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/transcript-hygiene.md
+
 - Route: /reference/transcript-hygiene
 - Headings:
   - H2: Global rule: runtime context is not user transcript
@@ -7819,6 +8406,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## reference/wizard.md
+
 - Route: /reference/wizard
 - Headings:
   - H2: Flow details (local mode)
@@ -7830,6 +8418,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## security/CONTRIBUTING-THREAT-MODEL.md
+
 - Route: /security/CONTRIBUTING-THREAT-MODEL
 - Headings:
   - H2: Ways to contribute
@@ -7848,6 +8437,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## security/THREAT-MODEL-ATLAS.md
+
 - Route: /security/THREAT-MODEL-ATLAS
 - Headings:
   - H2: MITRE ATLAS framework
@@ -7909,6 +8499,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## security/formal-verification.md
+
 - Route: /security/formal-verification
 - Headings:
   - H2: Where the models live
@@ -7926,6 +8517,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## security/incident-response.md
+
 - Route: /security/incident-response
 - Headings:
   - H2: 1. Detection and triage
@@ -7935,6 +8527,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: 5. Recovery and follow-up
 
 ## security/network-proxy.md
+
 - Route: /security/network-proxy
 - Headings:
   - H2: Why use a proxy
@@ -7949,6 +8542,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Limits
 
 ## specs/claw-supervisor.md
+
 - Route: /specs/claw-supervisor
 - Headings:
   - H1: Claw Supervisor
@@ -7967,6 +8561,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Open Questions
 
 ## start/bootstrapping.md
+
 - Route: /start/bootstrapping
 - Headings:
   - H2: What bootstrapping does
@@ -7975,6 +8570,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## start/docs-directory.md
+
 - Route: /start/docs-directory
 - Headings:
   - H2: Start here
@@ -7984,6 +8580,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## start/getting-started.md
+
 - Route: /start/getting-started
 - Headings:
   - H2: What you need
@@ -7992,6 +8589,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## start/hubs.md
+
 - Route: /start/hubs
 - Headings:
   - H2: Start here
@@ -8010,6 +8608,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## start/lore.md
+
 - Route: /start/lore
 - Headings:
   - H1: The Lore of OpenClaw 🦞📖
@@ -8033,6 +8632,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## start/onboarding-overview.md
+
 - Route: /start/onboarding-overview
 - Headings:
   - H2: Which path should I use?
@@ -8043,11 +8643,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## start/onboarding.md
+
 - Route: /start/onboarding
 - Headings:
   - H2: Related
 
 ## start/openclaw.md
+
 - Route: /start/openclaw
 - Headings:
   - H2: ⚠️ Safety first
@@ -8064,11 +8666,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## start/quickstart.md
+
 - Route: /start/quickstart
 - Headings:
   - H2: Related
 
 ## start/setup.md
+
 - Route: /start/setup
 - Headings:
   - H2: TL;DR
@@ -8088,6 +8692,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## start/showcase.md
+
 - Route: /start/showcase
 - Headings:
   - H2: Fresh from Discord
@@ -8101,6 +8706,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## start/wizard-cli-automation.md
+
 - Route: /start/wizard-cli-automation
 - Headings:
   - H2: Baseline non-interactive example
@@ -8109,6 +8715,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## start/wizard-cli-reference.md
+
 - Route: /start/wizard-cli-reference
 - Headings:
   - H2: What the wizard does
@@ -8119,6 +8726,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## start/wizard.md
+
 - Route: /start/wizard
 - Headings:
   - H2: Locale
@@ -8129,6 +8737,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related docs
 
 ## tools/acp-agents-setup.md
+
 - Route: /tools/acp-agents-setup
 - Headings:
   - H2: acpx harness support (current)
@@ -8147,6 +8756,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/acp-agents.md
+
 - Route: /tools/acp-agents
 - Headings:
   - H2: Which page do I want?
@@ -8176,6 +8786,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/agent-send.md
+
 - Route: /tools/agent-send
 - Headings:
   - H2: Quick start
@@ -8185,6 +8796,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/apply-patch.md
+
 - Route: /tools/apply-patch
 - Headings:
   - H2: Parameters
@@ -8193,6 +8805,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/brave-search.md
+
 - Route: /tools/brave-search
 - Headings:
   - H2: Get an API key
@@ -8202,6 +8815,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/browser-control.md
+
 - Route: /tools/browser-control
 - Headings:
   - H2: Control API (optional)
@@ -8219,6 +8833,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/browser-linux-troubleshooting.md
+
 - Route: /tools/browser-linux-troubleshooting
 - Headings:
   - H2: Problem: "Failed to start Chrome CDP on port 18800"
@@ -8231,6 +8846,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/browser-login.md
+
 - Route: /tools/browser-login
 - Headings:
   - H2: Manual login (recommended)
@@ -8240,6 +8856,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/browser-wsl2-windows-remote-cdp-troubleshooting.md
+
 - Route: /tools/browser-wsl2-windows-remote-cdp-troubleshooting
 - Headings:
   - H2: Choose the right browser mode first
@@ -8260,6 +8877,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/browser.md
+
 - Route: /tools/browser
 - Headings:
   - H2: What you get
@@ -8291,6 +8909,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/btw.md
+
 - Route: /tools/btw
 - Headings:
   - H2: What it does
@@ -8306,15 +8925,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/capability-cookbook.md
+
 - Route: /tools/capability-cookbook
 - Headings:
   - H2: Related
 
 ## tools/clawhub.md
+
 - Route: /tools/clawhub
 - Headings: none
 
 ## tools/code-execution.md
+
 - Route: /tools/code-execution
 - Headings:
   - H2: Setup
@@ -8324,6 +8946,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/creating-skills.md
+
 - Route: /tools/creating-skills
 - Headings:
   - H2: Create your first skill
@@ -8338,6 +8961,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/diffs.md
+
 - Route: /tools/diffs
 - Headings:
   - H2: Quick start
@@ -8360,6 +8984,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/duckduckgo-search.md
+
 - Route: /tools/duckduckgo-search
 - Headings:
   - H2: Setup
@@ -8369,6 +8994,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/elevated.md
+
 - Route: /tools/elevated
 - Headings:
   - H2: Directives
@@ -8379,6 +9005,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/exa-search.md
+
 - Route: /tools/exa-search
 - Headings:
   - H2: Install plugin
@@ -8392,6 +9019,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/exec-approvals-advanced.md
+
 - Route: /tools/exec-approvals-advanced
 - Headings:
   - H2: Safe bins (stdin-only)
@@ -8412,6 +9040,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/exec-approvals.md
+
 - Route: /tools/exec-approvals
 - Headings:
   - H2: Inspecting the effective policy
@@ -8443,6 +9072,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/exec.md
+
 - Route: /tools/exec
 - Headings:
   - H2: Parameters
@@ -8457,6 +9087,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/firecrawl.md
+
 - Route: /tools/firecrawl
 - Headings:
   - H2: Install plugin
@@ -8472,6 +9103,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/gemini-search.md
+
 - Route: /tools/gemini-search
 - Headings:
   - H2: Get an API key
@@ -8483,6 +9115,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/goal.md
+
 - Route: /tools/goal
 - Headings:
   - H1: Goal
@@ -8498,6 +9131,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/grok-search.md
+
 - Route: /tools/grok-search
 - Headings:
   - H2: Onboarding and configure
@@ -8509,6 +9143,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/image-generation.md
+
 - Route: /tools/image-generation
 - Headings:
   - H2: Quick start
@@ -8525,6 +9160,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/index.md
+
 - Route: /tools
 - Headings:
   - H2: Start here
@@ -8537,6 +9173,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/kimi-search.md
+
 - Route: /tools/kimi-search
 - Headings:
   - H2: Get an API key
@@ -8546,6 +9183,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/llm-task.md
+
 - Route: /tools/llm-task
 - Headings:
   - H2: Enable the plugin
@@ -8558,6 +9196,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/lobster.md
+
 - Route: /tools/lobster
 - Headings:
   - H2: Hook
@@ -8585,6 +9224,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/loop-detection.md
+
 - Route: /tools/loop-detection
 - Headings:
   - H2: Why this exists
@@ -8596,6 +9236,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/media-overview.md
+
 - Route: /tools/media-overview
 - Headings:
   - H2: Capabilities
@@ -8606,6 +9247,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/minimax-search.md
+
 - Route: /tools/minimax-search
 - Headings:
   - H2: Get a Token Plan credential
@@ -8615,6 +9257,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/multi-agent-sandbox-tools.md
+
 - Route: /tools/multi-agent-sandbox-tools
 - Headings:
   - H2: Configuration examples
@@ -8629,6 +9272,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/music-generation.md
+
 - Route: /tools/music-generation
 - Headings:
   - H2: Quick start
@@ -8647,6 +9291,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/ollama-search.md
+
 - Route: /tools/ollama-search
 - Headings:
   - H2: Setup
@@ -8655,6 +9300,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/parallel-search.md
+
 - Route: /tools/parallel-search
 - Headings:
   - H2: Install plugin
@@ -8666,6 +9312,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/pdf.md
+
 - Route: /tools/pdf
 - Headings:
   - H2: Availability
@@ -8681,6 +9328,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/permission-modes.md
+
 - Route: /tools/permission-modes
 - Headings:
   - H2: Recommended default
@@ -8691,6 +9339,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/perplexity-search.md
+
 - Route: /tools/perplexity-search
 - Headings:
   - H2: Install plugin
@@ -8706,6 +9355,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/plugin.md
+
 - Route: /tools/plugin
 - Headings:
   - H2: Requirements
@@ -8723,6 +9373,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/reactions.md
+
 - Route: /tools/reactions
 - Headings:
   - H2: How it works
@@ -8731,6 +9382,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/searxng-search.md
+
 - Route: /tools/searxng-search
 - Headings:
   - H2: Setup
@@ -8741,6 +9393,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/skill-workshop.md
+
 - Route: /tools/skill-workshop
 - Headings:
   - H2: How it works
@@ -8758,6 +9411,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/skills-config.md
+
 - Route: /tools/skills-config
 - Headings:
   - H2: Loading (skills.load)
@@ -8773,6 +9427,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/skills.md
+
 - Route: /tools/skills
 - Headings:
   - H2: Loading order
@@ -8793,6 +9448,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/slash-commands.md
+
 - Route: /tools/slash-commands
 - Headings:
   - H2: Three command types
@@ -8815,6 +9471,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/steer.md
+
 - Route: /tools/steer
 - Headings:
   - H2: Current session
@@ -8824,6 +9481,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/subagents.md
+
 - Route: /tools/subagents
 - Headings:
   - H2: Slash command
@@ -8864,6 +9522,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/tavily.md
+
 - Route: /tools/tavily
 - Headings:
   - H2: Getting started
@@ -8875,6 +9534,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/thinking.md
+
 - Route: /tools/thinking
 - Headings:
   - H2: What it does
@@ -8891,6 +9551,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Provider profiles
 
 ## tools/tokenjuice.md
+
 - Route: /tools/tokenjuice
 - Headings:
   - H2: Enable the plugin
@@ -8900,6 +9561,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/tool-search.md
+
 - Route: /tools/tool-search
 - Headings:
   - H2: How a turn runs
@@ -8914,6 +9576,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/trajectory.md
+
 - Route: /tools/trajectory
 - Headings:
   - H2: Quick start
@@ -8928,6 +9591,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/tts.md
+
 - Route: /tools/tts
 - Headings:
   - H2: Quick start
@@ -8953,6 +9617,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/video-generation.md
+
 - Route: /tools/video-generation
 - Headings:
   - H2: Quick start
@@ -8975,6 +9640,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/web-fetch.md
+
 - Route: /tools/web-fetch
 - Headings:
   - H2: Quick start
@@ -8989,6 +9655,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tools/web.md
+
 - Route: /tools/web
 - Headings:
   - H2: Quick start
@@ -9011,11 +9678,13 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## tts.md
+
 - Route: /tts
 - Headings:
   - H2: Related
 
 ## vps.md
+
 - Route: /vps
 - Headings:
   - H2: Pick a provider
@@ -9028,6 +9697,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## web/control-ui.md
+
 - Route: /web/control-ui
 - Headings:
   - H2: Quick open (local)
@@ -9054,6 +9724,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## web/dashboard.md
+
 - Route: /web/dashboard
 - Headings:
   - H2: Fast path (recommended)
@@ -9062,6 +9733,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## web/index.md
+
 - Route: /web
 - Headings:
   - H2: Webhooks
@@ -9075,6 +9747,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Building the UI
 
 ## web/tui.md
+
 - Route: /web/tui
 - Headings:
   - H2: Quick start
@@ -9098,6 +9771,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Related
 
 ## web/webchat.md
+
 - Route: /web/webchat
 - Headings:
   - H2: What it is

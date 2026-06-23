@@ -155,6 +155,7 @@ function renderDocsMap() {
     const fullPath = join(DOCS_DIR, relativePath);
     const headings = extractHeadings(readFileSync(fullPath, "utf8"));
     lines.push(`## ${relativePath}`);
+    lines.push("");
     lines.push(`- Route: ${routeForFile(relativePath)}`);
     if (headings.length === 0) {
       lines.push("- Headings: none");
