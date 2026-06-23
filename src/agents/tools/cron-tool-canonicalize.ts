@@ -111,17 +111,29 @@ function repairConcatenatedCronToolKeys(value: Record<string, unknown>): void {
 }
 
 /**
- * Recovers cron tool object keys that have trailing whitespace.
- * Some local model parsers append whitespace to specific key names during
- * parameter serialization.
+ * Trim leading/trailing whitespace from recognized cron job/patch keys in-place.
+ *
+ * Some small/local tool-call parsers (observed with qwen35b via llamacpp) emit
+ * valid JSON where cron keys carry whitespace-padded names (e.g. `"schedule "`
+ * instead of `"schedule"`).  Trim those keys early so downstream repair and
+ * canonicalization helpers see the expected canonical names.  The gateway uses
+ * strict `additionalProperties: false` schemas, so unpadded keys would be
+ * rejected before persistence.
+ *
+ * Only known cron recoverable keys are trimmed; unrecognized keys pass through
+ * unchanged so strict validation can surface them.  When the canonical key
+ * already exists the padded key is preserved as a genuine duplicate for
+ * validation to reject instead of silently merging or overwriting.
  */
 function repairWhitespacePaddedCronToolKeys(value: Record<string, unknown>): void {
   for (const key of Object.keys(value)) {
-    const trimmed = key.trimEnd();
-    if (trimmed !== key && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) {
-      value[trimmed] = value[key];
-      delete value[key];
-    }
+    const trimmed = key.trim();
+    if (trimmed === key || trimmed.length === 0) continue;
+    if (!CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) continue;
+    // Preserve genuine duplicates — let strict validation reject them.
+    if (value[trimmed] !== undefined) continue;
+    value[trimmed] = value[key];
+    delete value[key];
   }
 }
 
@@ -322,8 +334,11 @@ export function recoverCronObjectFromFlatParams(params: Record<string, unknown>)
   const value: Record<string, unknown> = {};
   let found = false;
   for (const key of Object.keys(params)) {
-    const trimmed = key.trimEnd();
-    const matchKey = trimmed !== key && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed) ? trimmed : key;
+    const trimmed = key.trim();
+    const matchKey =
+      trimmed !== key && trimmed.length > 0 && CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)
+        ? trimmed
+        : key;
     if (CRON_RECOVERABLE_OBJECT_KEYS.has(matchKey) && params[key] !== undefined) {
       value[matchKey] = params[key];
       found = true;
