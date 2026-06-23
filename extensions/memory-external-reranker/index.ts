@@ -1,5 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { ExternalMmrReranker, type ExternalRerankerConfig } from "./src/reranker.js";
+import { ExternalMmrReranker, type ExternalRerankerConfig } from "./src/external-reranker.js";
 
 export default definePluginEntry({
   id: "memory-external-reranker",

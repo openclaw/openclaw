@@ -318,11 +318,21 @@ All under `memorySearch.query.hybrid`:
 | `candidateMultiplier` | `number`  | `4`     | Candidate pool size multiplier     |
 
 <Tabs>
-  <Tab title="MMR (diversity)">
-    | Key           | Type      | Default | Description                          |
-    | ------------- | --------- | ------- | ------------------------------------ |
-    | `mmr.enabled` | `boolean` | `false` | Enable MMR re-ranking                |
-    | `mmr.lambda`  | `number`  | `0.7`   | 0 = max diversity, 1 = max relevance |
+  <Tab title="Reranking (staged)">
+    | Key                       | Type      | Default | Description                                                              |
+    | ------------------------- | --------- | ------- | ------------------------------------------------------------------------ |
+    | `rerank.enabled`          | `boolean` | `false` | Enable the staged reranking pipeline                                     |
+    | `rerank.stages[]`         | `array`   | `[]`    | Ordered reranker stages run serially over hybrid candidates              |
+    | `rerank.stages[].provider`| `string`  | —       | Registered reranker plugin id (e.g. `memory-mmr`, `memory-external-reranker`) |
+    | `rerank.stages[].topK`    | `number`  | —       | Top-K survivors passed to the next stage (ignored on the final stage)    |
+    | `rerank.stages[].lambda`  | `number`  | `0.7`   | MMR relevance-vs-diversity weight (0 = diverse, 1 = relevant); MMR-only  |
+
+    Stages run in order. Each stage reranks the previous stage's output, then
+    its `topK` filter narrows the survivors before the next stage so a slow,
+    precise reranker only ever sees a small candidate set. Stages whose plugin
+    is not installed are skipped. If no stages remain, results stay in score
+    order.
+
   </Tab>
   <Tab title="Temporal decay (recency)">
     | Key                          | Type      | Default | Description               |
@@ -346,7 +356,7 @@ All under `memorySearch.query.hybrid`:
           hybrid: {
             vectorWeight: 0.7,
             textWeight: 0.3,
-            mmr: { enabled: true, lambda: 0.7 },
+            rerank: { enabled: true, stages: [{ provider: "memory-mmr", lambda: 0.7 }] },
             temporalDecay: { enabled: true, halfLifeDays: 30 },
           },
         },

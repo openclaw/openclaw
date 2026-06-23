@@ -5,10 +5,8 @@
   "activation": {
     "onStartup": false,
     "onConfigPaths": [
-      "agents.defaults.memorySearch.query.hybrid.mmr.provider",
-      "agents.*.memorySearch.query.hybrid.mmr.provider",
-      "agents.defaults.memorySearch.query.hybrid.mmr.fallback",
-      "agents.*.memorySearch.query.hybrid.mmr.fallback"
+      "agents.defaults.memorySearch.query.hybrid.rerank",
+      "agents.*.memorySearch.query.hybrid.rerank"
     ]
   },
   "contracts": {

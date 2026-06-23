@@ -1,5 +1,8 @@
 // Memory Core plugin module implements mmr behavior.
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { jaccardSimilarity, tokenize } from "./tokenize.js";
+
+const log = createSubsystemLogger("memory/mmr");
 
 /**
  * Maximal Marginal Relevance (MMR) re-ranking.
@@ -31,6 +34,28 @@ export type MMRItem = {
   score: number;
   content: string;
 };
+
+/** Compact score distribution for debug logs: count plus highest/lowest score. */
+function summarizeScores(items: Array<{ score: number }>): {
+  count: number;
+  topScore: number | null;
+  bottomScore: number | null;
+} {
+  if (items.length === 0) {
+    return { count: 0, topScore: null, bottomScore: null };
+  }
+  let top = items[0].score;
+  let bottom = items[0].score;
+  for (const item of items) {
+    if (item.score > top) {
+      top = item.score;
+    }
+    if (item.score < bottom) {
+      bottom = item.score;
+    }
+  }
+  return { count: items.length, topScore: top, bottomScore: bottom };
+}
 
 /**
  * Compute the maximum similarity between an item and all selected items.
@@ -73,7 +98,12 @@ function maxSimilarityToSelected(
 export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
 
-  console.debug(`[memory-mmr] reranking enabled=${enabled} lambda=${lambda} items=${items.length}`);
+  log.debug("mmr rerank start", {
+    enabled,
+    lambda,
+    items: items.length,
+    scores: summarizeScores(items),
+  });
 
   // Validate lambda
   if (lambda !== undefined) {
@@ -84,9 +114,12 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 
   // Early exits
   if (!enabled || items.length <= 1) {
-    console.debug(
-      `[memory-mmr] early exit: enabled=${enabled} items=${items.length} returning ${items.length} items`,
-    );
+    log.debug("mmr rerank early exit", {
+      enabled,
+      items: items.length,
+      returned: items.length,
+      scores: summarizeScores(items),
+    });
     return [...items];
   }
 
@@ -148,7 +181,13 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
     }
   }
 
-  console.debug(`[memory-mmr] reranking complete: ${selected.length} items re-ranked`);
+  log.debug("mmr rerank complete", {
+    input: items.length,
+    reranked: selected.length,
+    filtered: items.length - selected.length,
+    inputScores: summarizeScores(items),
+    outputScores: summarizeScores(selected),
+  });
   return selected;
 }
 
@@ -159,11 +198,13 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 export function applyMMRToHybridResults<
   T extends { score: number; snippet: string; path: string; startLine: number },
 >(results: T[], config: Partial<MMRConfig> = {}): T[] {
-  console.debug(
-    `[memory-mmr/apply] applying MMR to hybrid results: ${results.length} results config=${JSON.stringify(config)}`,
-  );
+  log.debug("mmr apply to hybrid results", {
+    results: results.length,
+    config,
+    scores: summarizeScores(results),
+  });
   if (results.length === 0) {
-    console.debug(`[memory-mmr/apply] no results to rerank`);
+    log.debug("mmr apply: no results to rerank");
     return results;
   }
 
@@ -185,9 +226,13 @@ export function applyMMRToHybridResults<
 
   // Map back to original items using the ID
   const finalResults = reranked.map((item) => itemById.get(item.id)!);
-  console.debug(
-    `[memory-mmr/apply] MMR reranking complete: ${finalResults.length} results returned`,
-  );
+  log.debug("mmr apply complete", {
+    input: results.length,
+    returned: finalResults.length,
+    filtered: results.length - finalResults.length,
+    inputScores: summarizeScores(results),
+    outputScores: summarizeScores(finalResults),
+  });
   return finalResults;
 }
 

@@ -122,7 +122,7 @@ different daily notes.
       memorySearch: {
         query: {
           hybrid: {
-            mmr: { enabled: true },
+            rerank: { enabled: true, stages: [{ provider: "memory-mmr" }] },
             temporalDecay: { enabled: true },
           },
         },
@@ -166,6 +166,7 @@ inline batch timeout by default. If the host is simply slow, set
 
 - [Active Memory](/concepts/active-memory) -- sub-agent memory for interactive chat sessions
 - [Memory](/concepts/memory) -- file layout, backends, tools
+- [Memory rerankers](/concepts/memory-rerankers) -- staged reranking pipeline, MMR, and external rerankers
 - [Memory configuration reference](/reference/memory-config) -- all config knobs
 
 ## Related
@@ -173,3 +174,4 @@ inline batch timeout by default. If the host is simply slow, set
 - [Memory overview](/concepts/memory)
 - [Active memory](/concepts/active-memory)
 - [Builtin memory engine](/concepts/memory-builtin)
+- [Memory rerankers](/concepts/memory-rerankers)

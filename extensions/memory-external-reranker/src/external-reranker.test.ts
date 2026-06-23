@@ -12,7 +12,7 @@ import {
   requiresRerankerPrivateNetworkOptIn,
   resolveRerankerNetworkPolicy,
   setExternalRerankerFetchGuardForTesting,
-} from "./reranker.js";
+} from "./external-reranker.js";
 
 afterEach(() => {
   setExternalRerankerFetchGuardForTesting(null);

@@ -1,3 +1,4 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type {
   MemoryRerankerPlugin,
   RerankParams,
@@ -14,6 +15,8 @@ import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+
+const log = createSubsystemLogger("memory/external-reranker");
 
 export const DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS = 30_000;
 
@@ -86,6 +89,28 @@ type CohereRerankResponse = {
   results: Array<{ index: number; relevance_score: number }>;
 };
 
+/** Compact score distribution for debug logs: count plus highest/lowest score. */
+function summarizeScores(items: Array<{ score: number }>): {
+  count: number;
+  topScore: number | null;
+  bottomScore: number | null;
+} {
+  if (items.length === 0) {
+    return { count: 0, topScore: null, bottomScore: null };
+  }
+  let top = items[0].score;
+  let bottom = items[0].score;
+  for (const item of items) {
+    if (item.score > top) {
+      top = item.score;
+    }
+    if (item.score < bottom) {
+      bottom = item.score;
+    }
+  }
+  return { count: items.length, topScore: top, bottomScore: bottom };
+}
+
 /**
  * External reranker plugin implementation.
  *
@@ -115,15 +140,20 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
 
   async rerank(params: RerankParams): Promise<RerankResult> {
     const { query, documents, limit } = params;
+    const startedAt = Date.now();
     const providerId = this.cfg.provider;
     const candidates = [this.cfg.model, ...(this.cfg.modelFallbacks ?? [])];
     const endpointPath = this.cfg.endpointPath ?? "/v1/rerank";
     const topN = this.cfg.topN ?? limit;
     const requestTimeoutMs = resolveTimerTimeoutMs(DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS, 1);
 
-    console.debug(
-      `[memory-external-reranker] reranking with provider=${providerId} model=${this.cfg.model} fallbacks=${this.cfg.modelFallbacks?.join(",") ?? "none"} topN=${topN} documents=${documents.length}`,
-    );
+    log.debug("external reranker start", {
+      provider: providerId,
+      model: this.cfg.model,
+      fallbacks: this.cfg.modelFallbacks ?? [],
+      topN,
+      documents: documents.length,
+    });
 
     const providerEntry = this.openclawConfig.models?.providers?.[providerId];
     if (!providerEntry) {
@@ -160,9 +190,13 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
     for (const modelId of candidates) {
       const candidate = `${providerId}/${modelId}`;
       const url = `${normalizedBase}${normalizedPath}`;
-      console.debug(
-        `[memory-external-reranker] candidate=${candidate} model=${modelId} url=${url} topN=${topN} documents=${documents.length}`,
-      );
+      log.debug("external reranker candidate", {
+        candidate,
+        model: modelId,
+        url,
+        topN,
+        documents: documents.length,
+      });
       try {
         const { response, release } = await rerankerFetchGuard({
           url,
@@ -185,9 +219,11 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
           auditContext: "memory-external-reranker",
         });
 
-        console.debug(
-          `[memory-external-reranker] candidate=${candidate} response status=${response.status} ok=${response.ok}`,
-        );
+        log.debug("external reranker response", {
+          candidate,
+          status: response.status,
+          ok: response.ok,
+        });
 
         let results: RerankResult;
         try {
@@ -204,13 +240,23 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
         } finally {
           await release();
         }
-        console.debug(
-          `[memory-external-reranker] candidate=${candidate} success: ${results.length} documents reranked`,
-        );
+        log.debug("external reranker candidate success", {
+          candidate,
+          documents: documents.length,
+          reranked: results.length,
+          filtered: documents.length - results.length,
+          scores: summarizeScores(results),
+        });
+        log.debug("external reranker elapsed", {
+          candidate,
+          elapsedMs: Date.now() - startedAt,
+          documents: documents.length,
+          reranked: results.length,
+        });
         return results;
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
-        console.debug(`[memory-external-reranker] candidate=${candidate} failed: ${error.message}`);
+        log.debug("external reranker candidate failed", { candidate, error: error.message });
         errors.push(error);
       }
     }
@@ -219,6 +265,11 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
     const detail = candidates
       .map((c, i) => `${c}: ${errors[i]?.message ?? "unknown error"}`)
       .join("; ");
+    log.debug("external reranker elapsed", {
+      elapsedMs: Date.now() - startedAt,
+      documents: documents.length,
+      failed: true,
+    });
     throw new Error(`All reranker candidates failed — ${detail}`);
   }
 }

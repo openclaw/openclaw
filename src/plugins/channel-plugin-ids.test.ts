@@ -356,8 +356,8 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         activation: {
           onStartup: false,
           onConfigPaths: [
-            "agents.defaults.memorySearch.query.hybrid.mmr.enabled",
-            "agents.*.memorySearch.query.hybrid.mmr.enabled",
+            "agents.defaults.memorySearch.query.hybrid.rerank",
+            "agents.*.memorySearch.query.hybrid.rerank",
           ],
         },
         origin: "bundled",
@@ -1582,7 +1582,7 @@ describe("resolveGatewayStartupPluginIds", () => {
             memorySearch: {
               query: {
                 hybrid: {
-                  mmr: {
+                  rerank: {
                     enabled: true,
                   },
                 },
@@ -1605,7 +1605,7 @@ describe("resolveGatewayStartupPluginIds", () => {
             memorySearch: {
               query: {
                 hybrid: {
-                  mmr: {
+                  rerank: {
                     enabled: false,
                   },
                 },

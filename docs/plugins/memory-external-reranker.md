@@ -316,11 +316,12 @@ After enabling the external reranker plugin, configure memory search to use it:
       memorySearch: {
         query: {
           hybrid: {
-            mmr: {
+            rerank: {
               enabled: true,
-              lambda: 0.7,
-              provider: "memory-external-reranker", // Use external reranker
-              fallback: "none", // No fallback
+              stages: [
+                // Single external reranker stage.
+                { provider: "memory-external-reranker", lambda: 0.7 },
+              ],
             },
           },
         },
@@ -369,11 +370,9 @@ After enabling the external reranker plugin, configure memory search to use it:
             enabled: true,
             vectorWeight: 0.7,
             textWeight: 0.3,
-            mmr: {
+            rerank: {
               enabled: true,
-              lambda: 0.7,
-              provider: "memory-external-reranker",
-              fallback: "none",
+              stages: [{ provider: "memory-external-reranker", lambda: 0.7 }],
             },
           },
         },
@@ -424,32 +423,14 @@ The external reranker plugin handles its own model fallbacks by trying alternate
 
 The plugin will try each model in order until one succeeds. This is useful when a newer model is temporarily unavailable.
 
-### Provider fallback (different reranker plugin)
+### Provider fallback (a later reranker stage)
 
-The memory search system has a separate `fallback` configuration that points to a different reranker plugin. By default, fallback is set to `"none"`:
-
-```json5
-{
-  agents: {
-    defaults: {
-      memorySearch: {
-        query: {
-          hybrid: {
-            mmr: {
-              enabled: true,
-              lambda: 0.7,
-              provider: "memory-external-reranker",
-              fallback: "none", // Default: no fallback
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-To use the internal MMR reranker as a backup when the external reranker fails, explicitly set `fallback: "memory-mmr"`:
+Memory search reranking is a serial pipeline of stages. There is no dedicated
+fallback slot; instead, add a second stage and the pipeline keeps the previous
+stage's ordering whenever an earlier stage fails. To fall back to the internal
+MMR reranker when the external reranker fails, add `memory-mmr` as a later
+stage. Use `topK` on the external stage if you want it to narrow candidates
+before MMR runs:
 
 ```json5
 {
@@ -458,11 +439,12 @@ To use the internal MMR reranker as a backup when the external reranker fails, e
       memorySearch: {
         query: {
           hybrid: {
-            mmr: {
+            rerank: {
               enabled: true,
-              lambda: 0.7,
-              provider: "memory-external-reranker",
-              fallback: "memory-mmr", // Use internal MMR as fallback
+              stages: [
+                { provider: "memory-external-reranker", lambda: 0.7 },
+                { provider: "memory-mmr", lambda: 0.5 },
+              ],
             },
           },
         },
@@ -474,9 +456,9 @@ To use the internal MMR reranker as a backup when the external reranker fails, e
 
 ### What happens when reranking fails
 
-- **Primary reranker fails, no fallback configured**: Results are returned without reranking (sorted by original scores)
-- **Primary reranker fails, fallback configured**: System tries the fallback reranker
-- **Both primary and fallback fail**: Results are returned without reranking
+- **A stage fails or returns nothing**: the pipeline keeps the previous stage's ordering and continues with the remaining stages.
+- **A stage's plugin is not installed**: that stage is skipped.
+- **Every stage is skipped or fails**: results are returned without reranking (sorted by original scores).
 
 This ensures that memory search always returns results, even if reranking is unavailable.
 

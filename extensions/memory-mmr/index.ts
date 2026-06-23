@@ -1,5 +1,8 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { mmrRerank } from "./src/mmr-reranker.js";
+
+const log = createSubsystemLogger("memory/mmr");
 
 export function createMMRRerankerProvider() {
   return {
@@ -10,13 +13,20 @@ export function createMMRRerankerProvider() {
       limit: number;
       lambda?: number;
     }) => {
+      const startedAt = Date.now();
       const mmrItems = params.documents.map((doc) => ({
         id: doc.id,
         score: doc.score,
         content: doc.content,
       }));
       const reranked = mmrRerank(mmrItems, { enabled: true, lambda: params.lambda ?? 0.7 });
-      return reranked.map((item) => ({ id: item.id, score: item.score }));
+      const result = reranked.map((item) => ({ id: item.id, score: item.score }));
+      log.debug("memory-mmr rerank elapsed", {
+        elapsedMs: Date.now() - startedAt,
+        documents: params.documents.length,
+        reranked: result.length,
+      });
+      return result;
     },
   };
 }

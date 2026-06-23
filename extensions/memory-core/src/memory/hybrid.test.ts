@@ -116,7 +116,7 @@ describe("memory hybrid helpers", () => {
       mockReranker.mockClear();
     });
 
-    it("provider present → reranker function called; result order matches mock return", async () => {
+    it("single stage → reranker function called; result order matches mock return", async () => {
       const merged = await mergeHybridResults({
         vectorWeight: 0.7,
         textWeight: 0.3,
@@ -141,8 +141,7 @@ describe("memory hybrid helpers", () => {
           },
         ],
         keyword: [],
-        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
-        reranker: mockReranker,
+        rerank: { enabled: true, stages: [{ adapter: mockReranker, lambda: 0.7 }] },
       });
 
       expect(mockReranker).toHaveBeenCalledTimes(1);
@@ -152,7 +151,7 @@ describe("memory hybrid helpers", () => {
       expect(merged[1]?.path).toBe("memory/b.md");
     });
 
-    it('provider "none" → reranker function not called; score order preserved', async () => {
+    it("no stages → reranker function not called; score order preserved", async () => {
       const merged = await mergeHybridResults({
         vectorWeight: 0.7,
         textWeight: 0.3,
@@ -177,8 +176,8 @@ describe("memory hybrid helpers", () => {
           },
         ],
         keyword: [],
-        mmr: { enabled: true, lambda: 0.7, provider: "none", fallback: "none" },
-        // No reranker adapter passed: simulates manager resolving provider "none" to undefined
+        rerank: { enabled: true, stages: [] },
+        // No stages: simulates the manager resolving an empty or fully uninstalled pipeline
       });
 
       expect(mockReranker).not.toHaveBeenCalled();
@@ -188,7 +187,7 @@ describe("memory hybrid helpers", () => {
       expect(merged[1]?.path).toBe("memory/b.md");
     });
 
-    it("reranker throws + fallbackReranker → fallback called; primary error swallowed", async () => {
+    it("stage throws → next stage runs; error swallowed", async () => {
       const errorReranker = vi.fn(async () => {
         throw new Error("Primary reranker failed");
       });
@@ -216,9 +215,10 @@ describe("memory hybrid helpers", () => {
           },
         ],
         keyword: [],
-        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
-        reranker: errorReranker,
-        fallbackReranker,
+        rerank: {
+          enabled: true,
+          stages: [{ adapter: errorReranker }, { adapter: fallbackReranker }],
+        },
       });
 
       expect(errorReranker).toHaveBeenCalledTimes(1);
@@ -227,7 +227,7 @@ describe("memory hybrid helpers", () => {
       expect(merged[0]?.path).toBe("memory/a.md");
     });
 
-    it("primary provider absent + fallbackReranker → fallback called; score order from fallback", async () => {
+    it("single remaining stage runs; score order from stage", async () => {
       const fallbackReranker = vi.fn(
         async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) => {
           const sorted = [...items].toSorted((a, b) => b.score - a.score);
@@ -259,9 +259,8 @@ describe("memory hybrid helpers", () => {
           },
         ],
         keyword: [],
-        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "memory-mmr" },
-        // No primary reranker adapter: simulates primary provider not registered
-        fallbackReranker,
+        rerank: { enabled: true, stages: [{ adapter: fallbackReranker }] },
+        // Manager drops the uninstalled primary stage, leaving only this stage.
       });
 
       expect(mockReranker).not.toHaveBeenCalled();
@@ -271,7 +270,7 @@ describe("memory hybrid helpers", () => {
       expect(merged[1]?.path).toBe("memory/b.md");
     });
 
-    it("reranker throws + no fallback → fail-open; returns score-ordered results (no throw)", async () => {
+    it("stage throws + no later stage → fail-open; returns score-ordered results (no throw)", async () => {
       const errorReranker = vi.fn(async () => {
         throw new Error("Primary reranker failed");
       });
@@ -300,8 +299,7 @@ describe("memory hybrid helpers", () => {
           },
         ],
         keyword: [],
-        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
-        reranker: errorReranker,
+        rerank: { enabled: true, stages: [{ adapter: errorReranker }] },
       });
 
       expect(errorReranker).toHaveBeenCalledTimes(1);
@@ -311,10 +309,9 @@ describe("memory hybrid helpers", () => {
       expect(merged[1]?.path).toBe("memory/b.md");
     });
 
-    it("mmr.enabled=true, named provider but plugin not installed → fail-open; score-sorted results returned", async () => {
-      // Simulates the upgrade case: user has mmr.enabled=true in config but the
-      // memory-mmr plugin is not installed (createReranker returns undefined for
-      // an unregistered id, so no adapter is passed).
+    it("rerank enabled but no installed stages → fail-open; score-sorted results returned", async () => {
+      // Simulates the upgrade case: rerank is enabled in config but the named
+      // plugin is not installed, so the manager drops it and passes no stages.
       const merged = await mergeHybridResults({
         vectorWeight: 0.7,
         textWeight: 0.3,
@@ -339,8 +336,8 @@ describe("memory hybrid helpers", () => {
           },
         ],
         keyword: [],
-        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
-        // No reranker adapter: createReranker returns undefined when plugin is not registered.
+        rerank: { enabled: true, stages: [] },
+        // Manager drops stages whose plugin is not installed, leaving no stages.
       });
 
       expect(mockReranker).not.toHaveBeenCalled();
@@ -350,9 +347,9 @@ describe("memory hybrid helpers", () => {
       expect(merged[1]?.path).toBe("memory/b.md");
     });
 
-    it("mmr.enabled=true, provider and fallback configured but neither plugin installed → fail-open; score-sorted results returned", async () => {
-      // Simulates: user has both a primary and fallback reranker configured but
-      // neither plugin is installed (e.g. after an incomplete upgrade or reload).
+    it("rerank enabled but all stages uninstalled → fail-open; score-sorted results returned", async () => {
+      // Simulates: every configured stage names a plugin that is not installed
+      // (e.g. after an incomplete upgrade or reload), so the manager passes none.
       const merged = await mergeHybridResults({
         vectorWeight: 0.7,
         textWeight: 0.3,
@@ -377,13 +374,8 @@ describe("memory hybrid helpers", () => {
           },
         ],
         keyword: [],
-        mmr: {
-          enabled: true,
-          lambda: 0.7,
-          provider: "memory-mmr",
-          fallback: "memory-mmr-fallback",
-        },
-        // Neither adapter passed: both plugins absent after upgrade/reload.
+        rerank: { enabled: true, stages: [] },
+        // Manager drops all stages whose plugins are not installed.
       });
 
       expect(mockReranker).not.toHaveBeenCalled();
@@ -429,8 +421,7 @@ describe("memory hybrid helpers", () => {
           },
         ],
         keyword: [],
-        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
-        reranker: emptyReranker,
+        rerank: { enabled: true, stages: [{ adapter: emptyReranker }] },
       });
 
       const invalidFallback = await mergeHybridResults({
@@ -457,8 +448,7 @@ describe("memory hybrid helpers", () => {
           },
         ],
         keyword: [],
-        mmr: { enabled: true, lambda: 0.7, provider: "memory-mmr", fallback: "none" },
-        reranker: invalidIdReranker,
+        rerank: { enabled: true, stages: [{ adapter: invalidIdReranker }] },
       });
 
       expect(emptyReranker).toHaveBeenCalledTimes(1);
@@ -469,6 +459,208 @@ describe("memory hybrid helpers", () => {
       expect(emptyFallback[1]?.path).toBe("memory/b.md");
       expect(invalidFallback[0]?.path).toBe("memory/a.md");
       expect(invalidFallback[1]?.path).toBe("memory/b.md");
+    });
+
+    it("narrows survivors to topK between stages so later stages see a smaller set", async () => {
+      const firstStage = vi.fn(
+        async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) =>
+          [...items].toSorted((a, b) => b.score - a.score),
+      );
+      let secondStageInputSize = -1;
+      const secondStage = vi.fn(
+        async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) => {
+          secondStageInputSize = items.length;
+          return [...items].toSorted((a, b) => b.score - a.score);
+        },
+      );
+
+      const vector = Array.from({ length: 6 }, (_, i) => ({
+        id: `id-${i}`,
+        path: `memory/${i}.md`,
+        startLine: 1,
+        endLine: 2,
+        source: "memory" as const,
+        snippet: `vec-${i}`,
+        vectorScore: 1 - i * 0.1,
+      }));
+
+      const merged = await mergeHybridResults({
+        vectorWeight: 1,
+        textWeight: 0,
+        vector,
+        keyword: [],
+        rerank: {
+          enabled: true,
+          stages: [{ adapter: firstStage, topK: 2 }, { adapter: secondStage }],
+        },
+      });
+
+      expect(firstStage).toHaveBeenCalledTimes(1);
+      expect(secondStage).toHaveBeenCalledTimes(1);
+      // First stage saw all 6; its topK=2 narrows what the second stage receives.
+      expect(secondStageInputSize).toBe(2);
+      expect(merged).toHaveLength(2);
+      expect(merged[0]?.path).toBe("memory/0.md");
+      expect(merged[1]?.path).toBe("memory/1.md");
+    });
+
+    it("failed stage with topK does not narrow → next stage sees full original input", async () => {
+      // Stage 0 declares topK but throws. Its topK must be ignored so stage 1
+      // receives the same input stage 0 received, not an arbitrary head-slice.
+      const errorStage = vi.fn(async () => {
+        throw new Error("stage-0 failed");
+      });
+      let secondStageInputSize = -1;
+      const secondStage = vi.fn(
+        async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) => {
+          secondStageInputSize = items.length;
+          return [...items].toSorted((a, b) => b.score - a.score);
+        },
+      );
+
+      const vector = Array.from({ length: 6 }, (_, i) => ({
+        id: `id-${i}`,
+        path: `memory/${i}.md`,
+        startLine: 1,
+        endLine: 2,
+        source: "memory" as const,
+        snippet: `vec-${i}`,
+        vectorScore: 1 - i * 0.1,
+      }));
+
+      const merged = await mergeHybridResults({
+        vectorWeight: 1,
+        textWeight: 0,
+        vector,
+        keyword: [],
+        rerank: {
+          enabled: true,
+          stages: [{ adapter: errorStage, topK: 2 }, { adapter: secondStage }],
+        },
+      });
+
+      expect(errorStage).toHaveBeenCalledTimes(1);
+      expect(secondStage).toHaveBeenCalledTimes(1);
+      // topK from the failed stage must not be applied: stage 1 sees all 6.
+      expect(secondStageInputSize).toBe(6);
+      expect(merged).toHaveLength(6);
+    });
+
+    it("successful topK stage then failing last stage → returns prior topK-narrowed output", async () => {
+      // Stage 0 succeeds and narrows to topK=2; stage 1 (last) fails. The pipeline
+      // returns stage 0's filtered output unchanged.
+      const firstStage = vi.fn(
+        async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) =>
+          [...items].toSorted((a, b) => b.score - a.score),
+      );
+      const errorStage = vi.fn(async () => {
+        throw new Error("last stage failed");
+      });
+
+      const vector = Array.from({ length: 6 }, (_, i) => ({
+        id: `id-${i}`,
+        path: `memory/${i}.md`,
+        startLine: 1,
+        endLine: 2,
+        source: "memory" as const,
+        snippet: `vec-${i}`,
+        vectorScore: 1 - i * 0.1,
+      }));
+
+      const merged = await mergeHybridResults({
+        vectorWeight: 1,
+        textWeight: 0,
+        vector,
+        keyword: [],
+        rerank: {
+          enabled: true,
+          stages: [{ adapter: firstStage, topK: 2 }, { adapter: errorStage }],
+        },
+      });
+
+      expect(firstStage).toHaveBeenCalledTimes(1);
+      expect(errorStage).toHaveBeenCalledTimes(1);
+      // Stage 0 narrowed to 2; the failing last stage leaves that output intact.
+      expect(merged).toHaveLength(2);
+      expect(merged[0]?.path).toBe("memory/0.md");
+      expect(merged[1]?.path).toBe("memory/1.md");
+    });
+
+    it("all stages fail with topK on first → returns full original input", async () => {
+      // Every stage throws; the first declares topK. No stage succeeds, so no
+      // narrowing is applied and the original score-ordered input passes through.
+      const errorStageA = vi.fn(async () => {
+        throw new Error("stage-0 failed");
+      });
+      const errorStageB = vi.fn(async () => {
+        throw new Error("stage-1 failed");
+      });
+
+      const vector = Array.from({ length: 6 }, (_, i) => ({
+        id: `id-${i}`,
+        path: `memory/${i}.md`,
+        startLine: 1,
+        endLine: 2,
+        source: "memory" as const,
+        snippet: `vec-${i}`,
+        vectorScore: 1 - i * 0.1,
+      }));
+
+      const merged = await mergeHybridResults({
+        vectorWeight: 1,
+        textWeight: 0,
+        vector,
+        keyword: [],
+        rerank: {
+          enabled: true,
+          stages: [{ adapter: errorStageA, topK: 2 }, { adapter: errorStageB }],
+        },
+      });
+
+      expect(errorStageA).toHaveBeenCalledTimes(1);
+      expect(errorStageB).toHaveBeenCalledTimes(1);
+      // No stage succeeded: full original input is returned, topK ignored.
+      expect(merged).toHaveLength(6);
+      expect(merged[0]?.path).toBe("memory/0.md");
+      expect(merged[5]?.path).toBe("memory/5.md");
+    });
+
+    it("rerank disabled → stages skipped; score order preserved", async () => {
+      const stage = vi.fn(
+        async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) =>
+          [...items].toSorted((a, b) => a.score - b.score),
+      );
+
+      const merged = await mergeHybridResults({
+        vectorWeight: 1,
+        textWeight: 0,
+        vector: [
+          {
+            id: "a",
+            path: "memory/a.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "vec-a",
+            vectorScore: 0.9,
+          },
+          {
+            id: "b",
+            path: "memory/b.md",
+            startLine: 3,
+            endLine: 4,
+            source: "memory",
+            snippet: "vec-b",
+            vectorScore: 0.8,
+          },
+        ],
+        keyword: [],
+        rerank: { enabled: false, stages: [{ adapter: stage }] },
+      });
+
+      expect(stage).not.toHaveBeenCalled();
+      expect(merged[0]?.path).toBe("memory/a.md");
+      expect(merged[1]?.path).toBe("memory/b.md");
     });
   });
 });

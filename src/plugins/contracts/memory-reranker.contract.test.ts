@@ -96,8 +96,8 @@ describe("MMR upgrade path", () => {
 
   it("before plugin registers: getRegisteredMemoryReranker returns undefined", () => {
     // Registry is empty (cleared by afterEach from any prior test). Proves that
-    // mmr.enabled=true with a named provider doesn't phantom-resolve to a stale
-    // or default reranker when the plugin is absent.
+    // a configured reranker stage doesn't phantom-resolve to a stale or default
+    // reranker when the plugin is absent.
     expect(getRegisteredMemoryReranker("memory-mmr")).toBeUndefined();
   });
 
