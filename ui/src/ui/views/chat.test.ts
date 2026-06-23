@@ -17,7 +17,7 @@ import {
 import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState } from "../chat/chat-welcome.ts";
-import { renderChatSessionSelect } from "../chat/session-controls.ts";
+import { renderChatSessionSelect, resetChatSessionPickerState } from "../chat/session-controls.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../types.ts";
 import type { ChatAttachment, ChatQueueItem } from "../ui-types.ts";
@@ -4689,6 +4689,74 @@ describe("chat session controls", () => {
     ).toBe("Renamed page 51");
   });
 
+  it("uses raw loaded picker rows when refreshing after rename", async () => {
+    patchSessionMock.mockClear();
+    patchSessionMock.mockResolvedValueOnce(true);
+    const visibleRows: GatewaySessionRow[] = [
+      { key: "main", kind: "direct", label: "Main", updatedAt: 3 },
+      { key: "agent:main:after-archived", kind: "direct", label: "After archived", updatedAt: 2 },
+    ];
+    const request = vi.fn((method: string, params: Record<string, unknown> = {}) => {
+      if (method !== "sessions.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      expect(params.limit).toBe(75);
+      return Promise.resolve(
+        createSessionsResultFromRows(
+          [
+            { key: "main", kind: "direct", label: "Main", updatedAt: 4 },
+            {
+              key: "agent:main:after-archived",
+              kind: "direct",
+              label: "Renamed after archived",
+              updatedAt: 3,
+            },
+          ],
+          { hasMore: true, nextOffset: 75 },
+        ),
+      );
+    });
+    const { state } = createChatHeaderState();
+    state.client = { request } as unknown as GatewayBrowserClient;
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    state.sessionsShowArchived = false;
+    state.sessionsResult = createSessionsResultFromRows(visibleRows);
+    state.chatSessionPickerResult = createSessionsResultFromRows(visibleRows, {
+      hasMore: true,
+      nextOffset: 75,
+    });
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const option = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ].find((button) => button.dataset.sessionKey === "agent:main:after-archived");
+    option
+      ?.closest(".chat-session-picker__row")
+      ?.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')
+      ?.click();
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-rename-input="true"]',
+    );
+    input!.value = "Renamed after archived";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushTasks();
+    await waitForTimerTurn();
+
+    expect(request).toHaveBeenCalledWith("sessions.list", expect.objectContaining({ limit: 75 }));
+    expect(
+      state.chatSessionPickerResult?.sessions.find((row) => row.key === "agent:main:after-archived")
+        ?.label,
+    ).toBe("Renamed after archived");
+  });
+
   it("ignores an older picker reload that resolves after a successful rename", async () => {
     patchSessionMock.mockClear();
     patchSessionMock.mockResolvedValueOnce(true);
@@ -4929,6 +4997,56 @@ describe("chat session controls", () => {
     expect(patchSessionMock).toHaveBeenCalledTimes(2);
     expect(state.chatSessionPickerRenamePendingKeys["agent:main:work"]).toBe(true);
     expect(state.chatSessionPickerRenamePendingKeys["agent:main:side"]).toBe(true);
+  });
+
+  it("keeps pending rename keys when resetting picker UI state", async () => {
+    patchSessionMock.mockClear();
+    let finishPatch: () => void = () => {};
+    patchSessionMock.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishPatch = () => resolve(true);
+        }),
+    );
+    const { state } = createChatHeaderState();
+    state.sessionsIncludeGlobal = false;
+    state.sessionsIncludeUnknown = false;
+    const rows: GatewaySessionRow[] = [
+      { key: "main", kind: "direct", label: "Main", updatedAt: 2 },
+      { key: "agent:main:work", kind: "direct", label: "Work", updatedAt: 1 },
+    ];
+    state.sessionsResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerResult = createSessionsResultFromRows(rows);
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const option = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    ].find((button) => button.dataset.sessionKey === "agent:main:work");
+    option
+      ?.closest(".chat-session-picker__row")
+      ?.querySelector<HTMLButtonElement>('button[data-chat-session-rename="true"]')
+      ?.click();
+    render(renderChatSessionSelect(state), container);
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-rename-input="true"]',
+    );
+    input!.value = "Renamed work";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    input!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await flushTasks();
+
+    resetChatSessionPickerState(state);
+    expect(state.chatSessionPickerRenamePendingKeys["agent:main:work"]).toBe(true);
+
+    finishPatch();
+    await flushTasks();
+    await waitForTimerTurn();
+    expect(state.chatSessionPickerRenamePendingKeys["agent:main:work"]).toBeUndefined();
   });
 
   it("does not restore the rename editor when the picker closed before the failure resolved", async () => {
@@ -5344,6 +5462,9 @@ describe("chat session controls", () => {
       "agent:main:work",
       "agent:main:side",
     ]);
+    expect(
+      state.chatSessionPickerResult?.sessions.find((row) => row.key === "agent:main:work")?.label,
+    ).toBe("Renamed work");
     expect(state.chatSessionPickerRenameKey).toBeNull();
     expect(state.chatSessionPickerRenamePendingKeys["agent:main:side"]).toBe(true);
   });

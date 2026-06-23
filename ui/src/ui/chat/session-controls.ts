@@ -284,7 +284,6 @@ export function resetChatSessionPickerState(state: AppViewState) {
   state.chatSessionPickerResult = null;
   state.chatSessionPickerRenameKey = null;
   state.chatSessionPickerRenameDraft = "";
-  state.chatSessionPickerRenamePendingKeys = {};
   state.chatSessionPickerRenameRequestId = (state.chatSessionPickerRenameRequestId ?? 0) + 1;
 }
 
@@ -518,12 +517,47 @@ async function loadMoreChatSessionPickerResults(state: AppViewState) {
   }
 }
 
+function resolveFinitePositiveInteger(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
 function resolveChatSessionPickerReloadLimit(result: SessionsListResult | null): number {
-  return Math.max(CHAT_SESSIONS_REFRESH_LIMIT, result?.sessions.length ?? 0);
+  if (!result) {
+    return CHAT_SESSIONS_REFRESH_LIMIT;
+  }
+  const rawLoadedCount = Math.max(
+    resolveFinitePositiveInteger(result.nextOffset),
+    resolveFinitePositiveInteger(result.offset) + resolveFinitePositiveInteger(result.limitApplied),
+    result.hasMore === true ? 0 : resolveFinitePositiveInteger(result.totalCount),
+    result.sessions.length,
+  );
+  return Math.max(CHAT_SESSIONS_REFRESH_LIMIT, rawLoadedCount);
 }
 
 function resolveChatSessionPickerReloadQuery(state: AppViewState): string {
   return normalizeOptionalString(state.chatSessionPickerQuery) ?? "";
+}
+
+function updateChatSessionPickerCachedLabel(
+  state: AppViewState,
+  key: string,
+  label: string | null,
+) {
+  const result = state.chatSessionPickerResult;
+  if (!result?.sessions.some((row) => row.key === key)) {
+    return;
+  }
+  state.chatSessionPickerResult = {
+    ...result,
+    sessions: result.sessions.map((row) =>
+      row.key === key
+        ? {
+            ...row,
+            label: label ?? undefined,
+          }
+        : row,
+    ),
+  };
 }
 
 function resolveChatSessionRow(
@@ -717,7 +751,9 @@ async function commitChatSessionRename(state: AppViewState, key: string) {
     return;
   }
   if (!requestIsCurrent) {
-    if (!state.chatSessionPickerOpen) {
+    if (state.chatSessionPickerOpen) {
+      updateChatSessionPickerCachedLabel(state, key, label);
+    } else {
       invalidateChatSessionPickerSearchRequests(state);
       state.chatSessionPickerResult = null;
       state.chatSessionPickerLoading = false;
