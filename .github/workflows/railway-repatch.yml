@@ -1,0 +1,30 @@
+---
+name: Railway re-patch Dockerfile
+# On-demand: re-run the Railway Dockerfile patch on main and commit the result.
+# Use after changing scripts/railway-patch-dockerfile.sh to apply it to the
+# current Dockerfile without waiting for an upstream sync.
+"on":
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  repatch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Re-apply Railway Dockerfile patch
+        run: bash scripts/railway-patch-dockerfile.sh
+      - name: Commit if Dockerfile changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- Dockerfile; then
+            echo "Dockerfile unchanged"
+          else
+            git add Dockerfile
+            git commit -m "fix(railway): strip BuildKit mounts for Railway builder"
+            git push origin main
+            echo "pushed mount-stripped Dockerfile"
+          fi
