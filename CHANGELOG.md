@@ -37,6 +37,7 @@ This audited record covers the complete v2026.6.8..HEAD history: 423 merged PRs.
 
 #### Pull requests
 
+- **PR #92154** fix(qqbot): gate private group commands and close strict command visibility gaps. Thanks @sliverp.
 - **PR #90463** refactor: add session accessor seam with gateway consumer. Thanks @jalehman.
 - **PR #88656** Drop reasoning-only length turns from replay. Thanks @abel-zer0.
 - **PR #92856** feat(webui): add session workspace rail. Thanks @Solvely-Colin.

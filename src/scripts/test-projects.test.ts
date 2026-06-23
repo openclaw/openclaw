@@ -618,10 +618,10 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
     );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
   });
@@ -906,6 +906,7 @@ describe("test-projects args", () => {
           "test/scripts/prepare-extension-package-boundary-artifacts.test.ts",
           "test/scripts/proxy-install-ca.test.ts",
           "test/scripts/release-preflight.test.ts",
+          "test/scripts/render-maturity-docs.test.ts",
           "test/scripts/report-test-temp-creations.test.ts",
           "test/scripts/test-install-sh-docker.test.ts",
           "test/scripts/test-projects.test.ts",

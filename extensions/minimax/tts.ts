@@ -83,6 +83,8 @@ export async function minimaxTTS(params: {
         body: JSON.stringify({
           model,
           text,
+          stream: false,
+          output_format: "hex",
           voice_setting: {
             voice_id: voiceId,
             speed,
@@ -117,9 +119,7 @@ export async function minimaxTTS(params: {
         body.base_resp.status_code !== 0
       ) {
         const msg = body.base_resp.status_msg ?? "unknown error";
-        throw new Error(
-          `MiniMax TTS API error (${body.base_resp.status_code}): ${msg}`,
-        );
+        throw new Error(`MiniMax TTS API error (${body.base_resp.status_code}): ${msg}`);
       }
 
       const hexAudio = body?.data?.audio;

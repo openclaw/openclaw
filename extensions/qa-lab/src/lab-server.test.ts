@@ -6,12 +6,12 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaJsonBody } from "./bus-server.js";
+import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import {
   startQaLabServer,
   writeQaLabServerError,
   type QaLabServerStartParams,
 } from "./lab-server.js";
-import { resolveUiAssetVersion } from "./lab-server-ui.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
@@ -657,7 +657,8 @@ describe("qa-lab server", () => {
     });
 
     const result = await lab.runSelfCheck();
-    expect(result.outputPath).toBe(path.join(repoRoot, ".artifacts", "qa-e2e", "self-check.md"));
+    expect(path.dirname(result.outputPath)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+    expect(path.basename(result.outputPath)).toMatch(/^self-check-[a-z0-9]+-[a-f0-9]{8}\.md$/u);
     expect(await readFile(result.outputPath, "utf8")).toContain("Synthetic Slack-class roundtrip");
   });
 

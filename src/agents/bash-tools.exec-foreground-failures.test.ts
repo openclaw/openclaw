@@ -14,7 +14,6 @@ const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
   cancel: vi.fn(),
   cancelScope: vi.fn(),
-  reconcileOrphans: vi.fn(),
   getRecord: vi.fn(),
 }));
 
@@ -60,7 +59,6 @@ describe("exec foreground failures", () => {
     supervisorMock.spawn.mockReset();
     supervisorMock.cancel.mockReset();
     supervisorMock.cancelScope.mockReset();
-    supervisorMock.reconcileOrphans.mockReset();
     supervisorMock.getRecord.mockReset();
     resetProcessRegistryForTests();
   });

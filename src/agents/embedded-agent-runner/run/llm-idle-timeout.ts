@@ -7,6 +7,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { toErrorObject } from "../../../infra/errors.js";
 import { onLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
@@ -182,10 +183,6 @@ export function resolveLlmIdleTimeoutMs(params?: {
     return clampImplicitTimeoutMs(agentTimeoutMs);
   }
 
-  if (params?.trigger === "cron") {
-    return 0;
-  }
-
   // The default watchdog is a network-silence-as-hang guard for cloud providers.
   // Local providers can legitimately stream nothing for many minutes during
   // prompt evaluation or thinking, so falling back to the default would abort
@@ -332,7 +329,7 @@ export function streamWithIdleTimeout(
               cleanupIterator();
               return (
                 streamIterator.throw?.(error) ??
-                Promise.reject(toLintErrorObject(error, "Non-Error rejection"))
+                Promise.reject(toErrorObject(error, "Non-Error rejection"))
               );
             },
           });
@@ -371,18 +368,4 @@ export function streamWithIdleTimeout(
     }
     return wrapStream(maybeStream);
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

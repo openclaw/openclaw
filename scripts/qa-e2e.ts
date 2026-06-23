@@ -14,7 +14,7 @@ type QaE2eDeps = {
 
 type QaE2eArgs = {
   help: boolean;
-  outputPath: string;
+  outputPath?: string;
 };
 
 async function loadQaE2eRuntime(): Promise<QaE2eRuntime> {
@@ -58,7 +58,7 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
-      return { help: true, outputPath: ".artifacts/qa-e2e/self-check.md" };
+      return { help: true };
     }
     const inlineOutput = arg.startsWith("--output=") ? arg.slice("--output=".length).trim() : null;
     if (inlineOutput !== null) {
@@ -85,7 +85,7 @@ export function parseQaE2eArgs(argv: readonly string[]): QaE2eArgs {
     }
     outputPath = arg.trim();
   }
-  return { help: false, outputPath: outputPath || ".artifacts/qa-e2e/self-check.md" };
+  return outputPath ? { help: false, outputPath } : { help: false };
 }
 
 export async function main(
@@ -101,7 +101,9 @@ export async function main(
   const { isQaSelfCheckSuccessful, runQaE2eSelfCheck } = await (
     deps.loadRuntime ?? loadQaE2eRuntime
   )();
-  const result = await runQaE2eSelfCheck({ outputPath: args.outputPath });
+  const result = args.outputPath
+    ? await runQaE2eSelfCheck({ outputPath: args.outputPath })
+    : await runQaE2eSelfCheck();
   (deps.writeStdout ?? ((text: string) => process.stdout.write(text)))(
     `QA self-check report: ${result.outputPath}\n`,
   );

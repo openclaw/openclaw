@@ -42,6 +42,7 @@ export type QaTestFileScenarioRunParams = {
   repoRoot: string;
   runCommand?: QaScenarioCommandRunner;
   scenarios: readonly QaSeedScenarioWithSource[];
+  writeEvidenceFile?: boolean;
 };
 
 export type QaScenarioCommandExecution = {
@@ -80,6 +81,7 @@ type QaTestFileScenarioResult = {
 };
 
 export type QaTestFileScenarioRunResult = {
+  evidence: QaEvidenceSummaryJson;
   evidencePath: string;
   executionKind: QaTestFileExecutionKind;
   outputDir: string;
@@ -746,10 +748,13 @@ function buildScenarioArtifactPaths(params: {
 async function writeTestFileEvidenceFile(params: {
   evidence: unknown;
   outputDir: string;
+  writeEvidenceFile?: boolean;
 }): Promise<Pick<QaTestFileScenarioRunResult, "evidencePath">> {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
-  await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  if (params.writeEvidenceFile ?? true) {
+    await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
+    await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  }
   return { evidencePath };
 }
 
@@ -802,9 +807,11 @@ export async function runQaTestFileScenarios(
   const paths = await writeTestFileEvidenceFile({
     evidence,
     outputDir: params.outputDir,
+    writeEvidenceFile: params.writeEvidenceFile,
   });
   return {
     ...paths,
+    evidence,
     executionKind: kind,
     outputDir: params.outputDir,
     results,

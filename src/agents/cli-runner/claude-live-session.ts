@@ -2,6 +2,7 @@
  * Manages reusable Claude CLI stdio sessions for CLI-backed agent turns.
  */
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
@@ -729,10 +730,6 @@ function parseSessionId(parsed: Record<string, unknown>): string | undefined {
         ? parsed.sessionId.trim()
         : "";
   return sessionId || undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function normalizePositiveInt(

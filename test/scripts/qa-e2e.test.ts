@@ -47,7 +47,7 @@ describe("qa-e2e script", () => {
   });
 
   it("resolves the default self-check report path", () => {
-    expect(resolveQaE2eOutputPath([])).toBe(".artifacts/qa-e2e/self-check.md");
+    expect(resolveQaE2eOutputPath([])).toBeUndefined();
     expect(resolveQaE2eOutputPath([".artifacts/custom.md"])).toBe(".artifacts/custom.md");
     expect(resolveQaE2eOutputPath(["--output", ".artifacts/custom.md"])).toBe(
       ".artifacts/custom.md",
@@ -120,5 +120,23 @@ describe("qa-e2e script", () => {
     expect(isQaSelfCheckSuccessful).toHaveBeenCalledWith(result);
     expect(writeStdout).toHaveBeenCalledWith("QA self-check report: /tmp/qa-self-check.md\n");
     expect(env.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+  });
+
+  it("lets QA Lab choose the default self-check output path", async () => {
+    const result = makeSelfCheckResult("pass");
+    const runQaE2eSelfCheck = vi.fn(async () => result);
+    const env: NodeJS.ProcessEnv = {};
+
+    await expect(
+      main([], {
+        env,
+        loadRuntime: async () => ({
+          isQaSelfCheckSuccessful: () => true,
+          runQaE2eSelfCheck,
+        }),
+      }),
+    ).resolves.toBe(0);
+
+    expect(runQaE2eSelfCheck.mock.calls[0]).toEqual([]);
   });
 });

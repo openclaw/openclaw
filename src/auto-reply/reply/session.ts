@@ -231,6 +231,8 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  requestedSessionId?: string;
+  resumeRequestedSession?: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
   // Heartbeat, cron-event, and exec-event runs should NEVER trigger session
@@ -248,6 +250,7 @@ export async function initSessionState(params: {
   // Native slash/menu commands can arrive on a transport-specific "slash session"
   // while explicitly targeting an existing chat session. Honor that explicit target
   // before any binding lookup so command-side mutations land on the intended session.
+  // Priority: commandTargetSessionKey > boundConversation > route.
   const targetSessionKey =
     commandTargetSessionKey ??
     resolveBoundConversationSessionKey({
@@ -265,6 +268,7 @@ export async function initSessionState(params: {
   const agentId = resolveSessionAgentId({
     sessionKey: sessionCtxForState.SessionKey,
     config: cfg,
+    fallbackAgentId: sessionCtxForState.AgentId,
   });
   const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const resetTriggers = sessionCfg?.resetTriggers?.length
@@ -303,6 +307,7 @@ export async function initSessionState(params: {
   let persistedTrace: string | undefined;
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
+  let persistedResponseUsage: SessionEntry["responseUsage"];
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
   let persistedModelOverrideSource: SessionEntry["modelOverrideSource"];
@@ -431,6 +436,14 @@ export async function initSessionState(params: {
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
+  const requestedSessionId = params.requestedSessionId?.trim() || undefined;
+  const requestedCurrentSession = Boolean(
+    requestedSessionId && entry?.sessionId && entry.sessionId === requestedSessionId,
+  );
+  // Control UI sends sessionId on ordinary sends too, so only the one-shot reconnect
+  // resume signal is allowed to suppress configured idle/daily rollover.
+  const reconnectResumeRequested =
+    params.resumeRequestedSession === true && requestedCurrentSession;
   const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
@@ -475,7 +488,9 @@ export async function initSessionState(params: {
     }));
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
-    (((entryFreshness?.fresh ?? false) || (softResetAllowed && canReuseExistingEntry)) &&
+    (((reconnectResumeRequested && canReuseExistingEntry) ||
+      (entryFreshness?.fresh ?? false) ||
+      (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
@@ -505,6 +520,7 @@ export async function initSessionState(params: {
     persistedTrace = entry.traceLevel;
     persistedReasoning = entry.reasoningLevel;
     persistedTtsAuto = entry.ttsAuto;
+    persistedResponseUsage = entry.responseUsage;
     persistedModelOverride = entry.modelOverride;
     persistedProviderOverride = entry.providerOverride;
     persistedModelOverrideSource = entry.modelOverrideSource;
@@ -546,6 +562,7 @@ export async function initSessionState(params: {
       persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
+      persistedResponseUsage = entry.responseUsage;
     }
     // When a reset trigger (/new, /reset) starts a new session, also rotate the
     // underlying CLI conversation and carry forward spawn lineage/label.
@@ -662,7 +679,7 @@ export async function initSessionState(params: {
     traceLevel: persistedTrace ?? baseEntry?.traceLevel,
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
-    responseUsage: baseEntry?.responseUsage,
+    responseUsage: persistedResponseUsage ?? baseEntry?.responseUsage,
     usageFamilyKey,
     usageFamilySessionIds,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
@@ -806,6 +823,15 @@ export async function initSessionState(params: {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
     sessionEntry.memoryFlushAt = undefined;
+    // Runtime model fields are persisted last-run cache, not user selection.
+    // Reset must drop them so the next turn resolves current defaults or the
+    // explicit providerOverride/modelOverride values preserved above.
+    sessionEntry.modelProvider = undefined;
+    sessionEntry.model = undefined;
+    sessionEntry.fallbackNoticeSelectedModel = undefined;
+    sessionEntry.fallbackNoticeActiveModel = undefined;
+    sessionEntry.fallbackNoticeReason = undefined;
+    sessionEntry.systemPromptReport = undefined;
     // Clear stale context hash so the first flush in the new session is not
     // incorrectly skipped due to a hash match with the old transcript (#30115).
     sessionEntry.memoryFlushContextHash = undefined;
@@ -820,6 +846,8 @@ export async function initSessionState(params: {
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
+    sessionEntry.cacheRead = undefined;
+    sessionEntry.cacheWrite = undefined;
     sessionEntry.contextTokens = undefined;
     sessionEntry.contextBudgetStatus = undefined;
     sessionEntry.goal = undefined;

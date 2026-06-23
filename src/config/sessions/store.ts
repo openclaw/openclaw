@@ -82,7 +82,6 @@ export {
   drainSessionStoreWriterQueuesForTest,
   getSessionStoreWriterQueueSizeForTest,
 } from "./store-writer-state.js";
-export { withSessionStoreWriterForTest } from "./store-writer.js";
 export {
   loadSessionStore,
   readSessionEntries,

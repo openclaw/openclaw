@@ -378,7 +378,7 @@ struct OnboardingWizardView: View {
 
     private func onboardingSwitchIndicator(isOn: Bool) -> some View {
         Capsule()
-            .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.35))
+            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
             .frame(width: 52, height: 32)
             .overlay(alignment: isOn ? .trailing : .leading) {
                 Circle()
@@ -575,7 +575,7 @@ struct OnboardingWizardView: View {
 
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 64))
-                .foregroundStyle(.green)
+                .foregroundStyle(OpenClawBrand.ok)
                 .padding(.bottom, 20)
 
             Text("Connected")

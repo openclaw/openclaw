@@ -161,7 +161,12 @@ function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string)
   if (previousSessionKey !== sessionKey) {
     resetChatSessionPickerState(state);
   }
-  (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
+  const chatSessionState = state as unknown as {
+    currentSessionId?: string | null;
+    reconnectResumeSessionId?: string | null;
+  };
+  chatSessionState.currentSessionId = null;
+  chatSessionState.reconnectResumeSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
@@ -847,17 +852,18 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   return html`
     <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
       ${THEME_MODE_OPTIONS.map((opt) => {
+        // Group aria-label already says "Color mode"; per-button label only needs
+        // the differentiating mode name (System/Light/Dark).
         const label = t(opt.labelKey);
-        const tooltip = t("common.colorModeOption", { mode: label });
         return html`
           <button
             type="button"
             class="topbar-theme-mode__btn ${opt.id === state.themeMode
               ? "topbar-theme-mode__btn--active"
               : ""}"
-            title=${tooltip}
-            aria-label=${tooltip}
-            data-tooltip=${tooltip}
+            title=${label}
+            aria-label=${label}
+            data-tooltip=${label}
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >

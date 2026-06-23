@@ -1282,6 +1282,34 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps Mantis proof workflow edits on workflow evidence regression tests", () => {
+    const packageAcceptanceTargets = [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ];
+    const workflowTargets = new Map([
+      [".github/workflows/mantis-discord-smoke.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-discord-status-reactions.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-discord-thread-attachment.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
+      [
+        ".github/workflows/mantis-telegram-desktop-proof.yml",
+        [
+          "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+    ]);
+
+    for (const [workflowPath, targets] of workflowTargets) {
+      expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
+        mode: "targets",
+        targets,
+      });
+    }
+  });
+
   it("keeps release-check workflow edits on release workflow regression tests", () => {
     expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-release-checks.yml"])).toEqual(
       {
@@ -1980,22 +2008,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-npm-release.ts",
         ["test/plugin-npm-release.test.ts", "test/plugin-clawhub-release.test.ts"],
       ],
-      [
-        "scripts/plugin-clawhub-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-clawhub-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
+      ["scripts/plugin-clawhub-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-clawhub-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
       [
         "scripts/plugin-release-pretag-pack-check.ts",
         ["test/scripts/plugin-release-pretag-pack-check.test.ts"],

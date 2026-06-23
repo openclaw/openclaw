@@ -371,20 +371,118 @@ const buildMissingEntryErrorMessage = async () => {
 const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
-const resolvePrecomputedCommandHelp = (argv) => {
-  if (argv.length !== 4 || (argv[3] !== "--help" && argv[3] !== "-h")) {
-    return null;
+const LAUNCHER_HELP_FLAGS = new Set(["-h", "--help"]);
+const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
+const LAUNCHER_PRECOMPUTED_COMMAND_HELP = {
+  browser: { command: "browser", metadataKey: "browserHelpText" },
+  secrets: { command: "secrets", metadataKey: "secretsHelpText" },
+  nodes: { command: "nodes", metadataKey: "nodesHelpText" },
+};
+const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
+  "doctor",
+  "gateway",
+  "models",
+  "plugins",
+  "sessions",
+  "tasks",
+]);
+
+const isLauncherRootOptionValueToken = (arg) => {
+  if (!arg || arg === "--") {
+    return false;
   }
-  if (argv[2] === "browser") {
-    return { command: "browser", metadataKey: "browserHelpText" };
+  if (!arg.startsWith("-")) {
+    return true;
   }
-  if (argv[2] === "secrets") {
-    return { command: "secrets", metadataKey: "secretsHelpText" };
+  return /^-\d+(?:\.\d+)?$/.test(arg);
+};
+
+const consumeLauncherRootOptionToken = (args, index) => {
+  const arg = args[index];
+  if (!arg) {
+    return 0;
   }
-  if (argv[2] === "nodes") {
-    return { command: "nodes", metadataKey: "nodesHelpText" };
+  if (LAUNCHER_ROOT_BOOLEAN_FLAGS.has(arg)) {
+    return 1;
+  }
+  if (
+    arg.startsWith("--profile=") ||
+    arg.startsWith("--log-level=") ||
+    arg.startsWith("--container=")
+  ) {
+    return 1;
+  }
+  if (LAUNCHER_ROOT_VALUE_FLAGS.has(arg)) {
+    return isLauncherRootOptionValueToken(args[index + 1]) ? 2 : 1;
+  }
+  return 0;
+};
+
+const hasLauncherContainerTarget = (argv) => {
+  if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+    return true;
+  }
+  const args = argv.slice(2);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return false;
+    }
+    if (arg === "--container" || arg.startsWith("--container=")) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const resolvePrecomputedCommandHelpByName = (commandName) => {
+  if (Object.hasOwn(LAUNCHER_PRECOMPUTED_COMMAND_HELP, commandName)) {
+    return LAUNCHER_PRECOMPUTED_COMMAND_HELP[commandName];
+  }
+  if (LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP.has(commandName)) {
+    return {
+      command: commandName,
+      metadataKey: "subcommandHelpText",
+      subcommandKey: commandName,
+    };
   }
   return null;
+};
+
+const resolvePrecomputedCommandHelp = (argv) => {
+  const args = argv.slice(2);
+  let commandHelp = null;
+  let sawHelp = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return null;
+    }
+    if (!commandHelp) {
+      const consumed = consumeLauncherRootOptionToken(args, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        return null;
+      }
+      commandHelp = resolvePrecomputedCommandHelpByName(arg);
+      if (!commandHelp) {
+        return null;
+      }
+      continue;
+    }
+    if (LAUNCHER_HELP_FLAGS.has(arg)) {
+      sawHelp = true;
+      continue;
+    }
+    return null;
+  }
+
+  return commandHelp && sawHelp ? commandHelp : null;
 };
 
 const isHelpFastPathDisabled = () =>
@@ -456,11 +554,11 @@ const shouldDeferRootHelpToRuntimeEntry = () => {
   return false;
 };
 
-const loadPrecomputedHelpText = (key) => {
+const loadPrecomputedHelpText = (key, subkey) => {
   try {
     const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
     const parsed = JSON.parse(raw);
-    const value = parsed?.[key];
+    const value = subkey ? parsed?.[key]?.[subkey] : parsed?.[key];
     return typeof value === "string" && value.length > 0 ? value : null;
   } catch {
     return null;
@@ -650,10 +748,13 @@ const tryOutputPrecomputedCommandHelp = () => {
   if (!commandHelp) {
     return false;
   }
+  if (hasLauncherContainerTarget(process.argv)) {
+    return false;
+  }
   if (commandHelp.command === "nodes" && shouldDeferRootHelpToRuntimeEntry()) {
     return false;
   }
-  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey);
+  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey, commandHelp.subcommandKey);
   if (!precomputed) {
     return false;
   }

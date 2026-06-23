@@ -2,6 +2,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+export const PLAIN_GH_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+
 function isExecutable(filePath) {
   try {
     fs.accessSync(filePath, fs.constants.X_OK);
@@ -71,6 +73,7 @@ export function execPlainGh(args, options = {}) {
   return execFileSync(ghBin, args, {
     ...options,
     env,
+    maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
   });
 }
 
@@ -80,5 +83,6 @@ export function spawnPlainGh(args, options = {}) {
   return spawnSync(ghBin, args, {
     ...options,
     env,
+    maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
   });
 }
