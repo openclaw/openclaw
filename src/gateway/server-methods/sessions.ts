@@ -988,6 +988,45 @@ function buildNotFoundDiagnosis(
   };
 }
 
+function scoreDiagnoseCandidatePreselect(params: {
+  key: string;
+  entry: SessionEntry;
+  activeSessionKeys: ReadonlySet<string>;
+}): number {
+  const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
+    sessionId: params.entry.sessionId,
+    sessionKey: params.key,
+    sessionFile: params.entry.sessionFile,
+  });
+  const diagnostic = getDiagnosticSessionStateSnapshot({
+    sessionId: params.entry.sessionId,
+    sessionKey: params.key,
+    ...(params.entry.sessionFile ? { sessionFile: params.entry.sessionFile } : {}),
+  });
+  const activity = getDiagnosticSessionActivitySnapshot({
+    sessionId: params.entry.sessionId,
+    sessionKey: params.key,
+  });
+  const lane = getCommandLaneSnapshot(resolveSessionLane(params.key));
+  let score = 0;
+  if (params.activeSessionKeys.has(params.key) || embeddedRun.active || activity.activeWorkKind) {
+    score += 50;
+  }
+  if ((diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0) {
+    score += 40;
+  }
+  if (diagnostic.state === "processing") {
+    score += 30;
+  }
+  if (
+    activity.lastProgressAgeMs !== undefined &&
+    activity.lastProgressAgeMs >= STALE_PROGRESS_MIN_AGE_MS
+  ) {
+    score += 20;
+  }
+  return score;
+}
+
 function listDiagnoseCandidateRows(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
@@ -1023,13 +1062,17 @@ function listDiagnoseCandidateRows(params: {
       }
       return true;
     })
-    .toSorted(([aKey, aEntry], [bKey, bEntry]) => {
-      const activePriority =
-        Number(activeSessionKeys.has(bKey)) - Number(activeSessionKeys.has(aKey));
-      return activePriority || (bEntry.updatedAt ?? 0) - (aEntry.updatedAt ?? 0);
+    .map(([key, entry]) => ({
+      key,
+      entry,
+      preselectScore: scoreDiagnoseCandidatePreselect({ key, entry, activeSessionKeys }),
+    }))
+    .toSorted((a, b) => {
+      const activePriority = b.preselectScore - a.preselectScore;
+      return activePriority || (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
     })
     .slice(0, DEFAULT_DIAGNOSE_SCAN_LIMIT)
-    .map(([key, entry]) => ({
+    .map(({ key, entry }) => ({
       key,
       entry,
       row: buildDiagnoseRow(key, entry),
@@ -1063,6 +1106,10 @@ function scoreDiagnoseCandidate(params: {
     sessionId: params.row.sessionId,
     sessionKey: params.row.key,
   });
+  const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
+    sessionId: params.row.sessionId,
+    sessionKey: params.row.key,
+  });
   const activity = getDiagnosticSessionActivitySnapshot({
     sessionId: params.row.sessionId,
     sessionKey: params.row.key,
@@ -1070,13 +1117,16 @@ function scoreDiagnoseCandidate(params: {
   const lane = getCommandLaneSnapshot(resolveSessionLane(params.row.key));
   const terminal = isDiagnoseRowTerminal(params.row);
   let score = 0;
-  if (gatewayRun.hasActiveRun || activity.activeWorkKind) {
+  if (gatewayRun.hasActiveRun || embeddedRun.active || activity.activeWorkKind) {
     score += 50;
   }
   if ((diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0) {
     score += 40;
   }
-  if (terminal && (gatewayRun.hasActiveRun || diagnostic.state === "processing")) {
+  if (
+    terminal &&
+    (gatewayRun.hasActiveRun || embeddedRun.active || diagnostic.state === "processing")
+  ) {
     score += 80;
   }
   if (
