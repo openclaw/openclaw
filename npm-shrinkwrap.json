@@ -1,12 +1,12 @@
 {
   "name": "openclaw",
-  "version": "2026.6.9",
+  "version": "2026.6.9-nova",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "openclaw",
-      "version": "2026.6.9",
+      "version": "2026.6.9-nova",
       "hasInstallScript": true,
       "license": "MIT",
       "dependencies": {
