@@ -453,7 +453,7 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
-  it("archives the legacy memory sidecar without overwriting an already-migrated canonical index", async () => {
+  it("leaves the legacy memory sidecar in place when the canonical index already has rows", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
@@ -463,16 +463,15 @@ describe("memory-core doctor dreaming migration", () => {
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([
-      "Skipped Memory Core legacy memory index import for agent main because per-agent SQLite already has memory index rows",
+      "Skipped Memory Core legacy memory index import for agent main because per-agent SQLite already has memory index rows; left legacy sidecar in place",
     ]);
-    expect(result.changes).toEqual([
-      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
-    ]);
+    expect(result.changes).toEqual([]);
     expect(readMemoryRows(agentPath)).toEqual({
       sources: [{ path: "MEMORY.md", source: "memory", hash: "canonical-file-hash" }],
       chunks: [{ id: "canonical-chunk", text: "canonical memory remains authoritative" }],
       cache: [],
     });
-    await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 });

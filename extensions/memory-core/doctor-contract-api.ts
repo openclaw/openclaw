@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ensureMemoryIndexSchema,
-  importLegacyMemorySidecarIndex,
   loadSqliteVecExtension,
   requireNodeSqlite,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -14,6 +13,7 @@ import {
   ensureOpenClawAgentDatabaseSchema,
   resolveOpenClawAgentSqlitePath,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { importLegacyMemorySidecarIndex } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
 import {
   DAILY_INGESTION_STATE_RELATIVE_PATH,
   SESSION_INGESTION_STATE_RELATIVE_PATH,
@@ -183,9 +183,8 @@ async function migrateLegacyMemorySidecarSource(params: {
     }
     if (result.reason === "canonical-not-empty") {
       params.warnings.push(
-        `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because per-agent SQLite already has memory index rows`,
+        `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because per-agent SQLite already has memory index rows; left legacy sidecar in place`,
       );
-      await archiveLegacyMemorySidecar(params);
       return;
     }
     if (!result.imported) {
