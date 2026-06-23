@@ -717,6 +717,29 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("forwards cfg to deliverReplies so the sent-message ledger is scoped correctly", async () => {
+    // recordSentMessage / wasSentByBot resolve their bucket from cfg; if automatic
+    // dispatch omits cfg, ledger writes land in the default scope and own-mode
+    // reaction filtering with a custom session store cannot see them. (#92242)
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    const cfg = {
+      session: { store: "/tmp/custom-store" },
+    } as unknown as Parameters<typeof dispatchTelegramMessage>[0]["cfg"];
+    await dispatchWithContext({
+      context: createContext({
+        route: { agentId: "work" } as unknown as TelegramMessageContext["route"],
+      }),
+      cfg,
+    });
+
+    expectDeliverRepliesParams({ cfg });
+  });
+
   it("recovers forum thread context from a topic-scoped session key", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
     const oldHistoryKey = "-1003774691294:topic:1";

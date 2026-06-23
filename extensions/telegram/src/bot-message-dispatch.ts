@@ -1481,6 +1481,7 @@ export const dispatchTelegramMessage = async ({
     }
   };
   const deliveryBaseOptions = {
+    cfg,
     chatId: String(chatId),
     accountId: route.accountId,
     sessionKeyForInternalHooks: ctxPayload.SessionKey,
