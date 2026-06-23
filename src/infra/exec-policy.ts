@@ -22,9 +22,8 @@ export function applyExecPolicyLayer<TBase extends ExecPolicyLayer>(
     };
   }
   if (layer.security !== undefined || layer.ask !== undefined) {
-    const { mode: _mode, ...baseWithoutMode } = base;
     return {
-      ...baseWithoutMode,
+      ...base,
       security: layer.security ?? base.security,
       ask: layer.ask ?? base.ask,
     };
