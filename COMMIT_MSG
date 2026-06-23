@@ -1,0 +1,36 @@
+Fixes #95672
+
+## Summary
+
+Fixes three composite failures in cron isolated-agent runs:
+
+1. Model pin bypass: When a cron payload sets an explicit model but omits fallbacks, the runner now preserves configured fallbacks instead of unconditionally returning [] and falling back to default models.
+
+2. Empty-transcript compaction: The compaction guard now checks meaningful message content (non-empty text, thinking, or toolCall) instead of just role, preventing wasteful LLM calls on empty assistant-error messages.
+
+3. Fence self-takeover: Removed the unvalidated recordPostCompactionSessionFileWrite helper that could mask real external takeovers. The existing withCompactionPersistence path already handles owned writes correctly.
+
+## What Changed
+
+- src/cron/isolated-agent/run-fallback-policy.ts: Removed unconditional return [] for payload model overrides. Only explicit fallbacks: [] disables fallbacks.
+- src/cron/isolated-agent/run-fallback-policy.test.ts: Updated tests to expect configured fallbacks.
+- packages/agent-core/src/harness/compaction/compaction.ts: Added hasMeaningfulContent() helper for content-aware guard.
+- packages/agent-core/src/harness/compaction/compaction.test.ts: Added regression tests for empty-content guard.
+- src/agents/embedded-agent-runner/run/attempt.session-lock.ts: Removed unsafe recordPostCompactionSessionFileWrite helper.
+
+## What Did NOT Change
+
+- resolveEffectiveModelFallbacks core logic
+- contextEngine.compact internals
+- sessionLockController base behavior
+- Other provider routes
+
+## Tests
+
+node scripts/run-vitest.mjs src/cron/isolated-agent/run-fallback-policy.test.ts
+# Test Files  1 passed (1)
+# Tests  17 passed (17)
+
+node scripts/run-vitest.mjs packages/agent-core/src/harness/compaction/compaction.test.ts
+# Test Files  1 passed (1)
+# Tests  3 passed (3)

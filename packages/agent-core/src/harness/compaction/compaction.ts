@@ -725,6 +725,54 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
 
 export { serializeConversation } from "./utils.js";
 
+function hasMeaningfulContent(msg: AgentMessage): boolean {
+  const harnessMessage = msg as HarnessMessage;
+  switch (harnessMessage.role) {
+    case "user": {
+      const content = (
+        harnessMessage as { content: string | Array<{ type: string; text?: string }> }
+      ).content;
+      if (typeof content === "string" && content.trim().length > 0) return true;
+      if (Array.isArray(content) && content.some((b) => b.text && b.text.trim().length > 0))
+        return true;
+      return false;
+    }
+    case "assistant": {
+      const assistant = harnessMessage as {
+        content?: Array<{ type: string; text?: string; thinking?: string }>;
+      };
+      if (!assistant.content || assistant.content.length === 0) return false;
+      return assistant.content.some((block) => {
+        if (block.type === "text" && block.text && block.text.trim().length > 0) return true;
+        if (block.type === "thinking" && block.thinking && block.thinking.trim().length > 0)
+          return true;
+        if (block.type === "toolCall") return true;
+        return false;
+      });
+    }
+    case "custom": {
+      const content = (
+        harnessMessage as { content?: string | Array<{ type: string; text?: string }> }
+      ).content;
+      if (typeof content === "string" && content.trim().length > 0) return true;
+      if (Array.isArray(content) && content.some((b) => b.text && b.text.trim().length > 0))
+        return true;
+      return false;
+    }
+    case "bashExecution": {
+      const exec = harnessMessage as { command: string; output: string };
+      return exec.command.trim().length > 0 || exec.output.trim().length > 0;
+    }
+    case "branchSummary":
+    case "compactionSummary": {
+      const summary = harnessMessage as { summary: string };
+      return summary.summary.trim().length > 0;
+    }
+    default:
+      return false;
+  }
+}
+
 /** Generate compaction summary data from prepared session history. */
 export async function compact(
   preparation: CompactionPreparation,
@@ -758,6 +806,20 @@ export async function compact(
   }
 
   let summary: string;
+
+  // Guard: skip summarization when there is no real user-visible conversation
+  // to summarize. Compacting on a transcript that only contains metadata
+  // (session creation, model changes, etc.) produces meaningless summaries
+  // and can waste model calls or trigger downstream fence checks.
+  const hasRealConversation = messagesToSummarize.some((msg) => hasMeaningfulContent(msg));
+  if (!hasRealConversation && !isSplitTurn) {
+    return ok({
+      summary: previousSummary ?? "No prior history.",
+      firstKeptEntryId,
+      tokensBefore,
+      details: { readFiles: [], modifiedFiles: [] } as CompactionDetails,
+    });
+  }
 
   if (isSplitTurn && turnPrefixMessages.length > 0) {
     const [historyResult, turnPrefixResult] = await Promise.all([
