@@ -27,16 +27,39 @@ vi.mock("./bot-message-dispatch.js", () => ({
   dispatchTelegramMessage,
 }));
 
+const mockPluginStatus = vi.hoisted(() => vi.fn(() => "🧩 **MCP Plugins** (mock)"));
+const MOCK_MCP_COMMANDS = new Set(["/mcp_status", "/mcp_plugins", "/plugin_status"]);
+const mockIsPluginCommand = vi.hoisted(() =>
+  vi.fn((text: string) => {
+    const firstToken = text.trim().split(/\s+/)[0] ?? "";
+    const normalized = firstToken.replace(/@\w+$/, "").toLowerCase();
+    return MOCK_MCP_COMMANDS.has(normalized);
+  }),
+);
+
+vi.mock("./plugin-status-message.js", () => ({
+  buildTelegramPluginStatusMessage: mockPluginStatus,
+  isPluginCommand: mockIsPluginCommand,
+  escapeMarkdown: (s: string) => s,
+}));
+
 let createTelegramMessageProcessor: typeof import("./bot-message.js").createTelegramMessageProcessor;
 let formatTelegramInboundLogLine: typeof import("./bot-message.js").formatTelegramInboundLogLine;
+let selectTelegramMcpServersFromText: typeof import("./bot-message.js").selectTelegramMcpServersFromText;
+let TELEGRAM_MCP_PLUGIN_MANIFESTS: typeof import("./mcp-plugin-manifest.js").TELEGRAM_MCP_PLUGIN_MANIFESTS;
 
 describe("telegram bot message processor", () => {
   beforeAll(async () => {
-    ({ createTelegramMessageProcessor, formatTelegramInboundLogLine } =
-      await import("./bot-message.js"));
+    ({
+      createTelegramMessageProcessor,
+      formatTelegramInboundLogLine,
+      selectTelegramMcpServersFromText,
+    } = await import("./bot-message.js"));
+    ({ TELEGRAM_MCP_PLUGIN_MANIFESTS } = await import("./mcp-plugin-manifest.js"));
   });
 
   beforeEach(() => {
+    vi.unstubAllGlobals();
     buildTelegramMessageContext.mockClear();
     dispatchTelegramMessage.mockClear();
     telegramInboundInfo.mockClear();
@@ -73,12 +96,14 @@ describe("telegram bot message processor", () => {
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
     lifecycle?: import("./bot-message.js").TelegramMessageProcessorLifecycle,
+    text?: string,
   ) {
     return await processMessage(
       {
         message: {
           chat: { id: 123, type: "private", title: "chat" },
           message_id: 456,
+          ...(text === undefined ? {} : { text }),
         },
       } as unknown as Parameters<typeof processMessage>[0],
       [],
@@ -122,6 +147,151 @@ describe("telegram bot message processor", () => {
     };
   }
 
+  it.each([
+    ["안녕", []],
+    ["지금 상태 짧게 말해줘", []],
+    ["검색해줘", []],
+    ["뉴스 찾아봐", []],
+    ["github 상태 확인", ["github"]],
+    ["gmail 최근 메일", ["gmail"]],
+    ["노션 확인", ["notion"]],
+    ["문서 확인", []],
+    ["문서 OCR 해줘", ["kordoc"]],
+    ["tavily 심층검색", ["tavily"]],
+    ["sqlite db 조회", ["sqlite"]],
+    ["kordoc OCR", ["kordoc"]],
+    ["n8n workflow 상태", ["n8n-mcp"]],
+    ["github랑 gmail 상태", ["github", "gmail"]],
+    ["mcp 전체", ["*"]],
+    ["tools", ["*"]],
+  ])("selects Telegram MCP servers for %s", (text, expected) => {
+    expect(selectTelegramMcpServersFromText(text)).toEqual(expected);
+  });
+
+  it("keeps Telegram MCP plugin manifests non-default and triggerable only by manifest text", () => {
+    expect(TELEGRAM_MCP_PLUGIN_MANIFESTS).toHaveLength(7);
+    for (const manifest of TELEGRAM_MCP_PLUGIN_MANIFESTS) {
+      expect(manifest.id).not.toBe("");
+      expect(manifest.serverName).not.toBe("");
+      expect(manifest.enabledByDefault).toBe(false);
+      expect(manifest.telegramDefault).toBe(false);
+      expect(manifest.autoCall).toBe(false);
+      expect(manifest.triggers.length).toBeGreaterThan(0);
+    }
+    expect(selectTelegramMcpServersFromText("일반 대화입니다")).toEqual([]);
+  });
+
+  it("returns plugin status directly without dispatching", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage, undefined, "/mcp_status")).resolves.toBe(
+      true,
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(123, "🧩 **MCP Plugins** (mock)", {
+      parse_mode: "MarkdownV2",
+    });
+  });
+
+  it("/mcp_status does not dispatch agent run", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage, undefined, "/mcp_status")).resolves.toBe(
+      true,
+    );
+
+    expect(buildTelegramMessageContext).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("/mcp_status does not trigger MCP server selection", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage, undefined, "/mcp_status")).resolves.toBe(
+      true,
+    );
+
+    // Only sendMessage called; no MCP-related or dispatch activity
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(buildTelegramMessageContext).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("/mcp_plugins behaves the same as /mcp_status", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage, undefined, "/mcp_plugins")).resolves.toBe(
+      true,
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(123, "🧩 **MCP Plugins** (mock)", {
+      parse_mode: "MarkdownV2",
+    });
+    expect(buildTelegramMessageContext).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("/mcp_status@botname also returns early", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(
+      processSampleMessage(processMessage, undefined, "/mcp_status@jinhee_openclaw_bot"),
+    ).resolves.toBe(true);
+
+    expect(sendMessage).toHaveBeenCalledWith(123, "🧩 **MCP Plugins** (mock)", {
+      parse_mode: "MarkdownV2",
+    });
+    expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+  });
+
+  it("/plugins does NOT trigger MCP early return", async () => {
+    // /plugins should reach normal dispatch, not the MCP status route
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext({ sendTyping }));
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage, undefined, "/plugins")).resolves.toBe(true);
+
+    // /plugins should dispatch normally (not early-return), but if config says
+    // plugins=false it falls through; in this test setup, it reaches dispatch
+    expect(dispatchTelegramMessage).toHaveBeenCalled();
+  });
+
+  it("/plugin_status behaves the same as /mcp_status", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await expect(processSampleMessage(processMessage, undefined, "/plugin_status")).resolves.toBe(
+      true,
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(123, "🧩 **MCP Plugins** (mock)", {
+      parse_mode: "MarkdownV2",
+    });
+    expect(buildTelegramMessageContext).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).not.toHaveBeenCalled();
+  });
+
   it("dispatches when context is available", async () => {
     const sendTyping = vi.fn().mockResolvedValue(undefined);
     buildTelegramMessageContext.mockResolvedValue(
@@ -135,6 +305,9 @@ describe("telegram bot message processor", () => {
 
     expect(sendTyping).toHaveBeenCalledTimes(1);
     expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+    expect(dispatchTelegramMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ selectedMcpServers: [] }),
+    );
     expect(sendTyping.mock.invocationCallOrder[0]).toBeLessThan(
       dispatchTelegramMessage.mock.invocationCallOrder[0],
     );
@@ -225,6 +398,23 @@ describe("telegram bot message processor", () => {
         mediaType: "image/jpeg",
       }),
     ).toBe("Inbound message telegram:group:-100 -> @openclaw_bot (group, image/jpeg, 13 chars)");
+  });
+
+  it("passes selected MCP servers into dispatch params", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false })),
+    );
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await expect(
+      processSampleMessage(processMessage, undefined, "github랑 gmail 상태"),
+    ).resolves.toBe(true);
+
+    expect(dispatchTelegramMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ selectedMcpServers: ["github", "gmail"] }),
+    );
   });
 
   it("keeps dispatch running when the early typing cue fails", async () => {

@@ -2226,6 +2226,7 @@ export async function runAgentTurnWithFallback(params: {
                       params.opts?.shouldSuppressToolErrorWarnings ??
                       params.opts?.suppressToolErrorWarnings,
                     disableTools: params.opts?.disableTools,
+                    selectedMcpServers: params.opts?.selectedMcpServers,
                     enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                     forceHeartbeatTool: params.opts?.forceHeartbeatTool,
                     bootstrapContextMode: params.opts?.bootstrapContextMode,

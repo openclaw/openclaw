@@ -137,6 +137,7 @@ async function main(): Promise<void> {
         post({
           type: "poll-success",
           offset,
+          updateId: lastUpdateId,
           count: result.length,
           finishedAt: Date.now(),
         });

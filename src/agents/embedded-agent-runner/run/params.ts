@@ -13,6 +13,7 @@ import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { SkillSnapshot } from "../../../skills/types.js";
+import type { McpServerSelection } from "../../agent-bundle-mcp-types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { BlockReplyPayload } from "../../embedded-agent-payloads.js";
@@ -143,6 +144,8 @@ export type RunEmbeddedAgentParams = {
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Optional bundle MCP server subset prepared by an agent harness. */
+  selectedMcpServers?: McpServerSelection;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */

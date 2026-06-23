@@ -7,6 +7,9 @@ import {
   shouldLogVerbose,
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { appendJinheeConversationLog } from "../../../src/agents/jinhee-conversation-log-writer.js";
+import type { PluginActionDescriptor } from "../../../src/plugins/plugin-adapter.types.js";
+import { guardPluginActionsRuntime } from "../../../src/plugins/plugin-runtime-guard.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   buildTelegramMessageContext,
@@ -19,7 +22,12 @@ import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
+import {
+  TELEGRAM_FULL_MCP_TRIGGERS,
+  TELEGRAM_MCP_PLUGIN_MANIFESTS,
+} from "./mcp-plugin-manifest.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
+import { buildTelegramPluginStatusMessage, isPluginCommand } from "./plugin-status-message.js";
 
 async function fetchMemoryContext(query: string): Promise<string | null> {
   try {
@@ -40,6 +48,62 @@ async function fetchMemoryContext(query: string): Promise<string | null> {
 }
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
+
+function appendTelegramInboundJinheeLog(params: {
+  chatId: number | string;
+  text: string;
+  messageId?: number | string;
+}): void {
+  void appendJinheeConversationLog(
+    {
+      sessionId: String(params.chatId),
+      role: "user",
+      content: params.text,
+      source: "telegram_openclaw",
+      messageId: params.messageId != null ? String(params.messageId) : undefined,
+    },
+    { allowOperationalDb: true },
+  )
+    .then((result) => {
+      if (!result.ok) {
+        console.warn(`jinhee inbound conversation log skipped: ${result.reason}`);
+      }
+    })
+    .catch((error: unknown) => {
+      console.warn(`jinhee inbound conversation log failed: ${String(error)}`);
+    });
+}
+
+function isAsciiTokenTrigger(trigger: string): boolean {
+  return /^[a-z0-9_-]+(?:\s+[a-z0-9_-]+)*$/u.test(trigger);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function matchesTelegramMcpTrigger(text: string, trigger: string): boolean {
+  const normalizedTrigger = trigger.toLocaleLowerCase();
+  if (!isAsciiTokenTrigger(normalizedTrigger)) {
+    return text.includes(normalizedTrigger);
+  }
+  const escaped = escapeRegExp(normalizedTrigger).replace(/\s+/g, "\\s+");
+  return new RegExp(`(^|[^a-z0-9_-])${escaped}($|[^a-z0-9_-])`, "u").test(text);
+}
+
+export function selectTelegramMcpServersFromText(text: string): readonly string[] {
+  const normalized = text.toLocaleLowerCase();
+  if (
+    TELEGRAM_FULL_MCP_TRIGGERS.some((trigger) => matchesTelegramMcpTrigger(normalized, trigger))
+  ) {
+    return ["*"];
+  }
+  return TELEGRAM_MCP_PLUGIN_MANIFESTS.flatMap((manifest) =>
+    manifest.triggers.some((trigger) => matchesTelegramMcpTrigger(normalized, trigger))
+      ? [manifest.serverName]
+      : [],
+  );
+}
 
 export function formatTelegramInboundLogLine(params: {
   from: string;
@@ -138,6 +202,47 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
 
     // TICKET-030: Memory Context Integration
     const query = primaryCtx.message.text || "";
+
+    // OC-MCP-STATUS-ALIAS-001: Intercept /mcp_status, /mcp_plugins, /plugin_status — no MCP, no dispatch
+    if (isPluginCommand(query)) {
+      const statusMessage = buildTelegramPluginStatusMessage();
+      try {
+        await bot.api.sendMessage(primaryCtx.message.chat.id, statusMessage, {
+          parse_mode: "MarkdownV2",
+        });
+      } catch {
+        // silently ignore send failures for status commands
+      }
+      return true;
+    }
+
+    if (query) {
+      appendTelegramInboundJinheeLog({
+        chatId: primaryCtx.message.chat.id,
+        text: query,
+        messageId: primaryCtx.message.message_id,
+      });
+    }
+
+    const selectedMcpServers = selectTelegramMcpServersFromText(query);
+
+    // PLUGIN-RUNTIME-002 / BLOCK-003: Pre-filter at MCP server selection level.
+    // Conservative pre-filter (always "read" capability — tool-level enforcement
+    // happens at callTool chokepoint in agent-bundle-mcp-materialize.ts).
+    if (selectedMcpServers.length > 0) {
+      const guardDescriptor: PluginActionDescriptor = {
+        id: "telegram-mcp",
+        name: "mcp-tool-execution",
+        description: `Selected MCP servers: ${selectedMcpServers.join(", ")}`,
+        capabilities: ["read"],
+      };
+      const guardDecision = guardPluginActionsRuntime([guardDescriptor]);
+      if (!guardDecision.ok) {
+        telegramInboundLog.info(
+          `[PLUGIN-RUNTIME-BLOCK-003] MCP pre-filter: ${guardDecision.reason}`,
+        );
+      }
+    }
     const activePromptContext = promptContext || [];
     if (query && query.length > 2) {
       const memoryContext = await fetchMemoryContext(query);
@@ -226,6 +331,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         telegramCfg,
         telegramDeps,
         opts,
+        selectedMcpServers,
       });
       if (ingressDebugEnabled && ingressReceivedAtMs) {
         logVerbose(

@@ -57,6 +57,9 @@ import {
   logVerbose,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
+import { appendJinheeConversationLog } from "../../../src/agents/jinhee-conversation-log-writer.js";
+import type { PluginActionDescriptor } from "../../../src/plugins/plugin-adapter.types.js";
+import { guardPluginActionsRuntime } from "../../../src/plugins/plugin-runtime-guard.js";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -149,6 +152,29 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+
+function appendTelegramOutboundJinheeLog(params: { chatId: number | string; text: string }): void {
+  if (!params.text.trim()) {
+    return;
+  }
+  void appendJinheeConversationLog(
+    {
+      sessionId: String(params.chatId),
+      role: "assistant",
+      content: params.text,
+      source: "telegram_openclaw",
+    },
+    { allowOperationalDb: true },
+  )
+    .then((result) => {
+      if (!result.ok) {
+        console.warn(`jinhee outbound conversation log skipped: ${result.reason}`);
+      }
+    })
+    .catch((error: unknown) => {
+      console.warn(`jinhee outbound conversation log failed: ${String(error)}`);
+    });
+}
 
 type DraftPartialTextUpdate = {
   text: string;
@@ -247,6 +273,7 @@ type DispatchTelegramMessageParams = {
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
   opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb">;
+  selectedMcpServers?: readonly string[];
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
@@ -695,8 +722,25 @@ export const dispatchTelegramMessage = async ({
   telegramCfg,
   telegramDeps: injectedTelegramDeps,
   opts,
+  selectedMcpServers,
 }: DispatchTelegramMessageParams) => {
   const dispatchStartedAt = Date.now();
+
+  // PLUGIN-RUNTIME-002 / BLOCK-003: Pre-filter at dispatch entry level.
+  // Tool-level enforcement happens at callTool chokepoint (agent-bundle-mcp-materialize.ts).
+  if (selectedMcpServers && selectedMcpServers.length > 0) {
+    const guardDescriptors: PluginActionDescriptor[] = selectedMcpServers.map((server) => ({
+      id: `mcp:${server}`,
+      name: "mcp-tool-execution",
+      description: `MCP callTool on ${server}`,
+      capabilities: ["read"],
+    }));
+    const guardDecision = guardPluginActionsRuntime(guardDescriptors);
+    if (!guardDecision.ok) {
+      const log = createSubsystemLogger("telegram/dispatch");
+      log.info(`[PLUGIN-RUNTIME-BLOCK-003] dispatch pre-filter: ${guardDecision.reason}`);
+    }
+  }
   const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
@@ -1589,6 +1633,7 @@ export const dispatchTelegramMessage = async ({
       }
       answerLane.finalized = true;
       finalAnswerDelivered = true;
+      appendTelegramOutboundJinheeLog({ chatId, text });
       return { kind: "sent" };
     };
     const resolveTranscriptBackedFinalText = async (text: string): Promise<string> =>
@@ -1736,6 +1781,7 @@ export const dispatchTelegramMessage = async ({
                       });
                       if (result.kind !== "skipped") {
                         finalAnswerDelivered = true;
+                        appendTelegramOutboundJinheeLog({ chatId, text: finalText });
                       }
                       return result;
                     };
@@ -1877,6 +1923,9 @@ export const dispatchTelegramMessage = async ({
                     });
                     if (info.kind === "final" && delivered) {
                       finalAnswerDelivered = true;
+                      if (effectivePayload.text) {
+                        appendTelegramOutboundJinheeLog({ chatId, text: effectivePayload.text });
+                      }
                     }
                     if (info.kind === "final") {
                       await flushBufferedFinalAnswer();
@@ -1919,6 +1968,7 @@ export const dispatchTelegramMessage = async ({
                   },
                 },
                 replyOptions: {
+                  selectedMcpServers,
                   skillFilter,
                   disableBlockStreaming,
                   abortSignal: replyAbortController.signal,
@@ -2185,6 +2235,9 @@ export const dispatchTelegramMessage = async ({
       mediaLoader: telegramDeps.loadWebMedia,
     });
     sentFallback = result.delivered;
+    if (sentFallback) {
+      appendTelegramOutboundJinheeLog({ chatId, text: fallbackText });
+    }
   }
 
   if (

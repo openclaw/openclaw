@@ -784,6 +784,13 @@ export class TelegramPollingSession {
           this.#status.notePollSuccess(message.finishedAt);
         }
         this.#drainPendingDeliveriesAfterReconnect();
+        if (typeof message.updateId === "number") {
+          this.opts.persistUpdateId(message.updateId).catch((err) => {
+            this.opts.log(
+              `[telegram][diag] persist update offset from poll-success failed: ${formatErrorMessage(err)}`,
+            );
+          });
+        }
         pollState.outcome = `ok:${message.count}`;
         return;
       }
@@ -796,6 +803,11 @@ export class TelegramPollingSession {
       }
       if (message.type === "spooled") {
         liveness.noteGetUpdatesActivity();
+        this.opts.persistUpdateId(message.updateId).catch((err) => {
+          this.opts.log(
+            `[telegram][diag] persist update offset failed: ${formatErrorMessage(err)}`,
+          );
+        });
       }
     });
     const stopOnAbort = () => {

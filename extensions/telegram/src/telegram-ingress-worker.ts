@@ -12,6 +12,7 @@ export type TelegramIngressWorkerMessage =
       offset: number | null;
       count: number;
       finishedAt: number;
+      updateId: number | null;
     }
   | {
       type: "poll-error";

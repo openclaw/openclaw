@@ -85,6 +85,7 @@ type WorkerPollSuccessListener = (message: {
   offset: null;
   count: number;
   finishedAt: number;
+  updateId: number | null;
 }) => void;
 type WorkerPollErrorListener = (message: {
   type: "poll-error";
@@ -761,7 +762,12 @@ describe("TelegramPollingSession", () => {
     };
     createTelegramBotMock.mockReturnValueOnce(bot);
     let onMessage:
-      | ((message: { type: "poll-success"; finishedAt: number; count: number }) => void)
+      | ((message: {
+          type: "poll-success";
+          finishedAt: number;
+          count: number;
+          updateId: number | null;
+        }) => void)
       | undefined;
     let stopWorker: (() => void) | undefined;
     const workerDone = new Promise<void>((resolve) => {
@@ -791,7 +797,7 @@ describe("TelegramPollingSession", () => {
 
     const runPromise = session.runUntilAbort();
     await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1));
-    onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0 });
+    onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0, updateId: null });
 
     await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
 
@@ -2434,6 +2440,7 @@ describe("TelegramPollingSession", () => {
         offset: null,
         count: 0,
         finishedAt: Date.now(),
+        updateId: null,
       });
       expect(statusPatches(setStatus).at(-1)?.connected).toBe(false);
       expect(String(statusPatches(setStatus).at(-1)?.lastError)).toContain(
@@ -2535,6 +2542,7 @@ describe("TelegramPollingSession", () => {
         offset: null,
         count: 0,
         finishedAt: Date.now(),
+        updateId: null,
       });
       expect(statusPatches(setStatus).some((patch) => patch.connected === true)).toBe(true);
 

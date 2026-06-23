@@ -456,6 +456,7 @@ export {
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
+import { loadJinheeCanonicalMemoryBlock } from "../../jinhee-memory-bridge.js";
 export {
   resetEmbeddedAgentBaseStreamFnCacheForTest,
   resolveEmbeddedAgentBaseStreamFn,
@@ -1340,6 +1341,18 @@ export async function runEmbeddedAttempt(
     const contextFiles = bootstrapRouting.includeBootstrapInSystemContext
       ? remappedContextFiles
       : remappedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
+    // MEMORY-BRIDGE-001: inject JinheeOS canonical memory block (read-only bridge)
+    try {
+      const jinheeBlock = await loadJinheeCanonicalMemoryBlock();
+      if (jinheeBlock) {
+        contextFiles.push({
+          path: "jinhee-memory-block.md",
+          content: jinheeBlock,
+        });
+      }
+    } catch {
+      // Silent degrade — bridge failure must never block agent execution
+    }
     const bootstrapFilesForInjectionStats = bootstrapRouting.includeBootstrapInSystemContext
       ? hookAdjustedBootstrapFiles
       : hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
@@ -1420,6 +1433,7 @@ export async function runEmbeddedAttempt(
     const bundleMcpRuntime = bundleMcpSessionRuntime
       ? await materializeBundleMcpToolsForRun({
           runtime: bundleMcpSessionRuntime,
+          selectedMcpServers: params.selectedMcpServers,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
             ...(clientTools?.map((tool) => tool.function.name) ?? []),

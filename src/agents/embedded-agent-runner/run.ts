@@ -2295,10 +2295,10 @@ export async function runEmbeddedAgent(
             // Stage 1: keep last 5 user turns.
             // Stage 2: keep last 2 user turns (if stage 1 already done).
             const overflowFallbackCountKey = `overflowFallbackCount_${activeSessionId}`;
-            const fallbackCount =
-              (globalThis as Record<string, number>)[overflowFallbackCountKey] ?? 0;
+            const overflowFallbackCounts = globalThis as unknown as Record<string, number>;
+            const fallbackCount = overflowFallbackCounts[overflowFallbackCountKey] ?? 0;
             if (fallbackCount < 2) {
-              (globalThis as Record<string, number>)[overflowFallbackCountKey] = fallbackCount + 1;
+              overflowFallbackCounts[overflowFallbackCountKey] = fallbackCount + 1;
               const sessionMessages = attempt.messagesSnapshot ?? [];
               const keepTurns = fallbackCount === 0 ? 5 : 2;
               if (sessionMessages.length > 4) {
@@ -2320,7 +2320,7 @@ export async function runEmbeddedAgent(
                       `${sessionMessages.length} -> ${trimmed.length} messages (keeping last ${keepTurns} user turns)`,
                   );
                   try {
-                    activeSession.agent.state.messages = trimmed;
+                    attempt.messagesSnapshot = trimmed;
                     if (preflightRecovery?.source === "mid-turn") {
                       continueFromCurrentTranscript();
                     }

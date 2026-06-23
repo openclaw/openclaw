@@ -1,3 +1,4 @@
+import type { McpServerSelection } from "../agents/agent-bundle-mcp-types.js";
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -82,6 +83,8 @@ export type GetReplyOptions = {
   shouldSuppressToolErrorWarnings?: () => boolean | undefined;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
+  /** Optional bundle MCP server subset prepared by a channel trigger. */
+  selectedMcpServers?: McpServerSelection;
   /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
   enableHeartbeatTool?: boolean;
   /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
