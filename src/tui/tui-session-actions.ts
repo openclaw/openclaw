@@ -550,7 +550,9 @@ export function createSessionActions(context: SessionActionContext) {
           `runtime prewarm failed: ${record.runtimePluginsPrewarm.error ?? "unknown"}`,
         );
       }
-      void rememberSessionKey?.(state.currentSessionKey);
+      if (state.currentSessionId || (record.messages?.length ?? 0) > 0) {
+        void rememberSessionKey?.(state.currentSessionKey);
+      }
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }

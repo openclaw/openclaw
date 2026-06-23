@@ -1314,6 +1314,37 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.thinkingLevel).toBe("medium");
   });
 
+  it("does not remember a generated TUI session before it exists in persisted history", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: {},
+      sessions: [],
+    });
+    const loadHistory = vi.fn().mockResolvedValue({
+      messages: [],
+    });
+    const rememberSessionKey = vi.fn();
+    const state = createBaseState({
+      currentSessionKey: "agent:main:tui-new-empty",
+    });
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+      rememberSessionKey,
+    });
+
+    await runLoadHistory();
+
+    expect(state.currentSessionId).toBeNull();
+    expect(rememberSessionKey).not.toHaveBeenCalled();
+  });
+
   it("loads selected-agent global history with the selected agent id", async () => {
     const loadHistory = vi.fn().mockResolvedValue({
       sessionId: "session-work-global",
