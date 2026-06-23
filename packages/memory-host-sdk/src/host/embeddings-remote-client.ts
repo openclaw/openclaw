@@ -76,7 +76,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   const proxyConfig = providerConfig?.request?.proxy;
   const dispatcherPolicy =
     proxyConfig?.mode === "explicit-proxy" && proxyConfig.url
-      ? { mode: "explicit-proxy", proxyUrl: proxyConfig.url, allowPrivateProxy: true }
+      ? ({ mode: "explicit-proxy" as const, proxyUrl: proxyConfig.url, allowPrivateProxy: true } as const)
       : undefined;
 
   return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl), dispatcherPolicy };
