@@ -1083,7 +1083,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         accountId: accountInfo.accountId,
       }).then(
         () => true,
-        (err) => {
+        (err: unknown) => {
           logTypingFailure({
             log: (msg) => logVerbose(msg),
             channel: "imessage",
@@ -1110,7 +1110,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               accountId: accountInfo.accountId,
             });
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             logTypingFailure({
               log: (msg) => logVerbose(msg),
               channel: "imessage",
@@ -1200,7 +1200,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       void markIMessageChatRead(typingTarget, {
         cfg,
         accountId: accountInfo.accountId,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         runtime.error?.(`imessage: mark read failed: ${String(err)}`);
       });
     }
@@ -1386,7 +1386,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           },
           onPreDispatchFailure: () => {
             stopEarlyDirectTyping?.();
-            settleReplyDispatcher({
+            void settleReplyDispatcher({
               dispatcher,
               onSettled: () => markDispatchIdle(),
             });
