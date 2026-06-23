@@ -1,7 +1,7 @@
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 // Gateway model-pricing refresh and normalization.
 // Fetches, normalizes, and schedules cached pricing for model usage estimates.
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,
@@ -27,7 +27,6 @@ import type {
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
-import { isPrivateOrLoopbackHost } from "./net.js";
 import {
   clearLoadPluginMetadataSnapshotMemo,
   resolvePluginMetadataSnapshot,
@@ -46,6 +45,7 @@ import {
   type CachedPricingTier,
 } from "./model-pricing-cache-state.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
+import { isPrivateOrLoopbackHost as isPrivateOrLoopbackIp } from "./net.js";
 
 type OpenRouterPricingEntry = {
   id: string;
@@ -791,6 +791,37 @@ function addConfiguredWebSearchPluginModels(params: {
   }
 }
 
+/**
+ * Pricing-cache host classifier that preserves existing local-hostname
+ * behavior (`.local`, `*.localhost`, `localhost.localdomain` for
+ * self-hosted providers) while delegating IP-range checks to the
+ * canonical `isPrivateOrLoopbackHost()` in `net.ts`.
+ *
+ * This wrapper lets us share the well-tested IP classification
+ * (IPv6 ULA ranges, CGNAT, link-local, loopback, private IPv4)
+ * without accidentally dropping hostname patterns that the pricing
+ * cache has always treated as local/private endpoints.
+ */
+function isPrivateOrLoopbackHost(hostname: string): boolean {
+  const host = hostname
+    .trim()
+    .toLowerCase()
+    .replace(/^\[|\]$/g, "");
+  // Keep the existing hostname-based local detection so self-hosted
+  // providers configured with `.local` or `.localhost` addresses
+  // continue to skip remote pricing catalog fetches.
+  if (
+    host === "localhost" ||
+    host === "localhost.localdomain" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local")
+  ) {
+    return true;
+  }
+  // Delegate to canonical net.ts for correct IP-range checks
+  // (IPv6 ULA, CGNAT, link-local, loopback, private IPv4, etc.)
+  return isPrivateOrLoopbackIp(hostname);
+}
 
 function isPrivateOrLoopbackBaseUrl(baseUrl: string | undefined): boolean {
   if (!baseUrl) {
