@@ -13,6 +13,7 @@ import {
   isOfficialExternalPluginCatalogFeed,
   filterOfficialExternalPluginCatalogEntriesBySourceRefs,
   listOfficialExternalPluginCatalogEntries,
+  loadConfiguredHostedOfficialExternalPluginCatalogEntries,
   loadHostedOfficialExternalPluginCatalogEntries,
   parseOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds,
@@ -21,6 +22,7 @@ import {
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginCatalogProfileConfigFromConfig,
   validateOfficialExternalPluginCatalogEntrySourceRefs,
 } from "./official-external-plugin-catalog.js";
 
@@ -462,6 +464,47 @@ describe("official external plugin catalog", () => {
       defaultChoice: "clawhub",
       expectedIntegrity: "sha256-s1XdoEQDvsqri7qwaf0eewV4Ji50WeWYzFsZYVtb2rk=",
     });
+  });
+
+  it("loads hosted catalog profiles from OpenClaw config", async () => {
+    const config = {
+      marketplaces: {
+        feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
+        sources: { "acme-npm": { type: "npm" as const } },
+      },
+    };
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 14,
+      entries: [
+        {
+          name: "@acme/config-profile-proof",
+          kind: "plugin",
+          openclaw: {
+            plugin: { id: "config-profile-proof" },
+            install: { sourceRef: "acme-npm", npmSpec: "@acme/config-profile-proof" },
+          },
+        },
+      ],
+    });
+
+    expect(resolveOfficialExternalPluginCatalogProfileConfigFromConfig(config)).toBe(
+      config.marketplaces,
+    );
+
+    const result = await loadConfiguredHostedOfficialExternalPluginCatalogEntries(config, {
+      feedProfile: "acme",
+      fetchImpl: vi.fn(async (url: RequestInfo | URL) => {
+        expect(expectRequestUrl(url)).toBe("https://packages.acme.example/openclaw/feed");
+        return new Response(body, { status: 200 });
+      }),
+      snapshotStore: null,
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.entries.map((entry) => entry.name)).toEqual(["@acme/config-profile-proof"]);
   });
 
   it("allows named local feed profiles to authorize their configured HTTPS host", async () => {
