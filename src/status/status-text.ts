@@ -244,7 +244,7 @@ async function resolveStatusHarnessId(params: {
   provider: string;
   model: string;
   agentId: string;
-  sessionKey: string;
+  sessionKey?: string;
   sessionEntry?: SessionEntry;
 }): Promise<string | undefined> {
   try {
