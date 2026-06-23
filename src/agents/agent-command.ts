@@ -26,6 +26,7 @@ import {
   registerAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveAgentDeliveryPlan,
@@ -67,6 +68,7 @@ import {
   isDeliverableMessageChannel,
   resolveMessageChannel,
 } from "../utils/message-channel.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -137,6 +139,7 @@ import {
 } from "./run-termination.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
+import { hasNonzeroUsage } from "./usage.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -2453,8 +2456,8 @@ export async function agentCommandFromIngress(
   }
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
-  return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    agentCommandInternal(
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    const result = await agentCommandInternal(
       {
         ...opts,
         lifecycleGeneration,
@@ -2462,8 +2465,73 @@ export async function agentCommandFromIngress(
       },
       runtime,
       deps,
-    ),
-  );
+    );
+
+    // Emit model.usage diagnostic for HTTP ingress traffic (POST /v1/responses,
+    // POST /v1/chat/completions, and node-event dispatch). Unlike channel/cron
+    // paths which emit model.usage in runReplyAgent / finalizeCronRun, the
+    // ingress path has no such existing emission — without this, every
+    // diagnostics consumer (Langfuse bridge, @openclaw/diagnostics-otel,
+    // diagnostics-prometheus) sees usage/cost only for webchat/cli/cron turns
+    // and is blind to HTTP API traffic.
+    if (result) {
+      const cfg = getRuntimeConfig();
+      if (isDiagnosticsEnabled(cfg)) {
+        const agentMeta = result.meta?.agentMeta;
+        const usage = agentMeta?.usage;
+        if (agentMeta && hasNonzeroUsage(usage)) {
+          const providerUsed = agentMeta.provider ?? "";
+          const modelUsed = agentMeta.model ?? "";
+          const input = usage.input ?? 0;
+          const output = usage.output ?? 0;
+          const cacheRead = usage.cacheRead ?? 0;
+          const cacheWrite = usage.cacheWrite ?? 0;
+          const usagePromptTokens = input + cacheRead + cacheWrite;
+          const totalTokens = usage.total ?? usagePromptTokens + output;
+          const hasBillableUsageBuckets =
+            usage.input !== undefined ||
+            usage.output !== undefined ||
+            usage.cacheRead !== undefined ||
+            usage.cacheWrite !== undefined;
+          const costConfig = resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: cfg,
+          });
+          const costUsd = hasBillableUsageBuckets
+            ? estimateUsageCost({ usage, cost: costConfig })
+            : undefined;
+
+          emitTrustedDiagnosticEvent({
+            type: "model.usage",
+            sessionKey: opts.sessionKey,
+            sessionId: agentMeta.sessionId,
+            channel: opts.messageChannel ?? "http",
+            agentId: opts.agentId,
+            provider: providerUsed,
+            model: modelUsed,
+            usage: {
+              input,
+              output,
+              cacheRead,
+              cacheWrite,
+              promptTokens: usagePromptTokens,
+              total: totalTokens,
+            },
+            lastCallUsage: agentMeta.lastCallUsage,
+            context: {
+              limit: agentMeta.contextTokens,
+              ...(agentMeta.promptTokens !== undefined ? { used: agentMeta.promptTokens } : {}),
+            },
+            costUsd,
+            durationMs: result.meta?.durationMs,
+          });
+        }
+      }
+    }
+
+    return result;
+  });
 }
 
 export const testing = {
