@@ -17,6 +17,20 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), init);
 }
 
+async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS;
+  process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS = value;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS;
+    } else {
+      process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS = previous;
+    }
+  }
+}
+
 describe("release candidate checklist", () => {
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
@@ -386,6 +400,42 @@ describe("release candidate checklist", () => {
       }),
     );
   });
+
+  it("uses a positive integer GitHub API timeout env", async () => {
+    const fetchImpl = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      return jsonResponse({ workflow_runs: [] });
+    });
+
+    await withGithubApiTimeoutEnv("2500", async () => {
+      await expect(
+        githubApi("repos/openclaw/openclaw/actions/runs", {
+          fetchImpl,
+          token: "test-token",
+        }),
+      ).resolves.toEqual({ workflow_runs: [] });
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it.each(["1e3", "10.5", "0", "soon"])(
+    "rejects malformed GitHub API timeout env %s",
+    async (raw) => {
+      const fetchImpl = vi.fn();
+
+      await withGithubApiTimeoutEnv(raw, async () => {
+        await expect(
+          githubApi("repos/openclaw/openclaw/actions/runs", {
+            fetchImpl,
+            token: "test-token",
+          }),
+        ).rejects.toThrow(
+          "OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive integer",
+        );
+      });
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
 
   it("bounds GitHub API error bodies", async () => {
     const fetchImpl = vi.fn(async () => {

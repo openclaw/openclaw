@@ -211,6 +211,58 @@ describe("CLI attempt execution", () => {
   let storePath: string;
   let homeEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
+  async function runOpenClawEmbeddedAttemptForTest(overrides?: {
+    opts?: Partial<RunAgentAttemptParams["opts"]>;
+    runId?: string;
+  }) {
+    const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
+    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionEntry: SessionEntry = {
+      sessionId: `session-${runId}`,
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, `${runId}.jsonl`),
+      workspaceDir: tmpDir,
+      body: "stream gate",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId,
+      opts: {
+        message: "stream gate",
+        ...overrides?.opts,
+      } as RunAgentAttemptParams["opts"],
+      runContext: {} as RunAgentAttemptParams["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    return firstEmbeddedAgentArg();
+  }
+
   beforeEach(async () => {
     homeEnvSnapshot = captureEnv(["HOME"]);
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-"));
@@ -2121,6 +2173,24 @@ describe("CLI attempt execution", () => {
       },
       senderId: "sender-embedded",
     });
+  });
+
+  it("keeps live stream output for visible subagent lane runs", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { lane: "subagent" },
+      runId: "visible-subagent-stream",
+    });
+
+    expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
+  });
+
+  it("suppresses live stream output for hidden internal runs", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { lane: "subagent", sessionEffects: "internal" },
+      runId: "internal-subagent-stream",
+    });
+
+    expect(embeddedArg.suppressLiveStreamOutput).toBe(true);
   });
 
   it("forwards selected auth profiles through metadata-scoped provider aliases", async () => {

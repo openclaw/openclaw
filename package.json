@@ -629,6 +629,10 @@
       "types": "./dist/plugin-sdk/agent-harness-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-harness-runtime.js"
     },
+    "./plugin-sdk/agent-harness-tool-runtime": {
+      "types": "./dist/plugin-sdk/agent-harness-tool-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-harness-tool-runtime.js"
+    },
     "./plugin-sdk/hook-runtime": {
       "types": "./dist/plugin-sdk/hook-runtime.d.ts",
       "default": "./dist/plugin-sdk/hook-runtime.js"

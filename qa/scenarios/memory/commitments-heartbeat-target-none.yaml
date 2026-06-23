@@ -55,7 +55,7 @@ flow:
         - call: reset
         - set: beforeHeartbeatTs
           value:
-            expr: "((await env.gateway.call('last-heartbeat', {}, { timeoutMs: 5000 }))?.ts ?? 0)"
+            expr: "((await env.gateway.call('last-heartbeat', {}, { timeoutMs: liveTurnTimeoutMs(env, 15000) }))?.ts ?? 0)"
         - set: sessionKey
           value:
             expr: "`agent:qa:qa-channel:${config.conversationId}`"
@@ -106,7 +106,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "(async () => { const last = await env.gateway.call('last-heartbeat', {}, { timeoutMs: 5000 }); return last && last.ts > beforeHeartbeatTs ? last : undefined; })()"
+                expr: "(async () => { const last = await env.gateway.call('last-heartbeat', {}, { timeoutMs: liveTurnTimeoutMs(env, 15000) }); return last && last.ts > beforeHeartbeatTs ? last : undefined; })()"
             - expr: liveTurnTimeoutMs(env, 45000)
             - 250
         - call: sleep
