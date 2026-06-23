@@ -915,6 +915,13 @@ function selectorFromDiagnoseParams(p: DiagnoseParams): SessionsDiagnoseResult["
   };
 }
 
+function quoteDiagnoseCliArg(value: string): string {
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
+    return value;
+  }
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 function classifyDiagnoseSessionKind(key: string): DiagnoseRow["kind"] {
   if (key === "global") {
     return "global";
@@ -1090,11 +1097,17 @@ async function resolveDiagnoseTarget(params: {
   if (countDiagnoseSelectors(p) > 1) {
     throw new Error("choose only one of key, sessionId, or label for sessions.diagnose");
   }
+  const requestedAgentId = p.key
+    ? resolveRequestedGlobalAgentId(cfg, p.key, p.agentId)
+    : resolveRequestedGlobalAgentId(cfg, "global", p.agentId);
+  if (!requestedAgentId.ok) {
+    throw new Error(requestedAgentId.error.message);
+  }
   if (p.key) {
     const { target, storePath, store, entry } = loadSessionEntriesForTarget({
       key: p.key,
       cfg,
-      ...(p.agentId ? { agentId: p.agentId } : {}),
+      ...(requestedAgentId.agentId ? { agentId: requestedAgentId.agentId } : {}),
     });
     if (!entry) {
       return null;
@@ -1106,7 +1119,7 @@ async function resolveDiagnoseTarget(params: {
       entry,
       storePath,
       store,
-      agentId: target.agentId,
+      agentId: target.agentId ?? requestedAgentId.agentId,
     };
   }
 
@@ -1389,6 +1402,8 @@ async function buildDiagnoseResult(params: {
         sessionId: target.entry.sessionId,
         storePath: target.storePath,
         sessionFile: target.entry.sessionFile,
+        sessionEntry: target.entry,
+        sessionKey: target.key,
         agentId: target.agentId,
         maxLines: clampDiagnoseTail(p.tail),
       })
@@ -1455,8 +1470,8 @@ async function buildDiagnoseResult(params: {
       : {}),
     findings,
     nextChecks: [
-      `openclaw sessions tail --session-key ${target.key}`,
-      `openclaw sessions export-trajectory --session-key ${target.key}`,
+      `openclaw sessions tail --session-key ${quoteDiagnoseCliArg(target.key)}`,
+      `openclaw sessions export-trajectory --session-key ${quoteDiagnoseCliArg(target.key)}`,
       "openclaw health --verbose",
     ],
   };

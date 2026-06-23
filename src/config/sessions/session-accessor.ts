@@ -1825,11 +1825,11 @@ export async function commitReplySessionInitialization(params: {
 export async function readTranscriptTailLines(
   scope: SessionTranscriptReadScope & { maxLines: number },
 ): Promise<{ lines: string[]; totalLines: number } | null> {
-  const transcript = await resolveTranscriptReadAccess(scope);
   const maxLines = Math.max(1, Math.floor(scope.maxLines));
   const lines: string[] = [];
   let totalLines = 0;
   try {
+    const transcript = resolveSessionTranscriptReadTarget(scope);
     for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
       if (!line.trim()) {
         continue;
