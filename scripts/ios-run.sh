@@ -97,12 +97,8 @@ if [[ "${push_sandbox_simulator}" == "1" ]]; then
   fi
 
   xcodebuild_overrides+=(
-    "OPENCLAW_PUSH_TRANSPORT=relay"
-    "OPENCLAW_PUSH_DISTRIBUTION=official"
+    "OPENCLAW_PUSH_MODE=simulatorSandbox"
     "OPENCLAW_PUSH_RELAY_BASE_URL=${push_relay_base_url}"
-    "OPENCLAW_PUSH_APNS_ENVIRONMENT=sandbox"
-    "OPENCLAW_PUSH_RELAY_PROFILE=simulatorSandbox"
-    "OPENCLAW_PUSH_PROOF_POLICY=internalSimulator"
     "OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT=development"
   )
 fi

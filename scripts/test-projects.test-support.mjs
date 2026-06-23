@@ -971,10 +971,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
       "test/scripts/security-sensitive-guard-workflow.test.ts",
     ],
   ],
-  [
-    "scripts/github/resolve-openclaw-ref.sh",
-    ["test/scripts/resolve-openclaw-ref.test.ts"],
-  ],
+  ["scripts/github/resolve-openclaw-ref.sh", ["test/scripts/resolve-openclaw-ref.test.ts"]],
   ["scripts/ci-hydrate-testbox-env.sh", ["test/scripts/ci-hydrate-testbox-env.test.ts"]],
   [
     "scripts/github/run-openclaw-cross-os-release-checks.sh",
@@ -987,36 +984,22 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/ios-release-prepare.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
   ["scripts/ios-release-signing.mjs", ["test/scripts/ios-release-signing.test.ts"]],
   ["scripts/ios-release-upload.sh", ["test/scripts/ios-release-wrapper-args.test.ts"]],
+  ["scripts/ios-validate-app-store-ipa.sh", ["test/scripts/ios-validate-app-store-ipa.test.ts"]],
   ["scripts/lib/restart-mac-gateway.sh", ["test/scripts/restart-mac.test.ts"]],
   [
     "scripts/openclaw-release-clawhub-runtime-state.ts",
     ["test/scripts/openclaw-release-clawhub-runtime-state.test.ts"],
   ],
-  [
-    "scripts/openclaw-release-clawhub-plan.ts",
-    ["test/scripts/release-wrapper-scripts.test.ts"],
-  ],
+  ["scripts/openclaw-release-clawhub-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
   [
     "scripts/plan-release-workflow-matrix.mjs",
     ["test/scripts/release-workflow-matrix-plan.test.ts"],
   ],
   ["scripts/release-fast-pretag-check.sh", ["test/scripts/package-acceptance-workflow.test.ts"]],
-  [
-    "scripts/plugin-clawhub-release-check.ts",
-    ["test/scripts/release-wrapper-scripts.test.ts"],
-  ],
-  [
-    "scripts/plugin-clawhub-release-plan.ts",
-    ["test/scripts/release-wrapper-scripts.test.ts"],
-  ],
-  [
-    "scripts/plugin-npm-release-check.ts",
-    ["test/scripts/release-wrapper-scripts.test.ts"],
-  ],
-  [
-    "scripts/plugin-npm-release-plan.ts",
-    ["test/scripts/release-wrapper-scripts.test.ts"],
-  ],
+  ["scripts/plugin-clawhub-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+  ["scripts/plugin-clawhub-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+  ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+  ["scripts/plugin-npm-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
   [
     "scripts/plugin-release-pretag-pack-check.ts",
     ["test/scripts/plugin-release-pretag-pack-check.test.ts"],
