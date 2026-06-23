@@ -5,7 +5,6 @@ import { describe, expect, it } from "vitest";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { persistAbortTargetEntry, persistSessionEntry } from "./commands-session-store.js";
-import type { CommandHandler } from "./commands-types.js";
 
 async function withTempStore<T>(run: (storePath: string) => Promise<T>): Promise<T> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-command-session-store-"));
@@ -46,7 +45,7 @@ describe("commands session store persistence", () => {
           sessionStore,
           sessionKey,
           storePath,
-        } as Parameters<CommandHandler>[0]),
+        }),
       ).resolves.toBe(true);
 
       const persisted = loadSessionStore(storePath, { skipCache: true });
