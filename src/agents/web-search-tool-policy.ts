@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -12,6 +11,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
+import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
 export type WebSearchToolPolicyParams = {
@@ -33,7 +33,7 @@ export type WebSearchToolPolicyParams = {
   senderE164?: string | null;
 };
 
-export type WebSearchToolPolicyResolution = {
+type WebSearchToolPolicyResolution = {
   allowed: boolean;
   persistentAllowed: boolean;
 };

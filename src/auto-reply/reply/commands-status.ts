@@ -26,6 +26,7 @@ export async function buildStatusReply(
     text: await buildStatusText({
       ...params,
       statusChannel: command.channel,
+      statusAccountId: command.accountId,
     }),
   };
 }

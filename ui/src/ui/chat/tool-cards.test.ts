@@ -10,32 +10,6 @@ import {
   renderToolCardSidebar,
 } from "./tool-cards.ts";
 
-vi.mock("../icons.ts", () => ({
-  icons: {
-    check: "✓",
-    chevronDown: "",
-    panelRightOpen: "",
-    x: "✕",
-    zap: "",
-  },
-}));
-
-vi.mock("../tool-display.ts", () => ({
-  formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
-    name,
-    label: name
-      .split(/[._-]/g)
-      .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-      .join(" "),
-    icon: "zap",
-    detail:
-      args && typeof args === "object" && "detail" in args
-        ? String((args as { detail: unknown }).detail)
-        : undefined,
-  }),
-}));
-
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
   label: string,
@@ -121,7 +95,7 @@ describe("tool-cards", () => {
 
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Sessions Spawn",
+      "Sub-agent",
     );
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
@@ -134,8 +108,8 @@ describe("tool-cards", () => {
         {
           id: "msg:5a:call-5a",
           name: "skill_workshop",
-          args: { detail: "create" },
-          inputText: '{\n  "detail": "create"\n}',
+          args: { action: "create" },
+          inputText: '{\n  "action": "create"\n}',
           outputText: "Proposal created",
         },
         { expanded: false, onToggleExpanded: vi.fn() },
@@ -537,7 +511,6 @@ describe("tool-cards", () => {
     expect(card?.classList.contains("chat-tool-card--error")).toBe(true);
     expect(action?.classList.contains("chat-tool-card__action--error")).toBe(true);
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).toContain("✕");
     expect(action?.textContent).not.toContain("✓");
   });
 
@@ -558,7 +531,6 @@ describe("tool-cards", () => {
     const action = container.querySelector(".chat-tool-card__action");
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).toContain("✕");
     expect(action?.textContent).not.toContain("✓");
   });
 
@@ -579,7 +551,6 @@ describe("tool-cards", () => {
     const action = container.querySelector(".chat-tool-card__action");
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).toContain("✕");
     expect(action?.textContent).not.toContain("✓");
   });
 

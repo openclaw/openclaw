@@ -7,15 +7,11 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
 import { notifyLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
-import {
-  resolveLlmIdleTimeoutMs,
-  streamWithIdleTimeout,
-} from "./llm-idle-timeout.js";
+import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
-const DEFAULT_LLM_IDLE_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_SECONDS * 1000;
+const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 
 describe("resolveLlmIdleTimeoutMs", () => {
   it("returns default when config is undefined", () => {
@@ -146,16 +142,25 @@ describe("resolveLlmIdleTimeoutMs", () => {
     );
   });
 
-  it("disables the default idle timeout for cron when no timeout is configured", () => {
-    expect(resolveLlmIdleTimeoutMs({ trigger: "cron" })).toBe(0);
+  it("uses the default idle timeout for cron cloud model calls when no timeout is configured", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
 
     const cfg = { agents: { defaults: {} } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(0);
+    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("caps agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("keeps cron local provider model calls opted out of the implicit idle watchdog", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        model: { baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(0);
   });
 
   it.each([

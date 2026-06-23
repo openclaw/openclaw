@@ -260,7 +260,7 @@ to route them through the managed path.
 <Note>
   All provider key fields support SecretRef objects. Plugin-scoped SecretRefs
   under `plugins.entries.<plugin>.config.webSearch.apiKey` are resolved for the
-  bundled API-backed web search providers, including Brave, Exa, Firecrawl,
+  installed API-backed web search providers, including Brave, Exa, Firecrawl,
   Gemini, Grok, Kimi, MiniMax, Parallel, Perplexity, and Tavily,
   whether the provider is picked explicitly via `tools.web.search.provider` or
   selected through auto-detect. In auto-detect mode, OpenClaw resolves only the
@@ -307,10 +307,11 @@ plugin or run `openclaw doctor --fix` to clean up the stale config.
 
 - choose it with `tools.web.fetch.provider`
 - or omit that field and let OpenClaw auto-detect the first ready web-fetch
-  provider from available credentials
+  provider from configured credentials
 - non-sandboxed `web_fetch` can use installed plugin providers that declare
-  `contracts.webFetchProviders`; sandboxed fetches stay bundled-only
-- today the bundled web-fetch provider is Firecrawl, configured under
+  `contracts.webFetchProviders`; sandboxed fetches allow bundled providers and
+  verified official plugin installs, but exclude third-party external plugins
+- the official Firecrawl plugin provides web-fetch fallback, configured under
   `plugins.entries.firecrawl.config.webFetch.*`
 
 When you choose **Kimi** during `openclaw onboard` or
@@ -388,8 +389,8 @@ show the `x_search` prompt.
   freshness ranges require both start and end dates.
   Gemini, Grok, and Kimi return one synthesized answer with citations. They
   accept `count` for shared-tool compatibility, but it does not change the
-  grounded answer shape. Gemini supports `freshness`, `date_after`, and
-  `date_before` by converting them to Google Search grounding time ranges.
+  grounded answer shape. Gemini treats `day` freshness as a recency hint; wider
+  freshness values and explicit dates set Google Search grounding time ranges.
   Perplexity behaves the same way when you use the Sonar/OpenRouter
   compatibility path (`plugins.entries.perplexity.config.webSearch.baseUrl` /
   `model` or `OPENROUTER_API_KEY`).

@@ -9,6 +9,7 @@ import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
+import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../cli/plugins-registry-refresh.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -40,12 +41,14 @@ import {
   installPluginFromNpmPackArchive,
   type InstallPluginResult,
 } from "../plugins/install.js";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
 import {
   buildNpmResolutionInstallFields,
   recordPluginInstall,
   resolveNpmInstallRecordSpec,
 } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { VERSION } from "../version.js";
@@ -72,12 +75,28 @@ export type OnboardingPluginInstallEntry = {
 export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
 
 /** Config and status returned after attempting an onboarding plugin install. */
-export type OnboardingPluginInstallResult = {
+type OnboardingPluginInstallResult = {
   cfg: OpenClawConfig;
   installed: boolean;
   pluginId: string;
   status: OnboardingPluginInstallStatus;
 };
+
+async function markOnboardingPluginInstalled(
+  result: OnboardingPluginInstallResult & { installed: true },
+  params: {
+    runtime: RuntimeEnv;
+  },
+): Promise<OnboardingPluginInstallResult & { installed: true }> {
+  // Onboarding has not committed config yet, so invalidate only process-local
+  // discovery. The next lookup recovers the new package alongside persisted records.
+  clearLoadInstalledPluginIndexInstallRecordsCache();
+  clearPluginMetadataLifecycleCaches();
+  await invalidatePluginRuntimeDiscoveryAfterConfigMutation({
+    logger: { warn: (message) => params.runtime.log(message) },
+  });
+  return result;
+}
 
 function shouldFallbackClawHubToNpm(params: {
   result: { ok: false; code?: string };
@@ -915,12 +934,15 @@ async function installPluginFromOverride(params: {
           ...(result.version ? { version: result.version } : {}),
           ...buildNpmResolutionInstallFields(result.npmResolution),
         } as const);
-  return {
-    cfg: recordPluginInstall(enableResult.config, install),
-    installed: true,
-    pluginId: result.pluginId,
-    status: "installed",
-  };
+  return await markOnboardingPluginInstalled(
+    {
+      cfg: recordPluginInstall(enableResult.config, install),
+      installed: true,
+      pluginId: result.pluginId,
+      status: "installed",
+    },
+    { runtime: params.runtime },
+  );
 }
 
 async function installPluginFromClawHubSpecWithProgress(params: {
@@ -1104,21 +1126,27 @@ export async function ensureOnboardingPluginInstalled(params: {
       };
     }
     if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
-      return {
-        cfg: enableResult.config,
-        installed: true,
-        pluginId: entry.pluginId,
-        status: "installed",
-      };
+      return await markOnboardingPluginInstalled(
+        {
+          cfg: enableResult.config,
+          installed: true,
+          pluginId: entry.pluginId,
+          status: "installed",
+        },
+        { runtime },
+      );
     }
     next = addPluginLoadPath(enableResult.config, localPath);
     next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
-    return {
-      cfg: next,
-      installed: true,
-      pluginId: entry.pluginId,
-      status: "installed",
-    };
+    return await markOnboardingPluginInstalled(
+      {
+        cfg: next,
+        installed: true,
+        pluginId: entry.pluginId,
+        status: "installed",
+      },
+      { runtime },
+    );
   }
 
   let shouldTryNpm = choice === "npm";
@@ -1171,12 +1199,15 @@ export async function ensureOnboardingPluginInstalled(params: {
         spec: clawhubSpecs?.recordSpec ?? clawhubInstallSpec,
         installPath: result.targetDir,
       });
-      return {
-        cfg: next,
-        installed: true,
-        pluginId: result.pluginId,
-        status: "installed",
-      };
+      return await markOnboardingPluginInstalled(
+        {
+          cfg: next,
+          installed: true,
+          pluginId: result.pluginId,
+          status: "installed",
+        },
+        { runtime },
+      );
     }
 
     await prompter.note(
@@ -1293,12 +1324,15 @@ export async function ensureOnboardingPluginInstalled(params: {
       ...buildNpmResolutionInstallFields(result.npmResolution),
     } as const;
     next = recordPluginInstall(next, install);
-    return {
-      cfg: next,
-      installed: true,
-      pluginId: result.pluginId,
-      status: "installed",
-    };
+    return await markOnboardingPluginInstalled(
+      {
+        cfg: next,
+        installed: true,
+        pluginId: result.pluginId,
+        status: "installed",
+      },
+      { runtime },
+    );
   }
 
   await prompter.note(
@@ -1338,21 +1372,27 @@ export async function ensureOnboardingPluginInstalled(params: {
         };
       }
       if (pathsReferToSameDirectory(localPath, bundledLocalPath)) {
-        return {
-          cfg: enableResult.config,
-          installed: true,
-          pluginId: entry.pluginId,
-          status: "installed",
-        };
+        return await markOnboardingPluginInstalled(
+          {
+            cfg: enableResult.config,
+            installed: true,
+            pluginId: entry.pluginId,
+            status: "installed",
+          },
+          { runtime },
+        );
       }
       next = addPluginLoadPath(enableResult.config, localPath);
       next = await recordLocalPluginInstall({ cfg: next, entry, localPath, npmSpec, workspaceDir });
-      return {
-        cfg: next,
-        installed: true,
-        pluginId: entry.pluginId,
-        status: "installed",
-      };
+      return await markOnboardingPluginInstalled(
+        {
+          cfg: next,
+          installed: true,
+          pluginId: entry.pluginId,
+          status: "installed",
+        },
+        { runtime },
+      );
     }
   }
 

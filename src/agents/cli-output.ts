@@ -21,7 +21,7 @@ type CliUsage = {
   total?: number;
 };
 
-export type CliProcessDiagnostics = {
+type CliProcessDiagnostics = {
   backendId: string;
   processReason: string;
   exitCode: number | null;

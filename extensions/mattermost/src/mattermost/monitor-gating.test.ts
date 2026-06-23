@@ -59,6 +59,84 @@ describe("mattermost monitor gating", () => {
     });
   });
 
+  it("processes engaged thread follow-ups without a mention", () => {
+    const resolveRequireMention = vi.fn(() => true);
+
+    expect(
+      evaluateMattermostMentionGate({
+        kind: "channel",
+        cfg: {} as never,
+        accountId: "default",
+        channelId: "chan-1",
+        resolveRequireMention,
+        wasMentioned: false,
+        threadAlreadyEngaged: true,
+        isControlCommand: false,
+        commandAuthorized: false,
+        oncharEnabled: false,
+        oncharTriggered: false,
+        canDetectMention: true,
+      }),
+    ).toEqual({
+      shouldRequireMention: true,
+      shouldBypassMention: false,
+      effectiveWasMentioned: true,
+      dropReason: null,
+    });
+  });
+
+  it("engaged threads respond even when onchar is enabled but not triggered", () => {
+    const resolveRequireMention = vi.fn(() => true);
+
+    expect(
+      evaluateMattermostMentionGate({
+        kind: "channel",
+        cfg: {} as never,
+        accountId: "default",
+        channelId: "chan-1",
+        resolveRequireMention,
+        wasMentioned: false,
+        threadAlreadyEngaged: true,
+        isControlCommand: false,
+        commandAuthorized: false,
+        oncharEnabled: true,
+        oncharTriggered: false,
+        canDetectMention: true,
+      }),
+    ).toEqual({
+      shouldRequireMention: true,
+      shouldBypassMention: false,
+      effectiveWasMentioned: true,
+      dropReason: null,
+    });
+  });
+
+  it("drops non-mentioned channel traffic outside an engaged thread", () => {
+    const resolveRequireMention = vi.fn(() => true);
+
+    expect(
+      evaluateMattermostMentionGate({
+        kind: "channel",
+        cfg: {} as never,
+        accountId: "default",
+        channelId: "chan-1",
+        resolveRequireMention,
+        wasMentioned: false,
+        threadAlreadyEngaged: false,
+        isControlCommand: false,
+        commandAuthorized: false,
+        oncharEnabled: false,
+        oncharTriggered: false,
+        canDetectMention: true,
+      }),
+    ).toEqual({
+      shouldRequireMention: true,
+      shouldBypassMention: false,
+      effectiveWasMentioned: false,
+      dropReason: "missing-mention",
+    });
+  });
+
   it("bypasses mention for authorized control commands and allows direct chats", () => {
     const resolveRequireMention = vi.fn(() => true);
 

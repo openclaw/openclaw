@@ -30,8 +30,3 @@ export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathO
       ),
   );
 }
-
-/** Resolve the containing directory for one agent's SQLite database. */
-export function resolveOpenClawAgentSqliteDir(options: OpenClawAgentSqlitePathOptions): string {
-  return path.dirname(resolveOpenClawAgentSqlitePath(options));
-}

@@ -1,5 +1,4 @@
 // OpenClaw state database manages shared persisted state and migrations.
-import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -12,6 +11,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   type SqliteWalMaintenance,
@@ -50,61 +50,14 @@ export type OpenClawStateDatabaseOptions = {
   path?: string;
 };
 
-/** Status stored for a state migration run. */
-export type OpenClawMigrationRunStatus = "completed" | "warning" | "failed";
-/** Status stored for a state backup run. */
-export type OpenClawBackupRunStatus = "completed" | "failed";
-
 export type OpenClawStateDatabaseSchemaMigration = {
   kind: "agent-databases-composite-primary-key";
   path: string;
 };
 
-/** Input for recording one state migration run summary. */
-export type RecordOpenClawStateMigrationRunOptions = OpenClawStateDatabaseOptions & {
-  id?: string;
-  startedAt: number;
-  finishedAt?: number;
-  status: OpenClawMigrationRunStatus;
-  report: Record<string, unknown>;
-};
-
-/** Input for recording one migrated source file/table pair. */
-export type RecordOpenClawStateMigrationSourceOptions = OpenClawStateDatabaseOptions & {
-  runId: string;
-  migrationKind: string;
-  sourceKey: string;
-  sourcePath: string;
-  targetTable: string;
-  status: OpenClawMigrationRunStatus;
-  importedAt: number;
-  removedSource: boolean;
-  sourceSha256?: string;
-  sourceSizeBytes?: number;
-  sourceRecordCount?: number;
-  report: Record<string, unknown>;
-};
-
-/** Input for recording one state backup archive. */
-export type RecordOpenClawStateBackupRunOptions = OpenClawStateDatabaseOptions & {
-  id?: string;
-  createdAt: number;
-  archivePath: string;
-  status: OpenClawBackupRunStatus;
-  manifest: Record<string, unknown>;
-};
-
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 
-type OpenClawStateMetadataDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "backup_runs" | "migration_runs" | "migration_sources" | "schema_meta"
->;
-
-function readSqliteUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-  return Number(row?.user_version ?? 0);
-}
+type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
 
 function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
@@ -962,89 +915,6 @@ export function runOpenClawStateWriteTransaction<T>(
     // callers never retry an operation that is durable in SQLite.
   }
   return result;
-}
-
-/** Record a state migration run and return its stable run id. */
-export function recordOpenClawStateMigrationRun(
-  options: RecordOpenClawStateMigrationRunOptions,
-): string {
-  const id = options.id ?? randomUUID();
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.insertInto("migration_runs").values({
-        id,
-        started_at: options.startedAt,
-        finished_at: options.finishedAt ?? null,
-        status: options.status,
-        report_json: JSON.stringify(options.report),
-      }),
-    );
-  }, options);
-  return id;
-}
-
-/** Upsert the per-source audit row for a state migration. */
-export function recordOpenClawStateMigrationSource(
-  options: RecordOpenClawStateMigrationSourceOptions,
-): void {
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .insertInto("migration_sources")
-        .values({
-          source_key: options.sourceKey,
-          migration_kind: options.migrationKind,
-          source_path: options.sourcePath,
-          target_table: options.targetTable,
-          source_sha256: options.sourceSha256 ?? null,
-          source_size_bytes: options.sourceSizeBytes ?? null,
-          source_record_count: options.sourceRecordCount ?? null,
-          last_run_id: options.runId,
-          status: options.status,
-          imported_at: options.importedAt,
-          removed_source: options.removedSource ? 1 : 0,
-          report_json: JSON.stringify(options.report),
-        })
-        .onConflict((conflict) =>
-          conflict.column("source_key").doUpdateSet({
-            migration_kind: (eb) => eb.ref("excluded.migration_kind"),
-            source_path: (eb) => eb.ref("excluded.source_path"),
-            target_table: (eb) => eb.ref("excluded.target_table"),
-            source_sha256: (eb) => eb.ref("excluded.source_sha256"),
-            source_size_bytes: (eb) => eb.ref("excluded.source_size_bytes"),
-            source_record_count: (eb) => eb.ref("excluded.source_record_count"),
-            last_run_id: (eb) => eb.ref("excluded.last_run_id"),
-            status: (eb) => eb.ref("excluded.status"),
-            imported_at: (eb) => eb.ref("excluded.imported_at"),
-            removed_source: (eb) => eb.ref("excluded.removed_source"),
-            report_json: (eb) => eb.ref("excluded.report_json"),
-          }),
-        ),
-    );
-  }, options);
-}
-
-/** Record a state backup archive and return its stable backup id. */
-export function recordOpenClawStateBackupRun(options: RecordOpenClawStateBackupRunOptions): string {
-  const id = options.id ?? randomUUID();
-  runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(database.db);
-    executeSqliteQuerySync(
-      database.db,
-      db.insertInto("backup_runs").values({
-        id,
-        created_at: options.createdAt,
-        archive_path: options.archivePath,
-        status: options.status,
-        manifest_json: JSON.stringify(options.manifest),
-      }),
-    );
-  }, options);
-  return id;
 }
 
 /** Close all cached shared state database handles. */

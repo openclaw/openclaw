@@ -1,5 +1,4 @@
 // Discord plugin module implements message handler.process behavior.
-import path from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
 import { resolveAckReaction, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -38,13 +37,8 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  loadSessionStore,
-  readLatestAssistantTextFromSessionTranscript,
-  resolveAndPersistSessionFile,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveDiscordAccount, resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
 import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
@@ -113,10 +107,7 @@ function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
   return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
-type DiscordReplySkipReason =
-  | "aborted before delivery"
-  | "reasoning payload"
-  | "internal-only payload";
+type DiscordReplySkipReason = "aborted before delivery" | "internal-only payload";
 
 export function formatDiscordReplySkip(params: {
   kind: "tool" | "block" | "final";
@@ -525,21 +516,20 @@ async function processDiscordMessageInner(
     }
     try {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
-      const store = loadSessionStore(storePath, { clone: false });
-      const sessionEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const sessionEntry = getSessionEntry({
+        agentId: route.agentId,
+        sessionKey,
+        storePath,
+      });
       if (!sessionEntry?.sessionId) {
         return undefined;
       }
-      const { sessionFile } = await resolveAndPersistSessionFile({
+      const latest = await readLatestAssistantTextByIdentity({
+        agentId: route.agentId,
         sessionId: sessionEntry.sessionId,
         sessionKey,
-        sessionStore: store,
         storePath,
-        sessionEntry,
-        agentId: route.agentId,
-        sessionsDir: path.dirname(storePath),
       });
-      const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
       if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
         return undefined;
       }
@@ -609,18 +599,6 @@ async function processDiscordMessageInner(
       );
       return null;
     }
-    if (payload.isReasoning) {
-      // Reasoning/thinking payloads should not be delivered to Discord.
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "reasoning payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
-      return null;
-    }
     if (draftPreview.draftStream && draftPreview.isProgressMode && info.kind === "block") {
       const reply = resolveSendableOutboundReplyParts(payload);
       if (!reply.hasMedia && !payload.isError) {
@@ -652,18 +630,6 @@ async function processDiscordMessageInner(
       return { visibleReplySent: false };
     }
     const isFinal = info.kind === "final";
-    if (payload.isReasoning) {
-      // Reasoning/thinking payloads should not be delivered to Discord.
-      logVerbose(
-        formatDiscordReplySkip({
-          kind: info.kind,
-          reason: "reasoning payload",
-          target: deliverTarget,
-          sessionKey: ctxPayload.SessionKey,
-        }),
-      );
-      return { visibleReplySent: false };
-    }
     if (
       isFinal &&
       !options?.allowFallbackOnlyToolWarning &&

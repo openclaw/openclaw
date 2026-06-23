@@ -30,6 +30,7 @@ import {
 import { resolveCodexAppServerEnvApiKeyCacheKey } from "./auth-bridge.js";
 import { CodexAppServerRpcError } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { CODEX_TURN_START_TEXT_INPUT_MAX_CHARS } from "./context-engine-projection.js";
 import {
   CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
   createCodexDynamicToolBridge,
@@ -55,7 +56,9 @@ import {
   createResumeHarness,
   createStartedThreadHarness,
   fastWait,
+  getMockRuntimeIdentity,
   mockCall,
+  mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   setCodexAppServerClientFactoryForTest,
@@ -74,7 +77,11 @@ import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import * as sharedClientModule from "./shared-client.js";
 import { createCodexTestModel } from "./test-support.js";
-import { buildTurnStartParams, startOrResumeThread } from "./thread-lifecycle.js";
+import {
+  buildTurnStartParams,
+  codexDynamicToolsFingerprint,
+  startOrResumeThread,
+} from "./thread-lifecycle.js";
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();
@@ -116,6 +123,11 @@ function expectResumeRequest(
   }
 }
 
+const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
+  "features.standalone_web_search": false,
+  web_search: "disabled",
+});
+
 async function writeExistingBinding(
   sessionFile: string,
   workspaceDir: string,
@@ -126,6 +138,7 @@ async function writeExistingBinding(
     cwd: workspaceDir,
     model: "gpt-5.4-codex",
     modelProvider: "openai",
+    webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
     ...overrides,
   });
 }
@@ -146,6 +159,8 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     codeModeOnly: false,
+    connectionClass: "local-loopback",
+    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -205,7 +220,7 @@ async function buildDynamicToolsForTest(
   options: Partial<
     Pick<
       Parameters<typeof testing.buildDynamicTools>[0],
-      "forceHeartbeatTool" | "ignoreRuntimePlan"
+      "forceHeartbeatTool" | "ignoreDisableMessageTool" | "ignoreRuntimePlan"
     >
   > = {},
 ) {
@@ -303,7 +318,7 @@ function createCodexToolBridgeForTest(
     tools,
     registeredTools,
     signal,
-    directToolNames: testing.shouldForceMessageTool(params) ? ["message"] : [],
+    directToolNames: testing.resolveCodexDynamicToolDirectNames(params),
   });
 }
 
@@ -565,7 +580,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -716,7 +731,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -793,7 +808,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -852,7 +867,7 @@ describe("runCodexAppServerAttempt", () => {
       throw new Error(`unexpected method: ${method}`);
     });
     const client = {
-      getServerVersion: () => "0.132.0",
+      ...mockClientRuntimeMethods(),
       request,
     };
     try {
@@ -1034,7 +1049,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await startOrResumeThread({
       client: {
-        getServerVersion: () => "0.132.0",
+        ...mockClientRuntimeMethods(),
         request: async (method: string, requestParams?: unknown) => {
           requests.push({ method, params: requestParams });
           if (method === "thread/start") {
@@ -1672,6 +1687,55 @@ describe("runCodexAppServerAttempt", () => {
     expect(specNames(nextNormalBridge.specs)).toEqual(registeredToolNames);
   });
 
+  it("keeps message in the registered schema when disabled for an internal turn", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.disableMessageTool = true;
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const availableTools: RuntimeDynamicToolForTest[] = [];
+    const registeredTools = [createRuntimeDynamicTool("message")];
+    const bridge = createCodexToolBridgeForTest(params, availableTools, registeredTools);
+    const normalParams = createParams(sessionFile, workspaceDir);
+    normalParams.disableTools = false;
+    normalParams.sourceReplyDeliveryMode = "message_tool_only";
+    normalParams.runtimePlan = createCodexRuntimePlanFixture();
+    const normalTools = [createRuntimeDynamicTool("message")];
+    const normalRegisteredTools = [createRuntimeDynamicTool("message")];
+    const normalBridge = createCodexToolBridgeForTest(
+      normalParams,
+      normalTools,
+      normalRegisteredTools,
+    );
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).not.toContain("message");
+    expect(bridge.specs.map((tool) => tool.name)).toContain("message");
+    expect(codexDynamicToolsFingerprint(bridge.specs)).toBe(
+      codexDynamicToolsFingerprint(normalBridge.specs),
+    );
+    await expect(
+      bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: {},
+      }),
+    ).resolves.toMatchObject({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw tool is not available for this turn: message",
+        },
+      ],
+    });
+  });
+
   it("keeps the persistent dynamic schema stable across heartbeat-only turns", async () => {
     testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),
@@ -1840,6 +1904,7 @@ describe("runCodexAppServerAttempt", () => {
     let notify: ((notification: CodexServerNotification) => Promise<void>) | undefined;
     setCodexAppServerClientFactoryForTest(async () => {
       const client = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           events.push(`request:${method}`);
           if (method === "thread/start") {
@@ -1901,6 +1966,7 @@ describe("runCodexAppServerAttempt", () => {
     let startedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const client = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           events.push(`request:${method}`);
           if (method === "thread/start") {
@@ -1942,6 +2008,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request: vi.fn(async (method: string) => {
             if (method === "thread/start") {
               return threadStartResult();
@@ -2052,6 +2119,7 @@ describe("runCodexAppServerAttempt", () => {
       prependSystemContext: "pre system",
       appendSystemContext: "post system",
       prependContext: "queued context",
+      appendContext: "tail context",
     }));
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
@@ -2091,7 +2159,7 @@ describe("runCodexAppServerAttempt", () => {
       | { input?: Array<{ text?: string; text_elements?: unknown[]; type?: string }> }
       | undefined;
     expect(turnStartParams?.input).toEqual([
-      { type: "text", text: "queued context\n\nhello", text_elements: [] },
+      { type: "text", text: "queued context\n\nhello\n\ntail context", text_elements: [] },
     ]);
   });
 
@@ -2099,8 +2167,22 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage(
+        "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
+        Date.now(),
+      ),
+    );
     sessionManager.appendMessage(userMessage("we are fixing the Opik default project", Date.now()));
     sessionManager.appendMessage(assistantMessage("Opik default project context", Date.now() + 1));
+    for (let index = 0; index < 8; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `continuity filler ${index}: ${"x".repeat(4_000)}`,
+          Date.now() + 2 + index,
+        ),
+      );
+    }
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.prompt = "make the default webpage openclaw";
@@ -2119,10 +2201,55 @@ describe("runCodexAppServerAttempt", () => {
       "";
 
     expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("older next-step anchor: keep the handoff checklist");
     expect(inputText).toContain("we are fixing the Opik default project");
     expect(inputText).toContain("Opik default project context");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("make the default webpage openclaw");
+  });
+
+  it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(
+      userMessage(
+        "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
+        Date.now(),
+      ),
+    );
+    for (let index = 0; index < 12; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `continuity block ${index}: ${"x".repeat(128_000)}`,
+          Date.now() + 1 + index,
+        ),
+      );
+    }
+    sessionManager.appendMessage(
+      assistantMessage("recent continuity anchor: resume the database migration", Date.now() + 20),
+    );
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextTokenBudget = 300_000;
+    params.prompt = `current prompt survives ${"p".repeat(80_000)}`;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const turnStart = harness.requests.find((request) => request.method === "turn/start");
+    const inputText =
+      (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
+      "";
+
+    expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("recent continuity anchor: resume the database migration");
+    expect(inputText).toContain("Current user request:");
+    expect(inputText).toContain("current prompt survives");
+    expect(inputText).not.toContain("older next-step anchor: keep the handoff checklist");
   });
 
   it("keeps thread-start developer instructions stable when adding fresh-thread continuity", async () => {
@@ -3864,6 +3991,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3965,6 +4093,7 @@ describe("runCodexAppServerAttempt", () => {
       key: buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4067,6 +4196,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -4169,6 +4299,7 @@ describe("runCodexAppServerAttempt", () => {
         agentDir,
         authProfileId,
         accountId: "account-work",
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4312,6 +4443,7 @@ describe("runCodexAppServerAttempt", () => {
           startOptions: appServer.start,
           baseEnv: { CODEX_API_KEY: "old-codex-env-key" },
         }),
+        runtimeIdentity: getMockRuntimeIdentity(),
       }),
       request: async () => ({
         data: [
@@ -4503,6 +4635,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: () => () => undefined,
@@ -4548,6 +4681,7 @@ describe("runCodexAppServerAttempt", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: () => () => undefined,
@@ -4714,11 +4848,28 @@ describe("runCodexAppServerAttempt", () => {
     }
     const sessionManager = SessionManager.open(sessionFile);
     sessionManager.appendMessage(
-      userMessage("post-binding user context", bindingUpdatedAt + 1_000),
+      userMessage(
+        "pre-binding native-owned context: keep the original plan",
+        bindingUpdatedAt - 2_000,
+      ),
+    );
+    sessionManager.appendMessage(
+      userMessage(
+        "post-binding user context: resume the release checklist",
+        bindingUpdatedAt + 1_000,
+      ),
     );
     sessionManager.appendMessage(
       assistantMessage("post-binding assistant context", bindingUpdatedAt + 2_000),
     );
+    for (let index = 0; index < 8; index += 1) {
+      sessionManager.appendMessage(
+        assistantMessage(
+          `post-binding continuity filler ${index}: ${"x".repeat(4_000)}`,
+          bindingUpdatedAt + 3_000 + index,
+        ),
+      );
+    }
     await fs.writeFile(
       path.join(path.dirname(sessionFile), "sessions.json"),
       JSON.stringify({
@@ -4762,7 +4913,8 @@ describe("runCodexAppServerAttempt", () => {
     const inputText =
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
       "";
-    expect(inputText).toContain("post-binding user context");
+    expect(inputText).toContain("pre-binding native-owned context: keep the original plan");
+    expect(inputText).toContain("post-binding user context: resume the release checklist");
     expect(inputText).toContain("post-binding assistant context");
     const savedBinding = await readCodexAppServerBinding(sessionFile);
     expect(savedBinding?.threadId).toBe("thread-1");
@@ -4850,6 +5002,7 @@ describe("runCodexAppServerAttempt", () => {
       const methods: string[] = [];
       requests.push(methods);
       return {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           methods.push(method);
           if (method === "thread/resume" && startIndex === 0) {
@@ -4902,6 +5055,7 @@ describe("runCodexAppServerAttempt", () => {
       const methods: string[] = [];
       requests.push(methods);
       return {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           methods.push(method);
           if (method === "thread/resume" && startIndex < 2) {
@@ -4949,6 +5103,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new CodexAppServerRpcError(
@@ -4982,6 +5137,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             return await new Promise<never>(() => {});
@@ -5015,6 +5171,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new Error("write EPIPE");
@@ -5045,6 +5202,7 @@ describe("runCodexAppServerAttempt", () => {
     let failedClient: unknown;
     setCodexAppServerClientFactoryForTest(async () => {
       const c = {
+        ...mockClientRuntimeMethods(),
         request: vi.fn(async (method: string) => {
           if (method === "thread/start") {
             throw new CodexAppServerRpcError(
@@ -5459,6 +5617,50 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeRequestParams?.approvalsReviewer).toBe("guardian_subagent");
   });
 
+  it.each([
+    { name: "fast on", fastMode: true, expectedServiceTier: "priority" },
+    {
+      name: "fast off",
+      fastMode: false,
+      configuredServiceTier: "priority",
+      expectedServiceTier: null,
+    },
+    {
+      name: "fast auto active",
+      fastMode: () => true,
+      expectedServiceTier: "priority",
+    },
+  ] satisfies Array<{
+    name: string;
+    fastMode: EmbeddedRunAttemptParams["fastMode"];
+    configuredServiceTier?: "priority";
+    expectedServiceTier?: "priority" | null;
+  }>)(
+    "maps $name to app-server resume and turn service tier",
+    async ({ fastMode, configuredServiceTier, expectedServiceTier }) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      await writeExistingBinding(sessionFile, workspaceDir, { model: "gpt-5.2" });
+      const { requests, waitForMethod, completeTurn } = createResumeHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.fastMode = fastMode;
+
+      const options = configuredServiceTier
+        ? { pluginConfig: { appServer: { serviceTier: configuredServiceTier } } }
+        : {};
+      const run = runCodexAppServerAttempt(params, options);
+      await waitForMethod("turn/start");
+      await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+      await run;
+
+      for (const method of ["thread/resume", "turn/start"]) {
+        const request = requests.find((entry) => entry.method === method);
+        const requestParams = request?.params as Record<string, unknown> | undefined;
+        expect(requestParams?.serviceTier).toBe(expectedServiceTier);
+      }
+    },
+  );
+
   it("reuses the bound auth profile for app-server startup when params omit it", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -5503,5 +5705,315 @@ describe("runCodexAppServerAttempt", () => {
     expect(seenAuthProfileIds).toEqual(["openai:bound"]);
     expect(seenAgentDirs).toEqual([path.join(tempDir, "agent")]);
     expect(requests.map((entry) => entry.method)).toContain("turn/start");
+  });
+
+  it("announces Codex app-server fast auto progress after the crossing tool result", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const onToolResult = vi.fn();
+    const onAgentEvent = vi.fn();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.verboseLevel = "full";
+    params.fastModeAuto = true;
+    params.fastModeStartedAtMs = 1_000;
+    params.fastModeAutoOnSeconds = 30;
+    params.onToolResult = onToolResult;
+    params.onAgentEvent = onAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const notifyCommand = async (id: string, output: string, nowMs: number) => {
+      await harness.notify({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `echo ${id}`,
+            cwd: workspaceDir,
+            status: "inProgress",
+          },
+        },
+      });
+      now.mockReturnValue(nowMs);
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "commandExecution",
+            id,
+            command: `echo ${id}`,
+            cwd: workspaceDir,
+            status: "completed",
+            aggregatedOutput: output,
+            exitCode: 0,
+            durationMs: 1,
+          },
+        },
+      });
+    };
+
+    await notifyCommand("tool-before", "before", 20_000);
+    await notifyCommand("tool-crossing", "crossing", 35_500);
+    await notifyCommand("tool-after", "after", 42_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const payloads = onToolResult.mock.calls.map(([payload]) => payload) as Array<{
+      channelData?: Record<string, unknown>;
+      text?: string;
+    }>;
+    const texts = payloads.map((payload) => payload.text ?? "");
+    expect(texts.filter((text) => text.startsWith("💨Fast: auto-off"))).toEqual([
+      "💨Fast: auto-off(34s>=30s)",
+    ]);
+    expect(texts.filter((text) => text === "💨Fast: auto-on")).toHaveLength(1);
+    const offIndex = texts.indexOf("💨Fast: auto-off(34s>=30s)");
+    const onIndex = texts.indexOf("💨Fast: auto-on");
+    expect(offIndex).toBeGreaterThan(0);
+    expect(onIndex).toBeGreaterThan(offIndex + 1);
+    expect(texts.slice(offIndex + 1, onIndex).some((text) => !text.startsWith("💨Fast:"))).toBe(
+      true,
+    );
+    expect(payloads[offIndex]?.channelData).toEqual({
+      openclawProgressKind: "fast-mode-auto",
+    });
+    expect(payloads[onIndex]?.channelData).toEqual({
+      openclawProgressKind: "fast-mode-auto",
+    });
+    const fastEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "item" && event.data?.title === "Fast");
+    expect(fastEvents.map((event) => event.data?.summary)).toEqual([
+      "💨Fast: auto-off(34s>=30s)",
+      "💨Fast: auto-on",
+    ]);
+  });
+
+  it("does not announce Codex fast auto progress for explicit fast mode", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const onToolResult = vi.fn();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.fastModeAuto = false;
+    params.fastModeStartedAtMs = 1_000;
+    params.fastModeAutoOnSeconds = 30;
+    params.onToolResult = onToolResult;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    now.mockReturnValue(35_500);
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "function_call_output",
+          id: "call-raw-output",
+          call_id: "call-raw-output",
+          output: "tool output",
+        },
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
+    expect(texts.filter((text) => text.startsWith("💨Fast:"))).toEqual([]);
+  });
+
+  it("announces Codex app-server fast auto progress for snapshot-only tool results", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const onToolResult = vi.fn();
+    const onAgentEvent = vi.fn();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.verboseLevel = "full";
+    params.fastModeAuto = true;
+    params.fastModeStartedAtMs = 1_000;
+    params.fastModeAutoOnSeconds = 30;
+    params.onToolResult = onToolResult;
+    params.onAgentEvent = onAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    now.mockReturnValue(35_500);
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "commandExecution",
+              id: "tool-crossing",
+              command: "echo crossing",
+              commandActions: [],
+              cwd: workspaceDir,
+              processId: null,
+              source: "agent",
+              status: "completed",
+              aggregatedOutput: "crossing",
+              exitCode: 0,
+              durationMs: 1,
+            },
+          ],
+        },
+      },
+    });
+    await run;
+
+    const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
+    expect(texts.filter((text) => text.startsWith("💨Fast: auto-off"))).toEqual([
+      "💨Fast: auto-off(34s>=30s)",
+    ]);
+    expect(texts.filter((text) => text === "💨Fast: auto-on")).toHaveLength(1);
+    const fastEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "item" && event.data?.title === "Fast");
+    expect(fastEvents.map((event) => event.data?.summary)).toEqual([
+      "💨Fast: auto-off(34s>=30s)",
+      "💨Fast: auto-on",
+    ]);
+  });
+
+  it("announces Codex app-server fast auto progress for raw function call outputs", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const onToolResult = vi.fn();
+    const onAgentEvent = vi.fn();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.verboseLevel = "full";
+    params.fastModeAuto = true;
+    params.fastModeStartedAtMs = 1_000;
+    params.fastModeAutoOnSeconds = 30;
+    params.onToolResult = onToolResult;
+    params.onAgentEvent = onAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    now.mockReturnValue(35_500);
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "function_call_output",
+          id: "call-raw-output",
+          call_id: "call-raw-output",
+          output: "tool output",
+        },
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
+    expect(texts.filter((text) => text.startsWith("💨Fast: auto-off"))).toEqual([
+      "💨Fast: auto-off(34s>=30s)",
+    ]);
+    expect(texts.filter((text) => text === "💨Fast: auto-on")).toHaveLength(1);
+    const fastEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "item" && event.data?.title === "Fast");
+    expect(fastEvents.map((event) => event.data?.summary)).toEqual([
+      "💨Fast: auto-off(34s>=30s)",
+      "💨Fast: auto-on",
+    ]);
+  });
+
+  it("does not duplicate Codex app-server fast auto progress already announced by the outer runner", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const onToolResult = vi.fn();
+    const onAgentEvent = vi.fn();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.verboseLevel = "full";
+    params.fastModeAuto = true;
+    params.fastModeStartedAtMs = 1_000;
+    params.fastModeAutoOnSeconds = 30;
+    params.fastModeAutoProgressState = {
+      offAnnounced: true,
+      resetAnnounced: false,
+    };
+    params.onToolResult = onToolResult;
+    params.onAgentEvent = onAgentEvent;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "tool-1",
+          command: "echo tool-1",
+          cwd: workspaceDir,
+          status: "inProgress",
+        },
+      },
+    });
+    now.mockReturnValue(35_500);
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "commandExecution",
+          id: "tool-1",
+          command: "echo tool-1",
+          cwd: workspaceDir,
+          status: "completed",
+          aggregatedOutput: "tool output",
+          exitCode: 0,
+          durationMs: 1,
+        },
+      },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const texts = onToolResult.mock.calls.map(([payload]) => payload.text ?? "");
+    expect(texts.filter((text) => text.startsWith("💨Fast: auto-off"))).toEqual([]);
+    expect(texts.filter((text) => text === "💨Fast: auto-on")).toHaveLength(1);
+    expect(params.fastModeAutoProgressState).toEqual({
+      offAnnounced: true,
+      resetAnnounced: true,
+    });
+    const fastEvents = onAgentEvent.mock.calls
+      .map(([event]) => event)
+      .filter((event) => event.stream === "item" && event.data?.title === "Fast");
+    expect(fastEvents.map((event) => event.data?.summary)).toEqual(["💨Fast: auto-on"]);
   });
 });

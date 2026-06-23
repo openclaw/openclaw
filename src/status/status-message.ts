@@ -1,6 +1,7 @@
 // Status message helpers read and format stored status messages.
 import fs from "node:fs";
 import {
+  type FastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -8,6 +9,7 @@ import {
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveExtraParams } from "../agents/embedded-agent-runner/extra-params.js";
+import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
   areRuntimeModelRefsEquivalent,
@@ -33,17 +35,19 @@ import type {
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
+  resolveFreshSessionTotalTokens,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
-  resolveFreshSessionTotalTokens,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -52,24 +56,22 @@ import {
 } from "../media-understanding/runner.entries.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
 import {
   estimateUsageCost,
-  formatTokenCount as formatTokenCountShared,
+  formatTokenCount,
   formatUsd,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-import { formatFastModeLabel } from "./status-labels.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
   model?: AgentDefaults["model"] | string;
 };
-
-export const formatTokenCount = formatTokenCountShared;
 
 type QueueStatus = {
   mode?: string;
@@ -94,7 +96,7 @@ export type StatusArgs = {
   sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
-  resolvedFast?: boolean;
+  resolvedFast?: FastMode;
   resolvedHarness?: string;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
@@ -109,6 +111,7 @@ export type StatusArgs = {
   subagentsLine?: string;
   taskLine?: string;
   pluginHealthLine?: string;
+  channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
   now?: number;
 };
@@ -322,8 +325,10 @@ const readUsageFromSessionLog = (
     const snapshot = readRecentSessionUsageFromTranscript(
       {
         agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
-        sessionFile: sessionEntry?.sessionFile,
+        sessionEntry,
+        sessionFile: logPath,
         sessionId,
+        sessionKey,
         storePath,
       },
       256 * 1024,
@@ -511,6 +516,11 @@ function resolveChannelModelNote(params: {
     groupChannel: params.entry.groupChannel,
     groupSubject: params.entry.subject,
     parentSessionKey: params.parentSessionKey,
+    directUserIds: [
+      params.entry.origin?.nativeDirectUserId,
+      params.entry.origin?.from,
+      params.entry.origin?.to,
+    ],
   });
   if (!channelOverride) {
     return undefined;
@@ -878,6 +888,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   const verboseLevel =
     args.resolvedVerbose ?? args.sessionEntry?.verboseLevel ?? args.agent?.verboseDefault ?? "off";
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
+  const fastModeState = resolveFastModeState({
+    cfg: args.config,
+    provider: activeProvider,
+    model: activeModel,
+    agentId: args.agentId,
+    sessionEntry: args.sessionEntry,
+  });
   const reasoningLevel =
     args.resolvedReasoning ??
     args.sessionEntry?.reasoningLevel ??
@@ -898,8 +915,18 @@ export function buildStatusMessage(args: StatusArgs): string {
   });
 
   const updatedAt = entry?.updatedAt;
+  const sessionStartedAt = resolveSessionLifecycleTimestamps({
+    entry,
+    agentId: args.agentId,
+    storePath: args.sessionStorePath,
+  }).sessionStartedAt;
+  const sessionDuration =
+    typeof sessionStartedAt === "number"
+      ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
+      : undefined;
   const sessionLine = [
     `Session: ${args.sessionKey ?? "unknown"}`,
+    sessionDuration ? `duration ${sessionDuration}` : null,
     typeof updatedAt === "number" ? `updated ${formatTimeAgo(now - updatedAt)}` : "no activity",
   ]
     .filter(Boolean)
@@ -956,7 +983,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Execution: ${execution.label}`,
     `Runtime: ${agentRuntimeLabel}`,
     `Think: ${thinkLevel}`,
-    formatFastModeLabel(fastMode),
+    `Fast: ${formatFastModeStatusValue({
+      mode: fastMode,
+      fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+    })}`,
     textVerbosity ? `Text: ${textVerbosity}` : null,
     verboseLabel,
     traceLabel,
@@ -1040,16 +1070,12 @@ export function buildStatusMessage(args: StatusArgs): string {
     !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredDefaultModelLabel, {
       config: args.config,
     });
-  const modelLines = configDefaultDiffersFromSession
-    ? [
-        `🧠 Configured default: ${configuredDefaultModelLabel}`,
-        `📌 Session selected: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`,
-        "⚠️ Reason: session override",
-        `⚠️ This session is pinned to ${selectedModelLabel}; config primary ${configuredDefaultModelLabel} will apply to new/unpinned sessions.`,
-        "↩️ Clear with: /model default",
-        "📖 Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
-      ]
-    : [`🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}`];
+  const overrideLabel = configDefaultDiffersFromSession
+    ? ` · pinned session; config primary ${configuredDefaultModelLabel} · clear /model default`
+    : "";
+  const modelLines = [
+    `🧠 Model: ${selectedModelLabel}${selectedAuthLabel}${modelNote}${overrideLabel}`,
+  ];
 
   // Show configured fallback models (from agent model config)
   const configuredFallbacks = (() => {
@@ -1094,6 +1120,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `🧵 ${sessionLine}`,
     args.subagentsLine,
     args.taskLine,
+    args.channelFeatureLine,
     `⚙️ ${optionsLine}`,
     args.pluginHealthLine,
     pluginStatusLine ? `🧩 ${pluginStatusLine}` : null,

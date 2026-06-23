@@ -291,10 +291,11 @@ describe("fetchWithSlackAuth", () => {
 
   it("strips Authorization header on cross-origin redirects", async () => {
     // First call: redirect response from Slack
-    const redirectResponse = new Response(null, {
+    const redirectResponse = new Response("redirect body", {
       status: 302,
       headers: { location: "https://cdn.slack-edge.com/presigned-url?sig=abc123" },
     });
+    const cancel = vi.spyOn(redirectResponse.body!, "cancel").mockResolvedValue(undefined);
 
     // Second call: actual file content from CDN
     const fileResponse = new Response(Buffer.from("actual image data"), {
@@ -321,13 +322,15 @@ describe("fetchWithSlackAuth", () => {
       "https://cdn.slack-edge.com/presigned-url?sig=abc123",
       { redirect: "follow" },
     );
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("preserves Authorization header on same-origin redirects", async () => {
-    const redirectResponse = new Response(null, {
+    const redirectResponse = new Response("redirect body", {
       status: 302,
       headers: { location: "/files/redirect-target" },
     });
+    const cancel = vi.spyOn(redirectResponse.body!, "cancel").mockResolvedValue(undefined);
 
     const fileResponse = new Response(Buffer.from("image data"), {
       status: 200,
@@ -342,6 +345,7 @@ describe("fetchWithSlackAuth", () => {
       headers: { Authorization: "Bearer xoxb-test-token" },
       redirect: "follow",
     });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("returns redirect response when no location header is provided", async () => {

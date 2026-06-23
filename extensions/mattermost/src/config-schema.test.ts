@@ -30,6 +30,21 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it('rejects dmPolicy="open" without wildcard allowFrom', () => {
+    const result = MattermostConfigSchema.safeParse({
+      dmPolicy: "open",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts dmPolicy="open" with wildcard allowFrom', () => {
+    const result = MattermostConfigSchema.safeParse({
+      dmPolicy: "open",
+      allowFrom: ["*"],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts documented streaming modes and progress config", () => {
     const result = MattermostConfigSchema.safeParse({
       streaming: {

@@ -222,22 +222,6 @@ function normalizeAttachment(
   return { label, mime, base64 };
 }
 
-function validateAttachmentBase64OrThrow(
-  normalized: NormalizedAttachment,
-  opts: { maxBytes: number },
-): number {
-  if (!isValidBase64(normalized.base64)) {
-    throw new Error(`attachment ${normalized.label}: invalid base64 content`);
-  }
-  const sizeBytes = estimateBase64DecodedBytes(normalized.base64);
-  if (sizeBytes <= 0 || sizeBytes > opts.maxBytes) {
-    throw new Error(
-      `attachment ${normalized.label}: exceeds size limit (${sizeBytes} > ${opts.maxBytes} bytes)`,
-    );
-  }
-  return sizeBytes;
-}
-
 export async function parseMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,
@@ -429,62 +413,4 @@ export async function parseMessageWithAttachments(
     imageOrder,
     offloadedRefs,
   };
-}
-
-export async function resolveChatAttachmentLooksLikeImage(
-  attachment: ChatAttachment,
-  index = 0,
-): Promise<boolean> {
-  const normalized = normalizeAttachment(attachment, index, {
-    stripDataUrlPrefix: true,
-    requireImageMime: false,
-  });
-  if (!isValidBase64(normalized.base64)) {
-    throw new Error(`attachment ${normalized.label}: invalid base64 content`);
-  }
-  const providedMime = normalizeMime(normalized.mime);
-  const sniffedMime = normalizeMime(await sniffMimeFromBase64(normalized.base64));
-  const labelMime = normalizeMime(mimeTypeFromFilePath(normalized.label));
-  return isImageMime(resolveAttachmentMime({ sniffedMime, providedMime, labelMime }));
-}
-
-/**
- * @deprecated Use parseMessageWithAttachments instead.
- * This function converts images to markdown data URLs which Claude API cannot process as images.
- */
-export function buildMessageWithAttachments(
-  message: string,
-  attachments: ChatAttachment[] | undefined,
-  opts?: { maxBytes?: number },
-): string {
-  const maxBytes = opts?.maxBytes ?? 2_000_000;
-
-  if (!attachments || attachments.length === 0) {
-    return message;
-  }
-
-  const blocks: string[] = [];
-
-  for (const [idx, att] of attachments.entries()) {
-    if (!att) {
-      continue;
-    }
-
-    const normalized = normalizeAttachment(att, idx, {
-      stripDataUrlPrefix: false,
-      requireImageMime: true,
-    });
-    validateAttachmentBase64OrThrow(normalized, { maxBytes });
-
-    const { base64, label, mime } = normalized;
-    const safeLabel = label.replace(/\s+/g, "_");
-    blocks.push(`![${safeLabel}](data:${mime};base64,${base64})`);
-  }
-
-  if (blocks.length === 0) {
-    return message;
-  }
-
-  const separator = message.trim().length > 0 ? "\n\n" : "";
-  return `${message}${separator}${blocks.join("\n\n")}`;
 }

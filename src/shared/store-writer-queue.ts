@@ -19,7 +19,7 @@ export type StoreWriterQueue = {
 };
 
 /** Store writer queues keyed by the canonical store path. */
-export type StoreWriterQueues = Map<string, StoreWriterQueue>;
+type StoreWriterQueues = Map<string, StoreWriterQueue>;
 
 function getOrCreateStoreWriterQueue(
   queues: StoreWriterQueues,

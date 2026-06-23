@@ -161,7 +161,7 @@ describe("OpenClaw-owned tool runtime contract — Codex app-server adapter", ()
       expectRecordFields(eventRecord, {
         toolName: "exec",
         toolCallId: "call-middleware",
-        args: { command: "status" },
+        args: mergedParams,
       });
       expectRecordFields(requireRecord(eventRecord.result, "tool_result middleware result"), {
         content: [{ type: "text", text: "raw output" }],

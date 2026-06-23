@@ -69,4 +69,16 @@ vi.mock("../../channels/plugins/session-conversation.js", () => ({
       threadId: match.groups.threadId,
     };
   },
+  resolveSessionThreadInfo: (sessionKey: string | undefined | null) => {
+    const trimmed = sessionKey?.trim();
+    const topicMarker = ":topic:";
+    const topicIndex = trimmed?.lastIndexOf(topicMarker) ?? -1;
+    if (!trimmed || topicIndex < 0) {
+      return { baseSessionKey: trimmed, threadId: undefined };
+    }
+    return {
+      baseSessionKey: trimmed.slice(0, topicIndex),
+      threadId: trimmed.slice(topicIndex + topicMarker.length) || undefined,
+    };
+  },
 }));

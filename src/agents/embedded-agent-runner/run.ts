@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { getRuntimeConfigSnapshot } from "../../config/config.js";
@@ -22,6 +22,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   claimAgentRunContext,
+  emitAgentItemEvent,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   registerAgentRunContext,
@@ -29,7 +30,7 @@ import {
 } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
@@ -89,6 +90,12 @@ import {
   FailoverError,
   resolveFailoverStatus,
 } from "../failover-error.js";
+import {
+  DEFAULT_FAST_MODE_AUTO_ON_SECONDS,
+  type FastModeAutoProgressState,
+  formatFastModeAutoProgressText,
+  resolveFastModeForElapsed,
+} from "../fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
@@ -118,6 +125,10 @@ import {
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { hasOnlyAssistantReasoningContent } from "../replay-turn-classification.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
+import {
+  applyAgentRunSessionTargetIdentity,
+  resolveAgentRunSessionTarget,
+} from "../run-session-target.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -220,6 +231,7 @@ import {
   resolveHookModelSelection,
 } from "./run/setup.js";
 import { mergeAttemptToolMediaPayloads } from "./run/tool-media-payloads.js";
+import type { EmbeddedRunFastModeParam } from "./run/types.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -237,6 +249,7 @@ type ApiKeyInfo = ResolvedProviderAuth;
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
+const EMBEDDED_RUN_LANE_HEARTBEAT_MS = EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS / 2;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
@@ -246,6 +259,7 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -608,20 +622,28 @@ export function runEmbeddedAgent(
 async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  let params = paramsInput;
-  let lifecycleGeneration = params.lifecycleGeneration!;
+  const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
-    config: params.config,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    config: paramsBase.config,
+    sessionId: paramsBase.sessionId,
+    sessionKey: paramsBase.sessionKey,
+    agentId: paramsBase.agentId,
   });
-  if (effectiveSessionKey !== params.sessionKey) {
-    params = { ...params, sessionKey: effectiveSessionKey };
-  }
+  const runSessionTarget = await resolveAgentRunSessionTarget({
+    ...paramsBase,
+    sessionKey: effectiveSessionKey,
+  });
+  let params: RunEmbeddedAgentParamsWithSessionFile = {
+    ...paramsBase,
+    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    sessionId: runSessionTarget.sessionId,
+    sessionKey: effectiveSessionKey ?? runSessionTarget.sessionKey,
+    sessionFile: runSessionTarget.sessionFile,
+  };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
@@ -637,6 +659,8 @@ async function runEmbeddedAgentInternal(
   };
   const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  const laneTaskAbortController = new AbortController();
+  const laneTaskReleaseController = new AbortController();
   let laneTaskProgressAtMs = Date.now();
   const noteLaneTaskProgress = () => {
     laneTaskProgressAtMs = Date.now();
@@ -661,6 +685,9 @@ async function runEmbeddedAgentInternal(
       {
         ...opts,
         taskTimeoutProgressAtMs: () => laneTaskProgressAtMs,
+        taskTimeoutAbortSignal: laneTaskAbortController.signal,
+        taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+        taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
       },
       laneTaskTimeoutMs,
     );
@@ -766,6 +793,14 @@ async function runEmbeddedAgentInternal(
     return enqueueGlobal(async () => {
       throwIfAborted();
       const started = Date.now();
+      const fastModeStarted = params.fastModeStartedAtMs ?? started;
+      const fastModeAutoOnSeconds =
+        params.fastModeAutoOnSeconds ?? DEFAULT_FAST_MODE_AUTO_ON_SECONDS;
+      const fastModeAutoProgressState: FastModeAutoProgressState =
+        params.fastModeAutoProgressState ?? {
+          offAnnounced: false,
+          resetAnnounced: false,
+        };
       const startupStages = createEmbeddedRunStageTracker();
       let startupStagesEmitted = false;
       const notifyExecutionPhase = (
@@ -783,6 +818,114 @@ async function runEmbeddedAgentInternal(
       ) => {
         noteLaneTaskProgress();
         params.onRunProgress?.(info);
+      };
+      const emitFastModeAutoProgress = async (payload: {
+        enabled: boolean;
+        elapsedSeconds: number;
+        fastAutoOnSeconds?: number;
+      }) => {
+        const summary = formatFastModeAutoProgressText(payload);
+        try {
+          emitAgentItemEvent({
+            runId: params.runId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            data: {
+              itemId: `fast-mode-auto:${payload.enabled ? "on" : "off"}`,
+              kind: "status",
+              title: "Fast",
+              phase: "update",
+              status: "running",
+              summary,
+            },
+          });
+        } catch (error) {
+          log.debug(
+            `embedded run fast mode auto global event failed: ${formatErrorMessage(error)}`,
+          );
+        }
+        try {
+          await params.onAgentEvent?.({
+            stream: "item",
+            data: {
+              kind: "status",
+              title: "Fast",
+              phase: "update",
+              summary,
+            },
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          });
+        } catch (error) {
+          log.debug(`embedded run fast mode auto event failed: ${formatErrorMessage(error)}`);
+        }
+        try {
+          await params.onToolResult?.({
+            text: summary,
+            channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
+          });
+        } catch (error) {
+          log.debug(`embedded run fast mode auto progress failed: ${formatErrorMessage(error)}`);
+        }
+      };
+      const maybeAnnounceFastModeAutoOff = async () => {
+        if (params.fastMode !== "auto" || fastModeAutoProgressState.offAnnounced) {
+          return;
+        }
+        const next = resolveFastModeForElapsed({
+          mode: "auto",
+          startedAtMs: fastModeStarted,
+          fastAutoOnSeconds: fastModeAutoOnSeconds,
+        });
+        if (next.enabled) {
+          return;
+        }
+        fastModeAutoProgressState.offAnnounced = true;
+        await emitFastModeAutoProgress(next);
+      };
+      const notifyToolResult = async (payload: ReplyPayload) => {
+        await params.onToolResult?.(payload);
+      };
+      const notifyAgentEvent = async (
+        event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
+      ) => {
+        await params.onAgentEvent?.(event);
+      };
+      const resolveAttemptFastMode = (): boolean | undefined => {
+        const resolved = resolveFastModeForElapsed({
+          mode: params.fastMode,
+          startedAtMs: fastModeStarted,
+          fastAutoOnSeconds: fastModeAutoOnSeconds,
+        });
+        return resolved.mode === undefined ? undefined : resolved.enabled;
+      };
+      const resolveAttemptFastModeParam = (): EmbeddedRunFastModeParam | undefined => {
+        if (params.fastMode === "auto") {
+          return resolveAttemptFastMode;
+        }
+        return resolveAttemptFastMode();
+      };
+      const maybeEmitFastModeAutoReset = async () => {
+        if (
+          params.fastMode !== "auto" ||
+          !fastModeAutoProgressState.offAnnounced ||
+          fastModeAutoProgressState.resetAnnounced
+        ) {
+          return;
+        }
+        fastModeAutoProgressState.resetAnnounced = true;
+        await emitFastModeAutoProgress({
+          enabled: true,
+          elapsedSeconds: 0,
+          fastAutoOnSeconds: fastModeAutoOnSeconds,
+        });
+      };
+      const maybeEmitFastModeAutoResetBestEffort = async () => {
+        try {
+          await maybeEmitFastModeAutoReset();
+        } catch (error) {
+          log.warn(
+            `embedded run fast mode auto reset progress failed: ${formatErrorMessage(error)}`,
+          );
+        }
       };
       const emitStartupStageSummary = (phase: string) => {
         const summary = startupStages.snapshot();
@@ -1480,6 +1623,7 @@ async function runEmbeddedAgentInternal(
         const verdict = postCompactionGuard.observe(observation);
         if (verdict.shouldAbort) {
           postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+          laneTaskAbortController.abort(postCompactionAbortError);
           postCompactionAbortController?.abort(postCompactionAbortError);
         }
       };
@@ -1802,6 +1946,7 @@ async function runEmbeddedAgentInternal(
             apiKeyInfo,
             runtimeAuthState,
           });
+          const attemptFastMode = resolveAttemptFastModeParam();
           if (!startupStagesEmitted) {
             startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
           }
@@ -1831,7 +1976,7 @@ async function runEmbeddedAgentInternal(
             thinkingLevel: thinkLevel,
             extraParamsOverride: {
               ...params.streamParams,
-              fastMode: params.fastMode,
+              fastMode: attemptFastMode,
             },
           });
           if (!startupStagesEmitted) {
@@ -1846,6 +1991,7 @@ async function runEmbeddedAgentInternal(
           postCompactionAbortController = attemptAbortController;
           const parentAbortSignal = params.abortSignal;
           const relayParentAbort = (): void => {
+            laneTaskAbortController.abort(parentAbortSignal?.reason);
             attemptAbortController.abort(parentAbortSignal?.reason);
           };
           if (parentAbortSignal?.aborted) {
@@ -1853,6 +1999,48 @@ async function runEmbeddedAgentInternal(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+          // Native attempts start the heartbeat only after their own timeout
+          // watchdog is armed, keeping preflight inside the requested deadline.
+          let progressInterval: ReturnType<typeof setInterval> | undefined;
+          const stopLaneProgressHeartbeat = () => {
+            if (progressInterval) {
+              clearInterval(progressInterval);
+              progressInterval = undefined;
+            }
+            attemptAbortController.signal.removeEventListener("abort", stopLaneProgressHeartbeat);
+          };
+          const startLaneProgressHeartbeat = () => {
+            if (progressInterval || attemptAbortController.signal.aborted) {
+              return;
+            }
+            progressInterval = setInterval(
+              () => noteLaneTaskProgress(),
+              EMBEDDED_RUN_LANE_HEARTBEAT_MS,
+            );
+            progressInterval.unref?.();
+            attemptAbortController.signal.addEventListener("abort", stopLaneProgressHeartbeat, {
+              once: true,
+            });
+          };
+          // Timeout recovery can continue after an attempt returns, but a native
+          // transport that ignores its timeout releases the lane after one grace.
+          let timeoutReleaseTimer: ReturnType<typeof setTimeout> | undefined;
+          const clearAttemptTimeoutRelease = () => {
+            if (timeoutReleaseTimer) {
+              clearTimeout(timeoutReleaseTimer);
+              timeoutReleaseTimer = undefined;
+            }
+          };
+          const armAttemptTimeoutRelease = (reason: Error) => {
+            if (timeoutReleaseTimer) {
+              return;
+            }
+            timeoutReleaseTimer = setTimeout(
+              () => laneTaskReleaseController.abort(reason),
+              EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+            );
+            timeoutReleaseTimer.unref?.();
+          };
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -1876,7 +2064,10 @@ async function runEmbeddedAgentInternal(
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
+            approvalReviewerDeviceId: params.approvalReviewerDeviceId,
             currentChannelId: params.currentChannelId,
+            chatId: params.chatId,
+            channelContext: params.channelContext,
             currentMessagingTarget: params.currentMessagingTarget,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
@@ -1943,8 +2134,17 @@ async function runEmbeddedAgentInternal(
             thinkLevel,
             onToolOutcome: observeToolOutcome,
             allocateToolOutcomeOrdinal,
+            onToolStreamBoundary: maybeAnnounceFastModeAutoOff,
             onRunProgress: notifyRunProgress,
-            fastMode: params.fastMode,
+            fastMode: attemptFastMode,
+            fastModeAuto: params.fastMode === "auto",
+            ...(params.fastMode === "auto"
+              ? {
+                  fastModeStartedAtMs: fastModeStarted,
+                  fastModeAutoOnSeconds,
+                  fastModeAutoProgressState,
+                }
+              : {}),
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
@@ -1956,6 +2156,16 @@ async function runEmbeddedAgentInternal(
             runId: params.runId,
             lifecycleGeneration,
             abortSignal: attemptAbortController.signal,
+            onAttemptTimeoutArmed: pluginHarnessOwnsTransport
+              ? undefined
+              : startLaneProgressHeartbeat,
+            onAttemptTimeout: pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
+            onAttemptAbort: pluginHarnessOwnsTransport
+              ? undefined
+              : () => {
+                  stopLaneProgressHeartbeat();
+                  laneTaskAbortController.abort();
+                },
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -1967,9 +2177,9 @@ async function runEmbeddedAgentInternal(
             blockReplyChunking: params.blockReplyChunking,
             onReasoningStream: params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
-            onToolResult: params.onToolResult,
+            onToolResult: notifyToolResult,
             onAgentToolResult: params.onAgentToolResult,
-            onAgentEvent: params.onAgentEvent,
+            onAgentEvent: notifyAgentEvent,
             deferTerminalLifecycle:
               params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd,
             deferTerminalLifecycleEnd:
@@ -1984,6 +2194,7 @@ async function runEmbeddedAgentInternal(
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             silentExpected: params.silentExpected,
+            suppressLiveStreamOutput: params.suppressLiveStreamOutput,
             bootstrapContextMode: params.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,
@@ -2011,6 +2222,8 @@ async function runEmbeddedAgentInternal(
               throw postCompactionAbortError ?? err;
             })
             .finally(() => {
+              clearAttemptTimeoutRelease();
+              stopLaneProgressHeartbeat();
               parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
               if (postCompactionAbortController === attemptAbortController) {
                 postCompactionAbortController = undefined;
@@ -2768,7 +2981,7 @@ async function runEmbeddedAgentInternal(
               !hasRecoverableCodexAppServerTimeoutOutcome &&
               !shouldSurfaceCodexCompletionTimeout
             ) {
-              throw toLintErrorObject(promptError, "Prompt failed");
+              throw toErrorObject(promptError, "Prompt failed");
             }
           }
 
@@ -3038,7 +3251,7 @@ async function runEmbeddedAgentInternal(
               });
               logPromptFailoverDecision("surface_error");
             }
-            throw toLintErrorObject(promptError, "Prompt failed");
+            throw toErrorObject(promptError, "Prompt failed");
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
@@ -3931,6 +4144,9 @@ async function runEmbeddedAgentInternal(
           };
         }
       } finally {
+        if (params.isFinalFallbackAttempt !== false) {
+          await maybeEmitFastModeAutoResetBestEffort();
+        }
         forgetPromptBuildDrainCacheForRun(params.runId);
         stopRuntimeAuthRefreshTimer();
         await runAgentCleanupStep({
@@ -3985,18 +4201,4 @@ function resolveAuthProfileStateProvider(
   }
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

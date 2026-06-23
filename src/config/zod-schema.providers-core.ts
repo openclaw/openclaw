@@ -8,6 +8,7 @@ import {
   normalizeSlashCommandName,
   resolveCustomCommands,
 } from "../shared/custom-command-config.js";
+import { hasConfiguredSecretInput } from "./types.secrets.js";
 import { ToolPolicySchema } from "./zod-schema.agent-runtime.js";
 import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
 import {
@@ -954,11 +955,20 @@ export const SlackSocketModeSchema = z
   })
   .strict();
 
+export const SlackRelaySchema = z
+  .object({
+    url: z.string().optional(),
+    authToken: SecretInputSchema.optional().register(sensitive),
+    gatewayId: z.string().optional(),
+  })
+  .strict();
+
 export const SlackAccountSchema = z
   .object({
     name: z.string().optional(),
-    mode: z.enum(["socket", "http"]).optional(),
+    mode: z.enum(["socket", "http", "relay"]).optional(),
     socketMode: SlackSocketModeSchema.optional(),
+    relay: SlackRelaySchema.optional(),
     signingSecret: SecretInputSchema.optional().register(sensitive),
     webhookPath: z.string().optional(),
     capabilities: SlackCapabilitiesSchema.optional(),
@@ -1042,7 +1052,7 @@ export const SlackAccountSchema = z
   });
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
-  mode: z.enum(["socket", "http"]).optional().default("socket"),
+  mode: z.enum(["socket", "http", "relay"]).optional().default("socket"),
   signingSecret: SecretInputSchema.optional().register(sensitive),
   webhookPath: z.string().optional().default("/slack/events"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -1072,8 +1082,38 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       'channels.slack.dmPolicy="allowlist" requires channels.slack.allowFrom (or channels.slack.dm.allowFrom) to contain at least one sender ID',
   });
 
+  const requireRelayConfig = (
+    relay: { url?: unknown; authToken?: unknown; gatewayId?: unknown } | undefined,
+    path: (string | number)[],
+  ) => {
+    if (typeof relay?.url !== "string" || !relay.url.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.mode="relay" requires relay.url',
+        path: [...path, "url"],
+      });
+    }
+    if (!hasConfiguredSecretInput(relay?.authToken)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.mode="relay" requires relay.authToken',
+        path: [...path, "authToken"],
+      });
+    }
+    if (typeof relay?.gatewayId !== "string" || !relay.gatewayId.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.mode="relay" requires relay.gatewayId',
+        path: [...path, "gatewayId"],
+      });
+    }
+  };
+
   const baseMode = value.mode ?? "socket";
   if (!value.accounts) {
+    if (baseMode === "relay") {
+      requireRelayConfig(value.relay, ["relay"]);
+    }
     validateSlackSigningSecretRequirements(value, ctx);
     return;
   }
@@ -1085,6 +1125,10 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
       continue;
     }
     const accountMode = account.mode ?? baseMode;
+    const effectiveRelay = {
+      ...value.relay,
+      ...account.relay,
+    };
     const effectivePolicy =
       account.dmPolicy ?? account.dm?.policy ?? value.dmPolicy ?? value.dm?.policy ?? "pairing";
     const effectiveAllowFrom =
@@ -1106,6 +1150,9 @@ export const SlackConfigSchema = SlackAccountSchema.safeExtend({
         'channels.slack.accounts.*.dmPolicy="allowlist" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to contain at least one sender ID',
     });
     if (accountMode !== "http") {
+      if (accountMode === "relay") {
+        requireRelayConfig(effectiveRelay, ["accounts", accountId, "relay"]);
+      }
       continue;
     }
   }
@@ -1173,14 +1220,11 @@ export const SignalAccountSchemaBase = z
   })
   .strict();
 
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level SignalConfigSchema instead.
-export const SignalAccountSchema = SignalAccountSchemaBase;
-
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   apiMode: z.enum(["auto", "native", "container"]).optional(),
-  accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
+  // Account-level schemas skip allowFrom validation because accounts inherit
+  // allowFrom from the parent channel config at runtime.
+  accounts: z.record(z.string(), SignalAccountSchemaBase.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({
@@ -1453,13 +1497,10 @@ export const IMessageAccountSchemaBase = z
   })
   .strict();
 
-// Account-level schemas skip allowFrom validation because accounts inherit
-// allowFrom from the parent channel config at runtime.
-// Validation is enforced at the top-level IMessageConfigSchema instead.
-export const IMessageAccountSchema = IMessageAccountSchemaBase;
-
 export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
-  accounts: z.record(z.string(), IMessageAccountSchema.optional()).optional(),
+  // Account-level schemas skip allowFrom validation because accounts inherit
+  // allowFrom from the parent channel config at runtime.
+  accounts: z.record(z.string(), IMessageAccountSchemaBase.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
   requireOpenAllowFrom({

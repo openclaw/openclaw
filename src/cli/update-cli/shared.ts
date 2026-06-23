@@ -98,6 +98,7 @@ export { readPackageName, readPackageVersion };
 export async function resolveTargetVersion(
   tag: string,
   timeoutMs?: number,
+  options: { spec?: string; command?: string; cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<string | null> {
   if (!canResolveRegistryVersionForPackageTarget(tag)) {
     return null;
@@ -106,7 +107,14 @@ export async function resolveTargetVersion(
   if (direct) {
     return direct;
   }
-  const res = await fetchNpmTagVersion({ tag, timeoutMs });
+  const res = await fetchNpmTagVersion({
+    tag,
+    timeoutMs,
+    spec: options.spec,
+    command: options.command,
+    cwd: options.cwd,
+    env: options.env,
+  });
   return res.version ?? null;
 }
 

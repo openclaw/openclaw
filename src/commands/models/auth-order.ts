@@ -1,6 +1,5 @@
 /** Commands for viewing and editing per-agent provider auth profile order. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   type AuthProfileStore,
   externalCliDiscoveryForProviderAuth,
@@ -13,19 +12,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
-import { resolveKnownAgentId } from "./shared.js";
-
-function resolveTargetAgent(
-  cfg: Awaited<ReturnType<typeof loadModelsConfig>>,
-  raw?: string,
-): {
-  agentId: string;
-  agentDir: string;
-} {
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: raw }) ?? resolveDefaultAgentId(cfg);
-  const agentDir = resolveAgentDir(cfg, agentId);
-  return { agentId, agentDir };
-}
+import { resolveModelsTargetAgent } from "./shared.js";
 
 function describeOrder(store: AuthProfileStore, provider: string): string[] {
   const providerKey = normalizeProviderId(provider);
@@ -45,7 +32,7 @@ async function resolveAuthOrderContext(
   }
   const provider = normalizeProviderId(rawProvider);
   const cfg = await loadModelsConfig({ commandName: "models auth-order", runtime });
-  const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
+  const { agentId, agentDir } = resolveModelsTargetAgent(cfg, opts.agent);
   return { cfg, agentId, agentDir, provider };
 }
 

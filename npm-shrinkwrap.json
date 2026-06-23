@@ -1,12 +1,12 @@
 {
   "name": "openclaw",
-  "version": "2026.6.8",
+  "version": "2026.6.9",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "openclaw",
-      "version": "2026.6.8",
+      "version": "2026.6.9",
       "hasInstallScript": true,
       "license": "MIT",
       "dependencies": {
@@ -30,7 +30,6 @@
         "clawpdf": "0.3.0",
         "commander": "14.0.3",
         "croner": "10.0.1",
-        "cross-spawn": "7.0.6",
         "diff": "9.0.0",
         "dotenv": "17.4.2",
         "express": "5.2.1",
@@ -59,7 +58,7 @@
         "tslog": "4.10.2",
         "typebox": "1.1.39",
         "typescript": "6.0.3",
-        "undici": "8.3.0",
+        "undici": "8.5.0",
         "web-push": "3.6.7",
         "web-tree-sitter": "0.26.9",
         "ws": "8.21.0",
@@ -3339,9 +3338,9 @@
       }
     },
     "node_modules/undici": {
-      "version": "8.3.0",
-      "resolved": "https://registry.npmjs.org/undici/-/undici-8.3.0.tgz",
-      "integrity": "sha512-TkUDgb6tl7KOGZ+7e8E3d2FYgUQgF6z5YypqjWmixVQSQERFcVrVg0ySADm2LVLRh5ljAaHTCR5Fmz3Q34rB7Q==",
+      "version": "8.5.0",
+      "resolved": "https://registry.npmjs.org/undici/-/undici-8.5.0.tgz",
+      "integrity": "sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==",
       "license": "MIT",
       "engines": {
         "node": ">=22.19.0"

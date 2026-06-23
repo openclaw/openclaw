@@ -79,20 +79,23 @@ export function buildQaProfileScorecardEvidence(params: {
       category,
       featureCoverageByCategoryId: params.featureCoverageByCategoryId,
     });
-    const fulfilledFeatureCount = featureCoverageIds.filter((coverageIds) =>
-      coverageIds.some((coverageId) => primaryCoverageIds.has(coverageId)),
+    const fulfilledFeatureCount = featureCoverageIds.filter(
+      (coverageIds) =>
+        coverageIds.length > 0 &&
+        coverageIds.every((coverageId) => primaryCoverageIds.has(coverageId)),
     ).length;
     const secondaryOnlyFeatureCount = featureCoverageIds.filter(
       (coverageIds) =>
-        !coverageIds.some((coverageId) => primaryCoverageIds.has(coverageId)) &&
-        coverageIds.some((coverageId) => secondaryCoverageIds.has(coverageId)),
+        coverageIds.some((coverageId) => !primaryCoverageIds.has(coverageId)) &&
+        coverageIds.some(
+          (coverageId) =>
+            !primaryCoverageIds.has(coverageId) && secondaryCoverageIds.has(coverageId),
+        ),
     ).length;
     const missingCoverageIds = uniqueSortedStrings(
-      featureCoverageIds
-        .filter(
-          (coverageIds) => !coverageIds.some((coverageId) => primaryCoverageIds.has(coverageId)),
-        )
-        .flat(),
+      featureCoverageIds.flatMap((coverageIds) =>
+        coverageIds.filter((coverageId) => !primaryCoverageIds.has(coverageId)),
+      ),
     );
     const missingFeatureCount = featureCoverageIds.length - fulfilledFeatureCount;
     return {
