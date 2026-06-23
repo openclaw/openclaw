@@ -24,6 +24,7 @@ type MemoryWikiLintIssue = {
   severity: "error" | "warning";
   category: "structure" | "provenance" | "links" | "contradictions" | "open-questions" | "quality";
   code:
+    | "invalid-frontmatter"
     | "missing-id"
     | "duplicate-id"
     | "missing-page-type"
@@ -100,6 +101,20 @@ function collectPageIssues(
   const claimHealth = collectWikiClaimHealth(pages);
 
   for (const page of pages) {
+    if (page.frontmatterError) {
+      issues.push({
+        severity: "error",
+        category: "structure",
+        code: "invalid-frontmatter",
+        path: page.relativePath,
+        message: `Frontmatter failed to parse: ${page.frontmatterError}`,
+      });
+      // Frontmatter-derived fields below are empty as a result of the parse
+      // failure; skip checks that would otherwise pile on misleading
+      // "missing field" issues for the same root cause.
+      continue;
+    }
+
     const requiresStructuredPageMetadata = !isUnmanagedRawSourcePage(
       page,
       managedImportedSourcePagePaths,

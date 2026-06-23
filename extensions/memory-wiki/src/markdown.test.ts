@@ -421,4 +421,32 @@ describe("toWikiPageSummary", () => {
       },
     ]);
   });
+
+  it("degrades to empty frontmatter instead of throwing on unparsable YAML (#96125)", () => {
+    const raw = [
+      "---",
+      "pageType: synthesis",
+      "id: synthesis.test",
+      "sourceIds:",
+      '  - **MEMORY.md line 235**:"some quoted, value"',
+      "---",
+      "",
+      "# Test\n",
+    ].join("\n");
+
+    const summary = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/syntheses/test.md",
+      relativePath: "syntheses/test.md",
+      raw,
+    });
+    if (!summary) {
+      throw new Error("expected wiki summary");
+    }
+
+    expect(summary.frontmatterError).toBeTruthy();
+    expect(summary.hasFrontmatter).toBe(true);
+    expect(summary.id).toBeUndefined();
+    expect(summary.sourceIds).toEqual([]);
+    expect(summary.title).toBe("Test");
+  });
 });
