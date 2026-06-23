@@ -8,6 +8,8 @@ type AuthResolutionParams = Parameters<typeof resolveGatewayConnectionAuth>[0];
 const mockState = vi.hoisted(() => ({
   buildGatewayConnectionDetails: vi.fn(),
   resolveGatewayConnectionAuth: vi.fn(),
+  startSshPortForward: vi.fn(),
+  stopSshTunnel: vi.fn(),
 }));
 
 vi.mock("./connection-details.js", () => ({
@@ -18,6 +20,10 @@ vi.mock("./connection-details.js", () => ({
 vi.mock("./connection-auth.js", () => ({
   resolveGatewayConnectionAuth: (...args: unknown[]) =>
     mockState.resolveGatewayConnectionAuth(...args),
+}));
+
+vi.mock("../infra/ssh-tunnel.js", () => ({
+  startSshPortForward: (...args: unknown[]) => mockState.startSshPortForward(...args),
 }));
 
 const { resolveGatewayClientBootstrap, resolveGatewayUrlOverrideSource } =
@@ -49,6 +55,8 @@ describe("resolveGatewayClientBootstrap", () => {
   beforeEach(() => {
     mockState.buildGatewayConnectionDetails.mockReset();
     mockState.resolveGatewayConnectionAuth.mockReset();
+    mockState.startSshPortForward.mockReset();
+    mockState.stopSshTunnel.mockReset();
     mockState.resolveGatewayConnectionAuth.mockResolvedValue({
       token: undefined,
       password: undefined,
@@ -93,6 +101,51 @@ describe("resolveGatewayClientBootstrap", () => {
       env: process.env,
     });
 
+    expectLastAuthResolutionParams({
+      urlOverride: undefined,
+      urlOverrideSource: undefined,
+    });
+  });
+
+  it("opens an SSH tunnel and returns the local tunnel URL for configured SSH transport", async () => {
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://remote.example.com:18789",
+      urlSource: "config gateway.remote.url",
+    });
+    mockState.startSshPortForward.mockResolvedValue({
+      parsedTarget: { user: "user", host: "gateway.example", port: 22 },
+      localPort: 19091,
+      remotePort: 18789,
+      pid: 1234,
+      stderr: [],
+      stop: mockState.stopSshTunnel,
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "ws://remote.example.com:18789",
+            transport: "ssh",
+            sshTarget: "user@gateway.example",
+            sshIdentity: "~/.ssh/id_ed25519",
+          },
+        },
+      } as never,
+      env: process.env,
+    });
+
+    expect(mockState.startSshPortForward).toHaveBeenCalledWith({
+      target: "user@gateway.example",
+      identity: "~/.ssh/id_ed25519",
+      localPortPreferred: 18789,
+      remotePort: 18789,
+      timeoutMs: expect.any(Number),
+    });
+    expect(result.url).toBe("ws://127.0.0.1:19091");
+    expect(result.urlSource).toBe("config gateway.remote.url via ssh tunnel");
+    expect(result.sshTunnel?.stop).toBe(mockState.stopSshTunnel);
     expectLastAuthResolutionParams({
       urlOverride: undefined,
       urlOverrideSource: undefined,

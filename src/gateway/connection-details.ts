@@ -74,7 +74,9 @@ export function buildGatewayConnectionDetailsWithResolvers(
     : undefined;
 
   const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
-  if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
+  const usesConfiguredSshTransport =
+    !urlOverride && Boolean(remoteUrl) && remote?.transport === "ssh";
+  if (!usesConfiguredSshTransport && !isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(
       [
         `SECURITY ERROR: Gateway URL "${displayUrl}" uses plaintext ws:// to a non-loopback address.`,

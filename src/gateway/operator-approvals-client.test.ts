@@ -15,6 +15,7 @@ const bootstrapState = vi.hoisted(() => ({
   url: "ws://127.0.0.1:18789",
   urlSource: "local loopback",
   auth: { token: "secret" as string | undefined, password: undefined as string | undefined },
+  sshTunnelStop: vi.fn(async () => undefined),
 }));
 
 class MockGatewayClient {
@@ -49,10 +50,18 @@ class MockGatewayClient {
 
   stop(): void {
     clientState.stopSpy();
+    const onStop = this.opts.onStop;
+    if (typeof onStop === "function") {
+      void onStop();
+    }
   }
 
   async stopAndWait(): Promise<void> {
     await clientState.stopAndWaitSpy();
+    const onStop = this.opts.onStop;
+    if (typeof onStop === "function") {
+      await onStop();
+    }
   }
 }
 
@@ -61,6 +70,7 @@ vi.mock("./client-bootstrap.js", () => ({
     url: bootstrapState.url,
     urlSource: bootstrapState.urlSource,
     auth: bootstrapState.auth,
+    sshTunnel: { stop: bootstrapState.sshTunnelStop },
   })),
 }));
 
@@ -102,6 +112,13 @@ describe("withOperatorApprovalsGatewayClient", () => {
     bootstrapState.url = "ws://127.0.0.1:18789";
     bootstrapState.urlSource = "local loopback";
     bootstrapState.auth = { token: "secret", password: undefined };
+    bootstrapState.sshTunnelStop.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("stops bootstrap SSH tunnel when the approval client closes", async () => {
+    await runOperatorApprovalsGatewayClient();
+
+    expect(bootstrapState.sshTunnelStop).toHaveBeenCalledTimes(1);
   });
 
   it("waits for hello before running the callback and stops cleanly", async () => {

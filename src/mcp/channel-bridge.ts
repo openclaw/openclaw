@@ -146,6 +146,7 @@ export class OpenClawChannelBridge {
       url: bootstrap.url,
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
+      onStop: () => bootstrap.sshTunnel?.stop(),
       preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: "OpenClaw MCP",

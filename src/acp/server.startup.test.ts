@@ -2,6 +2,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type GatewayClientCallbacks = {
+  onStop?: () => void | Promise<void>;
   onHelloOk?: () => void;
   onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
@@ -15,6 +16,9 @@ type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
   url: string;
   urlSource: string;
   auth: GatewayClientAuth;
+  sshTunnel?: {
+    stop: () => void | Promise<void>;
+  };
 }>;
 type GatewayClientOptions = GatewayClientCallbacks &
   GatewayClientAuth & {
@@ -60,6 +64,7 @@ class MockGatewayClient {
   start(): void {}
 
   stop(): void {
+    void this.callbacks.onStop?.();
     this.callbacks.onClose?.(1000, "gateway stopped");
   }
 
@@ -440,6 +445,30 @@ describe("serveAcpGateway startup", () => {
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("stops bootstrap SSH tunnel during ACP shutdown", async () => {
+    const sshTunnelStop = vi.fn(async () => undefined);
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+      sshTunnel: { stop: sshTunnelStop },
+    });
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+
+    try {
+      const servePromise = serveAcpGateway({});
+      await emitHelloAndWaitForAgentSideConnection();
+      await stopServeWithSigint(signalHandlers, servePromise);
+
+      expect(sshTunnelStop).toHaveBeenCalledTimes(1);
     } finally {
       onceSpy.mockRestore();
     }

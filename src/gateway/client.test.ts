@@ -1082,6 +1082,20 @@ describe("GatewayClient close handling", () => {
     }
   });
 
+  it("runs onStop once when the client is stopped", async () => {
+    const onStop = vi.fn(async () => undefined);
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onStop,
+    });
+
+    client.start();
+    await client.stopAndWait();
+    client.stop();
+
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
   it("does not clear persisted device auth when explicit shared token is provided", () => {
     const onClose = vi.fn();
     const identity: DeviceIdentity = {

@@ -29,6 +29,8 @@ const deviceIdentityState = vi.hoisted(() => ({
 const loadDeviceAuthTokenMock = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => DeviceAuthEntry | null>(() => null),
 );
+const startSshPortForwardMock = vi.hoisted(() => vi.fn());
+const stopSshTunnelMock = vi.hoisted(() => vi.fn());
 
 const eventLoopReadyState = vi.hoisted(() => ({
   calls: [] as Array<{ maxWaitMs?: number } | undefined>,
@@ -204,6 +206,10 @@ vi.mock("./event-loop-ready.js", () => ({
   }),
 }));
 
+vi.mock("../infra/ssh-tunnel.js", () => ({
+  startSshPortForward: (...args: unknown[]) => startSshPortForwardMock(...args),
+}));
+
 const {
   testing,
   buildGatewayConnectionDetails,
@@ -294,6 +300,8 @@ function resetGatewayCallMocks() {
     resolveGatewayPort: resolveGatewayPortForTests,
   });
   deviceIdentityState.throwOnLoad = false;
+  startSshPortForwardMock.mockReset();
+  stopSshTunnelMock.mockReset();
   loadDeviceAuthTokenMock.mockReset();
   loadDeviceAuthTokenMock.mockReturnValue({
     token: "paired-device-token",
@@ -430,6 +438,43 @@ describe("callGateway url resolution", () => {
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
     expect(lastClientOptions?.token).toBe("explicit-token");
+  });
+
+  it("opens an SSH tunnel for configured remote call paths", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          transport: "ssh",
+          sshTarget: "user@gateway.example",
+          sshIdentity: "~/.ssh/id_ed25519",
+          token: "remote-token",
+        },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    startSshPortForwardMock.mockResolvedValue({
+      parsedTarget: { user: "user", host: "gateway.example", port: 22 },
+      localPort: 19091,
+      remotePort: 18789,
+      pid: 1234,
+      stderr: [],
+      stop: stopSshTunnelMock,
+    });
+
+    await callGateway({ method: "health" });
+
+    expect(startSshPortForwardMock).toHaveBeenCalledWith({
+      target: "user@gateway.example",
+      identity: "~/.ssh/id_ed25519",
+      localPortPreferred: 18789,
+      remotePort: 18789,
+      timeoutMs: expect.any(Number),
+    });
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:19091");
+    expect(lastClientOptions?.token).toBe("remote-token");
+    expect(stopSshTunnelMock).toHaveBeenCalledTimes(1);
   });
 
   it("skips config loading when explicit url and token are provided", async () => {
@@ -1364,6 +1409,26 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("wss://");
     expect((thrown as Error).message).toContain("Tailscale Serve/Funnel");
     expect((thrown as Error).message).toContain("openclaw doctor --fix");
+  });
+
+  it("allows plaintext ws remote URLs when configured SSH transport owns the tunnel", () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          transport: "ssh",
+          sshTarget: "user@gateway.example",
+        },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://remote.example.com:18789");
+    expect(details.urlSource).toBe("config gateway.remote.url");
   });
 
   it("redacts credential-bearing target URLs from insecure ws:// errors", () => {

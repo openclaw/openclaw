@@ -49,6 +49,7 @@ export async function createOperatorApprovalsGatewayClient(
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
+    onStop: () => bootstrap.sshTunnel?.stop(),
     ...(sendsApprovalRuntimeToken
       ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
       : {}),
