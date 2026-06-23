@@ -3,7 +3,12 @@ import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ErrorCode,
+  ListToolsResultSchema,
+  ToolSchema,
+  type CallToolResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
 import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
@@ -14,6 +19,7 @@ import type {
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Compile } from "typebox/compile";
+import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
@@ -47,10 +53,88 @@ type BundleMcpSession = {
 };
 
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedAgentMcpConfig>;
-type ListedTool = Awaited<ReturnType<Client["listTools"]>>["tools"][number];
 type CreateSessionMcpRuntime = (
   params: Parameters<typeof createSessionMcpRuntime>[0] & { configFingerprint?: string },
 ) => SessionMcpRuntime;
+
+/**
+ * The pinned SDK's ToolSchema validates inputSchema.type as z.literal("object"),
+ * so servers that omit the field (issue #63602) or declare a non-object root
+ * fail validation and crash the whole catalog. This schema is derived from the
+ * SDK's own ToolSchema and differs ONLY at the root inputSchema.type, which it
+ * accepts as an optional string: a missing type is backfilled to "object" by
+ * normalizeInputSchema(), and an explicit non-object type is skipped with a
+ * logWarn by the catalog gate below. Every other field — outputSchema, task
+ * execution metadata, annotations — keeps the exact pinned SDK contract, and
+ * each tools/list page is validated and cataloged from the same single
+ * response, so there is no strict-then-relist window for response drift.
+ */
+const RelaxedToolSchema = ToolSchema.extend({
+  inputSchema: ToolSchema.shape.inputSchema.extend({
+    type: z.string().optional(),
+  }),
+});
+
+type RelaxedListedTool = z.infer<typeof RelaxedToolSchema>;
+
+const RelaxedListToolsResultSchema = ListToolsResultSchema.extend({
+  tools: z.array(RelaxedToolSchema),
+});
+
+/**
+ * Normalize an MCP tool's inputSchema to always include type: "object",
+ * which LLM providers require. Some MCP servers omit the field; an explicit
+ * type is preserved so non-object schemas can be rejected by the gate below.
+ */
+function normalizeInputSchema(raw: Record<string, unknown>): Record<string, unknown> {
+  if (raw.type !== undefined) {
+    return raw;
+  }
+  return { ...raw, type: "object" };
+}
+
+/**
+ * Per the MCP spec, a tool's root inputSchema must be an object schema.
+ * Schemas with an explicit non-object root type (e.g. "string", "array") are
+ * malformed and would be rejected by OpenAI-style function-call providers,
+ * failing the entire request rather than just the bad tool.
+ */
+function isValidRootInputSchema(schema: Record<string, unknown>): boolean {
+  return schema.type === "object";
+}
+
+function collectValidCatalogTools(params: {
+  listedTools: RelaxedListedTool[];
+  serverName: string;
+  safeServerName: string;
+  launchSummary: string;
+}): McpCatalogTool[] {
+  const tools: McpCatalogTool[] = [];
+  for (const tool of params.listedTools) {
+    const toolName = tool.name.trim();
+    if (!toolName) {
+      continue;
+    }
+    const inputSchema = normalizeInputSchema(tool.inputSchema);
+    if (!isValidRootInputSchema(inputSchema)) {
+      logWarn(
+        `bundle-mcp: skipping tool "${toolName}" from server "${params.serverName}": ` +
+          `inputSchema.type is ${JSON.stringify(inputSchema.type)} (must be "object" per MCP spec).`,
+      );
+      continue;
+    }
+    tools.push({
+      serverName: params.serverName,
+      safeServerName: params.safeServerName,
+      toolName,
+      title: tool.title,
+      description: sanitizeMcpMetadataText(tool.description),
+      inputSchema,
+      fallbackDescription: `Provided by bundle MCP server "${params.serverName}" (${params.launchSummary}).`,
+    });
+  }
+  return tools;
+}
 
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
@@ -215,12 +299,33 @@ function redactErrorUrls(error: unknown): string {
   return redactSensitiveUrlLikeString(String(error));
 }
 
+// client.listTools() is request() + cacheToolMetadata(): the cache holds
+// output-schema validators and task-support guards that callTool() enforces
+// later. The method is TypeScript-private but part of the stable runtime
+// surface; calling it after every relaxed page parse keeps exact behavioral
+// parity with the SDK's own listTools() flow. The optional invocation avoids
+// a crash if a future SDK removes the method, and the test suite pins its
+// existence so a dependency upgrade that drops it fails loudly instead of
+// silently shedding the guards.
+type ToolMetadataCachingClient = {
+  cacheToolMetadata?: (tools: RelaxedListedTool[]) => void;
+};
+
 async function listAllTools(client: Client, timeoutMs: number) {
-  const tools: ListedTool[] = [];
+  const tools: RelaxedListedTool[] = [];
   let cursor: string | undefined;
   do {
     const params = cursor ? { cursor } : undefined;
-    const page = await client.listTools(params, { timeout: timeoutMs });
+    // Single request per page, validated once with the relaxed schema (the
+    // pinned SDK contract except the root inputSchema.type). The validated
+    // payload is the payload that gets cached and cataloged — never a
+    // second response whose contents the validation did not cover.
+    const page = await client.request(
+      { method: "tools/list", params },
+      RelaxedListToolsResultSchema,
+      { timeout: timeoutMs },
+    );
+    (client as unknown as ToolMetadataCachingClient).cacheToolMetadata?.(page.tools);
     tools.push(...page.tools);
     cursor = page.nextCursor;
   } while (cursor);
@@ -239,7 +344,7 @@ async function listAllToolsBestEffort(params: {
   client: Client;
   timeoutMs: number;
   suppressUnsupported: boolean;
-}): Promise<ListedTool[]> {
+}): Promise<RelaxedListedTool[]> {
   try {
     return await listAllTools(params.client, params.timeoutMs);
   } catch (error) {
@@ -639,11 +744,17 @@ export function createSessionMcpRuntime(params: {
             const exposedTools = listedTools.filter((tool) =>
               shouldExposeMcpTool(selection, tool.name.trim()),
             );
+            const catalogTools = collectValidCatalogTools({
+              listedTools: exposedTools,
+              serverName,
+              safeServerName,
+              launchSummary: resolved.description,
+            });
             servers[serverName] = {
               serverName,
               safeServerName,
               launchSummary: resolved.description,
-              toolCount: exposedTools.length,
+              toolCount: catalogTools.length,
               requestTimeoutMs: resolved.requestTimeoutMs,
               supportsParallelToolCalls: resolved.supportsParallelToolCalls,
               ...(capabilities.resources ? { resources: capabilities.resources } : {}),
@@ -667,21 +778,7 @@ export function createSessionMcpRuntime(params: {
                   }
                 : {}),
             };
-            for (const tool of exposedTools) {
-              const toolName = tool.name.trim();
-              if (!toolName) {
-                continue;
-              }
-              tools.push({
-                serverName,
-                safeServerName,
-                toolName,
-                title: tool.title,
-                description: sanitizeMcpMetadataText(tool.description),
-                inputSchema: tool.inputSchema,
-                fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
-              });
-            }
+            tools.push(...catalogTools);
           } catch (error) {
             const message = redactErrorUrls(error);
             if (!disposed) {
@@ -1143,5 +1240,10 @@ export const testing = {
   },
   setBundleMcpCatalogListTimeoutMsForTest,
   resolveSessionMcpRuntimeIdleTtlMs,
+  normalizeInputSchema,
+  isValidRootInputSchema,
+  collectValidCatalogTools,
+  RelaxedToolSchema,
+  RelaxedListToolsResultSchema,
 };
 export { testing as __testing };
