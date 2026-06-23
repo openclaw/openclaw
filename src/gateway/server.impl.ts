@@ -881,6 +881,7 @@ export async function startGatewayServer(
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+    workspaceDir: defaultWorkspaceDir,
   });
   log.info("starting HTTP server...");
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;

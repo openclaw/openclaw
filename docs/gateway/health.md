@@ -49,6 +49,23 @@ External uptime monitoring services should use the dedicated `/health` endpoint,
 - **DO use:** `GET /health` — instant response, no session created, no LLM call, returns `{"ok":true,"status":"live"}`
 - **DON'T use:** `/v1/chat/completions` for health checks — each request creates a full agent session with skill snapshot, context assembly, and LLM calls
 
+### Gateway readiness (`/readyz`)
+
+The `/readyz` endpoint is designed for Kubernetes readiness probes and similar
+orchestrator health checks. It reports not-ready during:
+
+- Startup sidecar settling
+- Gateway draining for restart
+- Channel health failures (disconnected, restart-exhausted)
+- **Workspace disk failure** — when the workspace directory is not writable (e.g.
+  `ENOSPC`, permissions), `/readyz` returns a `workspace-disk` failure. This
+  prevents Kubernetes from routing traffic to a pod that cannot persist
+  sessions, transcripts, or media.
+
+The workspace check is only active when a `workspaceDir` is configured (the
+default in gateway/server deployments). It writes and removes a temporary probe
+file on each check; the 1s cache keeps I/O overhead negligible.
+
 When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/completions` generates a new random session for each request. Monitoring services that ping every 15 minutes create ~96 sessions/day, each consuming 4–22KB. Over time this causes session store bloat and can lead to context window overflow.
 
 ### Monitoring service setup examples

@@ -1,4 +1,6 @@
 // Gateway readiness checker for channel health and startup sidecar state.
+import fs from "node:fs";
+import path from "node:path";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -36,6 +38,8 @@ function shouldIgnoreReadinessFailure(
   return health.reason === "not-running" && accountSnapshot.restartPending === true;
 }
 
+const READINESS_PROBE_FILENAME = ".readiness-probe";
+
 /** Create a cached readiness checker over channel runtime health. */
 export function createReadinessChecker(deps: {
   channelManager: ChannelManager;
@@ -46,6 +50,8 @@ export function createReadinessChecker(deps: {
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   shouldSkipChannelReadiness?: () => boolean;
   cacheTtlMs?: number;
+  /** When set, the readiness probe writes a probe file to verify writability. */
+  workspaceDir?: string;
 }): ReadinessChecker {
   const { channelManager, startedAt } = deps;
   const cacheTtlMs = Math.max(0, deps.cacheTtlMs ?? DEFAULT_READINESS_CACHE_TTL_MS);
@@ -97,6 +103,16 @@ export function createReadinessChecker(deps: {
           failing.push(channelId);
           break;
         }
+      }
+    }
+
+    if (deps.workspaceDir) {
+      try {
+        const probePath = path.join(deps.workspaceDir, READINESS_PROBE_FILENAME);
+        fs.writeFileSync(probePath, "", "utf-8");
+        fs.unlinkSync(probePath);
+      } catch {
+        failing.push("workspace-disk");
       }
     }
 

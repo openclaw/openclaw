@@ -1,4 +1,7 @@
 // Readiness checker tests cover startup grace, channel health, and stale socket decisions.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
@@ -74,6 +77,7 @@ function createReadinessHarness(params: {
     typeof createReadinessChecker
   >[0]["shouldSkipChannelReadiness"];
   cacheTtlMs?: number;
+  workspaceDir?: string;
 }) {
   const startedAt = Date.now() - (params.startedAgoMs ?? FIVE_MIN_MS);
   const manager = createManager(snapshotWith(params.accounts ?? {}));
@@ -88,6 +92,7 @@ function createReadinessHarness(params: {
       getEventLoopHealth: params.getEventLoopHealth,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
+      workspaceDir: params.workspaceDir,
     }),
   };
 }
@@ -328,6 +333,54 @@ describe("createReadinessChecker", () => {
       vi.advanceTimersByTime(600);
       expect(readiness()).toEqual(readySnapshot(301_100));
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("reports ready when workspace probe succeeds", () => {
+    withReadinessClock(() => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "readiness-test-"));
+      try {
+        const { readiness } = createReadinessHarness({
+          workspaceDir: tmpDir,
+        });
+        expect(readiness()).toEqual(readySnapshot());
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it("reports workspace-disk failure when workspace probe write fails", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        workspaceDir: "/nonexistent-readiness-probe-path",
+      });
+      const result = readiness();
+      expect(result.ready).toBe(false);
+      expect(result.failing).toContain("workspace-disk");
+    });
+  });
+
+  it("skips workspace probe when workspaceDir is not set", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({});
+      expect(readiness()).toEqual(readySnapshot());
+    });
+  });
+
+  it("cleans up the probe file after each check", () => {
+    withReadinessClock(() => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "readiness-probe-cleanup-"));
+      try {
+        const probePath = path.join(tmpDir, ".readiness-probe");
+        const { readiness } = createReadinessHarness({
+          workspaceDir: tmpDir,
+        });
+        readiness();
+        expect(fs.existsSync(probePath)).toBe(false);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
     });
   });
 
