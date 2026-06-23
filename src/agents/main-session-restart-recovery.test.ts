@@ -1352,4 +1352,112 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
     expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
   });
+
+  it("increments restartRecoveryAttempts when marking a fresh interruption", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+    registerAgentRunContext("restart-run", {
+      sessionKey: "agent:main:main",
+      sessionId: "main-session",
+    });
+
+    await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+    expect(store["agent:main:main"]?.restartRecoveryAttempts).toBe(1);
+  });
+
+  it("does not double-charge the budget when re-marking an already-aborted entry", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryAttempts: 2,
+      },
+    });
+    registerAgentRunContext("restart-run", {
+      sessionKey: "agent:main:main",
+      sessionId: "main-session",
+    });
+
+    await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    // Re-marking an entry that is still aborted must NOT increment the count.
+    expect(store["agent:main:main"]?.restartRecoveryAttempts).toBe(2);
+  });
+
+  it("quarantines a wedged session once it exceeds the cross-boot recovery budget", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        // Already exceeded the budget (MAX_RECOVERY_RETRIES === 3).
+        restartRecoveryAttempts: 4,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    // Quarantined, not resumed: no gateway resume call and the entry is parked.
+    expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+    expect(callGateway).not.toHaveBeenCalled();
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    const entry = store["agent:main:main"];
+    expect(entry?.abortedLastRun).toBe(false);
+    expect(entry?.restartRecoveryQuarantineReason).toBe("exceeded_restart_retry_budget");
+    expect(typeof entry?.restartRecoveryQuarantinedAt).toBe("string");
+    // Transcript pointer preserved so a future inbound can still resume the session.
+    expect(entry?.sessionId).toBe("main-session");
+  });
+
+  it("still resumes a wedged session while it is within the recovery budget", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryAttempts: 3,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "run the tool" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+    expect(store["agent:main:main"]?.restartRecoveryQuarantinedAt).toBeUndefined();
+  });
 });

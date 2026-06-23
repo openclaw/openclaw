@@ -7,10 +7,7 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import {
-  normalizeOptionalString,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -259,6 +256,21 @@ export type SessionEntry = {
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /**
+   * Persistent count of cross-boot restart-recovery resume attempts for this entry.
+   * Bounds the restart-recovery loop so a genuinely wedged session cannot death-loop
+   * the gateway across reboots. Reset to 0 when a fresh interruption is marked on a
+   * session that had previously settled (made progress). See #95750.
+   */
+  restartRecoveryAttempts?: number;
+  /**
+   * ISO timestamp set when an entry exceeded the cross-boot restart-recovery budget and
+   * was quarantined (no longer eligible for automatic resume). Cleared when the session
+   * makes fresh progress. See #95750.
+   */
+  restartRecoveryQuarantinedAt?: string;
+  /** Reason recorded alongside restartRecoveryQuarantinedAt. See #95750. */
+  restartRecoveryQuarantineReason?: string;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
   restartRecoveryRuns?: RestartRecoveryRun[];
   /** Durable guard state for automatic subagent orphan recovery. */

@@ -52,6 +52,16 @@ const log = createSubsystemLogger("main-session-restart-recovery");
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 const MAX_RECOVERY_RETRIES = 3;
 const RETRY_BACKOFF_MULTIPLIER = 2;
+// Cross-boot ceiling: how many times restart-recovery may resume the SAME wedged
+// entry before quarantining it. Reuses the in-process retry value as the persistent
+// budget so a genuinely wedged session cannot death-loop the gateway across reboots
+// (the in-process counter resets to 0 every boot). See #95750.
+const MAX_RESTART_RECOVERY_ATTEMPTS = MAX_RECOVERY_RETRIES;
+const RESTART_RECOVERY_BUDGET_QUARANTINE_REASON = "exceeded_restart_retry_budget";
+
+function normalizeRecoveryAttempts(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
 const UNRESUMABLE_SESSION_NOTICE =
   "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
   "Please send that last request again and I'll pick it up cleanly.";
@@ -254,6 +264,13 @@ export async function markRestartAbortedMainSessions(params: {
           }
           const wasRunning = entry.status === "running";
           entry.status = "running";
+          if (entry.abortedLastRun !== true) {
+            // Only count a NEW interruption (an entry that was not already in the
+            // aborted state). Re-marking an already-aborted entry within the same
+            // boot must not double-charge the cross-boot budget. See #95750.
+            entry.restartRecoveryAttempts =
+              normalizeRecoveryAttempts(entry.restartRecoveryAttempts) + 1;
+          }
           entry.abortedLastRun = true;
           if (!wasRunning) {
             entry.startedAt = undefined;
@@ -361,6 +378,8 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
           ) {
             continue;
           }
+          entry.restartRecoveryAttempts =
+            normalizeRecoveryAttempts(entry.restartRecoveryAttempts) + 1;
           entry.abortedLastRun = true;
           entry.updatedAt = Date.now();
           replacements.push({ sessionKey, entry });
@@ -470,6 +489,38 @@ async function markSessionFailed(params: {
     },
   });
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
+}
+
+async function quarantineRestartRecoveryBudgetExceeded(params: {
+  storePath: string;
+  sessionKey: string;
+  attempts: number;
+}): Promise<void> {
+  await applyRestartRecoveryLifecycle({
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (!entry) {
+        return { result: undefined };
+      }
+      // Clear the resume flag so the entry is no longer picked up by the recovery
+      // gate, but PRESERVE the transcript pointer (do not delete the entry) so the
+      // session can resume on the next user-driven inbound. See #95750.
+      entry.abortedLastRun = false;
+      entry.restartRecoveryQuarantinedAt = new Date().toISOString();
+      entry.restartRecoveryQuarantineReason = RESTART_RECOVERY_BUDGET_QUARANTINE_REASON;
+      entry.updatedAt = Date.now();
+      return {
+        result: undefined,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
+  log.warn(
+    `quarantined main session after exceeding restart-recovery budget: ${params.sessionKey} ` +
+      `(attempts=${params.attempts}, max=${MAX_RESTART_RECOVERY_ATTEMPTS})`,
+  );
 }
 
 async function sendUnresumableSessionNotice(params: {
@@ -680,6 +731,10 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
         if (!entryLockPaths.some((lockPath) => interruptedLockPaths.has(lockPath))) {
           continue;
         }
+        if (entry.abortedLastRun !== true) {
+          entry.restartRecoveryAttempts =
+            normalizeRecoveryAttempts(entry.restartRecoveryAttempts) + 1;
+        }
         entry.abortedLastRun = true;
         replacements.push({ sessionKey, entry });
         counts.marked++;
@@ -754,6 +809,19 @@ async function recoverStore(params: {
       continue;
     }
     if (shouldSkipMainRecovery(entry, sessionKey)) {
+      result.skipped++;
+      continue;
+    }
+    // Cross-boot budget gate: if this wedged entry has already been resumed the
+    // maximum number of times across reboots, quarantine it instead of resuming
+    // again. This is the ceiling that prevents the gateway death-loop. See #95750.
+    const recoveryAttempts = normalizeRecoveryAttempts(entry.restartRecoveryAttempts);
+    if (recoveryAttempts > MAX_RESTART_RECOVERY_ATTEMPTS) {
+      await quarantineRestartRecoveryBudgetExceeded({
+        storePath: params.storePath,
+        sessionKey,
+        attempts: recoveryAttempts,
+      });
       result.skipped++;
       continue;
     }

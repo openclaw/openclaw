@@ -41,12 +41,19 @@ type PersistedLifecycleSessionShape = Pick<
   | "runtimeMs"
   | "abortedLastRun"
   | "restartRecoveryRuns"
+  | "restartRecoveryAttempts"
+  | "restartRecoveryQuarantinedAt"
+  | "restartRecoveryQuarantineReason"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<LifecycleSessionShape>;
 
 function isFiniteTimestamp(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function normalizeRecoveryAttempts(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 function resolveLifecyclePhase(event: Pick<LifecycleEventLike, "data">): LifecyclePhase | null {
@@ -185,6 +192,18 @@ export function derivePersistedSessionLifecyclePatch(params: {
     ...snapshot,
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
   };
+  // A genuinely successful run means the session is no longer wedged: clear the
+  // cross-boot restart-recovery budget and any quarantine so a future, unrelated
+  // interruption gets a fresh attempt allowance. See #95750.
+  if (snapshot.status === "done") {
+    if (normalizeRecoveryAttempts(params.entry?.restartRecoveryAttempts) > 0) {
+      patch.restartRecoveryAttempts = undefined;
+    }
+    if (params.entry?.restartRecoveryQuarantinedAt != null) {
+      patch.restartRecoveryQuarantinedAt = undefined;
+      patch.restartRecoveryQuarantineReason = undefined;
+    }
+  }
   const runId = params.event.runId?.trim();
   const lifecycleGeneration = params.event.lifecycleGeneration?.trim();
   const restartRecoveryRuns = params.entry?.restartRecoveryRuns;

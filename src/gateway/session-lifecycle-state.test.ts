@@ -411,4 +411,31 @@ describe("session lifecycle state", () => {
       expected: terminalPatch(1_050, 1_550, status, abortedLastRun),
     });
   });
+
+  it("clears the restart-recovery budget + quarantine on a successful run (#95750)", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        restartRecoveryAttempts: 2,
+        restartRecoveryQuarantinedAt: "2026-06-23T00:00:00.000Z",
+        restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+      },
+      data: { phase: "end", endedAt: 1_550 },
+      expected: {
+        ...terminalPatch(1_050, 1_550, "done", false),
+        restartRecoveryAttempts: undefined,
+        restartRecoveryQuarantinedAt: undefined,
+        restartRecoveryQuarantineReason: undefined,
+      },
+    });
+  });
+
+  it("leaves the restart-recovery budget untouched on a non-successful run (#95750)", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        restartRecoveryAttempts: 2,
+      },
+      data: { phase: "error", endedAt: 1_550 },
+      expected: terminalPatch(1_050, 1_550, "failed", false),
+    });
+  });
 });
