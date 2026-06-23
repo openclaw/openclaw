@@ -547,23 +547,19 @@ export function buildGatewayCronService(params: {
       }).catch(() => {});
     },
     onIsolatedAgentSetupTimeout: ({ job, error, timeoutMs }) => {
-      const restart = requestSafeGatewayRestart({
-        reason: "cron.isolated_agent_setup_timeout",
-        delayMs: 0,
-        preservePendingEmitHooks: true,
-      });
+      // Do NOT restart the gateway on setup timeout. The dominant failure mode
+      // is event-loop saturation from concurrent embedded runs, not gateway state
+      // corruption. A restart would destroy in-flight work and re-enter the same
+      // saturation on next tick. Let the job error-backoff instead, which preserves
+      // all other scheduled work and only delays the failing job.
       cronLogger.warn(
         {
           jobId: job.id,
           jobName: job.name,
           timeoutMs,
           error,
-          restartStatus: restart.status,
-          restartCoalesced: restart.restart.coalesced,
-          restartSummary: restart.preflight.summary,
-          restartDelayMs: restart.restart.delayMs,
         },
-        "cron: isolated agent setup timed out before runner start; requested safe gateway restart",
+        "cron: isolated agent setup timed out before runner start; job will error-backoff instead of restarting gateway",
       );
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
