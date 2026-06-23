@@ -118,6 +118,7 @@ import {
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { createReadinessChecker } from "./server/readiness.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
+import { createWorkspaceDiskHealthProbe } from "./server/workspace-disk-health.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
@@ -890,6 +891,7 @@ export async function startGatewayServer(
   });
   const deferStartupSidecars = opts.deferStartupSidecars === true;
   const isGatewayStartupPending = () => !startupSidecarsReady && !deferStartupSidecars;
+  const workspaceDiskHealth = createWorkspaceDiskHealthProbe({});
   const getReadiness = createReadinessChecker({
     channelManager,
     startedAt: serverStartedAt,
@@ -900,6 +902,7 @@ export async function startGatewayServer(
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
+    getWorkspaceDiskHealth: workspaceDiskHealth,
   });
   log.info("starting HTTP server...");
   let currentPluginRegistryGatewayContext: GatewayRequestContext | undefined;
