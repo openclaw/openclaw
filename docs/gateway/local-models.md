@@ -321,6 +321,48 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
 
 5. **Past that, the bottleneck is upstream.** If the backend still fails only on larger OpenClaw runs after lean mode and `supportsTools: false`, the remaining issue is usually upstream model or server capacity — context window, GPU memory, kv-cache eviction, or a backend bug. It is not OpenClaw's transport layer at that point.
 
+## High-memory Ollama compaction tuning
+
+On 32 GB or 64 GB+ local machines, especially with Ollama models that expose a
+32k context window, you may want OpenClaw to keep more recent transcript before
+preflight compaction starts. Keep the conservative defaults on low-memory
+machines; lowering the reserve can increase model-server memory pressure and
+make Ollama evict, swap, or terminate the run.
+
+Tune this under `agents.defaults.compaction`, not under `models` or a provider
+block:
+
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        mode: "safeguard",
+        reserveTokensFloor: 2000,
+        keepRecentTokens: 20000,
+      },
+    },
+  },
+}
+```
+
+The preflight compaction threshold is:
+
+```text
+contextWindow - reserveTokensFloor - memoryFlush.softThresholdTokens
+```
+
+For a 32,768-token Ollama model with `reserveTokensFloor: 2000` and the default
+`memoryFlush.softThresholdTokens: 4000`, OpenClaw starts checking near 26,768
+tokens. Raise `reserveTokensFloor` again for larger models or tighter memory
+headroom; for example, a 32B or 72B model may need more KV-cache room than a 7B
+model on the same machine.
+
+Restart or reload OpenClaw after changing `openclaw.json`, then check verbose
+Gateway logs for `preflightCompaction check` or `memoryFlush check`. The log
+line includes `contextWindow` and `threshold`, so you can confirm OpenClaw is
+using the intended model window and reserve before relying on a long session.
+
 ## Troubleshooting
 
 - Gateway can reach the proxy? `curl http://127.0.0.1:1234/v1/models`.
