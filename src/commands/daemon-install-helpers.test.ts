@@ -1792,7 +1792,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
         models: {
           providers: {
             google: {
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
               apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
               models: [],
             },
