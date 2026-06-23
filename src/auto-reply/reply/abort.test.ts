@@ -527,6 +527,7 @@ describe("abort detection", () => {
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
     expect(getFollowupQueueDepth(canonicalKey)).toBe(0);
     expectSessionLaneCleared(canonicalKey);
+    expect(getAbortMemory(canonicalKey)).toBe(true);
   });
 
   it("plain-language stop on ACP-bound session triggers ACP cancel", async () => {

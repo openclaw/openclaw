@@ -428,8 +428,9 @@ export async function tryFastAbortFromMessage(params: {
         `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
       );
     }
-    if (!persistedAbortTarget && abortKey) {
-      setAbortMemory(abortKey, true);
+    const abortMemoryKey = persistedAbortTarget?.sessionKey ?? abortKey;
+    if (persistedAbortTarget?.persisted !== true && abortMemoryKey) {
+      setAbortMemory(abortMemoryKey, true);
     }
     const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
     return { handled: true, aborted, stoppedSubagents: stopped };
