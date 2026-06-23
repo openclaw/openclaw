@@ -1,42 +1,53 @@
+// Implements plugin command listing, install, and configuration helpers.
 import fs from "node:fs";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";
+import { resolveOfficialExternalNpmPackageTrust } from "../../cli/plugin-install-plan.js";
 import {
-  buildPreferredClawHubSpec,
   createPluginInstallLogger,
-  decidePreferredClawHubFallback,
   resolveFileNpmSpecToLocalPath,
 } from "../../cli/plugins-command-helpers.js";
-import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
 import {
-  readConfigFileSnapshot,
-  validateConfigObjectWithPlugins,
-  writeConfigFile,
-} from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/config.js";
+  persistPluginInstall,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+} from "../../cli/plugins-install-persist.js";
+import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
+import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveArchiveKind } from "../../infra/archive.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { installPluginFromClawHub } from "../../plugins/clawhub.js";
+import { installPluginFromGitSpec, parseGitPluginSpec } from "../../plugins/git-install.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../../plugins/install.js";
-import { clearPluginManifestRegistryCache } from "../../plugins/manifest-registry.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import {
+  getOfficialExternalPluginCatalogEntryForPackage,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
+} from "../../plugins/official-external-plugin-catalog.js";
 import type { PluginRecord } from "../../plugins/registry.js";
 import {
   buildAllPluginInspectReports,
+  buildPluginDiagnosticsReport,
   buildPluginInspectReport,
-  buildPluginStatusReport,
+  buildPluginRegistrySnapshotReport,
   formatPluginCompatibilityNotice,
   type PluginStatusReport,
 } from "../../plugins/status.js";
-import { setPluginEnabledInConfig } from "../../plugins/toggle-config.js";
 import { resolveUserPath } from "../../utils.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
-  requireGatewayClientScopeForInternalChannel,
+  requireGatewayClientScope,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+import { AutoReplyConfigMutationError, setPluginEnabledFromCommand } from "./config-mutations.js";
 import { parsePluginsCommand } from "./plugins-commands.js";
 
 function renderJsonBlock(label: string, value: unknown): string {
@@ -46,6 +57,7 @@ function renderJsonBlock(label: string, value: unknown): string {
 function buildPluginInspectJson(params: {
   id: string;
   config: OpenClawConfig;
+  installRecords: Record<string, PluginInstallRecord>;
   report: PluginStatusReport;
 }): {
   inspect: NonNullable<ReturnType<typeof buildPluginInspectReport>>;
@@ -71,12 +83,13 @@ function buildPluginInspectJson(params: {
       severity: warning.severity,
       message: formatPluginCompatibilityNotice(warning),
     })),
-    install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
+    install: params.installRecords[inspect.plugin.id] ?? null,
   };
 }
 
 function buildAllPluginInspectJson(params: {
   config: OpenClawConfig;
+  installRecords: Record<string, PluginInstallRecord>;
   report: PluginStatusReport;
 }): Array<{
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number];
@@ -97,7 +110,7 @@ function buildAllPluginInspectJson(params: {
       severity: warning.severity,
       message: formatPluginCompatibilityNotice(warning),
     })),
-    install: params.config.plugins?.installs?.[inspect.plugin.id] ?? null,
+    install: params.installRecords[inspect.plugin.id] ?? null,
   }));
 }
 
@@ -126,13 +139,38 @@ function formatPluginsList(report: PluginStatusReport): string {
   return lines.join("\n");
 }
 
+function isPluginsWriteAction(action: string): boolean {
+  return action === "install" || action === "enable" || action === "disable";
+}
+
+function hasGatewayAdminScope(params: Parameters<CommandHandler>[0]): boolean {
+  return params.ctx.GatewayClientScopes?.includes("operator.admin") === true;
+}
+
+function rejectNixModePluginWrite(): {
+  shouldContinue: false;
+  reply: { text: string };
+} | null {
+  try {
+    assertConfigWriteAllowedInCurrentMode();
+    return null;
+  } catch (error) {
+    return {
+      shouldContinue: false,
+      reply: { text: `⚠️ ${formatErrorMessage(error)}` },
+    };
+  }
+}
+
 function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord | undefined {
-  const target = rawName.trim().toLowerCase();
+  const target = normalizeOptionalLowercaseString(rawName);
   if (!target) {
     return undefined;
   }
   return report.plugins.find(
-    (plugin) => plugin.id.toLowerCase() === target || plugin.name.toLowerCase() === target,
+    (plugin) =>
+      normalizeOptionalLowercaseString(plugin.id) === target ||
+      normalizeOptionalLowercaseString(plugin.name) === target,
   );
 }
 
@@ -152,9 +190,33 @@ function looksLikeLocalPluginInstallSpec(raw: string): boolean {
   );
 }
 
+function findTrustedCatalogPackageInstall(packageName: string):
+  | {
+      pluginId: string;
+      npmSpec?: string;
+      expectedIntegrity?: string;
+    }
+  | undefined {
+  const entry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
+  if (!entry) {
+    return undefined;
+  }
+  const pluginId = resolveOfficialExternalPluginId(entry);
+  if (!pluginId) {
+    return undefined;
+  }
+  const install = resolveOfficialExternalPluginInstall(entry);
+  return {
+    pluginId,
+    ...(install?.npmSpec ? { npmSpec: install.npmSpec } : {}),
+    ...(install?.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+  };
+}
+
 async function installPluginFromPluginsCommand(params: {
   raw: string;
   config: OpenClawConfig;
+  snapshot: ConfigSnapshotForInstallPersist;
 }): Promise<{ ok: true; pluginId: string } | { ok: false; error: string }> {
   const fileSpec = resolveFileNpmSpecToLocalPath(params.raw);
   if (fileSpec && !fileSpec.ok) {
@@ -166,15 +228,15 @@ async function installPluginFromPluginsCommand(params: {
   if (fs.existsSync(resolved)) {
     const result = await installPluginFromPath({
       path: resolved,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
       return { ok: false, error: result.error };
     }
-    clearPluginManifestRegistryCache();
     const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
     await persistPluginInstall({
-      config: params.config,
+      snapshot: params.snapshot,
       pluginId: result.pluginId,
       install: {
         source,
@@ -190,18 +252,49 @@ async function installPluginFromPluginsCommand(params: {
     return { ok: false, error: `Path not found: ${resolved}` };
   }
 
-  const clawhubSpec = parseClawHubPluginSpec(params.raw);
-  if (clawhubSpec) {
-    const result = await installPluginFromClawHub({
+  const gitPrefix = params.raw.trim().toLowerCase().startsWith("git:");
+  const gitSpec = parseGitPluginSpec(params.raw);
+  if (gitPrefix && !gitSpec) {
+    return { ok: false, error: `unsupported git: plugin spec: ${params.raw}` };
+  }
+  if (gitSpec) {
+    const result = await installPluginFromGitSpec({
       spec: params.raw,
+      config: params.config,
       logger: createPluginInstallLogger(),
     });
     if (!result.ok) {
       return { ok: false, error: result.error };
     }
-    clearPluginManifestRegistryCache();
     await persistPluginInstall({
+      snapshot: params.snapshot,
+      pluginId: result.pluginId,
+      install: {
+        source: "git",
+        spec: params.raw,
+        installPath: result.targetDir,
+        version: result.version,
+        resolvedAt: result.git.resolvedAt,
+        gitUrl: result.git.url,
+        gitRef: result.git.ref,
+        gitCommit: result.git.commit,
+      },
+    });
+    return { ok: true, pluginId: result.pluginId };
+  }
+
+  const clawhubSpec = parseClawHubPluginSpec(params.raw);
+  if (clawhubSpec) {
+    const result = await installPluginFromClawHub({
+      spec: params.raw,
       config: params.config,
+      logger: createPluginInstallLogger(),
+    });
+    if (!result.ok) {
+      return { ok: false, error: result.error };
+    }
+    await persistPluginInstall({
+      snapshot: params.snapshot,
       pluginId: result.pluginId,
       install: {
         source: "clawhub",
@@ -219,45 +312,27 @@ async function installPluginFromPluginsCommand(params: {
     return { ok: true, pluginId: result.pluginId };
   }
 
-  const preferredClawHubSpec = buildPreferredClawHubSpec(params.raw);
-  if (preferredClawHubSpec) {
-    const clawhubResult = await installPluginFromClawHub({
-      spec: preferredClawHubSpec,
-      logger: createPluginInstallLogger(),
-    });
-    if (clawhubResult.ok) {
-      clearPluginManifestRegistryCache();
-      await persistPluginInstall({
-        config: params.config,
-        pluginId: clawhubResult.pluginId,
-        install: {
-          source: "clawhub",
-          spec: preferredClawHubSpec,
-          installPath: clawhubResult.targetDir,
-          version: clawhubResult.version,
-          integrity: clawhubResult.clawhub.integrity,
-          resolvedAt: clawhubResult.clawhub.resolvedAt,
-          clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-          clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-          clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-          clawhubChannel: clawhubResult.clawhub.clawhubChannel,
-        },
-      });
-      return { ok: true, pluginId: clawhubResult.pluginId };
-    }
-    if (decidePreferredClawHubFallback(clawhubResult) !== "fallback_to_npm") {
-      return { ok: false, error: clawhubResult.error };
-    }
-  }
-
+  const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
+    npmSpec: params.raw,
+    findOfficialExternalPackage: findTrustedCatalogPackageInstall,
+  });
   const result = await installPluginFromNpmSpec({
     spec: params.raw,
+    config: params.config,
+    ...(officialNpmTrust
+      ? {
+          expectedPluginId: officialNpmTrust.pluginId,
+          ...(officialNpmTrust.expectedIntegrity
+            ? { expectedIntegrity: officialNpmTrust.expectedIntegrity }
+            : {}),
+          trustedSourceLinkedOfficialInstall: true,
+        }
+      : {}),
     logger: createPluginInstallLogger(),
   });
   if (!result.ok) {
     return { ok: false, error: result.error };
   }
-  clearPluginManifestRegistryCache();
   const installRecord = buildNpmInstallRecordFields({
     spec: params.raw,
     installPath: result.targetDir,
@@ -265,14 +340,17 @@ async function installPluginFromPluginsCommand(params: {
     resolution: result.npmResolution,
   });
   await persistPluginInstall({
-    config: params.config,
+    snapshot: params.snapshot,
     pluginId: result.pluginId,
     install: installRecord,
   });
   return { ok: true, pluginId: result.pluginId };
 }
 
-async function loadPluginCommandState(workspaceDir: string): Promise<
+async function loadPluginCommandState(
+  workspaceDir: string,
+  options?: { loadModules?: boolean },
+): Promise<
   | {
       ok: true;
       path: string;
@@ -294,7 +372,47 @@ async function loadPluginCommandState(workspaceDir: string): Promise<
     ok: true,
     path: snapshot.path,
     config,
-    report: buildPluginStatusReport({ config, workspaceDir }),
+    report:
+      options?.loadModules === true
+        ? buildPluginDiagnosticsReport({ config, workspaceDir })
+        : buildPluginRegistrySnapshotReport({ config, workspaceDir }),
+  };
+}
+
+async function loadPluginCommandConfig(): Promise<
+  | { ok: true; path: string; snapshot: ConfigSnapshotForInstallPersist }
+  | { ok: false; path: string; error: string }
+> {
+  const prepared = await readConfigFileSnapshotForWrite();
+  const snapshot = prepared.snapshot;
+  if (!snapshot.valid) {
+    return {
+      ok: false,
+      path: snapshot.path,
+      error: "Config file is invalid; fix it before using /plugins.",
+    };
+  }
+  const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
+  const { pluginMutation } = resolveInstallConfigMutationPreflights({
+    parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
+    snapshotPath: snapshot.path,
+    writeOptions,
+  });
+  if (pluginMutation.mode === "blocked") {
+    return {
+      ok: false,
+      path: snapshot.path,
+      error: pluginMutation.reason,
+    };
+  }
+  return {
+    ok: true,
+    path: snapshot.path,
+    snapshot: {
+      config: structuredClone(snapshot.sourceConfig),
+      baseHash: snapshot.hash,
+      writeOptions,
+    },
   };
 }
 
@@ -310,13 +428,6 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   if (unauthorized) {
     return unauthorized;
   }
-  const allowInternalReadOnly =
-    (pluginsCommand.action === "list" || pluginsCommand.action === "inspect") &&
-    isInternalMessageChannel(params.command.channel);
-  const nonOwner = allowInternalReadOnly ? null : rejectNonOwnerCommand(params, "/plugins");
-  if (nonOwner) {
-    return nonOwner;
-  }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/plugins",
     configKey: "plugins",
@@ -331,7 +442,58 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const loaded = await loadPluginCommandState(params.workspaceDir);
+  if (isPluginsWriteAction(pluginsCommand.action)) {
+    const missingAdminScope = requireGatewayClientScope(params, {
+      label: "/plugins write",
+      allowedScopes: ["operator.admin"],
+      missingText:
+        "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
+    });
+    if (missingAdminScope) {
+      return missingAdminScope;
+    }
+    if (!params.command.senderIsOwner && !hasGatewayAdminScope(params)) {
+      const nonOwner = rejectNonOwnerCommand(params, "/plugins write");
+      if (nonOwner) {
+        return nonOwner;
+      }
+    }
+    const nixModeWrite = rejectNixModePluginWrite();
+    if (nixModeWrite) {
+      return nixModeWrite;
+    }
+  }
+
+  if (pluginsCommand.action === "install") {
+    const loadedConfig = await loadPluginCommandConfig();
+    if (!loadedConfig.ok) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${loadedConfig.error}` },
+      };
+    }
+    const installed = await installPluginFromPluginsCommand({
+      raw: pluginsCommand.spec,
+      config: loadedConfig.snapshot.config,
+      snapshot: loadedConfig.snapshot,
+    });
+    if (!installed.ok) {
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${installed.error}` },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: {
+        text: `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+      },
+    };
+  }
+
+  const loaded = await loadPluginCommandState(params.workspaceDir, {
+    loadModules: pluginsCommand.action === "inspect",
+  });
   if (!loaded.ok) {
     return {
       shouldContinue: false,
@@ -347,23 +509,28 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
   }
 
   if (pluginsCommand.action === "inspect") {
+    const installRecords = await loadInstalledPluginIndexInstallRecords();
     if (!pluginsCommand.name) {
       return {
         shouldContinue: false,
         reply: { text: formatPluginsList(loaded.report) },
       };
     }
-    if (pluginsCommand.name.toLowerCase() === "all") {
+    if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
       return {
         shouldContinue: false,
         reply: {
-          text: renderJsonBlock("🔌 Plugins", buildAllPluginInspectJson(loaded)),
+          text: renderJsonBlock(
+            "🔌 Plugins",
+            buildAllPluginInspectJson({ ...loaded, installRecords }),
+          ),
         },
       };
     }
     const payload = buildPluginInspectJson({
       id: pluginsCommand.name,
       config: loaded.config,
+      installRecords,
       report: loaded.report,
     });
     if (!payload) {
@@ -384,34 +551,6 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
-    label: "/plugins write",
-    allowedScopes: ["operator.admin"],
-    missingText: "❌ /plugins install|enable|disable requires operator.admin for gateway clients.",
-  });
-  if (missingAdminScope) {
-    return missingAdminScope;
-  }
-
-  if (pluginsCommand.action === "install") {
-    const installed = await installPluginFromPluginsCommand({
-      raw: pluginsCommand.spec,
-      config: structuredClone(loaded.config),
-    });
-    if (!installed.ok) {
-      return {
-        shouldContinue: false,
-        reply: { text: `⚠️ ${installed.error}` },
-      };
-    }
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `🔌 Installed plugin "${installed.pluginId}". Restart the gateway to load plugins.`,
-      },
-    };
-  }
-
   const plugin = findPlugin(loaded.report, pluginsCommand.name);
   if (!plugin) {
     return {
@@ -420,27 +559,36 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  const next = setPluginEnabledInConfig(
-    structuredClone(loaded.config),
-    plugin.id,
-    pluginsCommand.action === "enable",
-  );
-  const validated = validateConfigObjectWithPlugins(next);
-  if (!validated.ok) {
-    const issue = validated.issues[0];
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `⚠️ Config invalid after /plugins ${pluginsCommand.action} (${issue.path}: ${issue.message}).`,
-      },
-    };
+  let committedConfig: OpenClawConfig;
+  try {
+    committedConfig = await setPluginEnabledFromCommand({
+      pluginId: plugin.id,
+      enabled: pluginsCommand.action === "enable",
+      action: pluginsCommand.action,
+    });
+  } catch (error) {
+    if (error instanceof AutoReplyConfigMutationError) {
+      return { shouldContinue: false, reply: { text: `⚠️ ${error.message}` } };
+    }
+    throw error;
   }
-  await writeConfigFile(validated.config);
+  let registryWarning: string | undefined;
+  await refreshPluginRegistryAfterConfigMutation({
+    config: committedConfig,
+    reason: "policy-changed",
+    logger: {
+      warn: (message) => {
+        registryWarning = message;
+      },
+    },
+  });
 
   return {
     shouldContinue: false,
     reply: {
-      text: `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Restart the gateway to apply.`,
+      text:
+        `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Gateway reload will apply it to new agent turns.` +
+        (registryWarning ? `\n${registryWarning}` : ""),
     },
   };
 };

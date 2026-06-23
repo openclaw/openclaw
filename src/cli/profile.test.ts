@@ -1,3 +1,4 @@
+// Profile CLI tests cover profile selection, persistence, and command wiring.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatCliCommand } from "./command-format.js";
@@ -69,6 +70,186 @@ describe("parseCliProfileArgs", () => {
     expect(res.argv).toEqual(["node", "openclaw", "status", "--deep"]);
   });
 
+  it("preserves Matrix QA --profile for the command parser", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "matrix",
+      "--profile",
+      "fast",
+      "--fail-fast",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "qa",
+      "matrix",
+      "--profile",
+      "fast",
+      "--fail-fast",
+    ]);
+  });
+
+  it("preserves Matrix QA --profile after leading root options", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--no-color",
+      "qa",
+      "matrix",
+      "--profile=fast",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual(["node", "openclaw", "--no-color", "qa", "matrix", "--profile=fast"]);
+  });
+
+  it("parses qa run --profile smoke-ci as a root profile", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile",
+      "smoke-ci",
+      "--category",
+      "agent-runtime-and-provider-execution.agent-turn-execution",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("smoke-ci");
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--category",
+      "agent-runtime-and-provider-execution.agent-turn-execution",
+    ]);
+  });
+
+  it("parses qa run --profile=release self-check invocations as root profiles", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile=release",
+      "--output",
+      "qa-report.md",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("release");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
+  });
+
+  it("preserves qa run --qa-profile for the command parser", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+      "--surface",
+      "agent-runtime-and-provider-execution",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBeNull();
+    expect(res.argv).toEqual([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+      "--surface",
+      "agent-runtime-and-provider-execution",
+    ]);
+  });
+
+  it("parses arbitrary qa run --profile values as root profiles", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile",
+      "work",
+      "--output",
+      "qa-report.md",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
+  });
+
+  it("parses arbitrary qa run --profile= values as root profiles", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "qa",
+      "run",
+      "--profile=work",
+      "--output",
+      "qa-report.md",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--output", "qa-report.md"]);
+  });
+
+  it("still parses root --profile before qa run", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "qa",
+      "run",
+      "--qa-profile",
+      "smoke-ci",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "run", "--qa-profile", "smoke-ci"]);
+  });
+
+  it("still parses root --profile before Matrix QA", () => {
+    const res = parseCliProfileArgs([
+      "node",
+      "openclaw",
+      "--profile",
+      "work",
+      "qa",
+      "matrix",
+      "--fail-fast",
+    ]);
+    if (!res.ok) {
+      throw new Error(res.error);
+    }
+    expect(res.profile).toBe("work");
+    expect(res.argv).toEqual(["node", "openclaw", "qa", "matrix", "--fail-fast"]);
+  });
+
   it("parses interleaved --dev after the command token", () => {
     const res = parseCliProfileArgs(["node", "openclaw", "status", "--dev"]);
     if (!res.ok) {
@@ -110,6 +291,7 @@ describe("applyCliProfileEnv", () => {
 
   it("does not override explicit env values", () => {
     const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "prod",
       OPENCLAW_STATE_DIR: "/custom",
       OPENCLAW_GATEWAY_PORT: "19099",
     };
@@ -118,6 +300,7 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
+    expect(env.OPENCLAW_PROFILE).toBe("dev");
     expect(env.OPENCLAW_STATE_DIR).toBe("/custom");
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
@@ -212,6 +395,14 @@ describe("formatCliCommand", () => {
     expect(
       formatCliCommand("openclaw gateway status --deep", { OPENCLAW_CONTAINER_HINT: "demo" }),
     ).toBe("openclaw --container demo gateway status --deep");
+  });
+
+  it("ignores unsafe container hints", () => {
+    expect(
+      formatCliCommand("openclaw gateway status --deep", {
+        OPENCLAW_CONTAINER_HINT: "demo; rm -rf /",
+      }),
+    ).toBe("openclaw gateway status --deep");
   });
 
   it("preserves both --container and --profile hints", () => {

@@ -1,12 +1,14 @@
+// Subagent control tests cover sending, steering, killing, and admin cleanup of
+// child runs recorded in the subagent registry and session store.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import * as sessions from "../config/sessions.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import {
-  __testing,
+  testing,
   killAllControlledSubagentRuns,
   killControlledSubagentRun,
   killSubagentRunAdmin,
@@ -14,15 +16,178 @@ import {
   steerControlledSubagentRun,
 } from "./subagent-control.js";
 import {
+  testing as subagentRegistryTesting,
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.js";
 
+vi.mock("../gateway/call.js", () => ({
+  callGateway: vi.fn(),
+}));
+
+vi.mock("./run-wait.js", () => {
+  const readLatestAssistantReplySnapshot = async (params: {
+    sessionKey: string;
+    limit?: number;
+    callGateway?: (request: CallGatewayOptions) => Promise<{ messages?: unknown[] }>;
+  }) => {
+    // The real helper snapshots assistant fingerprints so a steer command only
+    // reports new replies, not the baseline text that existed before steering.
+    const history = await params.callGateway?.({
+      method: "chat.history",
+      params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
+    });
+    const messages = Array.isArray(history?.messages) ? history.messages : [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const message = messages[i];
+      if (!message || typeof message !== "object") {
+        continue;
+      }
+      if ((message as { role?: unknown }).role !== "assistant") {
+        continue;
+      }
+      const content = (message as { content?: unknown }).content;
+      let text = "";
+      if (Array.isArray(content)) {
+        const textBlocks: string[] = [];
+        for (const block of content) {
+          if (
+            block &&
+            typeof block === "object" &&
+            typeof (block as { text?: unknown }).text === "string"
+          ) {
+            textBlocks.push((block as { text: string }).text);
+          }
+        }
+        text = textBlocks.join("\n");
+      } else if (typeof content === "string") {
+        text = content;
+      }
+      if (text.trim()) {
+        return { text, fingerprint: JSON.stringify(message) };
+      }
+    }
+    return {};
+  };
+
+  return {
+    readLatestAssistantReplySnapshot,
+    waitForAgentRunAndReadUpdatedAssistantReply: async (params: {
+      runId: string;
+      sessionKey: string;
+      timeoutMs: number;
+      limit?: number;
+      baseline?: { fingerprint?: string };
+      callGateway?: (request: CallGatewayOptions) => Promise<Record<string, unknown>>;
+    }) => {
+      const wait = await params.callGateway?.({
+        method: "agent.wait",
+        params: {
+          runId: params.runId,
+          timeoutMs: Math.max(1, Math.floor(params.timeoutMs)),
+        },
+        timeoutMs: Math.max(1, Math.floor(params.timeoutMs)) + 2000,
+      });
+      const status = wait?.status;
+      if (status === "timeout" || status === "pending" || status === "error") {
+        return { status, error: typeof wait?.error === "string" ? wait.error : undefined };
+      }
+      const latestReply = await readLatestAssistantReplySnapshot({
+        sessionKey: params.sessionKey,
+        limit: params.limit,
+        callGateway: params.callGateway as
+          | ((request: CallGatewayOptions) => Promise<{ messages?: unknown[] }>)
+          | undefined,
+      });
+      return {
+        status: "ok",
+        replyText:
+          latestReply.text &&
+          (!params.baseline?.fingerprint || latestReply.fingerprint !== params.baseline.fingerprint)
+            ? latestReply.text
+            : undefined,
+      };
+    },
+  };
+});
+
+function setSubagentControlDepsForTest(
+  overrides: Parameters<typeof testing.setDepsForTest>[0] = {},
+) {
+  // Tests use real JSON store mutation to catch persisted cleanup/kill state,
+  // while swapping process-owned queues and embedded-run aborts for fakes.
+  testing.setDepsForTest({
+    abortEmbeddedAgentRun: () => false,
+    clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
+    updateSessionStore: async <T>(
+      storePath: string,
+      mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
+    ) => {
+      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, SessionEntry>;
+      const result = await mutator(store);
+      fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
+      return result;
+    },
+    ...overrides,
+  });
+}
+
+let tempRoot = "";
+let tempStoreIndex = 0;
+
+beforeAll(() => {
+  tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-control-"));
+});
+
+afterAll(() => {
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+function nextSessionStorePath(label: string) {
+  tempStoreIndex += 1;
+  return path.join(tempRoot, `${tempStoreIndex}-${label}.json`);
+}
+
+function cfgWithSessionStore(storePath = nextSessionStorePath("sessions")): OpenClawConfig {
+  return {
+    session: { store: storePath },
+  } as OpenClawConfig;
+}
+
+function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
+  const storePath = nextSessionStorePath(label);
+  fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
+  return storePath;
+}
+
+beforeEach(() => {
+  setSubagentControlDepsForTest();
+  subagentRegistryTesting.setDepsForTest({
+    cleanupBrowserSessionsForLifecycleEnd: async () => {},
+    ensureContextEnginesInitialized: () => {},
+    ensureRuntimePluginsLoaded: () => {},
+    getSubagentRunsSnapshotForRead: (runs) => new Map(runs),
+    persistSubagentRunsToDisk: () => {},
+    persistSubagentRunsToDiskOrThrow: () => {},
+    restoreSubagentRunsFromDisk: () => 0,
+    resolveContextEngine: async () => ({
+      info: { id: "test", name: "Test" },
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      ingest: async () => ({ ingested: false }),
+    }),
+  });
+});
+
+afterEach(() => {
+  subagentRegistryTesting.setDepsForTest();
+});
+
 describe("sendControlledSubagentMessage", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("rejects runs controlled by another session", async () => {
@@ -71,7 +236,7 @@ describe("sendControlledSubagentMessage", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent") {
           throw new Error("gateway unavailable");
@@ -104,11 +269,9 @@ describe("sendControlledSubagentMessage", () => {
       message: "continue",
     });
 
-    expect(result).toEqual({
-      status: "error",
-      runId: expect.any(String),
-      error: "gateway unavailable",
-    });
+    expect(result.status).toBe("error");
+    expect(typeof result.runId).toBe("string");
+    expect(result.error).toBe("gateway unavailable");
   });
 
   it("does not send to a newer live run when the caller passes a stale run entry", async () => {
@@ -170,16 +333,16 @@ describe("sendControlledSubagentMessage", () => {
       outcome: { status: "ok" },
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
         if (request.method === "agent") {
           return { runId: "run-followup-send" } as T;
         }
         if (request.method === "agent.wait") {
           return { status: "done" } as T;
-        }
-        if (request.method === "chat.history") {
-          return { messages: [] } as T;
         }
         throw new Error(`unexpected method: ${request.method}`);
       },
@@ -245,16 +408,16 @@ describe("sendControlledSubagentMessage", () => {
       outcome: { status: "ok" },
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          return { messages: [] } as T;
+        }
         if (request.method === "agent") {
           return { runId: "run-followup-stale-send" } as T;
         }
         if (request.method === "agent.wait") {
           return { status: "done" } as T;
-        }
-        if (request.method === "chat.history") {
-          return { messages: [] } as T;
         }
         throw new Error(`unexpected method: ${request.method}`);
       },
@@ -292,33 +455,93 @@ describe("sendControlledSubagentMessage", () => {
       replyText: undefined,
     });
   });
+
+  it("does not return the previous assistant reply when no new assistant message appears", async () => {
+    addSubagentRunForTests({
+      runId: "run-owned-stale-reply",
+      childSessionKey: "agent:main:subagent:owned-stale-reply",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "continue work",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      outcome: { status: "ok" },
+    });
+
+    let historyCalls = 0;
+    const staleAssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "older reply from a previous run" }],
+    };
+
+    setSubagentControlDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "chat.history") {
+          historyCalls += 1;
+          return { messages: [staleAssistantMessage] } as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-followup-stale-reply" } as T;
+        }
+        if (request.method === "agent.wait") {
+          return { status: "done" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await sendControlledSubagentMessage({
+      cfg: {
+        channels: { whatsapp: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-owned-stale-reply",
+        childSessionKey: "agent:main:subagent:owned-stale-reply",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "continue work",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+        endedAt: Date.now() - 1_000,
+        outcome: { status: "ok" },
+      },
+      message: "continue",
+    });
+
+    expect(historyCalls).toBe(2);
+    expect(result).toEqual({
+      status: "ok",
+      runId: "run-followup-stale-reply",
+      replyText: undefined,
+    });
+  });
 });
 
 describe("killSubagentRunAdmin", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("kills a subagent by session key without requester ownership checks", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-admin-kill-"));
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:worker";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            sessionId: "sess-worker",
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("admin-kill", {
+      [childSessionKey]: {
+        sessionId: "sess-worker",
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-worker",
@@ -332,27 +555,23 @@ describe("killSubagentRunAdmin", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    const cfg = {
-      session: { store: storePath },
-    } as OpenClawConfig;
+    const cfg = cfgWithSessionStore(storePath);
 
     const result = await killSubagentRunAdmin({
       cfg,
       sessionKey: childSessionKey,
     });
 
-    expect(result).toMatchObject({
-      found: true,
-      killed: true,
-      runId: "run-worker",
-      sessionKey: childSessionKey,
-    });
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(true);
+    expect(result.runId).toBe("run-worker");
+    expect(result.sessionKey).toBe(childSessionKey);
     expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 
   it("returns found=false when the session key is not tracked as a subagent run", async () => {
     const result = await killSubagentRunAdmin({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       sessionKey: "agent:main:subagent:missing",
     });
 
@@ -388,37 +607,24 @@ describe("killSubagentRunAdmin", () => {
     });
 
     const result = await killSubagentRunAdmin({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       sessionKey: childSessionKey,
     });
 
-    expect(result).toMatchObject({
-      found: true,
-      killed: false,
-      runId: "run-current-admin",
-      sessionKey: childSessionKey,
-    });
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(false);
+    expect(result.runId).toBe("run-current-admin");
+    expect(result.sessionKey).toBe(childSessionKey);
   });
 
   it("still terminates the run when session store persistence fails during kill", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-admin-kill-store-"));
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:worker-store-fail";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            sessionId: "sess-worker-store-fail",
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("admin-kill-store-fail", {
+      [childSessionKey]: {
+        sessionId: "sess-worker-store-fail",
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-worker-store-fail",
@@ -432,55 +638,38 @@ describe("killSubagentRunAdmin", () => {
       startedAt: Date.now() - 4_000,
     });
 
-    const updateSessionStoreSpy = vi
-      .spyOn(sessions, "updateSessionStore")
-      .mockRejectedValueOnce(new Error("session store unavailable"));
+    setSubagentControlDepsForTest({
+      updateSessionStore: async () => {
+        throw new Error("session store unavailable");
+      },
+    });
 
-    try {
-      const result = await killSubagentRunAdmin({
-        cfg: {
-          session: { store: storePath },
-        } as OpenClawConfig,
-        sessionKey: childSessionKey,
-      });
+    const result = await killSubagentRunAdmin({
+      cfg: cfgWithSessionStore(storePath),
+      sessionKey: childSessionKey,
+    });
 
-      expect(result).toMatchObject({
-        found: true,
-        killed: true,
-        runId: "run-worker-store-fail",
-        sessionKey: childSessionKey,
-      });
-      expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
-    } finally {
-      updateSessionStoreSpy.mockRestore();
-    }
+    expect(result.found).toBe(true);
+    expect(result.killed).toBe(true);
+    expect(result.runId).toBe("run-worker-store-fail");
+    expect(result.sessionKey).toBe(childSessionKey);
+    expect(getSubagentRunByChildSessionKey(childSessionKey)?.endedAt).toBeTypeOf("number");
   });
 });
 
 describe("killControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("does not mutate the live session when the caller passes a stale run entry", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-"));
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:stale-kill-worker";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("stale-kill", {
+      [childSessionKey]: {
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-current",
@@ -495,9 +684,7 @@ describe("killControlledSubagentRun", () => {
     });
 
     const result = await killControlledSubagentRun({
-      cfg: {
-        session: { store: storePath },
-      } as OpenClawConfig,
+      cfg: cfgWithSessionStore(storePath),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -587,7 +774,7 @@ describe("killControlledSubagentRun", () => {
     });
 
     const result = await killControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -688,7 +875,7 @@ describe("killControlledSubagentRun", () => {
     });
 
     const result = await killControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -724,27 +911,16 @@ describe("killControlledSubagentRun", () => {
 describe("killAllControlledSubagentRuns", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("ignores stale run snapshots in bulk kill requests", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-"));
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:stale-kill-all-worker";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("stale-kill-all", {
+      [childSessionKey]: {
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-current-bulk",
@@ -759,9 +935,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {
-        session: { store: storePath },
-      } as OpenClawConfig,
+      cfg: cfgWithSessionStore(storePath),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -797,25 +971,12 @@ describe("killAllControlledSubagentRuns", () => {
   });
 
   it("does not let a stale bulk entry suppress the current live entry for the same child key", async () => {
-    const tmpDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-subagent-stale-kill-all-shadow-"),
-    );
-    const storePath = path.join(tmpDir, "sessions.json");
     const childSessionKey = "agent:main:subagent:stale-kill-all-shadow-worker";
-
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          [childSessionKey]: {
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    const storePath = writeSessionStoreFixture("stale-kill-all-shadow", {
+      [childSessionKey]: {
+        updatedAt: Date.now(),
+      },
+    });
 
     addSubagentRunForTests({
       runId: "run-current-shadow",
@@ -830,9 +991,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {
-        session: { store: storePath },
-      } as OpenClawConfig,
+      cfg: cfgWithSessionStore(storePath),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -902,7 +1061,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -974,7 +1133,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
 
     const result = await killAllControlledSubagentRuns({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -1010,7 +1169,7 @@ describe("killAllControlledSubagentRuns", () => {
 describe("steerControlledSubagentRun", () => {
   afterEach(() => {
     resetSubagentRegistryForTests({ persist: false });
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("returns an error and clears the restart marker when run remap fails", async () => {
@@ -1030,7 +1189,7 @@ describe("steerControlledSubagentRun", () => {
       .spyOn(await import("./subagent-registry.js"), "replaceSubagentRunAfterSteer")
       .mockReturnValue(false);
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
@@ -1044,7 +1203,7 @@ describe("steerControlledSubagentRun", () => {
 
     try {
       const result = await steerControlledSubagentRun({
-        cfg: {} as OpenClawConfig,
+        cfg: cfgWithSessionStore(),
         controller: {
           controllerSessionKey: "agent:main:main",
           callerSessionKey: "agent:main:main",
@@ -1072,24 +1231,23 @@ describe("steerControlledSubagentRun", () => {
         sessionId: undefined,
         error: "failed to replace steered subagent run",
       });
-      expect(getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker")).toMatchObject({
-        runId: "run-steer-old",
-        suppressAnnounceReason: undefined,
-      });
+      const storedRun = getSubagentRunByChildSessionKey("agent:main:subagent:steer-worker");
+      expect(storedRun?.runId).toBe("run-steer-old");
+      expect(storedRun?.suppressAnnounceReason).toBeUndefined();
     } finally {
       replaceSpy.mockRestore();
     }
   });
 
   it("rejects steering runs that are no longer tracked in the registry", async () => {
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async () => {
         throw new Error("gateway should not be called");
       },
     });
 
     const result = await steerControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -1156,7 +1314,7 @@ describe("steerControlledSubagentRun", () => {
       startedAt: Date.now() - 500,
     });
 
-    __testing.setDepsForTest({
+    setSubagentControlDepsForTest({
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
         if (request.method === "agent.wait") {
           return {} as T;
@@ -1169,7 +1327,7 @@ describe("steerControlledSubagentRun", () => {
     });
 
     const result = await steerControlledSubagentRun({
-      cfg: {} as OpenClawConfig,
+      cfg: cfgWithSessionStore(),
       controller: {
         controllerSessionKey: "agent:main:main",
         callerSessionKey: "agent:main:main",
@@ -1201,5 +1359,131 @@ describe("steerControlledSubagentRun", () => {
       label: "current ended steer task",
       text: "steered current ended steer task.",
     });
+  });
+
+  it("steers a yielded run even though the paused attempt has ended", async () => {
+    const childSessionKey = "agent:main:subagent:yield-steer-worker";
+    addSubagentRunForTests({
+      runId: "run-yielded-steer",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "yielded steer task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      pauseReason: "sessions_yield",
+    });
+
+    setSubagentControlDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent.wait") {
+          return {} as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-yielded-followup" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await steerControlledSubagentRun({
+      cfg: cfgWithSessionStore(),
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-yielded-steer",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "yielded steer task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+        endedAt: Date.now() - 1_000,
+        pauseReason: "sessions_yield",
+      },
+      message: "continue now",
+    });
+
+    expect(result).toEqual({
+      status: "accepted",
+      runId: "run-yielded-followup",
+      sessionKey: childSessionKey,
+      sessionId: undefined,
+      mode: "restart",
+      label: "yielded steer task",
+      text: "steered yielded steer task.",
+    });
+  });
+
+  it("rotates the child session when restarting a previously active session", async () => {
+    const childSessionKey = "agent:main:subagent:active-steer-worker";
+    const storePath = writeSessionStoreFixture("steer-restart-session", {
+      [childSessionKey]: {
+        sessionId: "old-child-session",
+        updatedAt: Date.now(),
+      },
+    });
+    const agentCalls: CallGatewayOptions[] = [];
+    addSubagentRunForTests({
+      runId: "run-active-steer",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "active steer task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+    });
+
+    setSubagentControlDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayOptions) => {
+        if (request.method === "agent.wait") {
+          return {} as T;
+        }
+        if (request.method === "agent") {
+          agentCalls.push(request);
+          return { runId: "run-active-steer-restarted" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await steerControlledSubagentRun({
+      cfg: cfgWithSessionStore(storePath),
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-active-steer",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "active steer task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+      },
+      message: "updated direction",
+    });
+
+    expect(result.status).toBe("accepted");
+    expect(result.sessionId).toBeTypeOf("string");
+    expect(result.sessionId).not.toBe("old-child-session");
+    const agentParams = agentCalls[0]?.params as { sessionId?: string } | undefined;
+    expect(agentParams?.sessionId).toBe(result.sessionId);
   });
 });

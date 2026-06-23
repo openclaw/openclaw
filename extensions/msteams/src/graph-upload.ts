@@ -10,13 +10,14 @@
  */
 
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import { createMSTeamsHttpError } from "./http-error.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
 
-export interface OneDriveUploadResult {
+interface OneDriveUploadResult {
   id: string;
   webUrl: string;
   name: string;
@@ -50,8 +51,7 @@ export async function uploadToOneDrive(params: {
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`OneDrive upload failed: ${res.status} ${res.statusText} - ${body}`);
+    throw await createMSTeamsHttpError(res, "OneDrive upload failed");
   }
 
   const data = (await res.json()) as {
@@ -71,7 +71,7 @@ export async function uploadToOneDrive(params: {
   };
 }
 
-export interface OneDriveSharingLink {
+interface OneDriveSharingLink {
   webUrl: string;
 }
 
@@ -79,7 +79,7 @@ export interface OneDriveSharingLink {
  * Create a sharing link for a OneDrive file.
  * The link allows organization members to view the file.
  */
-export async function createSharingLink(params: {
+async function createSharingLink(params: {
   itemId: string;
   tokenProvider: MSTeamsAccessTokenProvider;
   /** Sharing scope: "organization" (default) or "anonymous" */
@@ -103,8 +103,7 @@ export async function createSharingLink(params: {
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Create sharing link failed: ${res.status} ${res.statusText} - ${body}`);
+    throw await createMSTeamsHttpError(res, "Create sharing link failed");
   }
 
   const data = (await res.json()) as {
@@ -198,8 +197,7 @@ export async function uploadToSharePoint(params: {
   );
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`SharePoint upload failed: ${res.status} ${res.statusText} - ${body}`);
+    throw await createMSTeamsHttpError(res, "SharePoint upload failed");
   }
 
   const data = (await res.json()) as {
@@ -219,7 +217,7 @@ export async function uploadToSharePoint(params: {
   };
 }
 
-export interface ChatMember {
+interface ChatMember {
   aadObjectId: string;
   displayName?: string;
 }
@@ -259,8 +257,7 @@ export async function getDriveItemProperties(params: {
   );
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Get driveItem properties failed: ${res.status} ${res.statusText} - ${body}`);
+    throw await createMSTeamsHttpError(res, "Get driveItem properties failed");
   }
 
   const data = (await res.json()) as {
@@ -327,7 +324,7 @@ export async function resolveGraphChatId(params: {
   }
 
   const res = await fetchFn(`${GRAPH_ROOT}${path}`, {
-    headers: { Authorization: `Bearer ${token}` },
+    headers: { "User-Agent": buildUserAgent(), Authorization: `Bearer ${token}` },
   });
 
   if (!res.ok) {
@@ -358,7 +355,7 @@ export async function resolveGraphChatId(params: {
  * Get members of a Teams chat for per-user sharing.
  * Used to create sharing links scoped to only the chat participants.
  */
-export async function getChatMembers(params: {
+async function getChatMembers(params: {
   chatId: string;
   tokenProvider: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
@@ -371,8 +368,7 @@ export async function getChatMembers(params: {
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`Get chat members failed: ${res.status} ${res.statusText} - ${body}`);
+    throw await createMSTeamsHttpError(res, "Get chat members failed");
   }
 
   const data = (await res.json()) as {
@@ -395,7 +391,7 @@ export async function getChatMembers(params: {
  * For organization scope (default), uses v1.0 API.
  * For per-user scope, uses beta API with recipients.
  */
-export async function createSharePointSharingLink(params: {
+async function createSharePointSharingLink(params: {
   siteId: string;
   itemId: string;
   tokenProvider: MSTeamsAccessTokenProvider;
@@ -436,10 +432,7 @@ export async function createSharePointSharingLink(params: {
   );
 
   if (!res.ok) {
-    const respBody = await res.text().catch(() => "");
-    throw new Error(
-      `Create SharePoint sharing link failed: ${res.status} ${res.statusText} - ${respBody}`,
-    );
+    throw await createMSTeamsHttpError(res, "Create SharePoint sharing link failed");
   }
 
   const data = (await res.json()) as {

@@ -1,6 +1,8 @@
+// Mattermost tests cover accounts plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
+  listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
   resolveMattermostReplyToMode,
@@ -53,9 +55,51 @@ describe("resolveDefaultMattermostAccountId", () => {
 
     expect(resolveDefaultMattermostAccountId(cfg)).toBe("default");
   });
+
+  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          botToken: "tok-default",
+          baseUrl: "https://chat.example.com",
+          accounts: {
+            work: {
+              enabled: false,
+              botToken: "tok-work",
+              baseUrl: "https://work.example.com",
+            },
+          },
+        },
+      },
+    };
+
+    expect(listMattermostAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultMattermostAccountId(cfg)).toBe("default");
+  });
 });
 
 describe("resolveMattermostReplyToMode", () => {
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          defaultAccount: "alerts",
+          accounts: {
+            alerts: {
+              botToken: "tok-alerts",
+              baseUrl: "https://alerts.example.com",
+              replyToMode: "all",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg });
+    expect(account.accountId).toBe("alerts");
+    expect(resolveMattermostReplyToMode(account, "channel")).toBe("all");
+  });
+
   it("uses the configured mode for channel and group messages", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -113,5 +157,25 @@ describe("resolveMattermostReplyToMode", () => {
       native: true,
       callbackPath: "/hooks/work",
     });
+  });
+
+  it("resolves documented streaming mode from account config", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: "partial",
+            accounts: {
+              work: {
+                streaming: "off",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.streamingMode).toBe("off");
   });
 });

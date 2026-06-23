@@ -1,22 +1,45 @@
-import type { Client } from "@buape/carbon";
+// Discord plugin module implements message handler behavior.
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/config-runtime";
-import { createDedupeCache } from "openclaw/plugin-sdk/infra-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { buildDiscordInboundJob } from "./inbound-job.js";
-import { createDiscordInboundWorker } from "./inbound-worker.js";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
+import type { Client } from "../internal/discord.js";
+import {
+  buildDiscordInboundReplayKey,
+  claimDiscordInboundReplay,
+  commitDiscordInboundReplay,
+  createDiscordInboundReplayGuard,
+  DiscordRetryableInboundError,
+  releaseDiscordInboundReplay,
+} from "./inbound-dedupe.js";
+import { buildDiscordInboundJob, resolveDiscordInboundJobQueueKey } from "./inbound-job.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
-import { preflightDiscordMessage } from "./message-handler.preflight.js";
-import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
+import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
+import type {
+  DiscordMessagePreflightContext,
+  DiscordMessagePreflightParams,
+} from "./message-handler.preflight.types.js";
+import { resolveDiscordAcceptedTypingPrestart } from "./message-handler.reply-typing-policy.js";
+import {
+  createDiscordMessageRunQueue,
+  type DiscordMessageRunQueueTestingHooks,
+} from "./message-run-queue.js";
 import {
   hasDiscordMessageStickers,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
 } from "./message-utils.js";
+import {
+  createDiscordReplyTypingFeedback,
+  type DiscordReplyTypingFeedback,
+} from "./reply-typing-feedback.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
+
+type PreflightDiscordMessage =
+  typeof import("./message-handler.preflight.js").preflightDiscordMessage;
+type CreateDiscordReplyTypingFeedback = typeof createDiscordReplyTypingFeedback;
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
@@ -24,32 +47,77 @@ type DiscordMessageHandlerParams = Omit<
 > & {
   setStatus?: DiscordMonitorStatusSink;
   abortSignal?: AbortSignal;
-  workerRunTimeoutMs?: number;
+  testing?: DiscordMessageHandlerTestingHooks;
 };
+
+type DiscordMessageHandlerTestingHooks = DiscordMessageRunQueueTestingHooks & {
+  preflightDiscordMessage?: PreflightDiscordMessage;
+  createReplyTypingFeedback?: CreateDiscordReplyTypingFeedback;
+};
+
+type PrestartedTypingFeedbackEntry = {
+  channelId: string;
+  feedback: DiscordReplyTypingFeedback;
+};
+
+let messagePreflightRuntimePromise:
+  | Promise<typeof import("./message-handler.preflight.js")>
+  | undefined;
+
+async function loadMessagePreflightRuntime() {
+  messagePreflightRuntimePromise ??= import("./message-handler.preflight.js");
+  return await messagePreflightRuntimePromise;
+}
 
 export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
   deactivate: () => void;
 };
 
-const RECENT_DISCORD_MESSAGE_TTL_MS = 5 * 60_000;
-const RECENT_DISCORD_MESSAGE_MAX = 5000;
+function isNonEmptyString(value: string | undefined): value is string {
+  return typeof value === "string" && value.length > 0;
+}
 
-function buildDiscordInboundDedupeKey(params: {
-  accountId: string;
-  data: DiscordMessageEvent;
-}): string | null {
-  const messageId = params.data.message?.id?.trim();
-  if (!messageId) {
-    return null;
+function startAcceptedTypingFeedback(params: {
+  ctx: DiscordMessagePreflightContext;
+  createFeedback?: CreateDiscordReplyTypingFeedback;
+  dedupeKey: string;
+  activeFeedback: Map<string, PrestartedTypingFeedbackEntry>;
+}): DiscordReplyTypingFeedback | undefined {
+  const { ctx, createFeedback, dedupeKey, activeFeedback } = params;
+  if (!resolveDiscordAcceptedTypingPrestart(ctx).shouldPrestart) {
+    return undefined;
   }
-  const channelId = resolveDiscordMessageChannelId({
-    message: params.data.message,
-    eventChannelId: params.data.channel_id,
+  const channelId = ctx.messageChannelId.trim();
+  const existing = activeFeedback.get(dedupeKey);
+  if (existing) {
+    // One pre-dispatch keepalive owns each serialized Discord queue key.
+    // Later queued jobs get fresh typing when their dispatch turn starts.
+    return undefined;
+  }
+  const replyTypingFeedback =
+    ctx.replyTypingFeedback ??
+    (createFeedback ?? createDiscordReplyTypingFeedback)({
+      cfg: ctx.cfg,
+      token: ctx.token,
+      accountId: ctx.accountId,
+      channelId: ctx.messageChannelId,
+      log: logVerbose,
+    });
+  const cleanup = replyTypingFeedback.onCleanup;
+  replyTypingFeedback.onCleanup = () => {
+    cleanup?.();
+    // Cleanup is the lease release for both normal dispatch and skipped jobs.
+    // Without this, a stale queue key would suppress future accepted typing.
+    if (activeFeedback.get(dedupeKey)?.feedback === replyTypingFeedback) {
+      activeFeedback.delete(dedupeKey);
+    }
+  };
+  activeFeedback.set(dedupeKey, { channelId, feedback: replyTypingFeedback });
+  ctx.replyTypingFeedback = replyTypingFeedback;
+  void replyTypingFeedback.onReplyStart().catch((err: unknown) => {
+    logVerbose(`discord accepted typing feedback failed: ${String(err)}`);
   });
-  if (!channelId) {
-    return null;
-  }
-  return `${params.accountId}:${channelId}:${messageId}`;
+  return replyTypingFeedback;
 }
 
 export function createDiscordMessageHandler(
@@ -64,21 +132,24 @@ export function createDiscordMessageHandler(
     params.discordConfig?.ackReactionScope ??
     params.cfg.messages?.ackReactionScope ??
     "group-mentions";
-  const inboundWorker = createDiscordInboundWorker({
+  const preflightDiscordMessageImpl = params.testing?.preflightDiscordMessage;
+  const replayGuard = createDiscordInboundReplayGuard();
+  // The map owns pre-dispatch typing leases, not queued work itself.
+  // Each lease is released by the feedback cleanup hook installed below.
+  const prestartedTypingFeedback = new Map<string, PrestartedTypingFeedbackEntry>();
+  const messageRunQueue = createDiscordMessageRunQueue({
     runtime: params.runtime,
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
-    runTimeoutMs: params.workerRunTimeoutMs,
-  });
-  const recentInboundMessages = createDedupeCache({
-    ttlMs: RECENT_DISCORD_MESSAGE_TTL_MS,
-    maxSize: RECENT_DISCORD_MESSAGE_MAX,
+    replayGuard,
+    testing: params.testing,
   });
 
   const { debouncer } = createChannelInboundDebouncer<{
     data: DiscordMessageEvent;
     client: Client;
     abortSignal?: AbortSignal;
+    replayKey?: string;
   }>({
     cfg: params.cfg,
     channel: "discord",
@@ -106,10 +177,9 @@ export function createDiscordMessageHandler(
       return shouldDebounceTextInbound({
         text: baseText,
         cfg: params.cfg,
-        hasMedia: Boolean(
+        hasMedia:
           (message.attachments && message.attachments.length > 0) ||
           hasDiscordMessageStickers(message),
-        ),
       });
     },
     onFlush: async (entries) => {
@@ -117,71 +187,122 @@ export function createDiscordMessageHandler(
       if (!last) {
         return;
       }
+      const replayKeys = entries.map((entry) => entry.replayKey).filter(isNonEmptyString);
       const abortSignal = last.abortSignal;
       if (abortSignal?.aborted) {
+        releaseDiscordInboundReplay({
+          replayKeys,
+          error: abortSignal.reason,
+          replayGuard,
+        });
         return;
       }
-      if (entries.length === 1) {
-        const ctx = await preflightDiscordMessage({
+      try {
+        if (entries.length === 1) {
+          const preflight =
+            preflightDiscordMessageImpl ??
+            (await loadMessagePreflightRuntime()).preflightDiscordMessage;
+          const ctx = await preflight({
+            ...params,
+            ackReactionScope,
+            groupPolicy,
+            abortSignal,
+            data: last.data,
+            client: last.client,
+          });
+          if (!ctx) {
+            await commitDiscordInboundReplay({ replayKeys, replayGuard });
+            return;
+          }
+          const queueKey = resolveDiscordInboundJobQueueKey(ctx);
+          startAcceptedTypingFeedback({
+            ctx,
+            createFeedback: params.testing?.createReplyTypingFeedback,
+            dedupeKey: queueKey,
+            activeFeedback: prestartedTypingFeedback,
+          });
+          applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
+          messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+          return;
+        }
+        const combinedBaseText = entries
+          .map((entry) =>
+            resolveDiscordMessageText(entry.data.message, { includeForwarded: false }),
+          )
+          .filter(Boolean)
+          .join("\n");
+        const syntheticMessage = Object.create(Object.getPrototypeOf(last.data.message), {
+          ...Object.getOwnPropertyDescriptors(last.data.message),
+          content: { value: combinedBaseText, enumerable: true, configurable: true },
+          attachments: { value: [], enumerable: true, configurable: true },
+          message_snapshots: {
+            value: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
+            enumerable: true,
+            configurable: true,
+          },
+          messageSnapshots: {
+            value: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
+            enumerable: true,
+            configurable: true,
+          },
+          rawData: {
+            value: { ...(last.data.message as { rawData?: Record<string, unknown> }).rawData },
+            enumerable: true,
+            configurable: true,
+          },
+        }) as DiscordMessageEvent["message"];
+        const syntheticData: DiscordMessageEvent = {
+          ...last.data,
+          message: syntheticMessage,
+        };
+        const preflight =
+          preflightDiscordMessageImpl ??
+          (await loadMessagePreflightRuntime()).preflightDiscordMessage;
+        const ctx = await preflight({
           ...params,
           ackReactionScope,
           groupPolicy,
           abortSignal,
-          data: last.data,
+          data: syntheticData,
           client: last.client,
         });
         if (!ctx) {
+          await commitDiscordInboundReplay({ replayKeys, replayGuard });
           return;
         }
-        inboundWorker.enqueue(buildDiscordInboundJob(ctx));
-        return;
-      }
-      const combinedBaseText = entries
-        .map((entry) => resolveDiscordMessageText(entry.data.message, { includeForwarded: false }))
-        .filter(Boolean)
-        .join("\n");
-      const syntheticMessage = {
-        ...last.data.message,
-        content: combinedBaseText,
-        attachments: [],
-        message_snapshots: (last.data.message as { message_snapshots?: unknown }).message_snapshots,
-        messageSnapshots: (last.data.message as { messageSnapshots?: unknown }).messageSnapshots,
-        rawData: {
-          ...(last.data.message as { rawData?: Record<string, unknown> }).rawData,
-        },
-      };
-      const syntheticData: DiscordMessageEvent = {
-        ...last.data,
-        message: syntheticMessage,
-      };
-      const ctx = await preflightDiscordMessage({
-        ...params,
-        ackReactionScope,
-        groupPolicy,
-        abortSignal,
-        data: syntheticData,
-        client: last.client,
-      });
-      if (!ctx) {
-        return;
-      }
-      if (entries.length > 1) {
-        const ids = entries.map((entry) => entry.data.message?.id).filter(Boolean) as string[];
-        if (ids.length > 0) {
-          const ctxBatch = ctx as typeof ctx & {
-            MessageSids?: string[];
-            MessageSidFirst?: string;
-            MessageSidLast?: string;
-          };
-          ctxBatch.MessageSids = ids;
-          ctxBatch.MessageSidFirst = ids[0];
-          ctxBatch.MessageSidLast = ids[ids.length - 1];
+        const queueKey = resolveDiscordInboundJobQueueKey(ctx);
+        startAcceptedTypingFeedback({
+          ctx,
+          createFeedback: params.testing?.createReplyTypingFeedback,
+          dedupeKey: queueKey,
+          activeFeedback: prestartedTypingFeedback,
+        });
+        applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
+        if (entries.length > 1) {
+          const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
+          if (ids.length > 0) {
+            const ctxBatch = ctx as typeof ctx & {
+              MessageSids?: string[];
+              MessageSidFirst?: string;
+              MessageSidLast?: string;
+            };
+            ctxBatch.MessageSids = ids;
+            ctxBatch.MessageSidFirst = ids[0];
+            ctxBatch.MessageSidLast = ids[ids.length - 1];
+          }
         }
+        messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
+      } catch (error) {
+        if (error instanceof DiscordRetryableInboundError) {
+          releaseDiscordInboundReplay({ replayKeys, error, replayGuard });
+        } else {
+          await commitDiscordInboundReplay({ replayKeys, replayGuard });
+        }
+        throw error;
       }
-      inboundWorker.enqueue(buildDiscordInboundJob(ctx));
     },
     onError: (err) => {
-      params.runtime.error?.(danger(`discord debounce flush failed: ${String(err)}`));
+      params.runtime.error(danger(`discord debounce flush failed: ${String(err)}`));
     },
   });
 
@@ -199,21 +320,31 @@ export function createDiscordMessageHandler(
       if (params.botUserId && msgAuthorId === params.botUserId) {
         return;
       }
-      const dedupeKey = buildDiscordInboundDedupeKey({
+      const replayKey = buildDiscordInboundReplayKey({
         accountId: params.accountId,
         data,
       });
-      if (dedupeKey && recentInboundMessages.check(dedupeKey)) {
+      if (
+        !(await claimDiscordInboundReplay({
+          replayKey,
+          replayGuard,
+        }))
+      ) {
         return;
       }
 
-      await debouncer.enqueue({ data, client, abortSignal: options?.abortSignal });
+      await debouncer.enqueue({
+        data,
+        client,
+        abortSignal: options?.abortSignal,
+        replayKey: replayKey ?? undefined,
+      });
     } catch (err) {
-      params.runtime.error?.(danger(`handler failed: ${String(err)}`));
+      params.runtime.error(danger(`handler failed: ${String(err)}`));
     }
   };
 
-  handler.deactivate = inboundWorker.deactivate;
+  handler.deactivate = messageRunQueue.deactivate;
 
   return handler;
 }

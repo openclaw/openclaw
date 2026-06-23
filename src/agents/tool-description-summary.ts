@@ -1,3 +1,11 @@
+/**
+ * Tool description summary helpers.
+ *
+ * Produces compact one-line summaries for verbose tool descriptions in inventory/list views.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+
 function normalizeSummaryWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
@@ -12,7 +20,7 @@ function truncateSummary(value: string, maxLen = 120): string {
   return `${trimmed}...`;
 }
 
-export function isToolDocBlockStart(line: string): boolean {
+function isToolDocBlockStart(line: string): boolean {
   const normalized = line.trim().toUpperCase();
   if (!normalized) {
     return false;
@@ -32,34 +40,29 @@ export function isToolDocBlockStart(line: string): boolean {
     return true;
   }
   return (
-    normalized.endsWith(":") && normalized === normalized.toUpperCase() && normalized.length > 12
+    normalized.endsWith(":") && line.trim() === line.trim().toUpperCase() && normalized.length > 12
   );
 }
 
+/** Build a short one-line summary from a tool description. */
 export function summarizeToolDescriptionText(params: {
   rawDescription?: string | null;
   displaySummary?: string | null;
   maxLen?: number;
 }): string {
-  const explicit = typeof params.displaySummary === "string" ? params.displaySummary.trim() : "";
+  const explicit = normalizeOptionalString(params.displaySummary) ?? "";
   if (explicit) {
     return truncateSummary(normalizeSummaryWhitespace(explicit), params.maxLen);
   }
 
-  const raw = typeof params.rawDescription === "string" ? params.rawDescription.trim() : "";
+  const raw = normalizeOptionalString(params.rawDescription) ?? "";
   if (!raw) {
     return "Tool";
   }
 
-  const paragraphs = raw
-    .split(/\n\s*\n/g)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const paragraphs = normalizeStringEntries(raw.split(/\n\s*\n/g));
   for (const paragraph of paragraphs) {
-    const lines = paragraph
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const lines = normalizeStringEntries(paragraph.split("\n"));
     if (lines.length === 0) {
       continue;
     }
@@ -87,12 +90,13 @@ export function summarizeToolDescriptionText(params: {
   return firstLine ? truncateSummary(normalizeSummaryWhitespace(firstLine), params.maxLen) : "Tool";
 }
 
+/** Build a longer verbose description while excluding schema/action blocks. */
 export function describeToolForVerbose(params: {
   rawDescription?: string | null;
   fallback: string;
   maxLen?: number;
 }): string {
-  const raw = typeof params.rawDescription === "string" ? params.rawDescription.trim() : "";
+  const raw = normalizeOptionalString(params.rawDescription) ?? "";
   if (!raw) {
     return params.fallback;
   }

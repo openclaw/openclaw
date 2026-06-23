@@ -1,3 +1,4 @@
+// Discord tests cover normalize plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   looksLikeDiscordTargetId,
@@ -25,6 +26,25 @@ describe("discord target normalization", () => {
     if (!result.ok) {
       expect(result.error.message).toContain("Discord recipient is required");
     }
+  });
+
+  it("treats bare outbound IDs listed in allowFrom as DM targets", () => {
+    expect(normalizeDiscordOutboundTarget("1234567890", ["1234567890"])).toEqual({
+      ok: true,
+      to: "user:1234567890",
+    });
+    expect(normalizeDiscordOutboundTarget("2345678901", ["user:2345678901"])).toEqual({
+      ok: true,
+      to: "user:2345678901",
+    });
+    expect(normalizeDiscordOutboundTarget("3456789012", ["<@3456789012>"])).toEqual({
+      ok: true,
+      to: "user:3456789012",
+    });
+    expect(normalizeDiscordOutboundTarget("4567890123", ["*"])).toEqual({
+      ok: true,
+      to: "channel:4567890123",
+    });
   });
 
   it("detects Discord-style target identifiers", () => {

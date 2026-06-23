@@ -4,14 +4,21 @@ read_when:
   - You want to use Exa for web_search
   - You need an EXA_API_KEY
   - You want neural search or content extraction
-title: "Exa Search"
+title: "Exa search"
 ---
-
-# Exa Search
 
 OpenClaw supports [Exa AI](https://exa.ai/) as a `web_search` provider. Exa
 offers neural, keyword, and hybrid search modes with built-in content
 extraction (highlights, text, summaries).
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/exa-plugin
+openclaw gateway restart
+```
 
 ## Get an API key
 
@@ -40,6 +47,7 @@ extraction (highlights, text, summaries).
         config: {
           webSearch: {
             apiKey: "exa-...", // optional if EXA_API_KEY is set
+            baseUrl: "https://api.exa.ai", // optional; OpenClaw appends /search
           },
         },
       },
@@ -58,17 +66,43 @@ extraction (highlights, text, summaries).
 **Environment alternative:** set `EXA_API_KEY` in the Gateway environment.
 For a gateway install, put it in `~/.openclaw/.env`.
 
+## Base URL override
+
+Set `plugins.entries.exa.config.webSearch.baseUrl` when Exa search requests
+should go through a compatible proxy or alternate Exa endpoint. OpenClaw
+normalizes bare hosts by prepending `https://` and appends `/search` unless the
+path already ends there. The resolved endpoint is included in the search cache
+key, so results from different Exa endpoints are not shared.
+
 ## Tool parameters
 
-| Parameter     | Description                                                                   |
-| ------------- | ----------------------------------------------------------------------------- |
-| `query`       | Search query (required)                                                       |
-| `count`       | Results to return (1-100)                                                     |
-| `type`        | Search mode: `auto`, `neural`, `fast`, `deep`, `deep-reasoning`, or `instant` |
-| `freshness`   | Time filter: `day`, `week`, `month`, or `year`                                |
-| `date_after`  | Results after this date (YYYY-MM-DD)                                          |
-| `date_before` | Results before this date (YYYY-MM-DD)                                         |
-| `contents`    | Content extraction options (see below)                                        |
+<ParamField path="query" type="string" required>
+Search query.
+</ParamField>
+
+<ParamField path="count" type="number">
+Results to return (1–100).
+</ParamField>
+
+<ParamField path="type" type="'auto' | 'neural' | 'fast' | 'deep' | 'deep-reasoning' | 'instant'">
+Search mode.
+</ParamField>
+
+<ParamField path="freshness" type="'day' | 'week' | 'month' | 'year'">
+Time filter.
+</ParamField>
+
+<ParamField path="date_after" type="string">
+Results after this date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="date_before" type="string">
+Results before this date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField path="contents" type="object">
+Content extraction options (see below).
+</ParamField>
 
 ### Content extraction
 

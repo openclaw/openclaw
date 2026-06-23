@@ -1,3 +1,7 @@
+// Tailscale status helpers parse and validate status payloads from Tailscale.
+import { z } from "zod";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
+
 export type TailscaleStatusCommandResult = {
   code: number | null;
   stdout: string;
@@ -13,33 +17,59 @@ const TAILSCALE_STATUS_COMMAND_CANDIDATES = [
   "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
 ];
 
-function parsePossiblyNoisyJsonObject(raw: string): Record<string, unknown> {
+const TailscaleStatusSchema = z.object({
+  Self: z
+    .object({
+      DNSName: z.string().optional(),
+      TailscaleIPs: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
+
+function parsePossiblyNoisyStatus(raw: string): z.infer<typeof TailscaleStatusSchema> | null {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   if (start === -1 || end <= start) {
-    return {};
+    return null;
   }
-  try {
-    return JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+  return safeParseJsonWithSchema(TailscaleStatusSchema, raw.slice(start, end + 1));
 }
 
 function extractTailnetHostFromStatusJson(raw: string): string | null {
-  const parsed = parsePossiblyNoisyJsonObject(raw);
-  const self =
-    typeof parsed.Self === "object" && parsed.Self !== null
-      ? (parsed.Self as Record<string, unknown>)
-      : undefined;
-  const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
+  const parsed = parsePossiblyNoisyStatus(raw);
+  const dns = parsed?.Self?.DNSName;
   if (dns && dns.length > 0) {
     return dns.replace(/\.$/, "");
   }
-  const ips = Array.isArray(self?.TailscaleIPs) ? (self.TailscaleIPs as string[]) : [];
+  const ips = parsed?.Self?.TailscaleIPs ?? [];
   return ips.length > 0 ? (ips[0] ?? null) : null;
 }
 
+/** Resolves the host published to clients for tailnet or Tailscale Serve gateway modes. */
+export function resolveTailscalePublishedHost(params: {
+  tailscaleMode: string;
+  tailnetHost: string | null;
+  serviceName?: string | null;
+}): string | null {
+  const tailnetHost = params.tailnetHost?.trim();
+  if (!tailnetHost) {
+    return null;
+  }
+  const serviceName =
+    params.tailscaleMode === "serve" ? params.serviceName?.trim() || undefined : undefined;
+  if (!serviceName) {
+    return tailnetHost;
+  }
+  // Tailscale Serve service names compose with DNS hosts, not raw tailnet IP addresses.
+  if (/^[\d.:]+$/.test(tailnetHost)) {
+    return null;
+  }
+  const bareServiceName = serviceName.replace(/^svc:/, "");
+  const tailnetSuffix = tailnetHost.split(".").slice(1).join(".");
+  return tailnetSuffix ? `${bareServiceName}.${tailnetSuffix}` : null;
+}
+
+/** Runs known Tailscale status commands and returns the first DNS name or tailnet IP found. */
 export async function resolveTailnetHostWithRunner(
   runCommandWithTimeout?: TailscaleStatusCommandRunner,
 ): Promise<string | null> {

@@ -1,86 +1,73 @@
+// Root --profile/--dev parsing and environment projection for profile-specific state.
 import os from "node:os";
 import path from "node:path";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { getPrimaryCommand } from "./argv.js";
+import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
+import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
-export type CliProfileParseResult =
+type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
-  if (argv.length < 2) {
-    return { ok: true, profile: null, argv };
-  }
-
-  const out: string[] = argv.slice(0, 2);
+  // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
   let sawDev = false;
 
-  const args = argv.slice(2);
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (arg === undefined) {
-      continue;
-    }
-    if (arg === FLAG_TERMINATOR) {
-      out.push(arg, ...args.slice(i + 1));
-      break;
-    }
-
+  const scanned = scanCliRootOptions(argv, ({ arg, args, index, out }) => {
     if (arg === "--dev") {
-      if (getPrimaryCommand(out) === "gateway") {
+      if (resolveCliArgvInvocation(out).primary === "gateway") {
         out.push(arg);
-        continue;
+        return { kind: "handled" };
       }
       if (profile && profile !== "dev") {
-        return { ok: false, error: "Cannot combine --dev with --profile" };
+        return { kind: "error", error: "Cannot combine --dev with --profile" };
       }
       sawDev = true;
       profile = "dev";
-      continue;
+      return { kind: "handled" };
     }
 
     if (arg === "--profile" || arg.startsWith("--profile=")) {
-      if (sawDev) {
-        return { ok: false, error: "Cannot combine --dev with --profile" };
-      }
-      const next = args[i + 1];
+      const next = args[index + 1];
       const { value, consumedNext } = takeCliRootOptionValue(arg, next);
-      if (consumedNext) {
-        i += 1;
+      const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
+      if (primary === "qa" && secondary === "matrix") {
+        out.push(arg);
+        if (consumedNext) {
+          out.push(next);
+        }
+        return { kind: "handled", consumedNext };
+      }
+      if (sawDev) {
+        return { kind: "error", error: "Cannot combine --dev with --profile" };
       }
       if (!value) {
-        return { ok: false, error: "--profile requires a value" };
+        return { kind: "error", error: "--profile requires a value" };
       }
       if (!isValidProfileName(value)) {
         return {
-          ok: false,
+          kind: "error",
           error: 'Invalid --profile (use letters, numbers, "_", "-" only)',
         };
       }
       profile = value;
-      continue;
+      return { kind: "handled", consumedNext };
     }
+    return { kind: "pass" };
+  });
 
-    const consumedRootOption = consumeRootOptionToken(args, i);
-    if (consumedRootOption > 0) {
-      for (let offset = 0; offset < consumedRootOption; offset += 1) {
-        const token = args[i + offset];
-        if (token !== undefined) {
-          out.push(token);
-        }
-      }
-      i += consumedRootOption - 1;
-      continue;
-    }
-
-    out.push(arg);
+  if (!scanned.ok) {
+    return scanned;
   }
 
-  return { ok: true, profile, argv: out };
+  return { ok: true, profile, argv: scanned.argv };
 }
 
 function resolveProfileStateDir(
@@ -88,7 +75,7 @@ function resolveProfileStateDir(
   env: Record<string, string | undefined>,
   homedir: () => string,
 ): string {
-  const suffix = profile.toLowerCase() === "default" ? "" : `-${profile}`;
+  const suffix = normalizeLowercaseStringOrEmpty(profile) === "default" ? "" : `-${profile}`;
   return path.join(resolveRequiredHomeDir(env as NodeJS.ProcessEnv, homedir), `.openclaw${suffix}`);
 }
 
@@ -107,12 +94,13 @@ export function applyCliProfileEnv(params: {
   // Convenience only: fill defaults, never override explicit env values.
   env.OPENCLAW_PROFILE = profile;
 
-  const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
-  if (!env.OPENCLAW_STATE_DIR?.trim()) {
+  const existingStateDir = normalizeOptionalString(env.OPENCLAW_STATE_DIR);
+  const stateDir = existingStateDir || resolveProfileStateDir(profile, env, homedir);
+  if (!existingStateDir) {
     env.OPENCLAW_STATE_DIR = stateDir;
   }
 
-  if (!env.OPENCLAW_CONFIG_PATH?.trim()) {
+  if (!normalizeOptionalString(env.OPENCLAW_CONFIG_PATH)) {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   }
 

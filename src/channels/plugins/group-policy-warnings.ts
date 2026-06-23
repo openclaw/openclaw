@@ -1,10 +1,15 @@
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * Channel group-policy warning collectors.
+ *
+ * Composes warning helpers for default, allowlist, and open-provider group policy states.
+ */
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
 } from "../../config/runtime-group-policy.js";
 import type { GroupPolicy } from "../../config/types.base.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 type GroupPolicyWarningCollector = (groupPolicy: GroupPolicy) => string[];
 type AccountGroupPolicyWarningCollector<ResolvedAccount> = (params: {

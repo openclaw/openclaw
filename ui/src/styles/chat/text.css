@@ -9,7 +9,7 @@
   border: 1px dashed rgba(255, 255, 255, 0.18);
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--control-ui-text-sm);
   line-height: 1.4;
 }
 
@@ -19,7 +19,7 @@
 }
 
 .chat-text {
-  font-size: 14px;
+  font-size: var(--chat-text-size);
   line-height: 1.5;
   word-wrap: break-word;
   overflow-wrap: break-word;
@@ -27,6 +27,20 @@
 
 .chat-text :where(p, ul, ol, pre, blockquote, table) {
   margin: 0;
+}
+
+.markdown-plain-text-fallback {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font: inherit;
+}
+
+.chat-text :where(table) {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote) {
@@ -39,6 +53,20 @@
 
 .chat-text :where(li + li) {
   margin-top: 0.25em;
+}
+
+/* Hide default marker only for unordered task lists; ordered lists keep numbers */
+.chat-text :where(ul > .task-list-item),
+.sidebar-markdown :where(ul > .task-list-item),
+.chat-thinking :where(ul > .task-list-item) {
+  list-style: none;
+}
+
+.chat-text :where(.task-list-item-checkbox),
+.sidebar-markdown :where(.task-list-item-checkbox),
+.chat-thinking :where(.task-list-item-checkbox) {
+  margin-right: 0.4em;
+  vertical-align: middle;
 }
 
 .chat-text :where(a) {
@@ -73,8 +101,8 @@
   background: rgba(0, 0, 0, 0.15);
   padding: 0.15em 0.4em;
   border-radius: var(--radius-sm);
-  overflow-wrap: normal;
-  word-break: keep-all;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-text :where(pre) {

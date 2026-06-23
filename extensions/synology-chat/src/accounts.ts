@@ -9,7 +9,9 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
-import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/config-runtime";
+import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   SynologyChatChannelConfig,
   ResolvedSynologyChatAccount,
@@ -18,7 +20,7 @@ import type {
 
 /** Extract the channel config from the full OpenClaw config object. */
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig | undefined {
-  return cfg?.channels?.["synology-chat"];
+  return cfg?.channels?.["synology-chat"] as SynologyChatChannelConfig | undefined;
 }
 
 function resolveImplicitAccountId(channelCfg: SynologyChatChannelConfig): string | undefined {
@@ -55,23 +57,32 @@ function resolveWebhookPathSource(params: {
 
 /** Parse allowedUserIds from string or array to string[]. */
 function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw.filter(Boolean);
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  if (!raw) {
+    return [];
+  }
+  if (Array.isArray(raw)) {
+    return raw.filter(Boolean);
+  }
+  return normalizeStringEntries(raw.split(","));
+}
+
+function normalizeRateLimitPerMinuteValue(raw: unknown): number | undefined {
+  if (typeof raw === "number") {
+    return Number.isSafeInteger(raw) && raw >= 0 ? raw : undefined;
+  }
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = parseStrictInteger(trimmed);
+  return parsed != null && parsed >= 0 ? parsed : undefined;
 }
 
 function parseRateLimitPerMinute(raw: string | undefined): number {
-  if (raw == null) {
-    return 30;
-  }
-  const trimmed = raw.trim();
-  if (!/^-?\d+$/.test(trimmed)) {
-    return 30;
-  }
-  return Number.parseInt(trimmed, 10);
+  return normalizeRateLimitPerMinuteValue(raw) ?? 30;
 }
 
 /**
@@ -140,7 +151,8 @@ export function resolveAccount(
     dangerouslyAllowInheritedWebhookPath,
     dmPolicy: merged.dmPolicy ?? "allowlist",
     allowedUserIds: parseAllowedUserIds(merged.allowedUserIds ?? envAllowedUserIds),
-    rateLimitPerMinute: merged.rateLimitPerMinute ?? envRateLimitValue,
+    rateLimitPerMinute:
+      normalizeRateLimitPerMinuteValue(merged.rateLimitPerMinute) ?? envRateLimitValue,
     botName: merged.botName ?? envBotName,
     allowInsecureSsl: merged.allowInsecureSsl ?? false,
   };

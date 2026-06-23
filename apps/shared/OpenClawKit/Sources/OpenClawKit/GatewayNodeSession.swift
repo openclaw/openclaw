@@ -1,27 +1,14 @@
-import OpenClawProtocol
 import Foundation
+import OpenClawProtocol
 import OSLog
 
-private struct NodeInvokeRequestPayload: Codable, Sendable {
+private struct NodeInvokeRequestPayload: Codable {
     var id: String
     var nodeId: String
     var command: String
     var paramsJSON: String?
     var timeoutMs: Int?
     var idempotencyKey: String?
-}
-
-private func replaceCanvasCapabilityInScopedHostUrl(scopedUrl: String, capability: String) -> String? {
-    let marker = "/__openclaw__/cap/"
-    guard let markerRange = scopedUrl.range(of: marker) else { return nil }
-    let capabilityStart = markerRange.upperBound
-    let suffix = scopedUrl[capabilityStart...]
-    let nextSlash = suffix.firstIndex(of: "/")
-    let nextQuery = suffix.firstIndex(of: "?")
-    let nextFragment = suffix.firstIndex(of: "#")
-    let capabilityEnd = [nextSlash, nextQuery, nextFragment].compactMap { $0 }.min() ?? scopedUrl.endIndex
-    guard capabilityStart < capabilityEnd else { return nil }
-    return String(scopedUrl[..<capabilityStart]) + capability + String(scopedUrl[capabilityEnd...])
 }
 
 func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
@@ -55,18 +42,18 @@ func canonicalizeCanvasHostUrl(raw: String?, activeURL: URL?) -> String? {
     return parsed.string ?? trimmed
 }
 
-
 public actor GatewayNodeSession {
     private let logger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    private static let defaultInvokeTimeoutMs = 30_000
+    private static let defaultInvokeTimeoutMs = 30000
     private var channel: GatewayChannelActor?
     private var activeURL: URL?
     private var activeToken: String?
     private var activeBootstrapToken: String?
     private var activePassword: String?
     private var activeConnectOptionsKey: String?
+    private var activeSessionIdentity: ObjectIdentifier?
     private var connectOptions: GatewayConnectOptions?
     private var onConnected: (@Sendable () async -> Void)?
     private var onDisconnected: (@Sendable (String) async -> Void)?
@@ -79,8 +66,8 @@ public actor GatewayNodeSession {
     static func invokeWithTimeout(
         request: BridgeInvokeRequest,
         timeoutMs: Int?,
-        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse
-    ) async -> BridgeInvokeResponse {
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async -> BridgeInvokeResponse
+    {
         let timeoutLogger = Logger(subsystem: "ai.openclaw", category: "node.gateway")
         let timeout: Int = {
             if let timeoutMs { return max(0, timeoutMs) }
@@ -144,15 +131,20 @@ public actor GatewayNodeSession {
                     ok: false,
                     error: OpenClawNodeError(
                         code: .unavailable,
-                        message: "node invoke timed out")
-                ))
+                        message: "node invoke timed out")))
             }
         }
-        timeoutLogger.info("node invoke race resolved id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
+        timeoutLogger
+            .info("node invoke race resolved id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
         return response
     }
+
     private var serverEventSubscribers: [UUID: AsyncStream<EventFrame>.Continuation] = [:]
-    private var canvasHostUrl: String?
+    private var pluginSurfaceUrls: [String: String] = [:]
+
+    private struct PluginSurfaceRefreshResponse: Decodable {
+        let pluginSurfaceUrls: [String: AnyCodable]?
+    }
 
     public init() {}
 
@@ -170,6 +162,7 @@ public actor GatewayNodeSession {
         let clientId = options.clientId.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientMode = options.clientMode.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let deviceIdentityProfile = options.deviceIdentityProfile.rawValue
         let includeDeviceIdentity = options.includeDeviceIdentity ? "1" : "0"
         let permissions = options.permissions
             .map { key, value in
@@ -187,6 +180,7 @@ public actor GatewayNodeSession {
             clientId,
             clientMode,
             clientDisplayName,
+            deviceIdentityProfile,
             includeDeviceIdentity,
             permissions,
         ].joined(separator: "|")
@@ -201,14 +195,16 @@ public actor GatewayNodeSession {
         sessionBox: WebSocketSessionBox?,
         onConnected: @escaping @Sendable () async -> Void,
         onDisconnected: @escaping @Sendable (String) async -> Void,
-        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse
-    ) async throws {
+        onInvoke: @escaping @Sendable (BridgeInvokeRequest) async -> BridgeInvokeResponse) async throws
+    {
         let nextOptionsKey = self.connectOptionsKey(connectOptions)
+        let nextSessionIdentity = sessionBox.map { ObjectIdentifier($0.session) }
         let shouldReconnect = self.activeURL != url ||
             self.activeToken != token ||
             self.activeBootstrapToken != bootstrapToken ||
             self.activePassword != password ||
             self.activeConnectOptionsKey != nextOptionsKey ||
+            self.activeSessionIdentity != nextSessionIdentity ||
             self.channel == nil
 
         self.connectOptions = connectOptions
@@ -240,6 +236,7 @@ public actor GatewayNodeSession {
             self.activeBootstrapToken = bootstrapToken
             self.activePassword = password
             self.activeConnectOptionsKey = nextOptionsKey
+            self.activeSessionIdentity = nextSessionIdentity
         }
 
         guard let channel = self.channel else {
@@ -265,52 +262,32 @@ public actor GatewayNodeSession {
         self.activeBootstrapToken = nil
         self.activePassword = nil
         self.activeConnectOptionsKey = nil
+        self.activeSessionIdentity = nil
         self.hasEverConnected = false
         self.resetConnectionState()
     }
 
     public func currentCanvasHostUrl() -> String? {
-        self.canvasHostUrl
+        self.pluginSurfaceUrls["canvas"]
     }
 
-    public func refreshNodeCanvasCapability(timeoutMs: Int = 8_000) async -> Bool {
-        guard let channel = self.channel else { return false }
-        do {
-            let data = try await channel.request(
-                method: "node.canvas.capability.refresh",
-                params: [:],
-                timeoutMs: Double(max(timeoutMs, 1)))
-            guard
-                let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                let rawCapability = payload["canvasCapability"] as? String
-            else {
-                self.logger.warning("node.canvas.capability.refresh missing canvasCapability")
-                return false
-            }
-            let capability = rawCapability.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !capability.isEmpty else {
-                self.logger.warning("node.canvas.capability.refresh returned empty capability")
-                return false
-            }
-            let scopedUrl = self.canvasHostUrl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !scopedUrl.isEmpty else {
-                self.logger.warning("node.canvas.capability.refresh missing local canvasHostUrl")
-                return false
-            }
-            guard let refreshed = replaceCanvasCapabilityInScopedHostUrl(
-                scopedUrl: scopedUrl,
-                capability: capability)
-            else {
-                self.logger.warning("node.canvas.capability.refresh could not rewrite scoped canvas URL")
-                return false
-            }
-            self.canvasHostUrl = refreshed
-            return true
-        } catch {
-            self.logger.warning(
-                "node.canvas.capability.refresh failed: \(error.localizedDescription, privacy: .public)")
-            return false
-        }
+    @discardableResult
+    public func refreshPluginSurfaceUrl(surface: String, timeoutSeconds: Int = 8) async -> String? {
+        guard let channel = self.channel else { return nil }
+        let trimmedSurface = surface.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSurface.isEmpty else { return nil }
+
+        return await self.requestPluginSurfaceRefresh(
+            channel: channel,
+            method: "node.pluginSurface.refresh",
+            params: ["surface": AnyCodable(trimmedSurface)],
+            surface: trimmedSurface,
+            timeoutSeconds: timeoutSeconds)
+    }
+
+    @discardableResult
+    public func refreshCanvasHostUrl(timeoutSeconds: Int = 8) async -> String? {
+        await self.refreshPluginSurfaceUrl(surface: "canvas", timeoutSeconds: timeoutSeconds)
     }
 
     public func currentRemoteAddress() -> String? {
@@ -334,6 +311,17 @@ public actor GatewayNodeSession {
         } catch {
             self.logger.error("node event failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    public func send(method: String, paramsJSON: String?) async throws {
+        guard let channel = self.channel else {
+            throw NSError(domain: "Gateway", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "not connected",
+            ])
+        }
+
+        let params = try self.decodeParamsJSON(paramsJSON)
+        try await channel.send(method: method, params: params)
     }
 
     public func request(method: String, paramsJSON: String?, timeoutSeconds: Int = 15) async throws -> Data {
@@ -364,8 +352,7 @@ public actor GatewayNodeSession {
     private func handlePush(_ push: GatewayPush) async {
         switch push {
         case let .snapshot(ok):
-            let raw = ok.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.canvasHostUrl = self.normalizeCanvasHostUrl(raw)
+            self.pluginSurfaceUrls = self.normalizePluginSurfaceUrls(ok.pluginsurfaceurls)
             if self.hasEverConnected {
                 self.broadcastServerEvent(
                     EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
@@ -436,6 +423,39 @@ public actor GatewayNodeSession {
         canonicalizeCanvasHostUrl(raw: raw, activeURL: self.activeURL)
     }
 
+    private func normalizePluginSurfaceUrls(_ raw: [String: AnyCodable]?) -> [String: String] {
+        var normalized: [String: String] = [:]
+        if let raw {
+            normalized = raw.compactMapValues { value in
+                self.normalizeCanvasHostUrl(value.value as? String)
+            }
+        }
+        return normalized
+    }
+
+    private func requestPluginSurfaceRefresh(
+        channel: GatewayChannelActor,
+        method: String,
+        params: [String: AnyCodable]?,
+        surface: String,
+        timeoutSeconds: Int) async -> String?
+    {
+        do {
+            let data = try await channel.request(
+                method: method,
+                params: params,
+                timeoutMs: Double(timeoutSeconds * 1000))
+            let decoded = try self.decoder.decode(PluginSurfaceRefreshResponse.self, from: data)
+            let urls = self.normalizePluginSurfaceUrls(decoded.pluginSurfaceUrls)
+            guard let refreshed = urls[surface] else { return nil }
+            self.pluginSurfaceUrls[surface] = refreshed
+            return refreshed
+        } catch {
+            self.logger.debug("\(method, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
     private func handleEvent(_ evt: EventFrame) async {
         self.broadcastServerEvent(evt)
         guard evt.event == "node.invoke.request" else { return }
@@ -450,13 +470,13 @@ public actor GatewayNodeSession {
             let req = BridgeInvokeRequest(
                 id: request.id,
                 command: request.command,
-                paramsJSON: request.paramsJSON)
+                paramsJSON: request.paramsJSON,
+                nodeId: request.nodeId)
             self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
             let response = await Self.invokeWithTimeout(
                 request: req,
                 timeoutMs: request.timeoutMs,
-                onInvoke: onInvoke
-            )
+                onInvoke: onInvoke)
             self.logger.info(
                 "node invoke completed id=\(request.id, privacy: .public) ok=\(response.ok, privacy: .public)")
             await self.sendInvokeResult(request: request, response: response)

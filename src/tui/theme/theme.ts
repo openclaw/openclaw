@@ -1,13 +1,13 @@
+// TUI theme defines shared colors and text styles for Pi TUI components.
 import type {
   EditorTheme,
   MarkdownTheme,
   SelectListTheme,
   SettingsListTheme,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import chalk from "chalk";
-import { highlight, supportsLanguage } from "cli-highlight";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
-import { createSyntaxTheme } from "./syntax-theme.js";
 
 const DARK_TEXT = "#E8E3D5";
 const LIGHT_TEXT = "#1E1E1E";
@@ -46,7 +46,7 @@ function pickHigherContrastText(r: number, g: number, b: number): boolean {
 }
 
 function isLightBackground(): boolean {
-  const explicit = process.env.OPENCLAW_THEME?.toLowerCase();
+  const explicit = normalizeOptionalLowercaseString(process.env.OPENCLAW_THEME);
   if (explicit === "light") {
     return true;
   }
@@ -131,27 +131,12 @@ export const palette = lightMode ? lightPalette : darkPalette;
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
 
-const syntaxTheme = createSyntaxTheme(fg(palette.code), lightMode);
-
 /**
- * Highlight code with syntax coloring.
+ * Render code blocks with the theme code color without pulling a parser into the base TUI path.
  * Returns an array of lines with ANSI escape codes.
  */
-function highlightCode(code: string, lang?: string): string[] {
-  try {
-    // Auto-detect can be slow for very large blocks; prefer explicit language when available.
-    // Check if language is supported, fall back to auto-detect
-    const language = lang && supportsLanguage(lang) ? lang : undefined;
-    const highlighted = highlight(code, {
-      language,
-      theme: syntaxTheme,
-      ignoreIllegals: true,
-    });
-    return highlighted.split("\n");
-  } catch {
-    // If highlighting fails, return plain code
-    return code.split("\n").map((line) => fg(palette.code)(line));
-  }
+function highlightCode(code: string): string[] {
+  return code.split("\n").map((line) => fg(palette.code)(line));
 }
 
 export const theme = {

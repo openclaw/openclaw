@@ -1,28 +1,64 @@
+// Dispatches final reply payloads through visible senders and message tools.
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { generateSecureInt } from "../../infra/secure-random.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../reply-payload.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
+import type {
+  ReplyDispatchBeforeDeliver,
+  ReplyDispatchKind,
+  ReplyDispatchRuntimeInfo,
+  ReplyDispatcher,
+  ReplyFollowupAdmissionBarrierTimeoutPolicy,
+} from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
-export type ReplyDispatchKind = "tool" | "block" | "final";
+export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
-type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
+type ReplyDispatchErrorHandler = (
+  err: unknown,
+  info: ReplyDispatchRuntimeInfo,
+) => Promise<void> | void;
 
 type ReplyDispatchSkipHandler = (
   payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind; reason: NormalizeReplySkipReason },
+  info: ReplyDispatchRuntimeInfo & { reason: NormalizeReplySkipReason },
 ) => void;
+
+type ReplyDispatchCancelHandler = (
+  payload: ReplyPayload,
+  info: ReplyDispatchRuntimeInfo,
+) => Promise<void> | void;
 
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind },
-) => Promise<void>;
+  info: ReplyDispatchRuntimeInfo,
+) => Promise<unknown>;
+
+export type { ReplyDispatchBeforeDeliver };
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
+
+function buildReplyDispatchRuntimeInfo(
+  payload: ReplyPayload,
+  kind: ReplyDispatchKind,
+): ReplyDispatchRuntimeInfo {
+  const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+  return {
+    kind,
+    ...(assistantMessageIndex !== undefined ? { assistantMessageIndex } : {}),
+  };
+}
 
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
@@ -37,31 +73,60 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
   if (max <= min) {
     return min;
   }
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+  return min + generateSecureInt(max - min + 1);
+}
+
+function getHumanDelayMax(config: HumanDelayConfig | undefined): number {
+  const mode = config?.mode ?? "off";
+  if (mode === "off") {
+    return 0;
+  }
+  const min =
+    mode === "custom" ? (config?.minMs ?? DEFAULT_HUMAN_DELAY_MIN_MS) : DEFAULT_HUMAN_DELAY_MIN_MS;
+  const max =
+    mode === "custom" ? (config?.maxMs ?? DEFAULT_HUMAN_DELAY_MAX_MS) : DEFAULT_HUMAN_DELAY_MAX_MS;
+  return max <= min ? min : max;
 }
 
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
+  silentReplyContext?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    surface?: string;
+    conversationType?: SilentReplyConversationType;
+  };
   responsePrefix?: string;
-  enableSlackInteractiveReplies?: boolean;
+  transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   /** Static context for response prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
   /** Dynamic context provider for response prefix template interpolation.
    * Called at normalization time, after model selection is complete. */
   responsePrefixContextProvider?: () => ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
-  onIdle?: () => void;
+  onIdle?: () => Promise<void> | void;
   onError?: ReplyDispatchErrorHandler;
   // AIDEV-NOTE: onSkip lets channels detect silent/empty drops (e.g. Telegram empty-response fallback).
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  beforeDeliver?: ReplyDispatchBeforeDeliver;
+  onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
+  /** Observe each queued payload settling, including cancellation and delivery failure. */
+  onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
+  /** Resolve an owner activity policy for holding queued follow-ups behind delivery. */
+  resolveFollowupAdmissionBarrierTimeoutPolicy?: (context: {
+    queuedCounts: Readonly<Record<ReplyDispatchKind, number>>;
+    humanDelayBudgetMs: number;
+  }) => ReplyFollowupAdmissionBarrierTimeoutPolicy | undefined;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
   typingCallbacks?: TypingCallbacks;
   onReplyStart?: () => Promise<void> | void;
-  onIdle?: () => void;
+  onIdle?: () => Promise<void> | void;
+  onSettled?: () => unknown;
+  onFreshSettledDelivery?: () => unknown;
   /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
   onCleanup?: () => void;
 };
@@ -74,22 +139,13 @@ type ReplyDispatcherWithTypingResult = {
   markRunComplete: () => void;
 };
 
-export type ReplyDispatcher = {
-  sendToolResult: (payload: ReplyPayload) => boolean;
-  sendBlockReply: (payload: ReplyPayload) => boolean;
-  sendFinalReply: (payload: ReplyPayload) => boolean;
-  waitForIdle: () => Promise<void>;
-  getQueuedCounts: () => Record<ReplyDispatchKind, number>;
-  markComplete: () => void;
-};
-
 type NormalizeReplyPayloadInternalOptions = Pick<
   ReplyDispatcherOptions,
   | "responsePrefix"
-  | "enableSlackInteractiveReplies"
   | "responsePrefixContext"
   | "responsePrefixContextProvider"
   | "onHeartbeatStrip"
+  | "transformReplyPayload"
 > & {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -103,14 +159,15 @@ function normalizeReplyPayloadInternal(
 
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
-    enableSlackInteractiveReplies: opts.enableSlackInteractiveReplies,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
+    transformReplyPayload: opts.transformReplyPayload,
     onSkip: opts.onSkip,
   });
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
+  let beforeDeliver = options.beforeDeliver;
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
@@ -125,6 +182,16 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     block: 0,
     final: 0,
   };
+  const failedCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
+  const cancelledCounts: Record<ReplyDispatchKind, number> = {
+    tool: 0,
+    block: 0,
+    final: 0,
+  };
 
   // Register this dispatcher globally for gateway restart coordination.
   const { unregister } = registerDispatcher({
@@ -133,15 +200,27 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   });
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+    const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
-      enableSlackInteractiveReplies: options.enableSlackInteractiveReplies,
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
+      transformReplyPayload: options.transformReplyPayload,
       onHeartbeatStrip: options.onHeartbeatStrip,
-      onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
+      onSkip: (reason) =>
+        options.onSkip?.(payload, {
+          ...buildReplyDispatchRuntimeInfo(payload, kind),
+          reason,
+        }),
     });
     if (!normalized) {
+      if (kind === "final" && originalWasExactSilent) {
+        silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {
+          hasSessionKey: Boolean(options.silentReplyContext?.sessionKey),
+          surface: options.silentReplyContext?.surface,
+          conversationType: options.silentReplyContext?.conversationType,
+        });
+      }
       return false;
     }
     queuedCounts[kind] += 1;
@@ -162,14 +241,43 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        // Safe: deliver is called inside an async .then() callback, so even a synchronous
-        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
+        let deliverPayload: ReplyPayload | null = normalized;
+        if (beforeDeliver) {
+          try {
+            deliverPayload = await beforeDeliver(normalized, dispatchInfo);
+          } catch (err: unknown) {
+            try {
+              await options.onBeforeDeliverCancelled?.(normalized, dispatchInfo);
+            } catch (cancelErr: unknown) {
+              void options.onError?.(cancelErr, dispatchInfo);
+            }
+            throw err;
+          }
+          if (!deliverPayload) {
+            cancelledCounts[kind] += 1;
+            try {
+              await options.onBeforeDeliverCancelled?.(normalized, dispatchInfo);
+            } catch (err: unknown) {
+              void options.onError?.(err, dispatchInfo);
+            }
+            return;
+          }
+          deliverPayload = copyReplyPayloadMetadata(normalized, deliverPayload);
+        }
+        await options.deliver(deliverPayload, dispatchInfo);
       })
-      .catch((err) => {
-        options.onError?.(err, { kind });
+      .catch((err: unknown) => {
+        failedCounts[kind] += 1;
+        void options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
       })
       .finally(() => {
+        const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
+        try {
+          options.onDeliverySettled?.(dispatchInfo);
+        } catch (err: unknown) {
+          void options.onError?.(err, dispatchInfo);
+        }
         pending -= 1;
         // Clear reservation if:
         // 1. pending is now 1 (just the reservation left)
@@ -181,7 +289,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         if (pending === 0) {
           // Unregister from global tracking when idle.
           unregister();
-          options.onIdle?.();
+          void options.onIdle?.();
         }
       });
     return true;
@@ -201,7 +309,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         pending -= 1;
         if (pending === 0) {
           unregister();
-          options.onIdle?.();
+          void options.onIdle?.();
         }
       }
     });
@@ -211,16 +319,70 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
+    appendBeforeDeliver: (hook) => {
+      const previousBeforeDeliver = beforeDeliver;
+      beforeDeliver = previousBeforeDeliver
+        ? async (payload, info) => {
+            const previousPayload = await previousBeforeDeliver(payload, info);
+            return previousPayload
+              ? hook(copyReplyPayloadMetadata(payload, previousPayload), info)
+              : null;
+          }
+        : hook;
+    },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+    getCancelledCounts: () => ({ ...cancelledCounts }),
+    getFailedCounts: () => ({ ...failedCounts }),
     markComplete,
+    resolveFollowupAdmissionBarrierTimeoutPolicy:
+      options.resolveFollowupAdmissionBarrierTimeoutPolicy
+        ? () =>
+            options.resolveFollowupAdmissionBarrierTimeoutPolicy?.({
+              queuedCounts: { ...queuedCounts },
+              humanDelayBudgetMs:
+                Math.max(0, queuedCounts.block - 1) * getHumanDelayMax(options.humanDelay),
+            })
+        : undefined,
   };
+}
+
+export async function waitForReplyDispatcherIdle(
+  dispatcher: Pick<ReplyDispatcher, "waitForIdle">,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  if (!abortSignal) {
+    await dispatcher.waitForIdle();
+    return;
+  }
+  if (abortSignal.aborted) {
+    return;
+  }
+  let removeAbortListener: (() => void) | undefined;
+  const aborted = new Promise<void>((resolve) => {
+    const onAbort = () => resolve();
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+  });
+  try {
+    await Promise.race([dispatcher.waitForIdle(), aborted]);
+  } finally {
+    removeAbortListener?.();
+  }
 }
 
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {
-  const { typingCallbacks, onReplyStart, onIdle, onCleanup, ...dispatcherOptions } = options;
+  const {
+    typingCallbacks,
+    onReplyStart,
+    onIdle,
+    onSettled: _onSettled,
+    onFreshSettledDelivery: _onFreshSettledDelivery,
+    onCleanup,
+    ...dispatcherOptions
+  } = options;
   const resolvedOnReplyStart = onReplyStart ?? typingCallbacks?.onReplyStart;
   const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
@@ -229,7 +391,7 @@ export function createReplyDispatcherWithTyping(
     ...dispatcherOptions,
     onIdle: () => {
       typingController?.markDispatchIdle();
-      resolvedOnIdle?.();
+      return resolvedOnIdle?.();
     },
   });
 

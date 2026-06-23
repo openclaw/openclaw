@@ -1,11 +1,19 @@
+// Input-mode parsing helpers for `openclaw config set` values, refs, providers, and batches.
 import fs from "node:fs";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
+  /** @deprecated Use strictJson. */
   json?: boolean;
   dryRun?: boolean;
   allowExec?: boolean;
+  merge?: boolean;
+  replace?: boolean;
   refProvider?: string;
   refSource?: string;
   refId?: string;
@@ -38,8 +46,7 @@ export type ConfigSetBatchEntry = {
 
 export function hasBatchMode(opts: ConfigSetOptions): boolean {
   return Boolean(
-    (opts.batchJson && opts.batchJson.trim().length > 0) ||
-    (opts.batchFile && opts.batchFile.trim().length > 0),
+    normalizeOptionalString(opts.batchJson) || normalizeOptionalString(opts.batchFile),
   );
 }
 
@@ -87,13 +94,13 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
       throw new Error(`${sourceLabel}[${index}] must be an object.`);
     }
     const typed = entry as Record<string, unknown>;
-    const path = typeof typed.path === "string" ? typed.path.trim() : "";
+    const path = normalizeOptionalString(typed.path) ?? "";
     if (!path) {
       throw new Error(`${sourceLabel}[${index}].path is required.`);
     }
-    const hasValue = Object.prototype.hasOwnProperty.call(typed, "value");
-    const hasRef = Object.prototype.hasOwnProperty.call(typed, "ref");
-    const hasProvider = Object.prototype.hasOwnProperty.call(typed, "provider");
+    const hasValue = Object.hasOwn(typed, "value");
+    const hasRef = Object.hasOwn(typed, "ref");
+    const hasProvider = Object.hasOwn(typed, "provider");
     const modeCount = Number(hasValue) + Number(hasRef) + Number(hasProvider);
     if (modeCount !== 1) {
       throw new Error(
@@ -111,8 +118,11 @@ function parseBatchEntries(raw: string, sourceLabel: string): ConfigSetBatchEntr
 }
 
 export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] | null {
-  const hasInline = Boolean(opts.batchJson && opts.batchJson.trim().length > 0);
-  const hasFile = Boolean(opts.batchFile && opts.batchFile.trim().length > 0);
+  // Batch mode is exclusive because each entry carries its own value/ref/provider mode.
+  const batchJson = normalizeOptionalString(opts.batchJson);
+  const batchFile = normalizeOptionalString(opts.batchFile);
+  const hasInline = Boolean(batchJson);
+  const hasFile = Boolean(batchFile);
   if (!hasInline && !hasFile) {
     return null;
   }
@@ -120,9 +130,9 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
     throw new Error("Use either --batch-json or --batch-file, not both.");
   }
   if (hasInline) {
-    return parseBatchEntries(opts.batchJson as string, "--batch-json");
+    return parseBatchEntries(batchJson as string, "--batch-json");
   }
-  const pathname = (opts.batchFile as string).trim();
+  const pathname = normalizeStringifiedOptionalString(opts.batchFile) ?? "";
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }

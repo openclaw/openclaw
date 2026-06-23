@@ -1,6 +1,5 @@
-/**
- * Voice mapping and XML utilities for voice call providers.
- */
+// Voice Call plugin module implements voice mapping behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /**
  * Escape XML special characters for TwiML and other XML responses.
@@ -49,19 +48,5 @@ export function mapVoiceToPolly(voice: string | undefined): string {
   }
 
   // Map OpenAI voices to Polly equivalents
-  return OPENAI_TO_POLLY_MAP[voice.toLowerCase()] || DEFAULT_POLLY_VOICE;
-}
-
-/**
- * Check if a voice name is a known OpenAI voice.
- */
-export function isOpenAiVoice(voice: string): boolean {
-  return voice.toLowerCase() in OPENAI_TO_POLLY_MAP;
-}
-
-/**
- * Get all supported OpenAI voice names.
- */
-export function getOpenAiVoiceNames(): string[] {
-  return Object.keys(OPENAI_TO_POLLY_MAP);
+  return OPENAI_TO_POLLY_MAP[normalizeLowercaseStringOrEmpty(voice)] || DEFAULT_POLLY_VOICE;
 }

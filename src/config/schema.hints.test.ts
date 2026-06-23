@@ -1,10 +1,25 @@
+// Verifies schema hint metadata and sensitive path handling.
+import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { __test__, isSensitiveConfigPath } from "./schema.hints.js";
+import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
+import { FIELD_HELP } from "./schema.help.js";
+import { testApi, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
+import { FIELD_LABELS } from "./schema.labels.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const { mapSensitivePaths } = __test__;
+const { collectMatchingSchemaPaths, mapSensitivePaths } = testApi;
+const BUNDLED_CHANNEL_HINT_PREFIXES = [
+  "channels.discord",
+  "channels.imessage",
+  "channels.irc",
+  "channels.msteams",
+  "channels.signal",
+  "channels.slack",
+  "channels.telegram",
+  "channels.whatsapp",
+] as const;
 
 describe("isSensitiveConfigPath", () => {
   it("matches whitelist suffixes case-insensitively", () => {
@@ -30,6 +45,27 @@ describe("isSensitiveConfigPath", () => {
     expect(isSensitiveConfigPath("channels.slack.token")).toBe(true);
     expect(isSensitiveConfigPath("models.providers.openai.apiKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.irc.nickserv.password")).toBe(true);
+    expect(isSensitiveConfigPath("channels.feishu.encryptKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.feishu.accounts.default.encryptKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.nostr.privateKey")).toBe(true);
+    expect(isSensitiveConfigPath("channels.nostr.accounts.default.privateKey")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.local.localService.env.HF_HOME")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.local.localService.env.MAX_TOKENS")).toBe(true);
+  });
+});
+
+describe("plugin-owned channel hint paths", () => {
+  it("keeps bundled channel help and labels out of core tables", () => {
+    for (const key of [...Object.keys(FIELD_HELP), ...Object.keys(FIELD_LABELS)]) {
+      if (
+        !BUNDLED_CHANNEL_HINT_PREFIXES.some(
+          (prefix) => key === prefix || key.startsWith(`${prefix}.`),
+        )
+      ) {
+        continue;
+      }
+      expect(isPluginOwnedChannelHintPath(key), `core still owns ${key}`).toBe(false);
+    }
   });
 });
 
@@ -132,10 +168,39 @@ describe("mapSensitivePaths", () => {
 
     expect(hints["agents.defaults.memorySearch.remote.apiKey"]?.sensitive).toBe(true);
     expect(hints["agents.list[].memorySearch.remote.apiKey"]?.sensitive).toBe(true);
-    expect(hints["channels.discord.accounts.*.token"]?.sensitive).toBe(true);
-    expect(hints["channels.googlechat.serviceAccount"]?.sensitive).toBe(true);
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.localService.env.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.request.headers.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.request.proxy.tls.cert"]?.sensitive).toBe(true);
+    expect(hints["proxy.proxyUrl"]?.sensitive).toBe(true);
+    expect(hints["proxy.tls.caFile"]?.sensitive).toBeUndefined();
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
+  });
+
+  it("marks buildSecretInputSchema fields as sensitive via registry", () => {
+    const schema = z.object({
+      encryptKey: buildSecretInputSchema().optional(),
+      appSecret: buildSecretInputSchema().optional(),
+      nested: z.object({
+        verificationToken: buildSecretInputSchema().optional(),
+      }),
+    });
+    const hints = mapSensitivePaths(schema, "", {});
+
+    expect(hints["encryptKey"]?.sensitive).toBe(true);
+    expect(hints["appSecret"]?.sensitive).toBe(true);
+    expect(hints["nested.verificationToken"]?.sensitive).toBe(true);
+  });
+});
+
+describe("collectMatchingSchemaPaths", () => {
+  it("finds base-config URL fields that may embed secrets", () => {
+    const paths = collectMatchingSchemaPaths(OpenClawSchema, "", isSensitiveUrlConfigPath);
+
+    expect(paths.has("mcp.servers.*.url")).toBe(true);
+    expect(paths.has("models.providers.*.baseUrl")).toBe(true);
+    expect(paths.has("models.providers.*.request.proxy.url")).toBe(true);
+    expect(paths.has("tools.media.audio.request.proxy.url")).toBe(true);
   });
 });

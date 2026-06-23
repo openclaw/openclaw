@@ -1,4 +1,6 @@
+// Matrix plugin module implements media behavior.
 import { getMatrixRuntime } from "../../runtime.js";
+import { MatrixMediaSizeLimitError, isMatrixMediaSizeLimitError } from "../media-errors.js";
 import type { MatrixClient } from "../sdk.js";
 
 // Type for encrypted file info
@@ -30,6 +32,9 @@ async function fetchMatrixMediaBuffer(params: {
     });
     return { buffer };
   } catch (err) {
+    if (isMatrixMediaSizeLimitError(err)) {
+      throw err;
+    }
     throw new Error(`Matrix media download failed: ${String(err)}`, { cause: err });
   }
 }
@@ -56,7 +61,7 @@ async function fetchEncryptedMediaBuffer(params: {
   );
 
   if (decrypted.byteLength > params.maxBytes) {
-    throw new Error("Matrix media exceeds configured size limit");
+    throw new MatrixMediaSizeLimitError();
   }
 
   return { buffer: decrypted };
@@ -69,6 +74,7 @@ export async function downloadMatrixMedia(params: {
   sizeBytes?: number;
   maxBytes: number;
   file?: EncryptedFile;
+  originalFilename?: string;
 }): Promise<{
   path: string;
   contentType?: string;
@@ -76,7 +82,7 @@ export async function downloadMatrixMedia(params: {
 } | null> {
   let fetched: { buffer: Buffer; headerType?: string } | null;
   if (typeof params.sizeBytes === "number" && params.sizeBytes > params.maxBytes) {
-    throw new Error("Matrix media exceeds configured size limit");
+    throw new MatrixMediaSizeLimitError();
   }
 
   if (params.file) {
@@ -104,6 +110,7 @@ export async function downloadMatrixMedia(params: {
     headerType,
     "inbound",
     params.maxBytes,
+    params.originalFilename,
   );
   return {
     path: saved.path,

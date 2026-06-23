@@ -1,9 +1,17 @@
-import { isGatewayCliClient, isWebchatClient } from "../../../utils/message-channel.js";
+// WebSocket auth messages format client-specific handshake failures without exposing secret material.
+import {
+  isGatewayCliClient,
+  isOperatorUiClient,
+  isWebchatClient,
+} from "../../../utils/message-channel.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
-import { GATEWAY_CLIENT_IDS } from "../../protocol/client-info.js";
 
+/**
+ * Human-readable WebSocket auth failure messages for CLI, UI, and webchat clients.
+ */
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
+/** Formats a client-specific auth failure message without exposing secret values. */
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
   authProvided: AuthProvidedKind;
@@ -12,7 +20,7 @@ export function formatGatewayAuthFailureMessage(params: {
 }): string {
   const { authMode, authProvided, reason, client } = params;
   const isCli = isGatewayCliClient(client);
-  const isControlUi = client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+  const isControlUi = isOperatorUiClient(client);
   const isWebchat = isWebchatClient(client);
   const uiHint = "open the dashboard URL and paste the token in Control UI settings";
   const tokenHint = isCli
@@ -52,6 +60,8 @@ export function formatGatewayAuthFailureMessage(params: {
       return "unauthorized: too many failed authentication attempts (retry later)";
     case "device_token_mismatch":
       return "unauthorized: device token mismatch (rotate/reissue device token)";
+    case "scope_mismatch":
+      return "unauthorized: device token scope mismatch (re-pair or approve scope upgrade)";
     default:
       break;
   }

@@ -180,12 +180,7 @@ private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHan
         guard let controller else { return }
 
         guard let url = message.webView?.url else { return }
-        if url.isFileURL {
-            guard controller.isTrustedCanvasUIURL(url) else { return }
-        } else {
-            // For security, only accept actions from local-network pages (e.g. the canvas host).
-            guard controller.isLocalNetworkCanvasURL(url) else { return }
-        }
+        guard controller.isTrustedCanvasUIURL(url) else { return }
 
         guard let body = ScreenController.parseA2UIActionBody(message.body) else { return }
 

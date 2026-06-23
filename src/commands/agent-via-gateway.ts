@@ -1,19 +1,41 @@
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { listAgentIds } from "../agents/agent-scope.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { CliDeps } from "../cli/deps.js";
-import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
-import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+// Gateway-first agent CLI implementation with embedded fallback for local/runtime failures.
+import { randomUUID } from "node:crypto";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
-  normalizeMessageChannel,
-} from "../utils/message-channel.js";
-import { agentCommand } from "./agent.js";
-import { resolveSessionKeyForRequest } from "./agent/session.js";
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import type { CliDeps } from "../cli/deps.types.js";
+import { withProgress } from "../cli/progress.js";
+import {
+  readGatewayDispatchConfig,
+  readGatewayDispatchConfigWithShellEnvFallback,
+} from "../config/gateway-dispatch-config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  callGateway,
+  isGatewayCredentialsRequiredError,
+  isGatewayExplicitAuthRequiredError,
+  isGatewayTransportError,
+  randomIdempotencyKey,
+  type GatewayRequestFunction,
+} from "../gateway/call.js";
+import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
+import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+import { routeLogsToStderr } from "../logging/console.js";
+import {
+  classifySessionKeyShape,
+  isUnscopedSessionKeySentinel,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+  scopeLegacySessionKeyToAgent,
+} from "../routing/session-key.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -21,6 +43,7 @@ type AgentGatewayResult = {
     mediaUrl?: string | null;
     mediaUrls?: string[];
   }>;
+  deliveryStatus?: unknown;
   meta?: unknown;
 };
 
@@ -29,15 +52,24 @@ type GatewayAgentResponse = {
   status?: string;
   summary?: string;
   result?: AgentGatewayResult;
+  deliveryStatus?: unknown;
 };
 
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
+const EMBEDDED_FALLBACK_META = {
+  transport: "embedded",
+  fallbackFrom: "gateway",
+} as const;
+const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
+const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
-export type AgentCliOpts = {
+type AgentCliOpts = {
   message: string;
   agent?: string;
+  model?: string;
   to?: string;
   sessionId?: string;
+  sessionKey?: string;
   thinking?: string;
   verbose?: string;
   json?: boolean;
@@ -54,22 +86,129 @@ export type AgentCliOpts = {
   local?: boolean;
 };
 
-function parseTimeoutSeconds(opts: { cfg: ReturnType<typeof loadConfig>; timeout?: string }) {
+type AgentCliSignal = "SIGINT" | "SIGTERM";
+type AgentCliProcessLike = {
+  on(signal: AgentCliSignal, handler: () => void): unknown;
+  off(signal: AgentCliSignal, handler: () => void): unknown;
+};
+type AgentCliDeps = CliDeps & {
+  process?: AgentCliProcessLike;
+};
+type AgentGatewayCallIdentity = Pick<
+  Parameters<typeof callGateway>[0],
+  "clientName" | "mode" | "scopes"
+>;
+type EmbeddedAgentCommandModule = typeof import("./agent.js");
+type AgentSessionModule = typeof import("./agent/session.js");
+type RuntimeConfigModule = typeof import("../config/io.js");
+type AgentSessionModuleLoader = () => Promise<AgentSessionModule>;
+
+const AGENT_CLI_SIGNALS: readonly AgentCliSignal[] = ["SIGINT", "SIGTERM"];
+const GATEWAY_ABORT_RETRY_DELAYS_MS = [50, 150, 300, 600] as const;
+const GATEWAY_ABORT_REQUEST_TIMEOUT_MS = 2_000;
+const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+
+let embeddedAgentCommandPromise: Promise<EmbeddedAgentCommandModule["agentCommand"]> | undefined;
+let agentSessionModulePromise: Promise<AgentSessionModule> | undefined;
+let runtimeConfigModulePromise: Promise<RuntimeConfigModule> | undefined;
+let replyPayloadModulePromise:
+  | Promise<typeof import("openclaw/plugin-sdk/reply-payload")>
+  | undefined;
+const defaultAgentSessionModuleLoader: AgentSessionModuleLoader = () =>
+  import("./agent/session.js");
+let agentSessionModuleLoader: AgentSessionModuleLoader = defaultAgentSessionModuleLoader;
+let gatewayAbortRetryDelaysMsForTests: readonly number[] | undefined;
+
+function resolveGatewayAbortRetryDelaysMs(): readonly number[] {
+  return gatewayAbortRetryDelaysMsForTests ?? GATEWAY_ABORT_RETRY_DELAYS_MS;
+}
+
+function loadEmbeddedAgentCommand(): Promise<EmbeddedAgentCommandModule["agentCommand"]> {
+  embeddedAgentCommandPromise ??= import("./agent.js").then((module) => module.agentCommand);
+  return embeddedAgentCommandPromise;
+}
+
+function loadAgentSessionModule(): Promise<AgentSessionModule> {
+  agentSessionModulePromise ??= agentSessionModuleLoader();
+  return agentSessionModulePromise;
+}
+
+async function loadRuntimeConfig(): Promise<OpenClawConfig> {
+  runtimeConfigModulePromise ??= import("../config/io.js");
+  const { getRuntimeConfig } = await runtimeConfigModulePromise;
+  return getRuntimeConfig();
+}
+
+function loadReplyPayloadModule() {
+  replyPayloadModulePromise ??= import("openclaw/plugin-sdk/reply-payload");
+  return replyPayloadModulePromise;
+}
+
+/** Test-only hooks for resetting lazy imports and shortening retry timing. */
+export const agentViaGatewayTesting = {
+  resetLazyImportsForTests(): void {
+    embeddedAgentCommandPromise = undefined;
+    agentSessionModulePromise = undefined;
+    runtimeConfigModulePromise = undefined;
+    replyPayloadModulePromise = undefined;
+    agentSessionModuleLoader = defaultAgentSessionModuleLoader;
+  },
+  setAgentSessionModuleLoaderForTests(loader: AgentSessionModuleLoader): void {
+    agentSessionModulePromise = undefined;
+    agentSessionModuleLoader = loader;
+  },
+  resolveGatewayAgentTimeoutMs,
+  setGatewayAbortRetryDelaysMsForTests(delays?: readonly number[]): void {
+    gatewayAbortRetryDelaysMsForTests = delays;
+  },
+};
+
+function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
+  if (opts.json === true) {
+    routeLogsToStderr();
+  }
+}
+
+function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
-      ? Number.parseInt(String(opts.timeout), 10)
+      ? parseStrictNonNegativeInteger(opts.timeout)
       : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
-  if (Number.isNaN(raw) || raw < 0) {
-    throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
+  if (raw === undefined) {
+    throw new Error(
+      `Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.`,
+    );
   }
   return raw;
 }
 
-function formatPayloadForLog(payload: {
+function resolveGatewayAgentTimeoutMs(timeoutSeconds: number): number {
+  if (timeoutSeconds === 0) {
+    return NO_GATEWAY_TIMEOUT_MS;
+  }
+  return resolveTimerTimeoutMs((timeoutSeconds + 30) * 1000, 10_000, 10_000);
+}
+
+async function getGatewayDispatchConfig(options?: {
+  skipShellEnvFallback?: boolean;
+}): Promise<OpenClawConfig> {
+  // Scoped gateway turns need core agent/session/gateway fields only. The
+  // running gateway owns plugin validation and plugin metadata freshness.
+  if (options?.skipShellEnvFallback === false) {
+    return await readGatewayDispatchConfigWithShellEnvFallback();
+  }
+  return readGatewayDispatchConfig();
+}
+
+async function formatPayloadForLog(payload: {
   text?: string;
   mediaUrls?: string[];
   mediaUrl?: string | null;
 }) {
+  const { resolveSendableOutboundReplyParts } = await loadReplyPayloadModule();
   const parts = resolveSendableOutboundReplyParts({
     text: payload.text,
     mediaUrls: payload.mediaUrls,
@@ -80,21 +219,425 @@ function formatPayloadForLog(payload: {
     lines.push(parts.text.trimEnd());
   }
   for (const url of parts.mediaUrls) {
-    lines.push(`MEDIA:${url}`);
+    lines.push(`Attachment: ${url}`);
   }
   return lines.join("\n").trimEnd();
 }
 
-export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
-  const body = (opts.message ?? "").trim();
-  if (!body) {
-    throw new Error("Message (--message) is required");
+function isGatewayAgentTimeoutError(err: unknown): boolean {
+  if (isGatewayTransportError(err)) {
+    return err.kind === "timeout";
   }
-  if (!opts.to && !opts.sessionId && !opts.agent) {
-    throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
+  return err instanceof Error && err.message.includes("gateway request timeout for agent");
+}
+
+function isCompactControlCommand(message: string): boolean {
+  return /^\/compact(?:\s|:|$)/iu.test(message.trim());
+}
+
+function isSessionResetCommand(message: string): boolean {
+  return /^\/(?:new|reset)(?:\s|$)/i.test(message.trim());
+}
+
+function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
+  return (
+    isGatewayCredentialsRequiredError(err) ||
+    isGatewayExplicitAuthRequiredError(err) ||
+    isGatewaySecretRefUnavailableError(err)
+  );
+}
+
+function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
+  return isGatewayTransportError(err);
+}
+
+function isTransientGatewayAgentConnectClose(err: unknown): boolean {
+  if (!isGatewayTransportError(err) || err.kind !== "closed") {
+    return false;
+  }
+  const code = typeof err.code === "number" ? err.code : undefined;
+  const reason = normalizeOptionalString(err.reason);
+  return code === 1000 && (!reason || reason === "no close reason");
+}
+
+function validateExplicitSessionKeyForDispatch(
+  opts: Pick<AgentCliOpts, "agent" | "sessionKey">,
+): void {
+  const sessionKey = opts.sessionKey?.trim();
+  if (!sessionKey) {
+    return;
   }
 
-  const cfg = loadConfig();
+  if (classifySessionKeyShape(sessionKey) === "malformed_agent") {
+    throw new Error(
+      `Invalid --session-key "${sessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
+    );
+  }
+
+  const agentIdRaw = opts.agent?.trim() || undefined;
+  if (!agentIdRaw || classifySessionKeyShape(sessionKey) !== "agent") {
+    return;
+  }
+  const agentId = normalizeAgentId(agentIdRaw);
+  const sessionAgentId = resolveAgentIdFromSessionKey(sessionKey);
+  if (sessionAgentId !== agentId) {
+    throw new Error(
+      `Agent id "${agentIdRaw}" does not match session key agent "${sessionAgentId}".`,
+    );
+  }
+}
+
+async function normalizeSessionKeyOptsForDispatch(opts: AgentCliOpts): Promise<AgentCliOpts> {
+  const rawSessionKey = opts.sessionKey?.trim();
+  const rawTo = opts.to?.trim();
+  if (!rawSessionKey && !opts.sessionId?.trim() && classifySessionKeyShape(rawTo) === "agent") {
+    return {
+      ...opts,
+      to: undefined,
+      sessionKey: rawTo,
+    };
+  }
+  const isLegacySessionKey =
+    rawSessionKey && classifySessionKeyShape(rawSessionKey) === "legacy_or_alias";
+  const agentIdRaw = opts.agent?.trim();
+  const shouldScopeDefaultAgentKey =
+    isLegacySessionKey && !agentIdRaw && !isUnscopedSessionKeySentinel(rawSessionKey);
+  const cfg =
+    isLegacySessionKey && (agentIdRaw || shouldScopeDefaultAgentKey)
+      ? opts.local === true
+        ? await loadRuntimeConfig()
+        : await getGatewayDispatchConfig()
+      : undefined;
+  const sessionKey = scopeLegacySessionKeyToAgent({
+    agentId: agentIdRaw ?? (shouldScopeDefaultAgentKey ? resolveDefaultAgentId(cfg!) : undefined),
+    sessionKey: opts.sessionKey,
+    mainKey: cfg?.session?.mainKey,
+  });
+  if (sessionKey === opts.sessionKey) {
+    return opts;
+  }
+  return {
+    ...opts,
+    sessionKey,
+  };
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+function readAcceptedRunContext(payload: unknown): {
+  runId?: string;
+  sessionKey?: string;
+} {
+  if (!payload || typeof payload !== "object") {
+    return {};
+  }
+  const runId = (payload as { runId?: unknown }).runId;
+  const sessionKey = (payload as { sessionKey?: unknown }).sessionKey;
+  const status = (payload as { status?: unknown }).status;
+  if (status !== "accepted") {
+    return {};
+  }
+  return {
+    runId: typeof runId === "string" && runId.trim() ? runId.trim() : undefined,
+    sessionKey: typeof sessionKey === "string" && sessionKey.trim() ? sessionKey.trim() : undefined,
+  };
+}
+
+function createAgentCliSignalBridge(processLike: AgentCliProcessLike = process) {
+  const controller = new AbortController();
+  let receivedSignal: AgentCliSignal | undefined;
+  const handlers = new Map<AgentCliSignal, () => void>();
+  const detachHandlers = () => {
+    for (const [signal, handler] of handlers) {
+      processLike.off(signal, handler);
+    }
+    handlers.clear();
+  };
+  for (const signal of AGENT_CLI_SIGNALS) {
+    const handler = () => {
+      receivedSignal = signal;
+      if (!controller.signal.aborted) {
+        // runtime.exit may bypass finally cleanup, so first-signal self-detach is load-bearing.
+        controller.abort();
+        detachHandlers();
+      }
+    };
+    handlers.set(signal, handler);
+    processLike.on(signal, handler);
+  }
+  return {
+    signal: controller.signal,
+    getReceivedSignal: () => receivedSignal,
+    dispose: detachHandlers,
+  };
+}
+
+function isAgentCliProcessLike(value: unknown): value is AgentCliProcessLike {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as { on?: unknown }).on === "function" &&
+    typeof (value as { off?: unknown }).off === "function"
+  );
+}
+
+function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliProcessLike {
+  if (!deps || !Object.hasOwn(deps, "process")) {
+    return process;
+  }
+  const processLike = (deps as { process?: unknown }).process;
+  return isAgentCliProcessLike(processLike) ? processLike : process;
+}
+
+function createAbortDelayError(): Error {
+  const err = new Error("gateway agent retry aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(createAbortDelayError());
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(createAbortDelayError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const response = value as { aborted?: unknown; runIds?: unknown };
+  if (response.aborted !== true) {
+    return false;
+  }
+  if (response.runIds === undefined) {
+    return true;
+  }
+  return Array.isArray(response.runIds) && response.runIds.includes(runId);
+}
+
+async function abortAcceptedGatewayAgentRunWithRequest(params: {
+  runId: string | undefined;
+  sessionKey: string | undefined;
+  signal: AgentCliSignal | undefined;
+  runtime: RuntimeEnv;
+  request: GatewayRequestFunction;
+  logFailure?: boolean;
+}): Promise<boolean> {
+  if (!params.signal || !params.runId || !params.sessionKey) {
+    return false;
+  }
+  try {
+    const response = await params.request(
+      "chat.abort",
+      {
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+      },
+      { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS },
+    );
+    if (isConfirmedChatAbortResponseForRun(response, params.runId)) {
+      return true;
+    }
+    if (params.logFailure !== false) {
+      params.runtime.error?.(
+        `Interrupted by ${params.signal}; Gateway run ${params.runId} was not confirmed aborted.`,
+      );
+    }
+    return false;
+  } catch (err) {
+    if (params.logFailure !== false) {
+      params.runtime.error?.(
+        `Interrupted by ${params.signal}; failed to abort Gateway run ${params.runId}: ${String(
+          err,
+        )}`,
+      );
+    }
+    return false;
+  }
+}
+
+async function abortAcceptedGatewayAgentRunWithGatewayCall(params: {
+  runId: string | undefined;
+  sessionKey: string | undefined;
+  signal: AgentCliSignal | undefined;
+  runtime: RuntimeEnv;
+  gatewayIdentity: AgentGatewayCallIdentity;
+  config: OpenClawConfig;
+}): Promise<void> {
+  const request: GatewayRequestFunction = async <T = Record<string, unknown>>(
+    method: string,
+    requestParams?: unknown,
+    opts?: Parameters<GatewayRequestFunction>[2],
+  ): Promise<T> =>
+    await callGateway<T>({
+      method,
+      params: requestParams,
+      timeoutMs: opts?.timeoutMs ?? undefined,
+      expectFinal: opts?.expectFinal,
+      config: params.config,
+      ...params.gatewayIdentity,
+    });
+  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
+  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
+    const isFinalAttempt = attempt === retryDelaysMs.length;
+    const aborted = await abortAcceptedGatewayAgentRunWithRequest({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      signal: params.signal,
+      runtime: params.runtime,
+      request,
+      logFailure: isFinalAttempt,
+    });
+    if (aborted || isFinalAttempt) {
+      return;
+    }
+    await delayMs(retryDelayMs);
+  }
+}
+
+async function abortAcceptedGatewayAgentRunOnActiveConnection(params: {
+  runId: string | undefined;
+  sessionKey: string | undefined;
+  signal: AgentCliSignal | undefined;
+  runtime: RuntimeEnv;
+  request: GatewayRequestFunction;
+}): Promise<boolean> {
+  const retryDelaysMs = resolveGatewayAbortRetryDelaysMs();
+  for (const [attempt, retryDelayMs] of [...retryDelaysMs, 0].entries()) {
+    const isFinalAttempt = attempt === retryDelaysMs.length;
+    const aborted = await abortAcceptedGatewayAgentRunWithRequest({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      signal: params.signal,
+      runtime: params.runtime,
+      request: params.request,
+      logFailure: false,
+    });
+    if (aborted || isFinalAttempt) {
+      return aborted;
+    }
+    await delayMs(retryDelayMs);
+  }
+  return false;
+}
+
+function exitForReceivedSignal(signal: AgentCliSignal | undefined, runtime: RuntimeEnv): boolean {
+  if (!signal) {
+    return false;
+  }
+  runtime.exit(AGENT_CLI_SIGNAL_EXIT_CODES[signal]);
+  return true;
+}
+
+function returnAfterSignalExit<T>(
+  value: T,
+  signal: AgentCliSignal | undefined,
+  runtime: RuntimeEnv,
+): T | undefined {
+  return exitForReceivedSignal(signal, runtime) ? undefined : value;
+}
+
+function createGatewayTimeoutFallbackSessionId(): string {
+  return `${GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX}${randomUUID()}`;
+}
+
+function createGatewayTimeoutFallbackSession(agentId?: string): {
+  sessionId: string;
+  sessionKey: string;
+} {
+  const sessionId = createGatewayTimeoutFallbackSessionId();
+  return {
+    sessionId,
+    sessionKey: `agent:${normalizeAgentId(agentId)}:explicit:${sessionId.trim()}`,
+  };
+}
+
+async function resolveAgentIdForGatewayTimeoutFallback(
+  opts: AgentCliOpts,
+): Promise<string | undefined> {
+  const explicitSessionKey = opts.sessionKey?.trim();
+  if (classifySessionKeyShape(explicitSessionKey) === "agent") {
+    return resolveAgentIdFromSessionKey(explicitSessionKey);
+  }
+  if (isUnscopedSessionKeySentinel(explicitSessionKey)) {
+    return resolveDefaultAgentId(await getGatewayDispatchConfig());
+  }
+
+  const agentIdRaw = opts.agent?.trim();
+  if (agentIdRaw) {
+    return normalizeAgentId(agentIdRaw);
+  }
+
+  if (!opts.to && !opts.sessionId) {
+    return undefined;
+  }
+  const cfg = await getGatewayDispatchConfig();
+  const { resolveSessionKeyForRequest } = await loadAgentSessionModule();
+  const resolvedSessionKey = resolveSessionKeyForRequest({
+    cfg,
+    to: opts.to,
+    sessionId: opts.sessionId,
+  }).sessionKey;
+  return classifySessionKeyShape(resolvedSessionKey) === "agent"
+    ? resolveAgentIdFromSessionKey(resolvedSessionKey)
+    : undefined;
+}
+
+function buildGatewayJsonResponse(response: GatewayAgentResponse): GatewayAgentResponse {
+  const deliveryStatus = response.result?.deliveryStatus;
+  if (deliveryStatus === undefined) {
+    return response;
+  }
+  return {
+    ...response,
+    deliveryStatus,
+  };
+}
+
+function isInFlightGatewayAgentResponse(response: GatewayAgentResponse): boolean {
+  return response.status === "in_flight";
+}
+
+function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): string {
+  return response.runId
+    ? `Agent run ${response.runId} is already in flight; not starting a duplicate run.`
+    : "Agent run is already in flight; not starting a duplicate run.";
+}
+
+async function agentViaGatewayCommand(
+  opts: AgentCliOpts,
+  runtime: RuntimeEnv,
+  signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
+) {
+  protectJsonStdout(opts);
+  const body = (opts.message ?? "").trim();
+  const explicitSessionKey = opts.sessionKey?.trim();
+  if (!body) {
+    throw new Error(
+      `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or pass --to/--session-key/--session-id for an existing conversation.`,
+    );
+  }
+  if (!opts.to && !opts.sessionId && !opts.agent && !explicitSessionKey) {
+    throw new Error(
+      `No target session selected. Use --agent <id>, --session-key <key>, --session-id <id>, or --to <E.164>. Run ${formatCliCommand("openclaw agents list")} to see agents.`,
+    );
+  }
+
+  let cfg = await getGatewayDispatchConfig();
   const agentIdRaw = opts.agent?.trim();
   const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
   if (agentId) {
@@ -106,70 +649,153 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
     }
   }
   const timeoutSeconds = parseTimeoutSeconds({ cfg, timeout: opts.timeout });
-  const gatewayTimeoutMs =
-    timeoutSeconds === 0
-      ? NO_GATEWAY_TIMEOUT_MS // no timeout (timer-safe max)
-      : Math.max(10_000, (timeoutSeconds + 30) * 1000);
+  const gatewayTimeoutMs = resolveGatewayAgentTimeoutMs(timeoutSeconds);
 
-  const sessionKey = resolveSessionKeyForRequest({
-    cfg,
-    agentId,
-    to: opts.to,
-    sessionId: opts.sessionId,
-  }).sessionKey;
-
-  const channel = normalizeMessageChannel(opts.channel);
-  const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
-
-  const response = await withProgress(
-    {
-      label: "Waiting for agent reply…",
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await callGateway<GatewayAgentResponse>({
-        method: "agent",
-        params: {
-          message: body,
+  const sessionKey =
+    classifySessionKeyShape(explicitSessionKey) === "agent"
+      ? explicitSessionKey
+      : (await loadAgentSessionModule()).resolveSessionKeyForRequest({
+          cfg,
           agentId,
           to: opts.to,
-          replyTo: opts.replyTo,
           sessionId: opts.sessionId,
-          sessionKey,
-          thinking: opts.thinking,
-          deliver: Boolean(opts.deliver),
-          channel,
-          replyChannel: opts.replyChannel,
-          replyAccountId: opts.replyAccount,
-          bestEffortDeliver: opts.bestEffortDeliver,
-          timeout: timeoutSeconds,
-          lane: opts.lane,
-          extraSystemPrompt: opts.extraSystemPrompt,
-          idempotencyKey,
-        },
-        expectFinal: true,
-        timeoutMs: gatewayTimeoutMs,
+          sessionKey: explicitSessionKey,
+        }).sessionKey;
+
+  const channel = normalizeMessageChannel(opts.channel);
+  const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
+  const modelOverride = normalizeOptionalString(opts.model);
+  const hasModelOverride = Boolean(modelOverride);
+  const needsAdminGatewayIdentity = hasModelOverride || isSessionResetCommand(body);
+  const gatewayIdentity: AgentGatewayCallIdentity = needsAdminGatewayIdentity
+    ? {
+        clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+        scopes: [ADMIN_SCOPE],
+      }
+    : {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
-      }),
-  );
+      };
+
+  let acceptedRunId: string | undefined = idempotencyKey;
+  let acceptedSessionKey: string | undefined = sessionKey;
+  let acceptedGatewayRun = false;
+  let activeConnectionAbortAttempted = false;
+  let activeConnectionAbortSucceeded = false;
+  let response: GatewayAgentResponse | undefined;
+  const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
+    await withProgress(
+      {
+        label: "Waiting for agent reply…",
+        indeterminate: true,
+        enabled: opts.json !== true,
+      },
+      async () =>
+        await callGateway({
+          method: "agent",
+          params: {
+            message: body,
+            agentId,
+            model: modelOverride,
+            to: opts.to,
+            replyTo: opts.replyTo,
+            sessionId: opts.sessionId,
+            sessionKey,
+            thinking: opts.thinking,
+            deliver: Boolean(opts.deliver),
+            channel,
+            replyChannel: opts.replyChannel,
+            replyAccountId: opts.replyAccount,
+            bestEffortDeliver: opts.bestEffortDeliver,
+            timeout: timeoutSeconds,
+            lane: opts.lane,
+            extraSystemPrompt: opts.extraSystemPrompt,
+            cleanupBundleMcpOnRunEnd: true,
+            idempotencyKey,
+          },
+          expectFinal: true,
+          timeoutMs: gatewayTimeoutMs,
+          config: activeCfg,
+          signal: signalBridge.signal,
+          onAccepted: (payload) => {
+            acceptedGatewayRun = true;
+            const accepted = readAcceptedRunContext(payload);
+            acceptedRunId = accepted.runId ?? acceptedRunId;
+            acceptedSessionKey = accepted.sessionKey ?? acceptedSessionKey;
+          },
+          onSignalAbort: async (request) => {
+            activeConnectionAbortAttempted = true;
+            activeConnectionAbortSucceeded = await abortAcceptedGatewayAgentRunOnActiveConnection({
+              runId: acceptedRunId,
+              sessionKey: acceptedSessionKey,
+              signal: signalBridge.getReceivedSignal(),
+              runtime,
+              request,
+            });
+          },
+          ...gatewayIdentity,
+        }),
+    );
+
+  let shellEnvFallbackRetriesRemaining = 1;
+  const consumeShellEnvFallbackRetry = () => shellEnvFallbackRetriesRemaining-- > 0;
+  for (;;) {
+    try {
+      response = await dispatchGatewayAgentCall(cfg);
+      break;
+    } catch (err) {
+      if (
+        !acceptedGatewayRun &&
+        shouldRetryGatewayDispatchWithShellEnvFallback(err) &&
+        consumeShellEnvFallbackRetry()
+      ) {
+        cfg = await getGatewayDispatchConfig({ skipShellEnvFallback: false });
+        continue;
+      }
+      if (
+        isAbortError(err) &&
+        !activeConnectionAbortSucceeded &&
+        (acceptedGatewayRun || activeConnectionAbortAttempted)
+      ) {
+        await abortAcceptedGatewayAgentRunWithGatewayCall({
+          runId: acceptedRunId,
+          sessionKey: acceptedSessionKey,
+          signal: signalBridge.getReceivedSignal(),
+          runtime,
+          gatewayIdentity,
+          config: cfg,
+        });
+      }
+      throw err;
+    }
+  }
+  if (!response) {
+    throw new Error("gateway agent call did not return a response");
+  }
 
   if (opts.json) {
-    writeRuntimeJson(runtime, response);
+    writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
     return response;
   }
 
   const result = response?.result;
   const payloads = result?.payloads ?? [];
 
+  if (isInFlightGatewayAgentResponse(response)) {
+    runtime.error?.(formatInFlightGatewayAgentMessage(response));
+    return response;
+  }
+
   if (payloads.length === 0) {
-    runtime.log(response?.summary ? String(response.summary) : "No reply from agent.");
+    if (response?.status !== "ok") {
+      runtime.log(response?.summary ? response.summary : "No reply from agent.");
+    }
     return response;
   }
 
   for (const payload of payloads) {
-    const out = formatPayloadForLog(payload);
+    const out = await formatPayloadForLog(payload);
     if (out) {
       runtime.log(out);
     }
@@ -178,20 +804,137 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
   return response;
 }
 
-export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
-  const localOpts = {
-    ...opts,
-    agentId: opts.agent,
-    replyAccountId: opts.replyAccount,
-  };
-  if (opts.local === true) {
-    return await agentCommand(localOpts, runtime, deps);
+async function agentViaGatewayCommandWithTransientRetries(
+  opts: AgentCliOpts,
+  runtime: RuntimeEnv,
+  signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
+) {
+  for (const [attempt, retryDelayMs] of [
+    ...GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS,
+    0,
+  ].entries()) {
+    try {
+      return await agentViaGatewayCommand(opts, runtime, signalBridge);
+    } catch (err) {
+      if (isAbortError(err)) {
+        throw err;
+      }
+      const isFinalAttempt = attempt === GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS.length;
+      if (isFinalAttempt || !isTransientGatewayAgentConnectClose(err)) {
+        throw err;
+      }
+      runtime.error?.(
+        `Gateway agent connection closed during handshake; retrying in ${retryDelayMs}ms before embedded fallback.`,
+      );
+      await delayMs(retryDelayMs, signalBridge.signal);
+    }
   }
+  throw new Error("Gateway agent retry loop exhausted unexpectedly.");
+}
 
+export async function agentCliCommand(
+  opts: AgentCliOpts,
+  runtime: RuntimeEnv,
+  deps?: AgentCliDeps,
+) {
+  protectJsonStdout(opts);
+  // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
+  // rejects CLI-originated senders, so the message would fall through to a
+  // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
+  // Fail loudly and point at the first-class command instead of no-opping.
+  if (isCompactControlCommand(opts.message)) {
+    runtime.error?.(
+      "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
+    );
+    runtime.exit(1);
+    return undefined;
+  }
+  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(opts);
+  validateExplicitSessionKeyForDispatch(dispatchOpts);
+  const gatewayDispatchOpts = dispatchOpts.runId
+    ? dispatchOpts
+    : { ...dispatchOpts, runId: randomIdempotencyKey() };
+  const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
+  const localOpts = {
+    ...gatewayDispatchOpts,
+    agentId: gatewayDispatchOpts.agent,
+    replyAccountId: gatewayDispatchOpts.replyAccount,
+    cleanupBundleMcpOnRunEnd: true,
+    cleanupCliLiveSessionOnRunEnd: true,
+    oneShotCliRun: dispatchOpts.local === true,
+    abortSignal: signalBridge.signal,
+  };
   try {
-    return await agentViaGatewayCommand(opts, runtime);
+    if (dispatchOpts.local === true) {
+      const agentCommand = await loadEmbeddedAgentCommand();
+      const result = await agentCommand(localOpts, runtime, deps);
+      return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
+    }
+
+    try {
+      const result = await agentViaGatewayCommandWithTransientRetries(
+        gatewayDispatchOpts,
+        runtime,
+        signalBridge,
+      );
+      return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
+    } catch (err) {
+      if (isAbortError(err)) {
+        if (exitForReceivedSignal(signalBridge.getReceivedSignal(), runtime)) {
+          return undefined;
+        }
+        throw err;
+      }
+      if (isGatewayAgentTimeoutError(err)) {
+        const fallbackAgentId = await resolveAgentIdForGatewayTimeoutFallback(dispatchOpts);
+        const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
+        runtime.error?.(
+          `EMBEDDED FALLBACK: Gateway agent timed out; running embedded agent with fresh session ${fallbackSession.sessionId}: ${String(err)}`,
+        );
+        const agentCommand = await loadEmbeddedAgentCommand();
+        const result = await agentCommand(
+          {
+            ...localOpts,
+            sessionId: fallbackSession.sessionId,
+            sessionKey: fallbackSession.sessionKey,
+            runId: fallbackSession.sessionId,
+            resultMetaOverrides: {
+              ...EMBEDDED_FALLBACK_META,
+              fallbackReason: "gateway_timeout",
+              fallbackSessionId: fallbackSession.sessionId,
+              fallbackSessionKey: fallbackSession.sessionKey,
+            },
+          },
+          runtime,
+          deps,
+        );
+        return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
+      }
+
+      if (!isGatewayAgentEmbeddedFallbackError(err)) {
+        throw err;
+      }
+
+      runtime.error?.(
+        `EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: ${String(err)}`,
+      );
+      const agentCommand = await loadEmbeddedAgentCommand();
+      const result = await agentCommand(
+        {
+          ...localOpts,
+          resultMetaOverrides: EMBEDDED_FALLBACK_META,
+        },
+        runtime,
+        deps,
+      );
+      return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
+    }
   } catch (err) {
-    runtime.error?.(`Gateway agent failed; falling back to embedded: ${String(err)}`);
-    return await agentCommand(localOpts, runtime, deps);
+    if (isAbortError(err) && exitForReceivedSignal(signalBridge.getReceivedSignal(), runtime)) {
+      return undefined;
+    }
+    throw err;
+  } finally {
+    signalBridge.dispose();
   }
 }

@@ -25,6 +25,7 @@ class OpenClawProtocolConstantsTest {
     assertEquals("canvas", OpenClawCapability.Canvas.rawValue)
     assertEquals("camera", OpenClawCapability.Camera.rawValue)
     assertEquals("voiceWake", OpenClawCapability.VoiceWake.rawValue)
+    assertEquals("talk", OpenClawCapability.Talk.rawValue)
     assertEquals("location", OpenClawCapability.Location.rawValue)
     assertEquals("sms", OpenClawCapability.Sms.rawValue)
     assertEquals("device", OpenClawCapability.Device.rawValue)
@@ -56,6 +57,7 @@ class OpenClawProtocolConstantsTest {
     assertEquals("device.info", OpenClawDeviceCommand.Info.rawValue)
     assertEquals("device.permissions", OpenClawDeviceCommand.Permissions.rawValue)
     assertEquals("device.health", OpenClawDeviceCommand.Health.rawValue)
+    assertEquals("device.apps", OpenClawDeviceCommand.Apps.rawValue)
   }
 
   @Test
@@ -87,12 +89,21 @@ class OpenClawProtocolConstantsTest {
   }
 
   @Test
-  fun callLogCommandsUseStableStrings() {
-    assertEquals("callLog.search", OpenClawCallLogCommand.Search.rawValue)
+  fun smsCommandsUseStableStrings() {
+    assertEquals("sms.send", OpenClawSmsCommand.Send.rawValue)
+    assertEquals("sms.search", OpenClawSmsCommand.Search.rawValue)
   }
 
   @Test
-  fun smsCommandsUseStableStrings() {
-    assertEquals("sms.search", OpenClawSmsCommand.Search.rawValue)
+  fun talkCommandsUseStableStrings() {
+    assertEquals("talk.ptt.start", OpenClawTalkCommand.PttStart.rawValue)
+    assertEquals("talk.ptt.stop", OpenClawTalkCommand.PttStop.rawValue)
+    assertEquals("talk.ptt.cancel", OpenClawTalkCommand.PttCancel.rawValue)
+    assertEquals("talk.ptt.once", OpenClawTalkCommand.PttOnce.rawValue)
+  }
+
+  @Test
+  fun callLogCommandsUseStableStrings() {
+    assertEquals("callLog.search", OpenClawCallLogCommand.Search.rawValue)
   }
 }

@@ -1,12 +1,16 @@
-import type { OpenClawConfig } from "../config/types.js";
+/** Command detectors used by inbound authorization and control-command routing. */
 import {
-  type CommandNormalizeOptions,
-  listChatCommands,
-  listChatCommandsForConfig,
-  normalizeCommandBody,
-} from "./commands-registry.js";
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.js";
+import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
+import { normalizeCommandBody } from "./commands-registry-normalize.js";
+import type { CommandNormalizeOptions } from "./commands-registry.types.js";
 import { isAbortTrigger } from "./reply/abort-primitives.js";
+import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
+/** Returns true when text starts with a configured control command alias. */
 export function hasControlCommand(
   text?: string,
   cfg?: OpenClawConfig,
@@ -19,15 +23,19 @@ export function hasControlCommand(
   if (!trimmed) {
     return false;
   }
-  const normalizedBody = normalizeCommandBody(trimmed, options);
+  const stripped = stripInboundMetadata(trimmed);
+  if (!stripped) {
+    return false;
+  }
+  const normalizedBody = normalizeCommandBody(stripped, options);
   if (!normalizedBody) {
     return false;
   }
-  const lowered = normalizedBody.toLowerCase();
+  const lowered = normalizeLowercaseStringOrEmpty(normalizedBody);
   const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
   for (const command of commands) {
     for (const alias of command.textAliases) {
-      const normalized = alias.trim().toLowerCase();
+      const normalized = normalizeOptionalLowercaseString(alias);
       if (!normalized) {
         continue;
       }
@@ -45,6 +53,7 @@ export function hasControlCommand(
   return false;
 }
 
+/** Returns true for exact control commands or abort triggers after metadata stripping. */
 export function isControlCommandMessage(
   text?: string,
   cfg?: OpenClawConfig,
@@ -60,7 +69,9 @@ export function isControlCommandMessage(
   if (hasControlCommand(trimmed, cfg, options)) {
     return true;
   }
-  const normalized = normalizeCommandBody(trimmed, options).trim().toLowerCase();
+  const stripped = stripInboundMetadata(trimmed);
+  const normalized =
+    normalizeOptionalLowercaseString(normalizeCommandBody(stripped, options)) ?? "";
   return isAbortTrigger(normalized);
 }
 
@@ -79,6 +90,7 @@ export function hasInlineCommandTokens(text?: string): boolean {
   return /(?:^|\s)[/!][a-z]/i.test(body);
 }
 
+/** Returns true when a message may need command authorization metadata. */
 export function shouldComputeCommandAuthorized(
   text?: string,
   cfg?: OpenClawConfig,

@@ -1,13 +1,23 @@
+// Gateway register option collision tests cover gateway command option registration.
 import { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "../test-runtime-capture.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerGatewayCli } from "./register.js";
 
-const callGatewayCli = vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
-  ok: true,
+const mocks = vi.hoisted(() => ({
+  callGatewayCli: vi.fn(async (_method: string, _opts: unknown, _params?: unknown) => ({
+    ok: true,
+  })),
+  gatewayStatusCommand: vi.fn(async (_opts: unknown, _runtime: unknown) => {}),
+  defaultRuntime: {
+    log: vi.fn(),
+    error: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+    exit: vi.fn(),
+  },
 }));
-const gatewayStatusCommand = vi.fn(async (_opts: unknown, _runtime: unknown) => {});
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { callGatewayCli, gatewayStatusCommand, defaultRuntime } = mocks;
 
 vi.mock("../cli-utils.js", () => ({
   runCommandWithRuntime: async (
@@ -23,13 +33,14 @@ vi.mock("../cli-utils.js", () => ({
   },
 }));
 
-vi.mock("../../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../runtime.js")>()),
-  defaultRuntime,
+vi.mock("../../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../../runtime.js")>("../../runtime.js")),
+  defaultRuntime: mocks.defaultRuntime,
 }));
 
 vi.mock("../../commands/gateway-status.js", () => ({
-  gatewayStatusCommand: (opts: unknown, runtime: unknown) => gatewayStatusCommand(opts, runtime),
+  gatewayStatusCommand: (opts: unknown, runtime: unknown) =>
+    mocks.gatewayStatusCommand(opts, runtime),
 }));
 
 vi.mock("./call.js", () => ({
@@ -42,17 +53,17 @@ vi.mock("./call.js", () => ({
       .option("--expect-final", "Wait for final response (agent)", false)
       .option("--json", "Output JSON", false),
   callGatewayCli: (method: string, opts: unknown, params?: unknown) =>
-    callGatewayCli(method, opts, params),
+    mocks.callGatewayCli(method, opts, params),
 }));
 
-vi.mock("./run.js", () => ({
+vi.mock("./run-command.js", () => ({
   addGatewayRunCommand: (cmd: Command) =>
     cmd
       .option("--token <token>", "Gateway token")
       .option("--password <password>", "Gateway password"),
 }));
 
-vi.mock("../daemon-cli.js", () => ({
+vi.mock("../daemon-cli/register-service-commands.js", () => ({
   addGatewayServiceCommands: () => undefined,
 }));
 
@@ -60,9 +71,9 @@ vi.mock("../../commands/health.js", () => ({
   formatHealthChannelLines: () => [],
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => ({}),
+vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
   readBestEffortConfig: async () => ({}),
+  readSourceConfigBestEffort: async () => ({}),
 }));
 
 vi.mock("../../infra/bonjour-discovery.js", () => ({
@@ -73,15 +84,15 @@ vi.mock("../../infra/widearea-dns.js", () => ({
   resolveWideAreaDiscoveryDomain: () => undefined,
 }));
 
-vi.mock("../../terminal/health-style.js", () => ({
+vi.mock("../../../packages/terminal-core/src/health-style.js", () => ({
   styleHealthChannelLine: (line: string) => line,
 }));
 
-vi.mock("../../terminal/links.js", () => ({
+vi.mock("../../../packages/terminal-core/src/links.js", () => ({
   formatDocsLink: () => "docs.openclaw.ai/cli/gateway",
 }));
 
-vi.mock("../../terminal/theme.js", () => ({
+vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
   colorize: (_rich: boolean, _fn: (value: string) => string, value: string) => value,
   isRich: () => false,
   theme: {
@@ -112,21 +123,30 @@ vi.mock("./discover.js", () => ({
   renderBeaconLines: () => [],
 }));
 
-describe("gateway register option collisions", () => {
-  let registerGatewayCli: typeof import("./register.js").registerGatewayCli;
-  let sharedProgram: Command;
+function firstGatewayCall() {
+  return callGatewayCli.mock.calls[0] ?? [];
+}
 
-  beforeAll(async () => {
-    ({ registerGatewayCli } = await import("./register.js"));
-    sharedProgram = new Command();
+function firstGatewayStatusCall() {
+  return gatewayStatusCommand.mock.calls[0] ?? [];
+}
+
+describe("gateway register option collisions", () => {
+  const sharedProgram: Command = new Command();
+
+  if (sharedProgram.commands.length === 0) {
     sharedProgram.exitOverride();
     registerGatewayCli(sharedProgram);
-  });
+  }
 
   beforeEach(() => {
-    resetRuntimeCapture();
     callGatewayCli.mockClear();
     gatewayStatusCommand.mockClear();
+    defaultRuntime.log.mockClear();
+    defaultRuntime.error.mockClear();
+    defaultRuntime.writeStdout.mockClear();
+    defaultRuntime.writeJson.mockClear();
+    defaultRuntime.exit.mockClear();
   });
 
   it.each([
@@ -134,25 +154,41 @@ describe("gateway register option collisions", () => {
       name: "forwards --token to gateway call when parent and child option names collide",
       argv: ["gateway", "call", "health", "--token", "tok_call", "--json"],
       assert: () => {
-        expect(callGatewayCli).toHaveBeenCalledWith(
-          "health",
-          expect.objectContaining({
-            token: "tok_call",
-          }),
-          {},
-        );
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, opts, params] = firstGatewayCall();
+        expect(method).toBe("health");
+        expect((opts as { token?: string } | undefined)?.token).toBe("tok_call");
+        expect(params).toEqual({});
       },
     },
     {
       name: "forwards --token to gateway probe when parent and child option names collide",
       argv: ["gateway", "probe", "--token", "tok_probe", "--json"],
       assert: () => {
-        expect(gatewayStatusCommand).toHaveBeenCalledWith(
-          expect.objectContaining({
-            token: "tok_probe",
-          }),
-          defaultRuntime,
-        );
+        expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+        const [opts, runtime] = firstGatewayStatusCall();
+        expect((opts as { token?: string } | undefined)?.token).toBe("tok_probe");
+        expect(runtime).toBe(defaultRuntime);
+      },
+    },
+    {
+      name: "passes decimal usage-cost --days values",
+      argv: ["gateway", "usage-cost", "--days", "7", "--json"],
+      assert: () => {
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, _opts, params] = firstGatewayCall();
+        expect(method).toBe("usage.cost");
+        expect(params).toEqual({ days: 7 });
+      },
+    },
+    {
+      name: "falls back for non-decimal usage-cost --days values",
+      argv: ["gateway", "usage-cost", "--days", "1e3", "--json"],
+      assert: () => {
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, _opts, params] = firstGatewayCall();
+        expect(method).toBe("usage.cost");
+        expect(params).toEqual({ days: 30 });
       },
     },
   ])("$name", async ({ argv, assert }) => {

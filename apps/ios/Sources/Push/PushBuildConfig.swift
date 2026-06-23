@@ -39,10 +39,6 @@ struct PushBuildConfig {
         self.relayBaseURL = Self.readURL(bundle: bundle, key: "OpenClawPushRelayBaseURL")
     }
 
-    var usesRelay: Bool {
-        self.transport == .relay
-    }
-
     private static func readURL(bundle: Bundle, key: String) -> URL? {
         guard let raw = bundle.object(forInfoDictionaryKey: key) as? String else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -1,13 +1,25 @@
+/**
+ * Scans remote provider model catalogs for configured providers.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
-  type Context,
-  complete,
-  getEnvApiKey,
-  getModel,
-  type Model,
-  type OpenAICompletionsOptions,
-  type Tool,
-} from "@mariozechner/pi-ai";
-import { Type } from "@sinclair/typebox";
+  asDateTimestampMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
+import { formatErrorMessage } from "../infra/errors.js";
+import { getEnvApiKey } from "../llm/env-api-keys.js";
+import type { OpenAICompletionsOptions } from "../llm/providers/openai-completions.js";
+import { complete } from "../llm/stream.js";
+import type { Context, Model, Tool } from "../llm/types.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
@@ -46,7 +58,7 @@ type OpenRouterModelPricing = {
   internalReasoning: number;
 };
 
-export type ProbeResult = {
+type ProbeResult = {
   ok: boolean;
   latencyMs: number | null;
   error?: string;
@@ -71,7 +83,7 @@ export type ModelScanResult = {
   image: ProbeResult;
 };
 
-export type OpenRouterScanOptions = {
+type OpenRouterScanOptions = {
   apiKey?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
@@ -92,17 +104,15 @@ function normalizeCreatedAtMs(value: unknown): number | null {
   if (value <= 0) {
     return null;
   }
-  if (value > 1e12) {
-    return Math.round(value);
-  }
-  return Math.round(value * 1000);
+  const timestampMs = value > 1e12 ? Math.round(value) : Math.round(value * 1000);
+  return asDateTimestampMs(timestampMs) ?? null;
 }
 
 function parseModality(modality: string | null): Array<"text" | "image"> {
   if (!modality) {
     return ["text"];
   }
-  const normalized = modality.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(modality);
   const parts = normalized.split(/[^a-z]+/).filter(Boolean);
   const hasImage = parts.includes("image");
   return hasImage ? ["text", "image"] : ["text"];
@@ -174,72 +184,85 @@ async function withTimeout<T>(
   }
 }
 
-async function fetchOpenRouterModels(fetchImpl: typeof fetch): Promise<OpenRouterModelMeta[]> {
-  const res = await fetchImpl(OPENROUTER_MODELS_URL, {
-    headers: { Accept: "application/json" },
-  });
-  if (!res.ok) {
-    throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
-  }
-  const payload = (await res.json()) as { data?: unknown };
-  const entries = Array.isArray(payload.data) ? payload.data : [];
+async function fetchOpenRouterModels(
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+): Promise<OpenRouterModelMeta[]> {
+  let res: Response | undefined;
+  try {
+    res = await withTimeout(timeoutMs, (signal) =>
+      fetchImpl(OPENROUTER_MODELS_URL, {
+        headers: { Accept: "application/json" },
+        signal,
+      }),
+    );
+    if (!res.ok) {
+      throw new Error(`OpenRouter /models failed: HTTP ${res.status}`);
+    }
+    const payload = (await res.json()) as { data?: unknown };
+    const entries = Array.isArray(payload.data) ? payload.data : [];
 
-  return entries
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const obj = entry as Record<string, unknown>;
-      const id = typeof obj.id === "string" ? obj.id.trim() : "";
-      if (!id) {
-        return null;
-      }
-      const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
+    return entries
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const obj = entry as Record<string, unknown>;
+        const id = normalizeOptionalString(obj.id) ?? "";
+        if (!id) {
+          return null;
+        }
+        const name = typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
 
-      const contextLength =
-        typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
-          ? obj.context_length
-          : null;
-
-      const maxCompletionTokens =
-        typeof obj.max_completion_tokens === "number" && Number.isFinite(obj.max_completion_tokens)
-          ? obj.max_completion_tokens
-          : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
-            ? obj.max_output_tokens
+        const contextLength =
+          typeof obj.context_length === "number" && Number.isFinite(obj.context_length)
+            ? obj.context_length
             : null;
 
-      const supportedParameters = Array.isArray(obj.supported_parameters)
-        ? obj.supported_parameters
-            .filter((value): value is string => typeof value === "string")
-            .map((value) => value.trim())
-            .filter(Boolean)
-        : [];
+        const maxCompletionTokens =
+          typeof obj.max_completion_tokens === "number" &&
+          Number.isFinite(obj.max_completion_tokens)
+            ? obj.max_completion_tokens
+            : typeof obj.max_output_tokens === "number" && Number.isFinite(obj.max_output_tokens)
+              ? obj.max_output_tokens
+              : null;
 
-      const supportedParametersCount = supportedParameters.length;
-      const supportsToolsMeta = supportedParameters.includes("tools");
+        const supportedParameters = Array.isArray(obj.supported_parameters)
+          ? normalizeStringEntries(
+              obj.supported_parameters.filter((value) => typeof value === "string"),
+            )
+          : [];
 
-      const modality =
-        typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
+        const supportedParametersCount = supportedParameters.length;
+        const supportsToolsMeta = supportedParameters.includes("tools");
 
-      const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
-      const createdAtMs = normalizeCreatedAtMs(obj.created_at);
-      const pricing = parseOpenRouterPricing(obj.pricing);
+        const modality =
+          typeof obj.modality === "string" && obj.modality.trim() ? obj.modality.trim() : null;
 
-      return {
-        id,
-        name,
-        contextLength,
-        maxCompletionTokens,
-        supportedParameters,
-        supportedParametersCount,
-        supportsToolsMeta,
-        modality,
-        inferredParamB,
-        createdAtMs,
-        pricing,
-      } satisfies OpenRouterModelMeta;
-    })
-    .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
+        const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
+        const createdAtMs = normalizeCreatedAtMs(obj.created_at);
+        const pricing = parseOpenRouterPricing(obj.pricing);
+
+        return {
+          id,
+          name,
+          contextLength,
+          maxCompletionTokens,
+          supportedParameters,
+          supportedParametersCount,
+          supportsToolsMeta,
+          modality,
+          inferredParamB,
+          createdAtMs,
+          pricing,
+        } satisfies OpenRouterModelMeta;
+      })
+      .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
+  } finally {
+    if (res && !res.bodyUsed) {
+      await res.body?.cancel().catch(() => undefined);
+    }
+  }
 }
 
 async function probeTool(
@@ -283,7 +306,7 @@ async function probeTool(
     return {
       ok: false,
       latencyMs: Date.now() - startedAt,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }
@@ -320,7 +343,7 @@ async function probeImage(
     return {
       ok: false,
       latencyMs: Date.now() - startedAt,
-      error: err instanceof Error ? err.message : String(err),
+      error: formatErrorMessage(err),
     };
   }
 }
@@ -331,7 +354,7 @@ function ensureImageInput(model: OpenAIModel): OpenAIModel {
   }
   return {
     ...model,
-    input: Array.from(new Set([...(model.input ?? []), "image"])),
+    input: uniqueStrings([...(model.input ?? []), "image"]) as OpenAIModel["input"],
   };
 }
 
@@ -401,16 +424,18 @@ export async function scanOpenRouterModels(
   const probe = options.probe ?? true;
   const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
   if (probe && !apiKey) {
-    throw new Error("Missing OpenRouter API key. Set OPENROUTER_API_KEY to run models scan.");
+    throw new Error(
+      "Missing OpenRouter API key. Free OpenRouter models still require OPENROUTER_API_KEY for live probes and inference; call with probe:false to list public catalog metadata.",
+    );
   }
 
-  const timeoutMs = Math.max(1, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));
   const minParamB = Math.max(0, Math.floor(options.minParamB ?? 0));
   const maxAgeDays = Math.max(0, Math.floor(options.maxAgeDays ?? 0));
-  const providerFilter = options.providerFilter?.trim().toLowerCase() ?? "";
+  const providerFilter = normalizeProviderId(options.providerFilter ?? "");
 
-  const catalog = await fetchOpenRouterModels(fetchImpl);
+  const catalog = await fetchOpenRouterModels(fetchImpl, timeoutMs);
   const now = Date.now();
 
   const filtered = catalog.filter((entry) => {
@@ -418,7 +443,7 @@ export async function scanOpenRouterModels(
       return false;
     }
     if (providerFilter) {
-      const prefix = entry.id.split("/")[0]?.toLowerCase() ?? "";
+      const prefix = normalizeProviderId(entry.id.split("/")[0] ?? "");
       if (prefix !== providerFilter) {
         return false;
       }
@@ -439,7 +464,18 @@ export async function scanOpenRouterModels(
     return true;
   });
 
-  const baseModel = getModel("openrouter", "openrouter/auto") as OpenAIModel;
+  const baseModel: OpenAIModel = {
+    id: "openrouter/auto",
+    name: "OpenRouter Auto",
+    api: "openai-completions",
+    provider: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    reasoning: false,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  };
 
   options.onProgress?.({
     phase: "probe",
@@ -493,6 +529,3 @@ export async function scanOpenRouterModels(
     },
   );
 }
-
-export { OPENROUTER_MODELS_URL };
-export type { OpenRouterModelMeta, OpenRouterModelPricing };

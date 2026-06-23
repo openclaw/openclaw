@@ -1,3 +1,4 @@
+// Discord plugin module implements gateway logging behavior.
 import type { EventEmitter } from "node:events";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -5,9 +6,9 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 type GatewayEmitter = Pick<EventEmitter, "on" | "removeListener">;
 
 const INFO_DEBUG_MARKERS = [
-  "WebSocket connection closed",
-  "Reconnecting with backoff",
-  "Attempting resume with backoff",
+  "Gateway websocket closed",
+  "Gateway reconnect scheduled in",
+  "Gateway forcing fresh IDENTIFY after",
 ];
 
 const shouldPromoteGatewayDebug = (message: string) =>

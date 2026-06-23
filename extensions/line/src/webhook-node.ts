@@ -1,11 +1,16 @@
+// Line plugin module implements webhook node behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { WebhookRequestBody } from "@line/bot-sdk";
+import type { webhook } from "@line/bot-sdk";
+import {
+  createMessageReceiveContext,
+  type MessageReceiveContext,
+} from "openclaw/plugin-sdk/channel-outbound";
+import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk/infra-runtime";
-import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
 const LINE_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
@@ -25,12 +30,17 @@ export async function readLineWebhookRequestBody(
 
 type ReadBodyFn = (req: IncomingMessage, maxBytes: number, timeoutMs?: number) => Promise<string>;
 
+function logLineWebhookDispatchError(runtime: RuntimeEnv | undefined, err: unknown): void {
+  runtime?.error?.(danger(`line webhook dispatch failed: ${String(err)}`));
+}
+
 export function createLineNodeWebhookHandler(params: {
   channelSecret: string;
-  bot: { handleWebhook: (body: WebhookRequestBody) => Promise<void> };
+  bot: { handleWebhook: (body: webhook.CallbackRequest) => Promise<void> };
   runtime: RuntimeEnv;
   readBody?: ReadBodyFn;
   maxBodyBytes?: number;
+  onRequestAuthenticated?: () => void;
 }): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const maxBodyBytes = params.maxBodyBytes ?? LINE_WEBHOOK_MAX_BODY_BYTES;
   const readBody = params.readBody ?? readLineWebhookRequestBody;
@@ -56,6 +66,7 @@ export function createLineNodeWebhookHandler(params: {
       return;
     }
 
+    let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
     try {
       const signatureHeader = req.headers["x-line-signature"];
       const signature =
@@ -96,15 +107,32 @@ export function createLineNodeWebhookHandler(params: {
         return;
       }
 
-      if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
-        await params.bot.handleWebhook(body);
+      params.onRequestAuthenticated?.();
+
+      receiveContext = createMessageReceiveContext({
+        id: `${Date.now()}:line:webhook`,
+        channel: "line",
+        message: body,
+        ackPolicy: "after_receive_record",
+        onAck: () => {
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ status: "ok" }));
+        },
+      });
+
+      if (receiveContext.shouldAckAfter("receive_record")) {
+        await receiveContext.ack();
       }
 
-      res.statusCode = 200;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ status: "ok" }));
+      if (body.events && body.events.length > 0) {
+        logVerbose(`line: received ${body.events.length} webhook events`);
+        void Promise.resolve()
+          .then(() => params.bot.handleWebhook(body))
+          .catch((err: unknown) => logLineWebhookDispatchError(params.runtime, err));
+      }
     } catch (err) {
+      await receiveContext?.nack(err);
       if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
         res.statusCode = 413;
         res.setHeader("Content-Type", "application/json");

@@ -1,3 +1,8 @@
+// Allow-from helpers parse and match plugin channel allowlist entries.
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
+import { isAllowedParsedChatSender as isAllowedParsedChatSenderShared } from "../channels/plugins/chat-target-prefixes.js";
+
 export type {
   AllowlistMatch,
   AllowlistMatchSource,
@@ -29,32 +34,36 @@ export {
 
 /** Lowercase and optionally strip prefixes from allowlist entries before sender comparisons. */
 export function formatAllowFromLowercase(params: {
+  /** Raw allowlist entries from config or channel-specific overrides. */
   allowFrom: Array<string | number>;
+  /** Optional prefix remover for channel aliases such as `tg:` or `zalo:`. */
   stripPrefixRe?: RegExp;
 }): string[] {
-  return params.allowFrom
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
+  return normalizeStringEntries(params.allowFrom)
     .map((entry) => (params.stripPrefixRe ? entry.replace(params.stripPrefixRe, "") : entry))
-    .map((entry) => entry.toLowerCase());
+    .map((entry) => normalizeOptionalLowercaseString(entry))
+    .filter((entry): entry is string => Boolean(entry));
 }
 
 /** Normalize allowlist entries through a channel-provided parser or canonicalizer. */
 export function formatNormalizedAllowFromEntries(params: {
+  /** Raw allowlist entries from config or channel-specific overrides. */
   allowFrom: Array<string | number>;
+  /** Channel-specific canonicalizer; empty results are omitted. */
   normalizeEntry: (entry: string) => string | undefined | null;
 }): string[] {
-  return params.allowFrom
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
+  return normalizeStringEntries(params.allowFrom)
     .map((entry) => params.normalizeEntry(entry))
     .filter((entry): entry is string => Boolean(entry));
 }
 
 /** Check whether a sender id matches a simple normalized allowlist with wildcard support. */
 export function isNormalizedSenderAllowed(params: {
+  /** Sender id or handle to compare after string coercion and lowercase normalization. */
   senderId: string | number;
+  /** Raw allowlist entries; `*` allows every sender. */
   allowFrom: Array<string | number>;
+  /** Optional prefix remover applied to allowlist entries before comparison. */
   stripPrefixRe?: RegExp;
 }): boolean {
   const normalizedAllow = formatAllowFromLowercase({
@@ -62,13 +71,14 @@ export function isNormalizedSenderAllowed(params: {
     stripPrefixRe: params.stripPrefixRe,
   });
   if (normalizedAllow.length === 0) {
+    // Empty allowlists deny by default; callers must opt into wildcard access explicitly.
     return false;
   }
   if (normalizedAllow.includes("*")) {
     return true;
   }
-  const sender = String(params.senderId).trim().toLowerCase();
-  return normalizedAllow.includes(sender);
+  const sender = normalizeOptionalLowercaseString(String(params.senderId));
+  return sender ? normalizedAllow.includes(sender) : false;
 }
 
 type ParsedChatAllowTarget =
@@ -77,60 +87,39 @@ type ParsedChatAllowTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; handle: string };
 
-/** Match chat-aware allowlist entries against sender, chat id, guid, or identifier fields. */
-export function isAllowedParsedChatSender<TParsed extends ParsedChatAllowTarget>(params: {
+/** Match allowlist entries against senders, with conversation targets requiring explicit opt-in. */
+export function isAllowedParsedChatSender(params: {
+  /** Raw allowlist entries, including handles, wildcard, or parsed chat targets. */
   allowFrom: Array<string | number>;
+  /** Sender handle/id from the inbound message. */
   sender: string;
+  /** Optional numeric conversation id for channel-specific chat target entries. */
   chatId?: number | null;
+  /** Optional stable conversation guid for channel-specific chat target entries. */
   chatGuid?: string | null;
+  /** Optional human/channel conversation identifier for chat target entries. */
   chatIdentifier?: string | null;
+  /** Enables matching conversation targets in addition to sender handles. */
+  allowConversationTargets?: boolean | null;
+  /** Channel-specific sender normalization hook. */
   normalizeSender: (sender: string) => string;
-  parseAllowTarget: (entry: string) => TParsed;
+  /** Channel-specific allowlist parser for handles and conversation targets. */
+  parseAllowTarget: (entry: string) => ParsedChatAllowTarget;
 }): boolean {
-  const allowFrom = params.allowFrom.map((entry) => String(entry).trim());
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-
-  const senderNormalized = params.normalizeSender(params.sender);
-  const chatId = params.chatId ?? undefined;
-  const chatGuid = params.chatGuid?.trim();
-  const chatIdentifier = params.chatIdentifier?.trim();
-
-  for (const entry of allowFrom) {
-    if (!entry) {
-      continue;
-    }
-    const parsed = params.parseAllowTarget(entry);
-    if (parsed.kind === "chat_id" && chatId !== undefined) {
-      if (parsed.chatId === chatId) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_guid" && chatGuid) {
-      if (parsed.chatGuid === chatGuid) {
-        return true;
-      }
-    } else if (parsed.kind === "chat_identifier" && chatIdentifier) {
-      if (parsed.chatIdentifier === chatIdentifier) {
-        return true;
-      }
-    } else if (parsed.kind === "handle" && senderNormalized) {
-      if (parsed.handle === senderNormalized) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return isAllowedParsedChatSenderShared(params);
 }
 
+/** Serializable allowlist resolution record used by setup/status UI surfaces. */
 export type BasicAllowlistResolutionEntry = {
+  /** Original allowlist input. */
   input: string;
+  /** Whether resolution found a concrete account/user id. */
   resolved: boolean;
+  /** Resolved id when available. */
   id?: string;
+  /** Resolved display name when available. */
   name?: string;
+  /** Optional resolver note for UI or docs output. */
   note?: string;
 };
 
@@ -149,7 +138,9 @@ export function mapBasicAllowlistResolutionEntries(
 
 /** Map allowlist inputs sequentially so resolver side effects stay ordered and predictable. */
 export async function mapAllowlistResolutionInputs<T>(params: {
+  /** Ordered allowlist inputs to resolve. */
   inputs: string[];
+  /** Resolver callback invoked once per input in order. */
   mapInput: (input: string) => Promise<T> | T;
 }): Promise<T[]> {
   const results: T[] = [];

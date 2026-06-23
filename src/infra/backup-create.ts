@@ -1,9 +1,12 @@
+// Creates backup archives while filtering volatile runtime state.
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as tar from "tar";
+import type { DatabaseSync } from "node:sqlite";
+import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -12,8 +15,33 @@ import {
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { writeJson } from "./json-files.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
+
+type TarRuntime = typeof import("tar");
+
+let tarRuntimePromise: Promise<TarRuntime> | undefined;
+
+function loadTarRuntime(): Promise<TarRuntime> {
+  tarRuntimePromise ??= import("tar");
+  return tarRuntimePromise;
+}
+
+type BackupLinkCacheKey = `${number}:${number}`;
+
+class BackupLinkCache extends Map<BackupLinkCacheKey, string> {
+  override get(_key: BackupLinkCacheKey): undefined {
+    return undefined;
+  }
+
+  override set(_key: BackupLinkCacheKey, _value: string): this {
+    return this;
+  }
+}
 
 export type BackupCreateOptions = {
   output?: string;
@@ -23,6 +51,12 @@ export type BackupCreateOptions = {
   verify?: boolean;
   json?: boolean;
   nowMs?: number;
+  /**
+   * Optional info logger invoked for non-fatal backup events such as tar
+   * retry notices or volatile-file skip counts. When omitted, events are
+   * silent aside from the final result.
+   */
+  log?: (message: string) => void;
 };
 
 type BackupManifestAsset = {
@@ -73,7 +107,93 @@ export type BackupCreateResult = {
     reason: string;
     coveredBy?: string;
   }>;
+  /**
+   * Count of files the archiver actively skipped because they matched the
+   * known-volatile filter (live sessions, cron logs, queues, sockets, pid/tmp).
+   * Populated on real writes only; dry runs report 0.
+   */
+  skippedVolatileCount: number;
 };
+
+const BACKUP_TAR_MAX_ATTEMPTS = 3;
+// Backoff between attempts: wait 10s before attempt 2, 20s before attempt 3.
+const BACKUP_TAR_BACKOFF_MS = [10_000, 20_000];
+
+function isTarEofRaceError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "EOF") {
+    return true;
+  }
+  // Keep this regex narrow: match only the two tar-specific EOF-class error
+  // strings thrown by node-tar's WriteEntry#onread (grow and shrink races,
+  // see node_modules/tar/dist/commonjs/write-entry.js around the
+  // "did not encounter expected EOF" and "encountered unexpected EOF"
+  // Object.assign sites), plus the TAR_BAD_ARCHIVE code surfaced by the
+  // parser on truncated input. A bare /EOF/i alternative also matched
+  // unrelated SSL/OpenSSL strings like "EOF occurred in violation of
+  // protocol" and "unexpected eof while reading", causing pointless retries.
+  const message = (err as Error).message ?? "";
+  return /(did not encounter expected|encountered unexpected) EOF|TAR_BAD_ARCHIVE/i.test(message);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+export type BackupTarRetryLogger = (message: string) => void;
+
+async function writeTarArchiveWithRetry(params: {
+  tempArchivePath: string;
+  runTar: () => Promise<void>;
+  log?: BackupTarRetryLogger;
+  sleepMs?: (ms: number) => Promise<void>;
+}): Promise<void> {
+  const sleepFn = params.sleepMs ?? sleep;
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= BACKUP_TAR_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      await params.runTar();
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (!isTarEofRaceError(err) || attempt === BACKUP_TAR_MAX_ATTEMPTS) {
+        break;
+      }
+      try {
+        await fs.rm(params.tempArchivePath, { force: true });
+      } catch (cleanupErr) {
+        const code = (cleanupErr as NodeJS.ErrnoException).code;
+        if (code && code !== "ENOENT") {
+          params.log?.(
+            `Backup archiver could not remove temp archive ${params.tempArchivePath} between retries: ${code}. Continuing.`,
+          );
+        }
+      }
+      const backoff = BACKUP_TAR_BACKOFF_MS[attempt - 1] ?? 0;
+      const offendingPath = (err as NodeJS.ErrnoException).path;
+      params.log?.(
+        `Backup archiver hit a live-write race${
+          offendingPath ? ` on ${offendingPath}` : ""
+        } (attempt ${attempt}/${BACKUP_TAR_MAX_ATTEMPTS}); retrying in ${Math.round(backoff / 1000)}s.`,
+      );
+      await sleepFn(backoff);
+    }
+  }
+  const final = lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  const offendingPath = (lastErr as NodeJS.ErrnoException | undefined)?.path;
+  const suffix = offendingPath
+    ? ` (last offending path: ${offendingPath}, after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`
+    : ` (after ${BACKUP_TAR_MAX_ATTEMPTS} attempts)`;
+  throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
+}
+
+export const testApi = { writeTarArchiveWithRetry, isTarEofRaceError };
+export { testApi as __test };
 
 async function resolveOutputPath(params: {
   output?: string;
@@ -125,6 +245,43 @@ async function assertOutputPathReady(outputPath: string): Promise<void> {
 
 function buildTempArchivePath(outputPath: string): string {
   return `${outputPath}.${randomUUID()}.tmp`;
+}
+
+// The temp manifest is passed to `tar.c` alongside the asset source paths. If
+// the temp file lives inside any asset, recursive traversal pulls it in a
+// second time and both copies remap to `<archiveRoot>/manifest.json`, which
+// makes verify reject the archive. A `tar` filter cannot fix this in place: it
+// fires for both the explicit-arg and the traversed entry, so excluding by
+// path drops the manifest entirely. We instead place the temp dir somewhere
+// guaranteed to be outside every asset.
+async function chooseBackupTempRoot(params: {
+  assets: readonly BackupAsset[];
+  outputPath: string;
+}): Promise<string> {
+  const systemTmp = os.tmpdir();
+  const canonicalSystemTmp = await canonicalizePathForContainment(systemTmp);
+  const systemTmpInsideAsset = params.assets.some((asset) =>
+    isPathWithin(canonicalSystemTmp, asset.sourcePath),
+  );
+  if (!systemTmpInsideAsset) {
+    return systemTmp;
+  }
+
+  // Fallback: the directory holding the output archive. The earlier
+  // output-containment check guarantees `outputPath` is outside every asset,
+  // so its parent is too. The caller must already have write access there to
+  // write the archive itself, so this stays within the existing sandbox.
+  const fallback = path.dirname(params.outputPath);
+  const canonicalFallback = await canonicalizePathForContainment(fallback);
+  const fallbackInsideAsset = params.assets.find((asset) =>
+    isPathWithin(canonicalFallback, asset.sourcePath),
+  );
+  if (fallbackInsideAsset) {
+    throw new Error(
+      `Backup temp root cannot be placed outside every source path: ${systemTmp} and ${fallback} both overlap ${fallbackInsideAsset.sourcePath}.`,
+    );
+  }
+  return fallback;
 }
 
 function isLinkUnsupportedError(code: string | undefined): boolean {
@@ -250,6 +407,13 @@ export function formatBackupCreateSummary(result: BackupCreateResult): string[] 
     lines.push("Dry run only; archive was not written.");
   } else {
     lines.push(`Created ${result.archivePath}`);
+    if (result.skippedVolatileCount > 0) {
+      lines.push(
+        `Skipped ${result.skippedVolatileCount} volatile file${
+          result.skippedVolatileCount === 1 ? "" : "s"
+        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+      );
+    }
     if (result.verified) {
       lines.push("Archive verification: passed");
     }
@@ -261,18 +425,275 @@ function remapArchiveEntryPath(params: {
   entryPath: string;
   manifestPath: string;
   archiveRoot: string;
+  sourcePathRemaps?: ReadonlyMap<string, string>;
 }): string {
   const normalizedEntry = path.resolve(params.entryPath);
   if (normalizedEntry === params.manifestPath) {
     return path.posix.join(params.archiveRoot, "manifest.json");
   }
+  const remappedSourcePath = params.sourcePathRemaps?.get(normalizedEntry);
+  if (remappedSourcePath) {
+    return buildBackupArchivePath(params.archiveRoot, remappedSourcePath);
+  }
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
+}
+
+function normalizeBackupFilterPath(value: string): string {
+  return value.replaceAll("\\", "/").replace(/\/+$/u, "");
+}
+
+export function buildExtensionsNodeModulesFilter(stateDir: string): (filePath: string) => boolean {
+  const normalizedStateDir = normalizeBackupFilterPath(stateDir);
+  const extensionsPrefix = `${normalizedStateDir}/extensions/`;
+
+  return (filePath: string): boolean => {
+    const normalizedFilePath = normalizeBackupFilterPath(filePath);
+    if (!normalizedFilePath.startsWith(extensionsPrefix)) {
+      return true;
+    }
+
+    return !normalizedFilePath.slice(extensionsPrefix.length).split("/").includes("node_modules");
+  };
+}
+
+type SqliteBackupAsset = {
+  sourcePath: string;
+  archiveSourcePath: string;
+  skippedSourcePaths: Set<string>;
+};
+
+type StateSqliteBackupPlan = {
+  snapshots: SqliteBackupAsset[];
+  discoveredSourcePaths: Set<string>;
+};
+
+const SQLITE_BACKUP_SOURCE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
+const SQLITE_BACKUP_EXCLUDED_SUFFIXES = [".reindex-lock.sqlite"] as const;
+const SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN =
+  /\.sqlite\.(?:backup|memory-reindex|tmp)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function isStatePackageContentPath(sourcePath: string, stateDir: string): boolean {
+  const resolvedStateDir = path.resolve(stateDir);
+  const resolvedSourcePath = path.resolve(sourcePath);
+  return (
+    isPathWithin(resolvedSourcePath, resolvedStateDir) &&
+    path.relative(resolvedStateDir, resolvedSourcePath).split(path.sep).includes("node_modules")
+  );
+}
+
+function resolveSqliteBackupDatabasePath(sourcePath: string): string | undefined {
+  for (const suffix of SQLITE_BACKUP_SOURCE_SUFFIXES.slice(1)) {
+    if (sourcePath.endsWith(suffix)) {
+      const databasePath = sourcePath.slice(0, -suffix.length);
+      return databasePath.endsWith(".sqlite") ? databasePath : undefined;
+    }
+  }
+  return sourcePath.endsWith(".sqlite") ? sourcePath : undefined;
+}
+
+function resolveSqliteBackupBasePath(sourcePath: string): string {
+  for (const suffix of SQLITE_BACKUP_SOURCE_SUFFIXES.slice(1)) {
+    if (sourcePath.endsWith(suffix)) {
+      return sourcePath.slice(0, -suffix.length);
+    }
+  }
+  return sourcePath;
+}
+
+function classifyStateSqliteBackupSourcePath(
+  sourcePath: string,
+  stateDir: string,
+): "excluded" | "sqlite" | undefined {
+  const resolvedSourcePath = path.resolve(sourcePath);
+  if (!isPathWithin(resolvedSourcePath, stateDir)) {
+    return undefined;
+  }
+  if (isStatePackageContentPath(resolvedSourcePath, stateDir)) {
+    return undefined;
+  }
+  if (
+    SQLITE_BACKUP_REINDEX_TRANSIENT_PATTERN.test(resolveSqliteBackupBasePath(resolvedSourcePath))
+  ) {
+    return "excluded";
+  }
+  const databasePath = resolveSqliteBackupDatabasePath(resolvedSourcePath);
+  if (!databasePath) {
+    return undefined;
+  }
+  return SQLITE_BACKUP_EXCLUDED_SUFFIXES.some((suffix) => databasePath.endsWith(suffix))
+    ? "excluded"
+    : "sqlite";
+}
+
+function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").ReadEntry): boolean {
+  return "isFile" in entry ? entry.isFile() : entry.type === "File";
+}
+
+function tableExistsSql(db: DatabaseSync, tableName: string): boolean {
+  const row = db
+    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+    .get(tableName) as { ok?: unknown } | undefined;
+  return row?.ok === 1;
+}
+
+function sanitizeGlobalStateSqliteSnapshot(db: DatabaseSync): void {
+  if (tableExistsSql(db, "delivery_queue_entries")) {
+    db.prepare("DELETE FROM delivery_queue_entries").run();
+    db.exec("VACUUM;");
+  }
+}
+
+async function listStateSqlitePaths(params: {
+  stateDir: string;
+  globalStateSqlitePath: string;
+}): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
+  const snapshotPaths = new Set<string>();
+  const discoveredSourcePaths = new Set<string>();
+  const extensionsFilter = buildExtensionsNodeModulesFilter(params.stateDir);
+  async function visit(dir: string): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      // Preserve state-tree symlinks in the archive instead of dereferencing
+      // their SQLite-looking targets during snapshot discovery.
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (extensionsFilter(entryPath) && !isStatePackageContentPath(entryPath, params.stateDir)) {
+          await visit(entryPath);
+        }
+      } else if (entry.isFile() && extensionsFilter(entryPath)) {
+        const resolvedEntryPath = path.resolve(entryPath);
+        if (resolveSqliteBackupDatabasePath(resolvedEntryPath)) {
+          discoveredSourcePaths.add(resolvedEntryPath);
+        }
+        if (
+          entry.name.endsWith(".sqlite") &&
+          !SQLITE_BACKUP_EXCLUDED_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))
+        ) {
+          snapshotPaths.add(resolvedEntryPath);
+        }
+      }
+    }
+  }
+  await visit(params.stateDir);
+
+  const globalStateSqlitePath = path.resolve(params.globalStateSqlitePath);
+  let globalStateEntry: import("node:fs").Stats | undefined;
+  try {
+    globalStateEntry = await fs.lstat(globalStateSqlitePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+  if (globalStateEntry?.isFile()) {
+    snapshotPaths.add(globalStateSqlitePath);
+    discoveredSourcePaths.add(globalStateSqlitePath);
+  } else if (globalStateEntry?.isSymbolicLink()) {
+    let targetEntry: import("node:fs").Stats;
+    try {
+      targetEntry = await fs.stat(globalStateSqlitePath);
+    } catch (err) {
+      throw new Error(
+        `Canonical global SQLite symlink cannot be snapshotted: ${globalStateSqlitePath}`,
+        { cause: err },
+      );
+    }
+    if (!targetEntry.isFile()) {
+      throw new Error(
+        `Canonical global SQLite symlink must resolve to a regular file: ${globalStateSqlitePath}`,
+      );
+    }
+    snapshotPaths.add(globalStateSqlitePath);
+    discoveredSourcePaths.add(globalStateSqlitePath);
+  } else if (globalStateEntry) {
+    throw new Error(
+      `Canonical global SQLite path must be a regular file or symlink to one: ${globalStateSqlitePath}`,
+    );
+  }
+
+  return {
+    snapshotPaths: [...snapshotPaths].toSorted((left, right) => left.localeCompare(right)),
+    discoveredSourcePaths,
+  };
+}
+
+async function createStateSqliteBackupPlan(params: {
+  stateDir: string;
+  tempDir: string;
+}): Promise<StateSqliteBackupPlan> {
+  // Complete discovery before writing snapshots. chooseBackupTempRoot keeps
+  // tempDir outside stateDir, and this ordering prevents future overlap from
+  // making backup discover one of its own staged SQLite files.
+  const globalStateSqlitePath = path.resolve(
+    resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: params.stateDir,
+    }),
+  );
+  const discovery = await listStateSqlitePaths({
+    stateDir: params.stateDir,
+    globalStateSqlitePath,
+  });
+  const sqlite = requireNodeSqlite();
+  const snapshots: SqliteBackupAsset[] = [];
+  for (const archiveSourcePath of discovery.snapshotPaths) {
+    // A discovered *.sqlite file that SQLite cannot snapshot aborts backup.
+    // Raw-copying malformed or unreadable databases would restore unsafe state.
+    // Resolve the canonical global path so a symlinked DB reads the target's
+    // live WAL/SHM state instead of looking for sidecars beside the symlink.
+    const sourceDatabasePath =
+      path.resolve(archiveSourcePath) === globalStateSqlitePath
+        ? await fs.realpath(archiveSourcePath)
+        : archiveSourcePath;
+    const source = new sqlite.DatabaseSync(sourceDatabasePath, {
+      allowExtension: true,
+      readOnly: true,
+    });
+    const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
+    try {
+      source.exec("PRAGMA busy_timeout = 30000;");
+      // VACUUM INTO removes deleted-page remnants before the snapshot enters
+      // the archive. Load sqlite-vec best-effort so memory indexes using vec0
+      // can still be compacted without weakening that privacy property.
+      await loadSqliteVecExtension({ db: source });
+      source.prepare("VACUUM INTO ?").run(sourcePath);
+    } finally {
+      source.close();
+    }
+    await fs.chmod(sourcePath, 0o600);
+    if (path.resolve(archiveSourcePath) === globalStateSqlitePath) {
+      const snapshot = new sqlite.DatabaseSync(sourcePath);
+      try {
+        sanitizeGlobalStateSqliteSnapshot(snapshot);
+      } finally {
+        snapshot.close();
+      }
+    }
+    snapshots.push({
+      sourcePath,
+      archiveSourcePath,
+      skippedSourcePaths: new Set(
+        [archiveSourcePath, sourceDatabasePath].flatMap((databasePath) =>
+          SQLITE_BACKUP_SOURCE_SUFFIXES.map((suffix) => path.resolve(`${databasePath}${suffix}`)),
+        ),
+      ),
+    });
+  }
+  return { snapshots, discoveredSourcePaths: discovery.discoveredSourcePaths };
 }
 
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
-  const nowMs = opts.nowMs ?? Date.now();
+  const nowMs = resolveDateTimestampMs(opts.nowMs);
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
@@ -317,6 +738,7 @@ export async function createBackupArchive(
     verified: false,
     assets: plan.included,
     skipped: plan.skipped,
+    skippedVolatileCount: 0,
   };
 
   if (opts.dryRun) {
@@ -324,10 +746,27 @@ export async function createBackupArchive(
   }
 
   await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-"));
+  const tempRoot = await chooseBackupTempRoot({ assets: result.assets, outputPath });
+  await fs.mkdir(tempRoot, { recursive: true });
+  const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-backup-"));
   const manifestPath = path.join(tempDir, "manifest.json");
   const tempArchivePath = buildTempArchivePath(outputPath);
+  const stateAsset = result.assets.find((asset) => asset.kind === "state");
   try {
+    const stateSqliteBackup = stateAsset
+      ? await createStateSqliteBackupPlan({
+          stateDir: stateAsset.sourcePath,
+          tempDir,
+        })
+      : { snapshots: [], discoveredSourcePaths: new Set<string>() };
+    const sourcePathRemaps = new Map<string, string>();
+    const skippedSqliteSourcePaths = new Set<string>();
+    for (const snapshot of stateSqliteBackup.snapshots) {
+      sourcePathRemaps.set(path.resolve(snapshot.sourcePath), snapshot.archiveSourcePath);
+      for (const skippedSourcePath of snapshot.skippedSourcePaths) {
+        skippedSqliteSourcePaths.add(skippedSourcePath);
+      }
+    }
     const manifest = buildManifest({
       createdAt,
       archiveRoot,
@@ -340,24 +779,103 @@ export async function createBackupArchive(
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
     });
-    await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+    await writeJson(manifestPath, manifest, { trailingNewline: true });
 
-    await tar.c(
-      {
-        file: tempArchivePath,
-        gzip: true,
-        portable: true,
-        preservePaths: true,
-        onWriteEntry: (entry) => {
-          entry.path = remapArchiveEntryPath({
-            entryPath: entry.path,
+    const tar = await loadTarRuntime();
+    const extensionsFilter = stateAsset
+      ? buildExtensionsNodeModulesFilter(stateAsset.sourcePath)
+      : undefined;
+    const volatilePlan = { stateDirs: [stateAsset?.sourcePath ?? plan.stateDir] };
+    let skippedVolatileCount = 0;
+    // node-tar invokes filters from async stat callbacks, so throwing inside
+    // the filter is uncaught. Omit unexpected SQLite and reject after tar settles.
+    const unexpectedSqliteSourcePaths: string[] = [];
+    const tarFilter = (
+      entryPath: string,
+      entryStat: import("node:fs").Stats | import("tar").ReadEntry,
+    ): boolean => {
+      // The manifest is staged in a tmp dir outside any state directory and
+      // is always safe to include.
+      const resolvedEntryPath = path.resolve(entryPath);
+      if (resolvedEntryPath === manifestPath) {
+        return true;
+      }
+      if (extensionsFilter && !extensionsFilter(entryPath)) {
+        return false;
+      }
+      const sqliteSourceKind = stateAsset
+        ? classifyStateSqliteBackupSourcePath(resolvedEntryPath, stateAsset.sourcePath)
+        : undefined;
+      if (sqliteSourceKind === "excluded") {
+        return false;
+      }
+      if (skippedSqliteSourcePaths.has(resolvedEntryPath)) {
+        return false;
+      }
+      if (
+        sqliteSourceKind === "sqlite" &&
+        stateSqliteBackup.discoveredSourcePaths.has(resolvedEntryPath)
+      ) {
+        return false;
+      }
+      if (sqliteSourceKind === "sqlite" && isBackupTarFilterFile(entryStat)) {
+        unexpectedSqliteSourcePaths.push(entryPath);
+        return false;
+      }
+      if (isVolatileBackupPath(entryPath, volatilePlan)) {
+        skippedVolatileCount += 1;
+        return false;
+      }
+      return true;
+    };
+    await writeTarArchiveWithRetry({
+      tempArchivePath,
+      log: opts.log,
+      runTar: async () => {
+        // tar.c re-walks the tree (and thus re-invokes tarFilter) on every
+        // attempt, so reset the closure counter here or retries would report
+        // cumulative skip counts across attempts instead of the final one.
+        skippedVolatileCount = 0;
+        unexpectedSqliteSourcePaths.length = 0;
+        await tar.c(
+          {
+            file: tempArchivePath,
+            gzip: true,
+            portable: true,
+            preservePaths: true,
+            linkCache: new BackupLinkCache(),
+            filter: tarFilter,
+            onWriteEntry: (entry) => {
+              entry.path = remapArchiveEntryPath({
+                entryPath: entry.path,
+                manifestPath,
+                archiveRoot,
+                sourcePathRemaps,
+              });
+            },
+          },
+          [
             manifestPath,
-            archiveRoot,
-          });
-        },
+            ...stateSqliteBackup.snapshots.map((snapshot) => snapshot.sourcePath),
+            ...result.assets.map((asset) => asset.sourcePath),
+          ],
+        );
+        const unexpectedSqliteSourcePath = unexpectedSqliteSourcePaths[0];
+        if (unexpectedSqliteSourcePath) {
+          throw new Error(
+            `SQLite state appeared after snapshot discovery: ${unexpectedSqliteSourcePath}. Retry backup so it can be snapshotted.`,
+          );
+        }
       },
-      [manifestPath, ...result.assets.map((asset) => asset.sourcePath)],
-    );
+    });
+    result.skippedVolatileCount = skippedVolatileCount;
+    if (skippedVolatileCount > 0) {
+      opts.log?.(
+        `Backup skipped ${skippedVolatileCount} volatile file${
+          skippedVolatileCount === 1 ? "" : "s"
+        } (live sessions, cron logs, queues, sockets, pid/tmp).`,
+      );
+    }
     await publishTempArchive({ tempArchivePath, outputPath });
   } finally {
     await fs.rm(tempArchivePath, { force: true }).catch(() => undefined);

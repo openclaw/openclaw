@@ -1,3 +1,4 @@
+// Covers provider usage report formatting.
 import { describe, expect, it } from "vitest";
 import {
   formatUsageReportLines,
@@ -17,9 +18,11 @@ function makeSnapshot(windows: ProviderUsageSnapshot["windows"]): ProviderUsageS
 }
 
 describe("provider-usage.format", () => {
-  it("returns null summary for errored or empty snapshots", () => {
-    expect(formatUsageWindowSummary({ ...makeSnapshot([]), error: "HTTP 401" })).toBeNull();
-    expect(formatUsageWindowSummary(makeSnapshot([]))).toBeNull();
+  it.each([
+    { snapshot: { ...makeSnapshot([]), error: "HTTP 401" } as ProviderUsageSnapshot, now },
+    { snapshot: makeSnapshot([]), now },
+  ])("returns null summary for empty or errored snapshots", ({ snapshot, now: currentNow }) => {
+    expect(formatUsageWindowSummary(snapshot, { now: currentNow })).toBeNull();
   });
 
   it("formats reset windows across now/minute/hour/day/date buckets", () => {
@@ -91,6 +94,27 @@ describe("provider-usage.format", () => {
     );
   });
 
+  it("formats provider summary text for balance-only providers", () => {
+    const summary: UsageSummary = {
+      updatedAt: now,
+      providers: [
+        {
+          provider: "deepseek",
+          displayName: "DeepSeek",
+          windows: [],
+          summary: "Balance ¥42.50",
+        },
+      ],
+    };
+
+    expect(formatUsageWindowSummary(summary.providers[0], { now })).toBe("Balance ¥42.50");
+    expect(formatUsageSummaryLine(summary, { now })).toBe("📊 Usage: DeepSeek Balance ¥42.50");
+    expect(formatUsageReportLines(summary, { now })).toEqual([
+      "Usage:",
+      "  DeepSeek: Balance ¥42.50",
+    ]);
+  });
+
   it("returns null summary line when providers are errored or have no windows", () => {
     expect(
       formatUsageSummaryLine({
@@ -112,52 +136,69 @@ describe("provider-usage.format", () => {
     ).toBeNull();
   });
 
-  it("formats report output for empty, error, no-data, and plan entries", () => {
-    expect(formatUsageReportLines({ updatedAt: now, providers: [] })).toEqual([
-      "Usage: no provider usage available.",
-    ]);
-
-    const summary: UsageSummary = {
-      updatedAt: now,
-      providers: [
-        {
-          provider: "openai-codex",
-          displayName: "Codex",
-          windows: [],
-          error: "Token expired",
-          plan: "Plus",
-        },
-        {
-          provider: "xiaomi",
-          displayName: "Xiaomi",
-          windows: [],
-        },
-      ],
-    };
-    expect(formatUsageReportLines(summary)).toEqual([
-      "Usage:",
-      "  Codex (Plus): Token expired",
-      "  Xiaomi: no data",
-    ]);
-  });
-
-  it("formats detailed report lines with reset windows", () => {
-    const summary: UsageSummary = {
-      updatedAt: now,
-      providers: [
-        {
-          provider: "anthropic",
-          displayName: "Claude",
-          plan: "Pro",
-          windows: [{ label: "Daily", usedPercent: 25, resetAt: now + 2 * 60 * 60_000 }],
-        },
-      ],
-    };
-
-    expect(formatUsageReportLines(summary, { now })).toEqual([
-      "Usage:",
-      "  Claude (Pro)",
-      "    Daily: 75% left · resets 2h",
-    ]);
+  it.each([
+    {
+      name: "formats empty reports",
+      summary: { updatedAt: now, providers: [] } as UsageSummary,
+      opts: undefined,
+      expected: ["Usage: no provider usage available."],
+    },
+    {
+      name: "formats error, no-data, and plan entries",
+      summary: {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "Codex",
+            windows: [],
+            error: "Token expired",
+            plan: "Plus",
+          },
+          {
+            provider: "xiaomi",
+            displayName: "Xiaomi",
+            windows: [],
+          },
+        ],
+      } as UsageSummary,
+      opts: undefined,
+      expected: ["Usage:", "  Codex (Plus): Token expired", "  Xiaomi: no data"],
+    },
+    {
+      name: "formats plan plus summary entries without windows",
+      summary: {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "deepseek",
+            displayName: "DeepSeek",
+            windows: [],
+            summary: "Balance ¥0.00",
+            plan: "Unavailable",
+          },
+        ],
+      } as UsageSummary,
+      opts: undefined,
+      expected: ["Usage:", "  DeepSeek (Unavailable): Balance ¥0.00"],
+    },
+    {
+      name: "formats detailed report lines with reset windows",
+      summary: {
+        updatedAt: now,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            plan: "Pro",
+            windows: [{ label: "Daily", usedPercent: 25, resetAt: now + 2 * 60 * 60_000 }],
+          },
+        ],
+      } as UsageSummary,
+      opts: { now },
+      expected: ["Usage:", "  Claude (Pro)", "    Daily: 75% left · resets 2h"],
+    },
+  ])("$name", ({ summary, opts, expected }) => {
+    expect(formatUsageReportLines(summary, opts)).toEqual(expected);
   });
 });

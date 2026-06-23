@@ -1,9 +1,14 @@
+// Control UI view renders agents utils screen content.
 import { html, nothing } from "lit";
 import {
   expandToolGroups,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
+import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
+import { buildQualifiedChatModelValue } from "../chat-model-ref.ts";
+import { controlUiPublicAssetPath } from "../public-assets.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,
@@ -165,6 +170,7 @@ type AgentConfigEntry = {
   workspace?: string;
   agentDir?: string;
   model?: unknown;
+  agentRuntime?: unknown;
   skills?: string[];
   tools?: {
     profile?: string;
@@ -192,93 +198,108 @@ export function normalizeAgentLabel(agent: {
   name?: string;
   identity?: { name?: string };
 }) {
-  return agent.name?.trim() || agent.identity?.name?.trim() || agent.id;
+  return (
+    normalizeOptionalString(agent.name) ?? normalizeOptionalString(agent.identity?.name) ?? agent.id
+  );
 }
 
-const AVATAR_URL_RE = /^(https?:\/\/|data:image\/|\/)/i;
+const CONTROL_UI_AVATAR_URL_RE = /^(data:image\/|\/(?!\/))/i;
+
+export function isRenderableControlUiAvatarUrl(value: string): boolean {
+  return CONTROL_UI_AVATAR_URL_RE.test(value);
+}
 
 export function resolveAgentAvatarUrl(
   agent: { identity?: { avatar?: string; avatarUrl?: string } },
   agentIdentity?: AgentIdentityResult | null,
 ): string | null {
   const candidates = [
-    agentIdentity?.avatar?.trim(),
-    agent.identity?.avatarUrl?.trim(),
-    agent.identity?.avatar?.trim(),
+    normalizeOptionalString(agentIdentity?.avatar),
+    normalizeOptionalString(agent.identity?.avatarUrl),
+    normalizeOptionalString(agent.identity?.avatar),
   ];
   for (const candidate of candidates) {
     if (!candidate) {
       continue;
     }
-    if (AVATAR_URL_RE.test(candidate)) {
+    if (isRenderableControlUiAvatarUrl(candidate)) {
       return candidate;
     }
   }
   return null;
 }
 
+// Chat-render variant: accept `blob:` URLs (produced locally by
+// `URL.createObjectURL` after an authenticated avatar fetch) in addition to
+// config-sanitized candidates. The config path still gates untrusted
+// http(s)/data sources through `resolveAgentAvatarUrl`.
+export function resolveChatAvatarRenderUrl(
+  candidate: string | null | undefined,
+  agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  agentIdentity?: AgentIdentityResult | null,
+): string | null {
+  const trimmed = normalizeOptionalString(candidate);
+  if (trimmed?.startsWith("blob:")) {
+    return trimmed;
+  }
+  return resolveAgentAvatarUrl(agent, agentIdentity);
+}
+
 export function agentLogoUrl(basePath: string): string {
-  const base = basePath?.trim() ? basePath.replace(/\/$/, "") : "";
-  return base ? `${base}/favicon.svg` : "favicon.svg";
+  return controlUiPublicAssetPath("favicon.svg", basePath);
 }
 
-function isLikelyEmoji(value: string) {
+export function assistantAvatarFallbackUrl(basePath: string): string {
+  return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
+}
+
+function isAvatarUrl(value: string): boolean {
   const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed.length > 16) {
-    return false;
-  }
-  let hasNonAscii = false;
-  for (let i = 0; i < trimmed.length; i += 1) {
-    if (trimmed.charCodeAt(i) > 127) {
-      hasNonAscii = true;
-      break;
-    }
-  }
-  if (!hasNonAscii) {
-    return false;
-  }
-  if (trimmed.includes("://") || trimmed.includes("/") || trimmed.includes(".")) {
-    return false;
-  }
-  return true;
+  return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
 }
 
-export function resolveAgentEmoji(
+const UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS = /[\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]/u;
+
+export function resolveAssistantTextAvatar(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed === DEFAULT_ASSISTANT_AVATAR) {
+    return null;
+  }
+  if (isAvatarUrl(trimmed)) {
+    return null;
+  }
+  if (
+    trimmed.length > 8 ||
+    /\s/.test(trimmed) ||
+    /[\\/.:]/.test(trimmed) ||
+    UNSAFE_ASSISTANT_TEXT_AVATAR_CHARS.test(trimmed)
+  ) {
+    return null;
+  }
+  return trimmed;
+}
+
+function resolveAgentTextAvatar(
   agent: { identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,
-) {
-  const identityEmoji = agentIdentity?.emoji?.trim();
-  if (identityEmoji && isLikelyEmoji(identityEmoji)) {
-    return identityEmoji;
+): string | null {
+  const candidates = [
+    normalizeOptionalString(agent.identity?.emoji),
+    normalizeOptionalString(agent.identity?.avatar),
+    normalizeOptionalString(agentIdentity?.emoji),
+    normalizeOptionalString(agentIdentity?.avatar),
+  ];
+  for (const candidate of candidates) {
+    const textAvatar = resolveAssistantTextAvatar(candidate);
+    if (textAvatar) {
+      return textAvatar;
+    }
   }
-  const agentEmoji = agent.identity?.emoji?.trim();
-  if (agentEmoji && isLikelyEmoji(agentEmoji)) {
-    return agentEmoji;
-  }
-  const identityAvatar = agentIdentity?.avatar?.trim();
-  if (identityAvatar && isLikelyEmoji(identityAvatar)) {
-    return identityAvatar;
-  }
-  const avatar = agent.identity?.avatar?.trim();
-  if (avatar && isLikelyEmoji(avatar)) {
-    return avatar;
-  }
-  return "";
+  return null;
 }
 
 export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? "default" : null;
-}
-
-export function agentAvatarHue(id: string): number {
-  let hash = 0;
-  for (let i = 0; i < id.length; i += 1) {
-    hash = (hash * 31 + id.charCodeAt(i)) | 0;
-  }
-  return ((hash % 360) + 360) % 360;
 }
 
 export function formatBytes(bytes?: number) {
@@ -312,6 +333,7 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
 export type AgentContext = {
   workspace: string;
   model: string;
+  runtime: string;
   identityName: string;
   identityAvatar: string;
   skillsLabel: string;
@@ -329,22 +351,32 @@ export function buildAgentContext(
   const workspaceFromFiles =
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
   const workspace =
-    workspaceFromFiles || config.entry?.workspace || config.defaults?.workspace || "default";
+    workspaceFromFiles ||
+    config.entry?.workspace ||
+    config.defaults?.workspace ||
+    agent.workspace ||
+    "default";
   const modelLabel = config.entry?.model
     ? resolveModelLabel(config.entry?.model)
-    : resolveModelLabel(config.defaults?.model);
+    : config.defaults?.model
+      ? resolveModelLabel(config.defaults?.model)
+      : resolveModelLabel(agent.model);
+  const runtime = resolveAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
-    agentIdentity?.name?.trim() ||
-    agent.identity?.name?.trim() ||
-    agent.name?.trim() ||
+    normalizeOptionalString(agent.identity?.name) ||
+    normalizeOptionalString(agent.name) ||
+    normalizeOptionalString(agentIdentity?.name) ||
     config.entry?.name ||
     agent.id;
-  const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity) ? "custom" : "—";
+  const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity)
+    ? "custom"
+    : (resolveAgentTextAvatar(agent, agentIdentity) ?? "—");
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   return {
     workspace,
     model: modelLabel,
+    runtime,
     identityName,
     identityAvatar,
     skillsLabel: skillFilter ? `${skillCount} selected` : "all skills",
@@ -352,16 +384,24 @@ export function buildAgentContext(
   };
 }
 
+export function resolveAgentRuntimeLabel(
+  agentRuntime?: AgentsListResult["agents"][number]["agentRuntime"],
+): string {
+  const id = normalizeOptionalString(agentRuntime?.id) ?? "pi";
+  const fallback = normalizeOptionalString(agentRuntime?.fallback);
+  return fallback ? `${id} (fallback ${fallback})` : id;
+}
+
 export function resolveModelLabel(model?: unknown): string {
   if (!model) {
     return "-";
   }
   if (typeof model === "string") {
-    return model.trim() || "-";
+    return normalizeOptionalString(model) || "-";
   }
   if (typeof model === "object" && model) {
     const record = model as { primary?: string; fallbacks?: string[] };
-    const primary = record.primary?.trim();
+    const primary = normalizeOptionalString(record.primary);
     if (primary) {
       const fallbackCount = Array.isArray(record.fallbacks) ? record.fallbacks.length : 0;
       return fallbackCount > 0 ? `${primary} (+${fallbackCount} fallback)` : primary;
@@ -380,7 +420,7 @@ export function resolveModelPrimary(model?: unknown): string | null {
     return null;
   }
   if (typeof model === "string") {
-    const trimmed = model.trim();
+    const trimmed = normalizeOptionalString(model);
     return trimmed || null;
   }
   if (typeof model === "object" && model) {
@@ -395,7 +435,7 @@ export function resolveModelPrimary(model?: unknown): string | null {
             : typeof record.value === "string"
               ? record.value
               : null;
-    const primary = candidate?.trim();
+    const primary = normalizeOptionalString(candidate);
     return primary || null;
   }
   return null;
@@ -576,11 +616,13 @@ export function buildModelOptions(
   configForm: Record<string, unknown> | null,
   current?: string | null,
   catalog?: ModelCatalogEntry[],
+  selected?: string | null,
 ) {
   const seen = new Set<string>();
   const options: ConfiguredModelOption[] = [];
+  const selectedKey = selected ? normalizeLowercaseStringOrEmpty(selected) : null;
   const addOption = (value: string, label: string) => {
-    const key = value.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(value);
     if (seen.has(key)) {
       return;
     }
@@ -595,20 +637,29 @@ export function buildModelOptions(
   if (catalog) {
     for (const entry of catalog) {
       const provider = entry.provider?.trim();
-      const value = provider ? `${provider}/${entry.id}` : entry.id;
+      const value = buildQualifiedChatModelValue(entry.id, provider);
       const label = provider ? `${entry.id} · ${provider}` : entry.id;
       addOption(value, label);
     }
   }
 
-  if (current && !seen.has(current.toLowerCase())) {
+  if (current && !seen.has(normalizeLowercaseStringOrEmpty(current))) {
     options.unshift({ value: current, label: `Current (${current})` });
   }
 
   if (options.length === 0) {
     return nothing;
   }
-  return options.map((option) => html`<option value=${option.value}>${option.label}</option>`);
+  return options.map(
+    (option) => html`
+      <option
+        value=${option.value}
+        ?selected=${selectedKey === normalizeLowercaseStringOrEmpty(option.value)}
+      >
+        ${option.label}
+      </option>
+    `,
+  );
 }
 
 type CompiledPattern =

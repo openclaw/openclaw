@@ -1,5 +1,7 @@
+// Non-interactive daemon install tests cover gateway service planning, token resolution, and systemd handling.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { installGatewayDaemonNonInteractive } from "./daemon-install.js";
 
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const gatewayInstallErrorHint = vi.hoisted(() => vi.fn(() => "hint"));
@@ -35,8 +37,6 @@ vi.mock("../../daemon-runtime.js", () => ({
 vi.mock("../../systemd-linger.js", () => ({
   ensureSystemdUserLingerNonInteractive,
 }));
-
-const { installGatewayDaemonNonInteractive } = await import("./daemon-install.js");
 
 describe("installGatewayDaemonNonInteractive", () => {
   beforeEach(() => {
@@ -97,7 +97,11 @@ describe("installGatewayDaemonNonInteractive", () => {
       port: 18789,
     });
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Gateway install blocked"));
+    expect(runtime.error.mock.calls).toEqual([
+      [
+        "Gateway install blocked: gateway.auth.token SecretRef is configured but unresolved (boom). Fix gateway auth config/token input and rerun setup.",
+      ],
+    ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
     expect(serviceInstall).not.toHaveBeenCalled();
@@ -125,9 +129,11 @@ describe("installGatewayDaemonNonInteractive", () => {
         installed: false,
         skippedReason: "systemd-user-unavailable",
       });
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("Systemd user services are unavailable"),
-      );
+      expect(runtime.log.mock.calls).toEqual([
+        [
+          "Systemd user services are unavailable; skipping service install. Use a direct shell run (`openclaw gateway run`) or rerun without --install-daemon on this session.",
+        ],
+      ]);
       expect(buildGatewayInstallPlan).not.toHaveBeenCalled();
       expect(serviceInstall).not.toHaveBeenCalled();
     } finally {

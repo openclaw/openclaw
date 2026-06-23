@@ -1,12 +1,12 @@
-import fs from "node:fs";
-import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+// Shares bundled plugin config merge behavior across setup and runtime code.
 import { applyMergePatch } from "../config/merge-patch.js";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { isRecord } from "../utils.js";
-import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginBundleFormat } from "./types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { matchRootFileOpenFailure, type RootFileOpenFailure } from "../infra/boundary-file-read.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
+import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginBundleFormat } from "./manifest-types.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
@@ -22,39 +22,29 @@ export type BundleServerRuntimeSupport = {
 export function readBundleJsonObject(params: {
   rootDir: string;
   relativePath: string;
-  onOpenFailure?: (
-    failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>,
-  ) => ReadBundleJsonResult;
+  onOpenFailure?: (failure: RootFileOpenFailure) => ReadBundleJsonResult;
 }): ReadBundleJsonResult {
-  const absolutePath = path.join(params.rootDir, params.relativePath);
-  const opened = openBoundaryFileSync({
-    absolutePath,
-    rootPath: params.rootDir,
+  const result = readRootJsonObjectSync({
+    rootDir: params.rootDir,
+    relativePath: params.relativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
-  if (!opened.ok) {
-    return params.onOpenFailure?.(opened) ?? { ok: true, raw: {} };
+  if (result.ok) {
+    return { ok: true, raw: result.value };
   }
-  try {
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    if (!isRecord(raw)) {
-      return { ok: false, error: `${params.relativePath} must contain a JSON object` };
-    }
-    return { ok: true, raw };
-  } catch (error) {
-    return { ok: false, error: `failed to parse ${params.relativePath}: ${String(error)}` };
-  } finally {
-    fs.closeSync(opened.fd);
+  if (result.reason === "open") {
+    return params.onOpenFailure?.(result.failure) ?? { ok: true, raw: {} };
   }
+  return { ok: false, error: result.error };
 }
 
 export function resolveBundleJsonOpenFailure(params: {
-  failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>;
+  failure: RootFileOpenFailure;
   relativePath: string;
   allowMissing?: boolean;
 }): ReadBundleJsonResult {
-  return matchBoundaryFileOpenFailure(params.failure, {
+  return matchRootFileOpenFailure(params.failure, {
     path: () => {
       if (params.allowMissing) {
         return { ok: true, raw: {} };
@@ -94,6 +84,7 @@ export function inspectBundleServerRuntimeSupport<TConfig>(params: {
 export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   createEmptyConfig: () => TConfig;
   loadBundleConfig: (params: {
     pluginId: string;
@@ -102,11 +93,18 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
   }) => { config: TConfig; diagnostics: string[] };
   createDiagnostic: (pluginId: string, message: string) => TDiagnostic;
 }): { config: TConfig; diagnostics: TDiagnostic[] } {
-  const registry = loadPluginManifestRegistry({
-    workspaceDir: params.workspaceDir,
-    config: params.cfg,
-  });
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
+  if (!normalizedPlugins.enabled) {
+    return { config: params.createEmptyConfig(), diagnostics: [] };
+  }
+
+  const registry =
+    params.manifestRegistry ??
+    loadPluginManifestRegistryForPluginRegistry({
+      workspaceDir: params.workspaceDir,
+      config: params.cfg,
+      includeDisabled: true,
+    });
   const diagnostics: TDiagnostic[] = [];
   let merged = params.createEmptyConfig();
 
@@ -114,13 +112,13 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     if (record.format !== "bundle" || !record.bundleFormat) {
       continue;
     }
-    const enableState = resolveEffectiveEnableState({
+    const activationState = resolveEffectivePluginActivationState({
       id: record.id,
       origin: record.origin,
       config: normalizedPlugins,
       rootConfig: params.cfg,
     });
-    if (!enableState.enabled) {
+    if (!activationState.activated) {
       continue;
     }
 

@@ -1,26 +1,44 @@
+// OpenAI-compatible embeddings HTTP endpoint.
+// Bridges /v1/embeddings requests to configured OpenClaw memory providers.
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { logWarn } from "../logger.js";
 import {
-  createEmbeddingProvider,
-  type EmbeddingProviderOptions,
-  type EmbeddingProviderId,
-  type EmbeddingProviderRequest,
-} from "../memory/embeddings.js";
+  getEmbeddingProvider as getGenericEmbeddingProvider,
+  type EmbeddingProvider as GenericEmbeddingProvider,
+  type EmbeddingProviderAdapter as GenericEmbeddingProviderAdapter,
+} from "../plugins/embedding-provider-runtime.js";
+import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import type {
+  MemoryEmbeddingProvider,
+  MemoryEmbeddingProviderAdapter,
+} from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson } from "./http-common.js";
+import { sendJson, sendMissingScopeForbidden } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   OPENCLAW_MODEL_ID,
+  authorizeOpenAiCompatibleHttpModelOverride,
   getHeader,
+  isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveAgentIdFromModel,
+  resolveOpenAiCompatibleHttpOperatorScopes,
 } from "./http-utils.js";
 
+// OpenAI-compatible `/v1/embeddings` bridge. It maps OpenClaw agent/model
+// routing onto configured memory embedding providers while preserving the
+// response shape expected by OpenAI SDK clients.
 type OpenAiEmbeddingsHttpOptions = {
   auth: ResolvedGatewayAuth;
   maxBodyBytes?: number;
@@ -41,12 +59,12 @@ const DEFAULT_EMBEDDINGS_BODY_BYTES = 5 * 1024 * 1024;
 const MAX_EMBEDDING_INPUTS = 128;
 const MAX_EMBEDDING_INPUT_CHARS = 8_192;
 const MAX_EMBEDDING_TOTAL_CHARS = 65_536;
-const SAFE_AUTO_EXPLICIT_PROVIDERS = new Set<EmbeddingProviderId>([
-  "openai",
-  "gemini",
-  "voyage",
-  "mistral",
-]);
+const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+type EmbeddingProviderRequest = string;
+type MemorySearchEmbeddingConfig = Pick<
+  NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
+  "local" | "remote" | "outputDimensionality" | "inputType" | "queryInputType" | "documentInputType"
+>;
 
 function coerceRequest(value: unknown): EmbeddingsRequest {
   return value && typeof value === "object" ? (value as EmbeddingsRequest) : {};
@@ -66,10 +84,13 @@ function resolveInputTexts(input: unknown): string[] | null {
 }
 
 function encodeEmbeddingBase64(embedding: number[]): string {
+  // OpenAI-compatible base64 embeddings are raw float32 bytes, not JSON.
   const float32 = Float32Array.from(embedding);
   return Buffer.from(float32.buffer).toString("base64");
 }
 
+// Keep request limits local to the HTTP bridge; provider adapters may support
+// more, but this endpoint must protect gateway memory and request latency.
 function validateInputTexts(texts: string[]): string | undefined {
   if (texts.length > MAX_EMBEDDING_INPUTS) {
     return `Too many inputs (max ${MAX_EMBEDDING_INPUTS}).`;
@@ -87,43 +108,131 @@ function validateInputTexts(texts: string[]): string | undefined {
   return undefined;
 }
 
+function resolveEmbeddingProviderRemoteConfig(remote: MemorySearchEmbeddingConfig["remote"]) {
+  return remote
+    ? {
+        baseUrl: remote.baseUrl,
+        apiKey: remote.apiKey,
+        headers: remote.headers,
+      }
+    : undefined;
+}
+
+async function createConfiguredEmbeddingProvider(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  provider: EmbeddingProviderRequest;
+  model: string;
+  memorySearch?: MemorySearchEmbeddingConfig;
+}): Promise<MemoryEmbeddingProvider> {
+  const providerId =
+    params.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : params.provider;
+  // Prefer memory-specific adapters because they understand query/document
+  // input types; generic embedding adapters are adapted only as a fallback.
+  const createWithAdapter = async (adapter: MemoryEmbeddingProviderAdapter) => {
+    const result = await adapter.create({
+      config: params.cfg,
+      agentDir: params.agentDir,
+      model: params.model || adapter.defaultModel || "",
+      local: params.memorySearch?.local,
+      remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
+      outputDimensionality: params.memorySearch?.outputDimensionality,
+    });
+    return result.provider;
+  };
+  const createWithGenericAdapter = async (adapter: GenericEmbeddingProviderAdapter) => {
+    const result = await adapter.create({
+      config: params.cfg,
+      agentDir: params.agentDir,
+      provider: providerId,
+      model: params.model || adapter.defaultModel || "",
+      local: params.memorySearch?.local,
+      remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
+      dimensions: params.memorySearch?.outputDimensionality,
+      inputType: params.memorySearch?.inputType,
+      queryInputType: params.memorySearch?.queryInputType,
+      documentInputType: params.memorySearch?.documentInputType,
+    });
+    return result.provider ? adaptGenericEmbeddingProvider(result.provider) : null;
+  };
+
+  const adapter = getMemoryEmbeddingProvider(providerId, params.cfg);
+  if (adapter) {
+    const provider = await createWithAdapter(adapter);
+    if (!provider) {
+      throw new Error(`Memory embedding provider ${providerId} is unavailable.`);
+    }
+    return provider;
+  }
+
+  const genericAdapter = getGenericEmbeddingProvider(providerId, params.cfg);
+  if (!genericAdapter) {
+    throw new Error(`Unknown memory embedding provider: ${providerId}`);
+  }
+  const provider = await createWithGenericAdapter(genericAdapter);
+  if (!provider) {
+    throw new Error(`Embedding provider ${providerId} is unavailable.`);
+  }
+  return provider;
+}
+
+// Generic embedding providers expose one embed API; memory search expects
+// query/document methods so the HTTP endpoint can batch document-style inputs.
+function adaptGenericEmbeddingProvider(
+  provider: GenericEmbeddingProvider,
+): MemoryEmbeddingProvider {
+  return {
+    id: provider.id,
+    model: provider.model,
+    ...(typeof provider.maxInputTokens === "number"
+      ? { maxInputTokens: provider.maxInputTokens }
+      : {}),
+    embedQuery: async (text, options) =>
+      await provider.embed(text, {
+        ...options,
+        inputType: "query",
+      }),
+    embedBatch: async (texts, options) =>
+      await provider.embedBatch(texts, {
+        ...options,
+        inputType: "document",
+      }),
+    ...(provider.close ? { close: provider.close } : {}),
+  };
+}
+
+// Request model overrides are constrained to the configured memory provider so
+// a gateway client cannot select an arbitrary embedding provider by model name.
 function resolveEmbeddingsTarget(params: {
   requestModel: string;
   configuredProvider: EmbeddingProviderRequest;
 }): { provider: EmbeddingProviderRequest; model: string } | { errorMessage: string } {
+  const configuredProvider =
+    params.configuredProvider === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : params.configuredProvider;
   const raw = params.requestModel.trim();
   const slash = raw.indexOf("/");
   if (slash === -1) {
-    return { provider: params.configuredProvider, model: raw };
+    return { provider: configuredProvider, model: raw };
   }
 
-  const provider = raw.slice(0, slash).trim().toLowerCase() as EmbeddingProviderRequest;
+  const provider = normalizeLowercaseStringOrEmpty(raw.slice(0, slash));
   const model = raw.slice(slash + 1).trim();
   if (!model) {
     return { errorMessage: "Unsupported embedding model reference." };
   }
 
-  if (params.configuredProvider === "auto") {
-    if (provider === "auto") {
-      return { provider: "auto", model };
-    }
-    if (SAFE_AUTO_EXPLICIT_PROVIDERS.has(provider)) {
-      return { provider, model };
-    }
+  if (provider !== configuredProvider) {
     return {
       errorMessage: "This agent does not allow that embedding provider on `/v1/embeddings`.",
     };
   }
 
-  if (provider !== params.configuredProvider) {
-    return {
-      errorMessage: "This agent does not allow that embedding provider on `/v1/embeddings`.",
-    };
-  }
-
-  return { provider: params.configuredProvider, model };
+  return { provider: configuredProvider, model };
 }
 
+/** Handles OpenAI-compatible embeddings requests for the configured agent memory provider. */
 export async function handleOpenAiEmbeddingsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -131,6 +240,8 @@ export async function handleOpenAiEmbeddingsHttpRequest(
 ): Promise<boolean> {
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/embeddings",
+    requiredOperatorMethod: "chat.send",
+    resolveOperatorScopes: resolveOpenAiCompatibleHttpOperatorScopes,
     auth: opts.auth,
     trustedProxies: opts.trustedProxies,
     allowRealIpFallback: opts.allowRealIpFallback,
@@ -143,9 +254,14 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   if (!handled) {
     return true;
   }
+  const modelOverrideAuth = authorizeOpenAiCompatibleHttpModelOverride(req, handled.requestAuth);
+  if (!modelOverrideAuth.allowed) {
+    sendMissingScopeForbidden(res, modelOverrideAuth.missingScope);
+    return true;
+  }
 
   const payload = coerceRequest(handled.body);
-  const requestModel = typeof payload.model === "string" ? payload.model.trim() : "";
+  const requestModel = normalizeOptionalString(payload.model) ?? "";
   if (!requestModel) {
     sendJson(res, 400, {
       error: { message: "Missing `model`.", type: "invalid_request_error" },
@@ -153,7 +269,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   if (requestModel !== OPENCLAW_MODEL_ID && !resolveAgentIdFromModel(requestModel, cfg)) {
     sendJson(res, 400, {
       error: {
@@ -182,12 +298,29 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const agentId = resolveAgentIdForRequest({ req, model: requestModel });
+  let agentId: string;
+  try {
+    agentId = resolveAgentIdForRequest({ req, model: requestModel });
+  } catch (err) {
+    if (isUnknownGatewayAgentError(err)) {
+      sendJson(res, 400, {
+        error: { message: err.message, type: "invalid_request_error" },
+      });
+      return true;
+    }
+    throw err;
+  }
   const agentDir = resolveAgentDir(cfg, agentId);
   const memorySearch = resolveMemorySearchConfig(cfg, agentId);
-  const configuredProvider = (memorySearch?.provider ?? "openai") as EmbeddingProviderRequest;
-  const overrideModel = getHeader(req, "x-openclaw-model")?.trim() || memorySearch?.model || "";
-  const target = resolveEmbeddingsTarget({ requestModel: overrideModel, configuredProvider });
+  const configuredProvider = memorySearch?.provider ?? "openai";
+  const overrideModel =
+    normalizeOptionalString(getHeader(req, "x-openclaw-model")) ||
+    normalizeOptionalString(memorySearch?.model) ||
+    "";
+  const target = resolveEmbeddingsTarget({
+    requestModel: overrideModel,
+    configuredProvider,
+  });
   if ("errorMessage" in target) {
     sendJson(res, 400, {
       error: {
@@ -198,41 +331,23 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     return true;
   }
 
-  const options: EmbeddingProviderOptions = {
-    config: cfg,
-    agentDir,
-    provider: target.provider,
-    model: target.model,
-    // Public HTTP embeddings should fail closed rather than silently mixing
-    // vector spaces across fallback providers/models.
-    fallback: "none",
-    local: memorySearch?.local,
-    remote: memorySearch?.remote
-      ? {
-          baseUrl: memorySearch.remote.baseUrl,
-          apiKey: memorySearch.remote.apiKey,
-          headers: memorySearch.remote.headers,
-        }
-      : undefined,
-    outputDimensionality:
-      typeof payload.dimensions === "number" && payload.dimensions > 0
-        ? Math.floor(payload.dimensions)
-        : memorySearch?.outputDimensionality,
-  };
-
   try {
-    const result = await createEmbeddingProvider(options);
-    if (!result.provider) {
-      sendJson(res, 503, {
-        error: {
-          message: result.providerUnavailableReason ?? "Embeddings provider unavailable.",
-          type: "api_error",
-        },
-      });
-      return true;
-    }
-
-    const embeddings = await result.provider.embedBatch(texts);
+    const provider = await createConfiguredEmbeddingProvider({
+      cfg,
+      agentDir,
+      provider: target.provider,
+      model: target.model,
+      memorySearch: memorySearch
+        ? {
+            ...memorySearch,
+            outputDimensionality:
+              typeof payload.dimensions === "number" && payload.dimensions > 0
+                ? Math.floor(payload.dimensions)
+                : memorySearch.outputDimensionality,
+          }
+        : undefined,
+    });
+    const embeddings = await provider.embedBatch(texts);
     const encodingFormat = payload.encoding_format === "base64" ? "base64" : "float";
 
     sendJson(res, 200, {
@@ -249,7 +364,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
       },
     });
   } catch (err) {
-    logWarn(`openai-compat: embeddings request failed: ${String(err)}`);
+    logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
     sendJson(res, 500, {
       error: {
         message: "internal error",

@@ -1,11 +1,22 @@
-import { describe, expect, test } from "vitest";
+// Covers agent event sequencing and run context cleanup.
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
+  type AgentEventPayload,
+  captureAgentRunLifecycleGeneration,
+  claimAgentRunContext,
   clearAgentRunContext,
   emitAgentEvent,
+  getAgentEventLifecycleGeneration,
   getAgentRunContext,
+  listAgentRunsForSession,
   onAgentEvent,
   registerAgentRunContext,
+  releaseAgentRunContext,
+  resetAgentEventsForTest,
   resetAgentRunContextForTest,
+  rotateAgentEventLifecycleGeneration,
+  sweepStaleRunContexts,
+  withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
 
 type AgentEventsModule = typeof import("./agent-events.js");
@@ -17,15 +28,361 @@ async function importAgentEventsModule(cacheBust: string): Promise<AgentEventsMo
 }
 
 describe("agent-events sequencing", () => {
-  test("stores and clears run context", async () => {
-    resetAgentRunContextForTest();
+  beforeEach(() => {
+    resetAgentEventsForTest();
+  });
+
+  test("stores and clears run context", () => {
     registerAgentRunContext("run-1", { sessionKey: "main" });
     expect(getAgentRunContext("run-1")?.sessionKey).toBe("main");
     clearAgentRunContext("run-1");
     expect(getAgentRunContext("run-1")).toBeUndefined();
   });
 
-  test("maintains monotonic seq per runId", async () => {
+  test("does not let an old execution clear a newer same-id context", () => {
+    registerAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration: "post-restart",
+    });
+
+    clearAgentRunContext("shared-run", "pre-restart");
+    expect(getAgentRunContext("shared-run")?.lifecycleGeneration).toBe("post-restart");
+
+    clearAgentRunContext("shared-run", "post-restart");
+    expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("clears sequence state when guarded cleanup finds no run context", () => {
+    const seen: number[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "contextless-run") {
+        seen.push(event.seq);
+      }
+    });
+
+    emitAgentEvent({ runId: "contextless-run", stream: "assistant", data: { text: "first" } });
+    clearAgentRunContext("contextless-run", getAgentEventLifecycleGeneration());
+    emitAgentEvent({ runId: "contextless-run", stream: "assistant", data: { text: "second" } });
+    stop();
+
+    expect(seen).toEqual([1, 1]);
+  });
+
+  test("preserves sequence state when same-generation ownership is reclaimed", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext("retry-run", {
+      sessionKey: "main",
+      lifecycleGeneration,
+    });
+    const seen: number[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "retry-run") {
+        seen.push(event.seq);
+      }
+    });
+
+    emitAgentEvent({ runId: "retry-run", stream: "assistant", data: { text: "first" } });
+    claimAgentRunContext("retry-run", {
+      sessionKey: "main",
+      lifecycleGeneration,
+    });
+    emitAgentEvent({ runId: "retry-run", stream: "assistant", data: { text: "second" } });
+    stop();
+
+    expect(seen).toEqual([1, 2]);
+  });
+
+  test("keeps a tracked context until every overlapping owner exits", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const firstOwner = claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+    const secondOwner = claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+
+    clearAgentRunContext("shared-run", lifecycleGeneration);
+    releaseAgentRunContext("shared-run", firstOwner);
+    expect(getAgentRunContext("shared-run")).toBeDefined();
+
+    releaseAgentRunContext("shared-run", secondOwner);
+    expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("clears tracked context after an inner same-generation reclaim", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const ownerToken = claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+
+    claimAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration,
+      verboseLevel: "off",
+    });
+    releaseAgentRunContext("shared-run", ownerToken);
+
+    expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("honors a matching clear deferred behind a tracked owner", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration,
+    });
+    const ownerToken = claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+
+    clearAgentRunContext("shared-run", lifecycleGeneration);
+    releaseAgentRunContext("shared-run", ownerToken);
+
+    expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("full event reset clears tracked ownership", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext(
+      "shared-run",
+      { sessionKey: "main", lifecycleGeneration },
+      { trackOwner: true },
+    );
+
+    resetAgentEventsForTest();
+    registerAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration,
+    });
+    clearAgentRunContext("shared-run", lifecycleGeneration);
+
+    expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("drops stale explicit-generation events before shared listeners", () => {
+    const activeGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration: activeGeneration,
+    });
+    const seen: AgentEventPayload[] = [];
+    const stop = onAgentEvent((event) => seen.push(event));
+
+    emitAgentEvent({
+      runId: "shared-run",
+      lifecycleGeneration: "pre-restart",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    emitAgentEvent({
+      runId: "shared-run",
+      lifecycleGeneration: activeGeneration,
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+    stop();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.seq).toBe(1);
+    expect(seen[0]?.data.phase).toBe("start");
+  });
+
+  test("drops stale inherited-generation events from every stream", () => {
+    const preRestartGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration: preRestartGeneration,
+    });
+    const seen: AgentEventPayload[] = [];
+    const stop = onAgentEvent((event) => seen.push(event));
+
+    rotateAgentEventLifecycleGeneration();
+    const postRestartGeneration = getAgentEventLifecycleGeneration();
+    withAgentRunLifecycleGeneration(preRestartGeneration, () => {
+      emitAgentEvent({
+        runId: "shared-run",
+        stream: "assistant",
+        data: { text: "stale" },
+      });
+    });
+    claimAgentRunContext("shared-run", {
+      sessionKey: "main",
+      lifecycleGeneration: postRestartGeneration,
+    });
+    withAgentRunLifecycleGeneration(postRestartGeneration, () => {
+      emitAgentEvent({
+        runId: "shared-run",
+        stream: "tool",
+        data: { name: "current" },
+      });
+    });
+    stop();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.seq).toBe(1);
+    expect(seen[0]?.stream).toBe("tool");
+  });
+
+  test("captures inherited lifecycle ownership for descendant runs", () => {
+    const preRestartGeneration = getAgentEventLifecycleGeneration();
+    rotateAgentEventLifecycleGeneration();
+
+    const captured = withAgentRunLifecycleGeneration(preRestartGeneration, () =>
+      captureAgentRunLifecycleGeneration("descendant-run"),
+    );
+
+    expect(captured).toBe(preRestartGeneration);
+  });
+
+  test("lists only runs owned by the current lifecycle", () => {
+    const preRestartGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext("stale-run", {
+      sessionKey: "main",
+      lifecycleGeneration: preRestartGeneration,
+    });
+    const currentLifecycleGeneration = rotateAgentEventLifecycleGeneration();
+    claimAgentRunContext("current-run", {
+      sessionKey: "main",
+      lifecycleGeneration: currentLifecycleGeneration,
+    });
+
+    expect(listAgentRunsForSession({ sessionKey: "main" })).toEqual([
+      {
+        runId: "current-run",
+        lifecycleGeneration: currentLifecycleGeneration,
+      },
+    ]);
+  });
+
+  test("drops stale-generation terminal lifecycle after rotation", () => {
+    const preRestartGeneration = getAgentEventLifecycleGeneration();
+    claimAgentRunContext("interrupted-run", {
+      sessionKey: "main",
+      lifecycleGeneration: preRestartGeneration,
+    });
+    rotateAgentEventLifecycleGeneration();
+    const seen: AgentEventPayload[] = [];
+    const stop = onAgentEvent((event) => seen.push(event));
+
+    withAgentRunLifecycleGeneration(preRestartGeneration, () => {
+      emitAgentEvent({
+        runId: "interrupted-run",
+        stream: "lifecycle",
+        data: { phase: "end" },
+      });
+    });
+    stop();
+
+    expect(seen).toHaveLength(0);
+  });
+
+  test("stamps the owning sessionId onto lifecycle events for reset-stale guarding (#88538)", () => {
+    registerAgentRunContext("run-1", { sessionKey: "main", sessionId: "old-session-id" });
+    const seen: Array<{ stream: string; sessionId?: string }> = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId === "run-1") {
+        seen.push({ stream: evt.stream, sessionId: evt.sessionId });
+      }
+    });
+
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "error" } });
+    emitAgentEvent({ runId: "run-1", stream: "item", data: {} });
+
+    stop();
+
+    expect(seen.find((evt) => evt.stream === "lifecycle")?.sessionId).toBe("old-session-id");
+    // Only lifecycle events carry the sessionId; other streams stay unstamped.
+    expect(seen.find((evt) => evt.stream === "item")?.sessionId).toBeUndefined();
+  });
+
+  test("rejects old runs after restart and stamps the new generation", () => {
+    const oldGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext("old-run", { sessionKey: "main" });
+    const newGeneration = rotateAgentEventLifecycleGeneration();
+    registerAgentRunContext("new-run", { sessionKey: "main" });
+    const seen = new Map<string, { generation?: string; keys: string[] }>();
+    const stop = onAgentEvent((evt) => {
+      if (evt.stream === "lifecycle") {
+        seen.set(evt.runId, {
+          generation: evt.lifecycleGeneration,
+          keys: Object.keys(evt),
+        });
+      }
+    });
+
+    emitAgentEvent({ runId: "old-run", stream: "lifecycle", data: { phase: "end" } });
+    emitAgentEvent({ runId: "new-run", stream: "lifecycle", data: { phase: "start" } });
+    stop();
+
+    expect(newGeneration).not.toBe(oldGeneration);
+    expect(seen.has("old-run")).toBe(false);
+    expect(seen.get("new-run")?.generation).toBe(newGeneration);
+    expect(seen.get("new-run")?.keys).not.toContain("lifecycleGeneration");
+  });
+
+  test("lets a newly admitted retry claim an explicit lifecycle generation", () => {
+    registerAgentRunContext("shared-run-id", { sessionKey: "main" });
+    const oldGeneration = getAgentRunContext("shared-run-id")?.lifecycleGeneration;
+    const newGeneration = rotateAgentEventLifecycleGeneration();
+
+    claimAgentRunContext("shared-run-id", {
+      sessionKey: "main",
+      lifecycleGeneration: newGeneration,
+    });
+
+    expect(newGeneration).not.toBe(oldGeneration);
+    expect(getAgentRunContext("shared-run-id")?.lifecycleGeneration).toBe(newGeneration);
+  });
+
+  test("does not let an older execution reclaim a newly admitted run id", () => {
+    claimAgentRunContext("shared-run-id", {
+      sessionKey: "new-session",
+      lifecycleGeneration: "post-restart",
+    });
+
+    registerAgentRunContext("shared-run-id", {
+      sessionKey: "old-session",
+      lifecycleGeneration: "pre-restart",
+      isControlUiVisible: false,
+    });
+
+    expect(getAgentRunContext("shared-run-id")).toEqual(
+      expect.objectContaining({
+        sessionKey: "new-session",
+        lifecycleGeneration: "post-restart",
+      }),
+    );
+    expect(getAgentRunContext("shared-run-id")?.isControlUiVisible).toBeUndefined();
+  });
+
+  test("refreshes the stamped sessionId when run context is re-registered (#88538)", () => {
+    registerAgentRunContext("run-1", { sessionKey: "main", sessionId: "start-id" });
+    // Callers that already persisted a rotation can re-register the new owner.
+    registerAgentRunContext("run-1", { sessionId: "rotated-id" });
+    let stamped: string | undefined;
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId === "run-1" && evt.stream === "lifecycle") {
+        stamped = evt.sessionId;
+      }
+    });
+
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: { phase: "end" } });
+
+    stop();
+    // Terminal event carries the rotated id, so persistence won't treat the
+    // run as stale against the row it rotated to.
+    expect(stamped).toBe("rotated-id");
+  });
+
+  test("maintains monotonic seq per runId", () => {
     const seen: Record<string, number[]> = {};
     const stop = onAgentEvent((evt) => {
       const list = seen[evt.runId] ?? [];
@@ -44,7 +401,7 @@ describe("agent-events sequencing", () => {
     expect(seen["run-2"]).toEqual([1]);
   });
 
-  test("preserves compaction ordering on the event bus", async () => {
+  test("preserves compaction ordering on the event bus", () => {
     const phases: Array<string> = [];
     const stop = onAgentEvent((evt) => {
       if (evt.runId !== "run-1") {
@@ -70,10 +427,10 @@ describe("agent-events sequencing", () => {
     expect(phases).toEqual(["start", "end"]);
   });
 
-  test("omits sessionKey for runs hidden from Control UI", async () => {
+  test("omits sessionKey for non-lifecycle runs hidden from Control UI", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-hidden", {
-      sessionKey: "session-imessage",
+      sessionKey: "session-quietchat",
       isControlUiVisible: false,
     });
 
@@ -85,14 +442,57 @@ describe("agent-events sequencing", () => {
       runId: "run-hidden",
       stream: "assistant",
       data: { text: "hi" },
-      sessionKey: "session-imessage",
+      sessionKey: "session-quietchat",
     });
     stop();
 
     expect(receivedSessionKey).toBeUndefined();
   });
 
-  test("merges later run context updates into existing runs", async () => {
+  test("preserves sessionKey for lifecycle events hidden from Control UI", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-hidden-lifecycle", {
+      sessionKey: "session-quietchat",
+      isControlUiVisible: false,
+    });
+
+    let receivedSessionKey: string | undefined;
+    const stop = onAgentEvent((evt) => {
+      receivedSessionKey = evt.sessionKey;
+    });
+    emitAgentEvent({
+      runId: "run-hidden-lifecycle",
+      stream: "lifecycle",
+      data: { phase: "end" },
+      sessionKey: "session-quietchat",
+    });
+    stop();
+
+    expect(receivedSessionKey).toBe("session-quietchat");
+  });
+
+  test("falls back to registered sessionKey for hidden lifecycle events", () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-hidden-lifecycle-context", {
+      sessionKey: "session-quietchat-context",
+      isControlUiVisible: false,
+    });
+
+    let receivedSessionKey: string | undefined;
+    const stop = onAgentEvent((evt) => {
+      receivedSessionKey = evt.sessionKey;
+    });
+    emitAgentEvent({
+      runId: "run-hidden-lifecycle-context",
+      stream: "lifecycle",
+      data: { phase: "error", error: "boom" },
+    });
+    stop();
+
+    expect(receivedSessionKey).toBe("session-quietchat-context");
+  });
+
+  test("merges later run context updates into existing runs", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", {
       sessionKey: "session-main",
@@ -101,17 +501,18 @@ describe("agent-events sequencing", () => {
     registerAgentRunContext("run-ctx", {
       verboseLevel: "full",
       isHeartbeat: true,
+      lastActiveAt: 12_345,
     });
 
-    expect(getAgentRunContext("run-ctx")).toEqual({
-      sessionKey: "session-main",
-      verboseLevel: "full",
-      isHeartbeat: true,
-      isControlUiVisible: true,
-    });
+    const context = getAgentRunContext("run-ctx");
+    expect(context?.sessionKey).toBe("session-main");
+    expect(context?.verboseLevel).toBe("full");
+    expect(context?.isHeartbeat).toBe(true);
+    expect(context?.isControlUiVisible).toBe(true);
+    expect(context?.lastActiveAt).toBe(12_345);
   });
 
-  test("falls back to registered sessionKey when event sessionKey is blank", async () => {
+  test("falls back to registered sessionKey when event sessionKey is blank", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", { sessionKey: "session-main" });
 
@@ -130,7 +531,7 @@ describe("agent-events sequencing", () => {
     expect(receivedSessionKey).toBe("session-main");
   });
 
-  test("keeps notifying later listeners when one throws", async () => {
+  test("keeps notifying later listeners when one throws", () => {
     const seen: string[] = [];
     const stopBad = onAgentEvent(() => {
       throw new Error("boom");
@@ -139,13 +540,13 @@ describe("agent-events sequencing", () => {
       seen.push(evt.runId);
     });
 
-    expect(() =>
+    expect(
       emitAgentEvent({
         runId: "run-safe",
         stream: "assistant",
         data: { text: "hi" },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     stopGood();
     stopBad();
@@ -182,7 +583,7 @@ describe("agent-events sequencing", () => {
 
     stop();
 
-    expect(second.getAgentRunContext("run-dup")).toEqual({ sessionKey: "session-dup" });
+    expect(second.getAgentRunContext("run-dup")?.sessionKey).toBe("session-dup");
     expect(seen).toEqual([
       { seq: 1, sessionKey: "session-dup" },
       { seq: 2, sessionKey: "session-dup" },
@@ -190,4 +591,64 @@ describe("agent-events sequencing", () => {
 
     first.resetAgentEventsForTest();
   });
+
+  test("sweeps stale run contexts and clears their sequence state", () => {
+    const stop = vi.spyOn(Date, "now");
+    stop.mockReturnValue(100);
+    registerAgentRunContext("run-stale", { sessionKey: "session-stale", registeredAt: 100 });
+    registerAgentRunContext("run-active", { sessionKey: "session-active", registeredAt: 100 });
+
+    stop.mockReturnValue(200);
+    emitAgentEvent({ runId: "run-stale", stream: "assistant", data: { text: "stale" } });
+
+    stop.mockReturnValue(900);
+    emitAgentEvent({ runId: "run-active", stream: "assistant", data: { text: "active" } });
+
+    stop.mockReturnValue(1_000);
+    expect(sweepStaleRunContexts(500)).toBe(1);
+    expect(getAgentRunContext("run-stale")).toBeUndefined();
+    expect(getAgentRunContext("run-active")?.sessionKey).toBe("session-active");
+
+    const seen: Array<{ runId: string; seq: number }> = [];
+    const unsubscribe = onAgentEvent((evt) => {
+      if (evt.runId === "run-stale" || evt.runId === "run-active") {
+        seen.push({ runId: evt.runId, seq: evt.seq });
+      }
+    });
+
+    emitAgentEvent({ runId: "run-stale", stream: "assistant", data: { text: "restarted" } });
+    emitAgentEvent({ runId: "run-active", stream: "assistant", data: { text: "continued" } });
+
+    unsubscribe();
+    stop.mockRestore();
+
+    expect(seen).toEqual([
+      { runId: "run-stale", seq: 1 },
+      { runId: "run-active", seq: 2 },
+    ]);
+  });
+});
+
+test("clearAgentRunContext also cleans up seqByRun to prevent memory leak (#63643)", () => {
+  // Regression test: seqByRun entries were never deleted when a run ended,
+  // causing unbounded growth over time.
+  registerAgentRunContext("run-leak", { sessionKey: "main" });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+
+  // After clearing run context, the sequence counter should also be removed.
+  clearAgentRunContext("run-leak");
+
+  // Emitting a new event on the same runId should start seq from 1 again,
+  // proving the old entry was deleted.
+  const seqs: number[] = [];
+  const stop = onAgentEvent((evt) => {
+    if (evt.runId === "run-leak") {
+      seqs.push(evt.seq);
+    }
+  });
+  emitAgentEvent({ runId: "run-leak", stream: "lifecycle", data: {} });
+  stop();
+
+  expect(seqs).toEqual([1]);
 });

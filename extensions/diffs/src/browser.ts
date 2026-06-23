@@ -1,16 +1,25 @@
+// Diffs plugin module implements browser behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { chromium } from "playwright-core";
 import type { OpenClawConfig } from "../api.js";
 import type { DiffRenderOptions, DiffTheme } from "./types.js";
-import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
+import {
+  LANGUAGE_PACK_VIEWER_ASSET_PREFIX,
+  VIEWER_ASSET_PREFIX,
+  getServedLanguagePackViewerAsset,
+  getServedViewerAsset,
+} from "./viewer-assets.js";
 
 const DEFAULT_BROWSER_IDLE_MS = 30_000;
 const SHARED_BROWSER_KEY = "__default__";
 const IMAGE_SIZE_LIMIT_ERROR = "Diff frame did not render within image size limits.";
 const PDF_REFERENCE_PAGE_HEIGHT_PX = 1_056;
 const MAX_PDF_PAGES = 50;
+const LOCAL_VIEWER_BASE_HREF = "http://127.0.0.1/plugins/diffs/view/local/local";
 
 export type DiffScreenshotter = {
   screenshotHtml(params: {
@@ -59,7 +68,6 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
     theme: DiffTheme;
     image: DiffRenderOptions["image"];
   }): Promise<string> {
-    await fs.mkdir(path.dirname(params.outputPath), { recursive: true });
     const lease = await acquireSharedBrowser({
       config: this.config,
       idleMs: this.browserIdleMs,
@@ -95,12 +103,18 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
             await route.abort();
             return;
           }
-          if (!parsed.pathname.startsWith(VIEWER_ASSET_PREFIX)) {
+          const isBaseViewerAsset = parsed.pathname.startsWith(VIEWER_ASSET_PREFIX);
+          const isLanguagePackViewerAsset = parsed.pathname.startsWith(
+            LANGUAGE_PACK_VIEWER_ASSET_PREFIX,
+          );
+          if (!isBaseViewerAsset && !isLanguagePackViewerAsset) {
             await route.abort();
             return;
           }
           const pathname = parsed.pathname;
-          const asset = await getServedViewerAsset(pathname);
+          const asset = isLanguagePackViewerAsset
+            ? await getServedLanguagePackViewerAsset(pathname)
+            : await getServedViewerAsset(pathname);
           if (!asset) {
             await route.abort();
             return;
@@ -163,15 +177,15 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
           await page.evaluate(() => {
             const html = document.documentElement;
             const body = document.body;
-            const frame = document.querySelector(".oc-frame");
+            const frameLocal = document.querySelector(".oc-frame");
 
             html.style.background = "transparent";
             body.style.margin = "0";
             body.style.padding = "0";
             body.style.background = "transparent";
             body.style.setProperty("-webkit-print-color-adjust", "exact");
-            if (frame instanceof HTMLElement) {
-              frame.style.margin = "0";
+            if (frameLocal instanceof HTMLElement) {
+              frameLocal.style.margin = "0";
             }
           });
 
@@ -187,16 +201,22 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
             throw new Error(IMAGE_SIZE_LIMIT_ERROR);
           }
 
-          await page.pdf({
-            path: params.outputPath,
-            width: `${pdfWidth}px`,
-            height: `${pdfHeight}px`,
-            printBackground: true,
-            margin: {
-              top: "0",
-              right: "0",
-              bottom: "0",
-              left: "0",
+          const pageForPdf = page;
+          await writeExternalArtifactFile({
+            outputPath: params.outputPath,
+            write: async (tempPath) => {
+              await pageForPdf.pdf({
+                path: tempPath,
+                width: `${pdfWidth}px`,
+                height: `${pdfHeight}px`,
+                printBackground: true,
+                margin: {
+                  top: "0",
+                  right: "0",
+                  bottom: "0",
+                  left: "0",
+                },
+              });
             },
           });
           return params.outputPath;
@@ -236,15 +256,21 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
           throw new Error(IMAGE_SIZE_LIMIT_ERROR);
         }
 
-        await page.screenshot({
-          path: params.outputPath,
-          type: "png",
-          scale: "device",
-          clip: {
-            x,
-            y,
-            width: cssWidth,
-            height: cssHeight,
+        const pageForScreenshot = page;
+        await writeExternalArtifactFile({
+          outputPath: params.outputPath,
+          write: async (tempPath) => {
+            await pageForScreenshot.screenshot({
+              path: tempPath,
+              type: "png",
+              scale: "device",
+              clip: {
+                x,
+                y,
+                width: cssWidth,
+                height: cssHeight,
+              },
+            });
           },
         });
         return params.outputPath;
@@ -254,15 +280,29 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
       if (error instanceof Error && error.message === IMAGE_SIZE_LIMIT_ERROR) {
         throw error;
       }
-      const reason = error instanceof Error ? error.message : String(error);
+      const reason = formatErrorMessage(error);
       throw new Error(
         `Diff PNG/PDF rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
+        { cause: error },
       );
     } finally {
       await page?.close().catch(() => {});
       await lease.release();
     }
   }
+}
+
+async function writeExternalArtifactFile(params: {
+  outputPath: string;
+  write: (tempPath: string) => Promise<void>;
+}): Promise<void> {
+  const rootDir = path.dirname(params.outputPath);
+  await fs.mkdir(rootDir, { recursive: true });
+  await writeExternalFileWithinRoot({
+    rootDir,
+    path: path.basename(params.outputPath),
+    write: params.write,
+  });
 }
 
 export async function resetSharedBrowserStateForTests(): Promise<void> {
@@ -274,7 +314,7 @@ function injectBaseHref(html: string): string {
   if (html.includes("<base ")) {
     return html;
   }
-  return html.replace("<head>", '<head><base href="http://127.0.0.1/" />');
+  return html.replace("<head>", `<head><base href="${LOCAL_VIEWER_BASE_HREF}" />`);
 }
 
 async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<string | undefined> {
@@ -292,7 +332,7 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
     return await executablePathCache.valuePromise;
   }
 
-  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error) => {
+  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error: unknown) => {
     if (executablePathCache?.valuePromise === valuePromise) {
       executablePathCache = null;
     }
@@ -366,7 +406,7 @@ async function acquireSharedBrowser(params: {
         }
         return browser;
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (sharedBrowserState?.browserPromise === browserPromise) {
           sharedBrowserState = null;
         }

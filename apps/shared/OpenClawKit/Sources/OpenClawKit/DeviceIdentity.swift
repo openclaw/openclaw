@@ -1,6 +1,29 @@
 import CryptoKit
 import Foundation
 
+public enum GatewayDeviceIdentityProfile: String, Sendable {
+    case primary
+    case shareExtension
+
+    var identityFileName: String {
+        switch self {
+        case .primary:
+            "device.json"
+        case .shareExtension:
+            "share-device.json"
+        }
+    }
+
+    var authFileName: String {
+        switch self {
+        case .primary:
+            "device-auth.json"
+        case .shareExtension:
+            "share-device-auth.json"
+        }
+    }
+}
+
 public struct DeviceIdentity: Codable, Sendable {
     public var deviceId: String
     public var publicKey: String
@@ -19,6 +42,32 @@ enum DeviceIdentityPaths {
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
 
     static func stateDirURL() -> URL {
+        self.stateDirURL(
+            overrideURL: self.stateDirOverrideURL(),
+            legacyStateDirURL: self.legacyStateDirURL(),
+            appGroupStateDirURL: self.appGroupStateDirURL(),
+            temporaryDirectory: FileManager.default.temporaryDirectory)
+    }
+
+    static func stateDirURL(
+        overrideURL: URL?,
+        legacyStateDirURL: URL?,
+        appGroupStateDirURL: URL?,
+        temporaryDirectory: URL) -> URL
+    {
+        if let overrideURL {
+            return overrideURL
+        }
+        if let appGroupStateDirURL {
+            return appGroupStateDirURL
+        }
+        if let legacyStateDirURL {
+            return legacyStateDirURL
+        }
+        return temporaryDirectory.appendingPathComponent("openclaw", isDirectory: true)
+    }
+
+    private static func stateDirOverrideURL() -> URL? {
         for key in self.stateDirEnv {
             if let raw = getenv(key) {
                 let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,30 +76,92 @@ enum DeviceIdentityPaths {
                 }
             }
         }
+        return nil
+    }
 
+    private static func legacyStateDirURL() -> URL? {
         if let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             return appSupport.appendingPathComponent("OpenClaw", isDirectory: true)
         }
+        return nil
+    }
 
-        return FileManager.default.temporaryDirectory.appendingPathComponent("openclaw", isDirectory: true)
+    private static func appGroupStateDirURL() -> URL? {
+        guard
+            let containerURL = FileManager.default
+                .containerURL(forSecurityApplicationGroupIdentifier: OpenClawAppGroup.identifier)
+        else {
+            return nil
+        }
+        return containerURL.appendingPathComponent("OpenClaw", isDirectory: true)
     }
 }
 
 public enum DeviceIdentityStore {
-    private static let fileName = "device.json"
+    private static let ed25519SPKIPrefix = Data([
+        0x30, 0x2A, 0x30, 0x05, 0x06, 0x03, 0x2B, 0x65,
+        0x70, 0x03, 0x21, 0x00,
+    ])
+    private static let ed25519PKCS8PrivatePrefix = Data([
+        0x30, 0x2E, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06,
+        0x03, 0x2B, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+    ])
 
     public static func loadOrCreate() -> DeviceIdentity {
-        let url = self.fileURL()
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode(DeviceIdentity.self, from: data),
-           !decoded.deviceId.isEmpty,
-           !decoded.publicKey.isEmpty,
-           !decoded.privateKey.isEmpty {
-            return decoded
+        self.loadOrCreate(profile: .primary)
+    }
+
+    public static func loadOrCreate(profile: GatewayDeviceIdentityProfile) -> DeviceIdentity {
+        self.loadOrCreate(fileURL: self.fileURL(profile: profile))
+    }
+
+    static func loadOrCreate(fileURL url: URL) -> DeviceIdentity {
+        if let data = try? Data(contentsOf: url) {
+            switch self.decodeStoredIdentity(data) {
+            case let .identity(decoded):
+                return decoded
+            case .recognizedInvalid:
+                return self.generate()
+            case .unknown:
+                break
+            }
         }
         let identity = self.generate()
-        self.save(identity)
+        self.save(identity, to: url)
         return identity
+    }
+
+    private enum DecodeResult {
+        case identity(DeviceIdentity)
+        case recognizedInvalid
+        case unknown
+    }
+
+    private static func decodeStoredIdentity(_ data: Data) -> DecodeResult {
+        let decoder = JSONDecoder()
+        if let decoded = try? decoder.decode(DeviceIdentity.self, from: data) {
+            guard let identity = self.normalizedRawIdentity(decoded) else {
+                return .recognizedInvalid
+            }
+            return .identity(identity)
+        }
+
+        if let decoded = try? decoder.decode(PemDeviceIdentity.self, from: data) {
+            guard decoded.version == 1,
+                  let publicKeyData = self.rawPublicKey(fromPEM: decoded.publicKeyPem),
+                  let privateKeyData = self.rawPrivateKey(fromPEM: decoded.privateKeyPem),
+                  self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
+            else {
+                return .recognizedInvalid
+            }
+            return .identity(DeviceIdentity(
+                deviceId: self.deviceId(publicKeyData: publicKeyData),
+                publicKey: publicKeyData.base64EncodedString(),
+                privateKey: privateKeyData.base64EncodedString(),
+                createdAtMs: decoded.createdAtMs))
+        }
+
+        return self.hasRecognizedIdentityShape(data) ? .recognizedInvalid : .unknown
     }
 
     public static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {
@@ -69,7 +180,7 @@ public enum DeviceIdentityStore {
         let publicKey = privateKey.publicKey
         let publicKeyData = publicKey.rawRepresentation
         let privateKeyData = privateKey.rawRepresentation
-        let deviceId = SHA256.hash(data: publicKeyData).compactMap { String(format: "%02x", $0) }.joined()
+        let deviceId = self.deviceId(publicKeyData: publicKeyData)
         return DeviceIdentity(
             deviceId: deviceId,
             publicKey: publicKeyData.base64EncodedString(),
@@ -90,8 +201,69 @@ public enum DeviceIdentityStore {
         return self.base64UrlEncode(data)
     }
 
-    private static func save(_ identity: DeviceIdentity) {
-        let url = self.fileURL()
+    private static func normalizedRawIdentity(_ identity: DeviceIdentity) -> DeviceIdentity? {
+        guard !identity.deviceId.isEmpty,
+              let publicKeyData = Data(base64Encoded: identity.publicKey),
+              let privateKeyData = Data(base64Encoded: identity.privateKey)
+        else { return nil }
+
+        guard publicKeyData.count == 32, privateKeyData.count == 32,
+              self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
+        else { return nil }
+        return DeviceIdentity(
+            deviceId: self.deviceId(publicKeyData: publicKeyData),
+            publicKey: identity.publicKey,
+            privateKey: identity.privateKey,
+            createdAtMs: identity.createdAtMs)
+    }
+
+    private static func rawPublicKey(fromPEM pem: String) -> Data? {
+        guard let der = self.derData(fromPEM: pem),
+              der.count == self.ed25519SPKIPrefix.count + 32,
+              der.prefix(self.ed25519SPKIPrefix.count) == self.ed25519SPKIPrefix
+        else { return nil }
+        return der.suffix(32)
+    }
+
+    private static func rawPrivateKey(fromPEM pem: String) -> Data? {
+        guard let der = self.derData(fromPEM: pem),
+              der.count == self.ed25519PKCS8PrivatePrefix.count + 32,
+              der.prefix(self.ed25519PKCS8PrivatePrefix.count) == self.ed25519PKCS8PrivatePrefix
+        else { return nil }
+        return der.suffix(32)
+    }
+
+    private static func keyPairMatches(publicKeyData: Data, privateKeyData: Data) -> Bool {
+        guard let privateKey = try? Curve25519.Signing.PrivateKey(rawRepresentation: privateKeyData)
+        else {
+            return false
+        }
+        return privateKey.publicKey.rawRepresentation == publicKeyData
+    }
+
+    private static func derData(fromPEM pem: String) -> Data? {
+        let body = pem
+            .split(whereSeparator: \.isNewline)
+            .filter { !$0.hasPrefix("-----") }
+            .joined()
+        return Data(base64Encoded: body)
+    }
+
+    private static func hasRecognizedIdentityShape(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return false
+        }
+        return object.keys.contains("publicKeyPem")
+            || object.keys.contains("privateKeyPem")
+            || object.keys.contains("publicKey")
+            || object.keys.contains("privateKey")
+    }
+
+    private static func deviceId(publicKeyData: Data) -> String {
+        SHA256.hash(data: publicKeyData).compactMap { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func save(_ identity: DeviceIdentity, to url: URL) {
         do {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
@@ -103,10 +275,18 @@ public enum DeviceIdentityStore {
         }
     }
 
-    private static func fileURL() -> URL {
+    private static func fileURL(profile: GatewayDeviceIdentityProfile) -> URL {
         let base = DeviceIdentityPaths.stateDirURL()
         return base
             .appendingPathComponent("identity", isDirectory: true)
-            .appendingPathComponent(fileName, isDirectory: false)
+            .appendingPathComponent(profile.identityFileName, isDirectory: false)
     }
+}
+
+private struct PemDeviceIdentity: Codable {
+    var version: Int
+    var deviceId: String
+    var publicKeyPem: String
+    var privateKeyPem: String
+    var createdAtMs: Int
 }

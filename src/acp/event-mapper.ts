@@ -1,3 +1,4 @@
+/** Converts ACP prompt and tool-event shapes into Gateway-friendly text, files, and metadata. */
 import type {
   ContentBlock,
   ImageContent,
@@ -5,8 +6,15 @@ import type {
   ToolCallLocation,
   ToolKind,
 } from "@agentclientprotocol/sdk";
+import { asRecord } from "@openclaw/acp-core/record-shared";
+import {
+  hasNonEmptyString,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 
-export type GatewayAttachment = {
+type GatewayAttachment = {
   type: string;
   mimeType: string;
   content: string;
@@ -95,12 +103,6 @@ function escapeResourceTitle(value: string): string {
   return escapeInlineControlChars(value).replace(/[()[\]]/g, (char) => `\\${char}`);
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function normalizeToolLocationPath(value: string): string | undefined {
   const trimmed = value.trim();
   if (
@@ -176,7 +178,7 @@ function collectLocationsFromTextMarkers(
   locations: Map<string, ToolCallLocation>,
 ): void {
   for (const match of text.matchAll(TOOL_RESULT_PATH_MARKER_RE)) {
-    const candidate = match[1]?.trim();
+    const candidate = normalizeOptionalString(match[1]);
     if (candidate) {
       addToolLocation(locations, candidate);
     }
@@ -241,6 +243,7 @@ function collectToolLocations(
   }
 }
 
+/** Extracts bounded text content from an ACP prompt block list. */
 export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
   const parts: string[] = [];
   // Track accumulated byte count per block to catch oversized prompts before full concatenation
@@ -274,6 +277,7 @@ export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number)
   return parts.join("\n");
 }
 
+/** Extracts image/file prompt blocks into Gateway attachment payloads. */
 export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAttachment[] {
   const attachments: GatewayAttachment[] = [];
   for (const block of prompt) {
@@ -293,6 +297,7 @@ export function extractAttachmentsFromPrompt(prompt: ContentBlock[]): GatewayAtt
   return attachments;
 }
 
+/** Builds the display title used for ACP tool-call events. */
 export function formatToolTitle(
   name: string | undefined,
   args: Record<string, unknown> | undefined,
@@ -306,14 +311,17 @@ export function formatToolTitle(
     const safe = raw.length > 100 ? `${raw.slice(0, 100)}...` : raw;
     return `${key}: ${safe}`;
   });
-  return `${base}: ${parts.join(", ")}`;
+  // Sanitize at the source so session updates and permission requests never
+  // inherit raw control bytes from untrusted tool arguments.
+  return escapeInlineControlChars(`${base}: ${parts.join(", ")}`);
 }
 
+/** Infers ACP tool kind from a normalized tool name. */
 export function inferToolKind(name?: string): ToolKind {
   if (!name) {
     return "other";
   }
-  const normalized = name.toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(name);
   if (normalized.includes("read")) {
     return "read";
   }
@@ -338,8 +346,9 @@ export function inferToolKind(name?: string): ToolKind {
   return "other";
 }
 
+/** Extracts textual ACP tool-call content from unknown runtime payloads. */
 export function extractToolCallContent(value: unknown): ToolCallContent[] | undefined {
-  if (typeof value === "string") {
+  if (hasNonEmptyString(value)) {
     return value.trim()
       ? [
           {
@@ -362,7 +371,7 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
   const blocks = Array.isArray(record.content) ? record.content : [];
   for (const block of blocks) {
     const entry = asRecord(block);
-    if (entry?.type === "text" && typeof entry.text === "string" && entry.text.trim()) {
+    if (entry?.type === "text" && hasNonEmptyString(entry.text)) {
       contents.push({
         type: "content",
         content: {
@@ -378,15 +387,11 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
   }
 
   const fallbackText =
-    typeof record.text === "string"
-      ? record.text
-      : typeof record.message === "string"
-        ? record.message
-        : typeof record.error === "string"
-          ? record.error
-          : undefined;
+    readStringValue(record.text) ??
+    readStringValue(record.message) ??
+    readStringValue(record.error);
 
-  if (!fallbackText?.trim()) {
+  if (!hasNonEmptyString(fallbackText)) {
     return undefined;
   }
 
@@ -401,6 +406,7 @@ export function extractToolCallContent(value: unknown): ToolCallContent[] | unde
   ];
 }
 
+/** Extracts bounded file locations from nested tool-call payloads. */
 export function extractToolCallLocations(...values: unknown[]): ToolCallLocation[] | undefined {
   const locations = new Map<string, ToolCallLocation>();
   for (const value of values) {

@@ -1,3 +1,4 @@
+// Compatibility parser for older bundled daemon CLI exports inside generated bundles.
 export const LEGACY_DAEMON_CLI_EXPORTS = [
   "registerDaemonCli",
   "runDaemonInstall",
@@ -9,6 +10,9 @@ export const LEGACY_DAEMON_CLI_EXPORTS = [
 ] as const;
 
 type LegacyDaemonCliExport = (typeof LEGACY_DAEMON_CLI_EXPORTS)[number];
+type LegacyDaemonCliRunnerExport = Exclude<LegacyDaemonCliExport, "registerDaemonCli">;
+
+/** Accessor names for legacy daemon bundle exports after minifier/export alias resolution. */
 export type LegacyDaemonCliAccessors = {
   registerDaemonCli: string;
   runDaemonRestart: string;
@@ -52,9 +56,8 @@ function findRegisterContainerSymbol(bundleSource: string): string | null {
   return bundleSource.match(REGISTER_CONTAINER_RE)?.[1] ?? null;
 }
 
-export function resolveLegacyDaemonCliAccessors(
-  bundleSource: string,
-): LegacyDaemonCliAccessors | null {
+/** Find the accessor for the old `registerDaemonCli` export shape, including esbuild containers. */
+export function resolveLegacyDaemonCliRegisterAccessor(bundleSource: string): string | null {
   const aliases = parseExportAliases(bundleSource);
   if (!aliases) {
     return null;
@@ -63,6 +66,19 @@ export function resolveLegacyDaemonCliAccessors(
   const registerContainer = findRegisterContainerSymbol(bundleSource);
   const registerContainerAlias = registerContainer ? aliases.get(registerContainer) : undefined;
   const registerDirectAlias = aliases.get("registerDaemonCli");
+  return registerContainerAlias
+    ? `${registerContainerAlias}.registerDaemonCli`
+    : (registerDirectAlias ?? null);
+}
+
+/** Find legacy daemon runner exports in generated bundle source. */
+export function resolveLegacyDaemonCliRunnerAccessors(
+  bundleSource: string,
+): Partial<Record<LegacyDaemonCliRunnerExport, string>> | null {
+  const aliases = parseExportAliases(bundleSource);
+  if (!aliases) {
+    return null;
+  }
 
   const runDaemonInstall = aliases.get("runDaemonInstall");
   const runDaemonRestart = aliases.get("runDaemonRestart");
@@ -70,30 +86,55 @@ export function resolveLegacyDaemonCliAccessors(
   const runDaemonStatus = aliases.get("runDaemonStatus");
   const runDaemonStop = aliases.get("runDaemonStop");
   const runDaemonUninstall = aliases.get("runDaemonUninstall");
-  if (!(registerContainerAlias || registerDirectAlias) || !runDaemonRestart) {
+  if (
+    !runDaemonInstall &&
+    !runDaemonRestart &&
+    !runDaemonStart &&
+    !runDaemonStatus &&
+    !runDaemonStop &&
+    !runDaemonUninstall
+  ) {
+    return null;
+  }
+
+  return {
+    ...(runDaemonInstall ? { runDaemonInstall } : {}),
+    ...(runDaemonRestart ? { runDaemonRestart } : {}),
+    ...(runDaemonStart ? { runDaemonStart } : {}),
+    ...(runDaemonStatus ? { runDaemonStatus } : {}),
+    ...(runDaemonStop ? { runDaemonStop } : {}),
+    ...(runDaemonUninstall ? { runDaemonUninstall } : {}),
+  };
+}
+
+/** Resolve all legacy daemon accessors required to bridge old bundles into current CLI code. */
+export function resolveLegacyDaemonCliAccessors(
+  bundleSource: string,
+): LegacyDaemonCliAccessors | null {
+  const registerDaemonCli = resolveLegacyDaemonCliRegisterAccessor(bundleSource);
+  const runnerAccessors = resolveLegacyDaemonCliRunnerAccessors(bundleSource);
+  if (!registerDaemonCli || !runnerAccessors?.runDaemonRestart) {
     return null;
   }
 
   const accessors: LegacyDaemonCliAccessors = {
-    registerDaemonCli: registerContainerAlias
-      ? `${registerContainerAlias}.registerDaemonCli`
-      : registerDirectAlias!,
-    runDaemonRestart,
+    registerDaemonCli,
+    runDaemonRestart: runnerAccessors.runDaemonRestart,
   };
-  if (runDaemonInstall) {
-    accessors.runDaemonInstall = runDaemonInstall;
+  if (runnerAccessors.runDaemonInstall) {
+    accessors.runDaemonInstall = runnerAccessors.runDaemonInstall;
   }
-  if (runDaemonStart) {
-    accessors.runDaemonStart = runDaemonStart;
+  if (runnerAccessors.runDaemonStart) {
+    accessors.runDaemonStart = runnerAccessors.runDaemonStart;
   }
-  if (runDaemonStatus) {
-    accessors.runDaemonStatus = runDaemonStatus;
+  if (runnerAccessors.runDaemonStatus) {
+    accessors.runDaemonStatus = runnerAccessors.runDaemonStatus;
   }
-  if (runDaemonStop) {
-    accessors.runDaemonStop = runDaemonStop;
+  if (runnerAccessors.runDaemonStop) {
+    accessors.runDaemonStop = runnerAccessors.runDaemonStop;
   }
-  if (runDaemonUninstall) {
-    accessors.runDaemonUninstall = runDaemonUninstall;
+  if (runnerAccessors.runDaemonUninstall) {
+    accessors.runDaemonUninstall = runnerAccessors.runDaemonUninstall;
   }
   return accessors;
 }

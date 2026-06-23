@@ -1,12 +1,26 @@
+// Shared queue type contracts for admission, drain, and fallback handling.
+import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
-import type { SkillSnapshot } from "../../../agents/skills.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { CurrentInboundPromptContext } from "../../../agents/embedded-agent-runner/run/params.js";
+import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
+import type { ChatType } from "../../../channels/chat-type.js";
+import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { ReplyToMode } from "../../../config/types.base.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import type { SkillSnapshot } from "../../../skills/types.js";
+import type {
+  QueuedReplyDeliveryCorrelation,
+  QueuedReplyLifecycle,
+  SourceReplyDeliveryMode,
+} from "../../get-reply-options.types.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
-export type QueueMode = "steer" | "followup" | "collect" | "steer-backlog" | "interrupt" | "queue";
+export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
@@ -19,12 +33,40 @@ export type QueueSettings = {
 
 export type QueueDedupeMode = "message-id" | "prompt" | "none";
 
+export class FollowupRunDeferredError extends Error {
+  constructor(message = "Follow-up run deferred") {
+    super(message);
+    this.name = "FollowupRunDeferredError";
+  }
+}
+
+export function isFollowupRunDeferredError(error: unknown): error is FollowupRunDeferredError {
+  return error instanceof FollowupRunDeferredError;
+}
+
 export type FollowupRun = {
   prompt: string;
+  /** Latest session to claim without rewriting the queued run before store refresh. */
+  admissionSessionId?: string;
+  /** User-visible prompt body persisted to transcript; excludes runtime-only prompt context. */
+  transcriptPrompt?: string;
+  /** Shared lifecycle owner for the current user-turn transcript append. */
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  currentInboundEventKind?: InboundEventKind;
+  /** Whether the current inbound message contained audio for inbound-only TTS policy. */
+  currentInboundAudio?: boolean;
+  /** Explicit current-turn context that should be visible for this run but not persisted as user text. */
+  currentInboundContext?: CurrentInboundPromptContext;
+  /** Abort signal for turns that are canceled by their source-channel admission fence. */
+  abortSignal?: AbortSignal;
+  deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
+  queuedLifecycle?: QueuedReplyLifecycle;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
   enqueuedAt: number;
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
+  imageOrder?: PromptImageOrderEntry[];
   /**
    * Originating channel for reply routing.
    * When set, replies should be routed back to this provider
@@ -40,6 +82,10 @@ export type FollowupRun = {
   originatingAccountId?: string;
   /** Thread id for reply routing (Telegram topic id or Matrix thread event id). */
   originatingThreadId?: string | number;
+  /** Provider reply target for transports that model threads as message replies. */
+  originatingReplyToId?: string;
+  /** Effective reply policy for deciding whether the reply target affects queued delivery. */
+  originatingReplyToMode?: ReplyToMode;
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: {
@@ -47,7 +93,9 @@ export type FollowupRun = {
     agentDir: string;
     sessionId: string;
     sessionKey?: string;
+    runtimePolicySessionKey?: string;
     messageProvider?: string;
+    chatType?: ChatType;
     agentAccountId?: string;
     groupId?: string;
     groupChannel?: string;
@@ -57,12 +105,19 @@ export type FollowupRun = {
     senderUsername?: string;
     senderE164?: string;
     senderIsOwner?: boolean;
+    traceAuthorized?: boolean;
     sessionFile: string;
     workspaceDir: string;
+    /** Task working directory for runtime execution. Defaults to workspaceDir. */
+    cwd?: string;
     config: OpenClawConfig;
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    hasSessionModelOverride?: boolean;
+    modelOverrideSource?: "auto" | "user";
+    hasAutoFallbackProvenance?: boolean;
+    autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
     authProfileId?: string;
     authProfileIdSource?: "auto" | "user";
     thinkLevel?: ThinkLevel;
@@ -76,13 +131,47 @@ export type FollowupRun = {
       defaultLevel: ElevatedLevel;
     };
     timeoutMs: number;
+    runTimeoutOverrideMs?: number;
     blockReplyBreak: "text_end" | "message_end";
     ownerNumbers?: string[];
     inputProvenance?: InputProvenance;
     extraSystemPrompt?: string;
+    sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+    silentReplyPromptMode?: SilentReplyPromptMode;
+    extraSystemPromptStatic?: string;
     enforceFinalTag?: boolean;
+    skipProviderRuntimeHints?: boolean;
+    silentExpected?: boolean;
+    allowEmptyAssistantReplyAsSilent?: boolean;
+    suppressNextUserMessagePersistence?: boolean;
+    suppressTranscriptOnlyAssistantPersistence?: boolean;
   };
 };
+
+export function isFollowupRunAborted(run: Pick<FollowupRun, "abortSignal">): boolean {
+  return run.abortSignal?.aborted === true;
+}
+
+const enqueuedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
+const completedFollowupLifecycles = new WeakSet<QueuedReplyLifecycle>();
+
+export function markFollowupRunEnqueued(run: Pick<FollowupRun, "queuedLifecycle">): void {
+  const lifecycle = run.queuedLifecycle;
+  if (!lifecycle || enqueuedFollowupLifecycles.has(lifecycle)) {
+    return;
+  }
+  enqueuedFollowupLifecycles.add(lifecycle);
+  lifecycle.onEnqueued?.();
+}
+
+export function completeFollowupRunLifecycle(run: Pick<FollowupRun, "queuedLifecycle">): void {
+  const lifecycle = run.queuedLifecycle;
+  if (!lifecycle || completedFollowupLifecycles.has(lifecycle)) {
+    return;
+  }
+  completedFollowupLifecycles.add(lifecycle);
+  lifecycle.onComplete?.();
+}
 
 export type ResolveQueueSettingsParams = {
   cfg: OpenClawConfig;
@@ -90,4 +179,5 @@ export type ResolveQueueSettingsParams = {
   sessionEntry?: SessionEntry;
   inlineMode?: QueueMode;
   inlineOptions?: Partial<QueueSettings>;
+  pluginDebounceMs?: number;
 };

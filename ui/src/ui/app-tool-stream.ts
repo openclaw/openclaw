@@ -1,4 +1,16 @@
-import { truncateText } from "./format.ts";
+// Control UI module implements app tool stream behavior.
+import { updateActivityFromToolEvent, type ActivityEntry } from "./activity-model.ts";
+import { createChatModelOverride } from "./chat-model-ref.ts";
+import type { ChatModelOverride } from "./chat-model-ref.types.ts";
+import { formatUnknownText, truncateText } from "./format.ts";
+import {
+  buildAgentMainSessionKey,
+  DEFAULT_AGENT_ID,
+  DEFAULT_MAIN_KEY,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "./session-key.ts";
+import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
@@ -10,7 +22,19 @@ export type AgentEventPayload = {
   stream: string;
   ts: number;
   sessionKey?: string;
+  agentId?: string;
   data: Record<string, unknown>;
+};
+
+export type SessionOperationEventPayload = {
+  operationId?: string;
+  operation?: string;
+  phase?: string;
+  sessionKey?: string;
+  agentId?: string;
+  ts?: number;
+  completed?: boolean;
+  reason?: string;
 };
 
 export type ToolStreamEntry = {
@@ -27,14 +51,29 @@ export type ToolStreamEntry = {
 
 type ToolStreamHost = {
   sessionKey: string;
+  assistantAgentId?: string | null;
+  agentsList?: { defaultId?: string | null } | null;
+  hello?: {
+    snapshot?: {
+      sessionDefaults?: SessionDefaultsSnapshot;
+    };
+  } | null;
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
-  chatStreamSegments: Array<{ text: string; ts: number }>;
+  chatStreamSegments: Array<{ text: string; ts: number; toolCallId?: string }>;
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
+  activityEntries?: ActivityEntry[];
   toolStreamSyncTimer: number | null;
+  chatModelOverrides?: Record<string, ChatModelOverride | null>;
+};
+
+type SessionDefaultsSnapshot = {
+  defaultAgentId?: string;
+  mainKey?: string;
+  mainSessionKey?: string;
 };
 
 function toTrimmedString(value: unknown): string | null {
@@ -53,7 +92,11 @@ function resolveModelLabel(provider: unknown, model: unknown): string | null {
   const providerValue = toTrimmedString(provider);
   if (providerValue) {
     const prefix = `${providerValue}/`;
-    if (modelValue.toLowerCase().startsWith(prefix.toLowerCase())) {
+    if (
+      normalizeLowercaseStringOrEmpty(modelValue).startsWith(
+        normalizeLowercaseStringOrEmpty(prefix),
+      )
+    ) {
       const trimmedModel = modelValue.slice(prefix.length).trim();
       if (trimmedModel) {
         return `${providerValue}/${trimmedModel}`;
@@ -160,8 +203,7 @@ function formatToolOutput(value: unknown): string | null {
     try {
       text = JSON.stringify(value, null, 2);
     } catch {
-      // oxlint-disable typescript/no-base-to-string
-      text = String(value);
+      text = formatUnknownText(value);
     }
   }
   const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
@@ -169,6 +211,158 @@ function formatToolOutput(value: unknown): string | null {
     return truncated.text;
   }
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function resolveSessionStatusModelOverride(result: unknown): ChatModelOverride | null | undefined {
+  const details = readRecord(readRecord(result)?.details);
+  if (!details || details.changedModel !== true) {
+    return undefined;
+  }
+  if (Object.hasOwn(details, "modelOverride")) {
+    const override = toTrimmedString(details.modelOverride);
+    return override ? createChatModelOverride(override) : null;
+  }
+  const model = toTrimmedString(details.model);
+  if (!model) {
+    return undefined;
+  }
+  const provider = toTrimmedString(details.modelProvider);
+  return createChatModelOverride(provider ? `${provider}/${model}` : model);
+}
+
+function syncSessionStatusModelOverride(host: ToolStreamHost, data: Record<string, unknown>) {
+  if (!host.chatModelOverrides) {
+    return;
+  }
+  const result = data.result;
+  const details = readRecord(readRecord(result)?.details);
+  const targetSessionKey = toTrimmedString(details?.sessionKey) ?? host.sessionKey;
+  if (
+    !sessionKeyMatchesHost(host, targetSessionKey, toTrimmedString(details?.agentId) ?? undefined)
+  ) {
+    return;
+  }
+  const override = resolveSessionStatusModelOverride(result);
+  if (override === undefined) {
+    return;
+  }
+  host.chatModelOverrides = {
+    ...host.chatModelOverrides,
+    [targetSessionKey]: override,
+  };
+}
+
+function readSessionDefaults(host: ToolStreamHost): SessionDefaultsSnapshot | undefined {
+  return host.hello?.snapshot?.sessionDefaults;
+}
+
+function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+  return normalizeLowercaseStringOrEmpty(sessionKey) === "global";
+}
+
+function resolveDefaultAgentId(host: ToolStreamHost): string {
+  const defaults = readSessionDefaults(host);
+  return normalizeAgentId(
+    toTrimmedString(host.agentsList?.defaultId) ??
+      toTrimmedString(defaults?.defaultAgentId) ??
+      DEFAULT_AGENT_ID,
+  );
+}
+
+function resolveSelectedAgentId(host: ToolStreamHost): string {
+  return normalizeAgentId(toTrimmedString(host.assistantAgentId) ?? resolveDefaultAgentId(host));
+}
+
+function agentEventScopeMatches(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  if (!isGlobalSessionKey(host.sessionKey) || !isGlobalSessionKey(payload.sessionKey)) {
+    return true;
+  }
+  const payloadAgentId = toTrimmedString(payload.agentId);
+  const selectedAgentId = resolveSelectedAgentId(host);
+  return payloadAgentId
+    ? normalizeAgentId(payloadAgentId) === selectedAgentId
+    : selectedAgentId === resolveDefaultAgentId(host);
+}
+
+function resolveAgentMainAliasAgentId(host: ToolStreamHost, value?: string): string | null {
+  const parsed = parseAgentSessionKey(value);
+  if (!parsed) {
+    return null;
+  }
+  const defaults = readSessionDefaults(host);
+  const mainKey = toTrimmedString(defaults?.mainKey) ?? DEFAULT_MAIN_KEY;
+  const rest = normalizeLowercaseStringOrEmpty(parsed.rest);
+  return rest === DEFAULT_MAIN_KEY || rest === normalizeLowercaseStringOrEmpty(mainKey)
+    ? normalizeAgentId(parsed.agentId)
+    : null;
+}
+
+function selectedGlobalAliasEventMatches(
+  host: ToolStreamHost,
+  sessionKey: string,
+  agentId?: string,
+): boolean {
+  const hostAgentId = resolveAgentMainAliasAgentId(host, host.sessionKey);
+  if (!hostAgentId || !isGlobalSessionKey(sessionKey)) {
+    return false;
+  }
+  const eventAgentId = normalizeAgentId(agentId ?? resolveDefaultAgentId(host));
+  return hostAgentId === eventAgentId;
+}
+
+function sessionKeyMatchesHost(
+  host: ToolStreamHost,
+  sessionKey: string,
+  agentId?: string,
+): boolean {
+  return (
+    normalizeSessionKeyForEventComparison(host, sessionKey) ===
+      normalizeSessionKeyForEventComparison(host, host.sessionKey) ||
+    selectedGlobalAliasEventMatches(host, sessionKey, agentId)
+  );
+}
+
+function resolveDefaultMainSessionKey(host: ToolStreamHost): string {
+  const defaults = readSessionDefaults(host);
+  const configuredMain = toTrimmedString(defaults?.mainSessionKey);
+  if (configuredMain) {
+    return configuredMain;
+  }
+  return buildAgentMainSessionKey({
+    agentId: toTrimmedString(defaults?.defaultAgentId) ?? DEFAULT_AGENT_ID,
+    mainKey: toTrimmedString(defaults?.mainKey) ?? DEFAULT_MAIN_KEY,
+  });
+}
+
+function normalizeSessionKeyForEventComparison(
+  host: ToolStreamHost,
+  value?: string,
+): string | null {
+  const raw = toTrimmedString(value);
+  if (!raw) {
+    return null;
+  }
+  const defaults = readSessionDefaults(host);
+  const mainKey = toTrimmedString(defaults?.mainKey) ?? DEFAULT_MAIN_KEY;
+  const defaultAgentId = toTrimmedString(defaults?.defaultAgentId) ?? DEFAULT_AGENT_ID;
+  const canonicalMain = resolveDefaultMainSessionKey(host);
+  const aliases = new Set(
+    [
+      DEFAULT_MAIN_KEY,
+      mainKey,
+      canonicalMain,
+      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey: DEFAULT_MAIN_KEY }),
+      buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey }),
+    ].map((entry) => normalizeLowercaseStringOrEmpty(entry)),
+  );
+  const normalizedRaw = normalizeLowercaseStringOrEmpty(raw);
+  return aliases.has(normalizedRaw)
+    ? normalizeLowercaseStringOrEmpty(canonicalMain)
+    : normalizedRaw;
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -245,7 +439,8 @@ export function resetToolStream(host: ToolStreamHost) {
 }
 
 export type CompactionStatus = {
-  active: boolean;
+  phase: "active" | "retrying" | "complete";
+  runId: string | null;
   startedAt: number | null;
   completedAt: number | null;
 };
@@ -265,39 +460,174 @@ type CompactionHost = ToolStreamHost & {
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
+  requestUpdate?: () => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
+const COMPACTION_ACTIVE_STALE_TIMEOUT_MS = 5 * 60_000;
 const FALLBACK_TOAST_DURATION_MS = 8000;
 
-export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
-  const data = payload.data ?? {};
-  const phase = typeof data.phase === "string" ? data.phase : "";
-
-  // Clear any existing timer
+function clearCompactionTimer(host: CompactionHost) {
   if (host.compactionClearTimer != null) {
     window.clearTimeout(host.compactionClearTimer);
     host.compactionClearTimer = null;
   }
+}
 
-  if (phase === "start") {
-    host.compactionStatus = {
-      active: true,
+function scheduleCompactionClear(
+  host: CompactionHost,
+  delayMs = COMPACTION_TOAST_DURATION_MS,
+  expected?: { phase?: CompactionStatus["phase"]; runId?: string | null },
+) {
+  host.compactionClearTimer = window.setTimeout(() => {
+    const current = host.compactionStatus;
+    if (expected?.phase && current?.phase !== expected.phase) {
+      return;
+    }
+    if (expected?.runId && current?.runId !== expected.runId) {
+      return;
+    }
+    host.compactionStatus = null;
+    host.compactionClearTimer = null;
+    host.requestUpdate?.();
+  }, delayMs);
+}
+
+function setCompactionComplete(host: CompactionHost, runId: string) {
+  host.compactionStatus = {
+    phase: "complete",
+    runId,
+    startedAt: host.compactionStatus?.startedAt ?? null,
+    completedAt: Date.now(),
+  };
+  scheduleCompactionClear(host, COMPACTION_TOAST_DURATION_MS, { phase: "complete", runId });
+}
+
+export function handleSessionOperationEvent(
+  host: ToolStreamHost,
+  payload?: SessionOperationEventPayload,
+) {
+  if (!payload || payload.operation !== "compact") {
+    return;
+  }
+  const sessionKey = toTrimmedString(payload.sessionKey);
+  const agentId = toTrimmedString(payload.agentId) ?? undefined;
+  if (
+    !sessionKey ||
+    !sessionKeyMatchesHost(host, sessionKey, agentId) ||
+    !agentEventScopeMatches(host, {
+      runId: toTrimmedString(payload.operationId) ?? "",
+      seq: 0,
+      stream: "session.operation",
+      ts: typeof payload.ts === "number" ? payload.ts : Date.now(),
+      sessionKey,
+      ...(agentId ? { agentId } : {}),
+      data: {},
+    })
+  ) {
+    return;
+  }
+
+  const operationId = toTrimmedString(payload.operationId) ?? `session-compact:${sessionKey}`;
+  const compactionHost = host as CompactionHost;
+
+  if (payload.phase === "start") {
+    clearCompactionTimer(compactionHost);
+    compactionHost.compactionStatus = {
+      phase: "active",
+      runId: operationId,
       startedAt: Date.now(),
       completedAt: null,
     };
-  } else if (phase === "end") {
-    host.compactionStatus = {
-      active: false,
-      startedAt: host.compactionStatus?.startedAt ?? null,
-      completedAt: Date.now(),
-    };
-    // Auto-clear the toast after duration
-    host.compactionClearTimer = window.setTimeout(() => {
-      host.compactionStatus = null;
-      host.compactionClearTimer = null;
-    }, COMPACTION_TOAST_DURATION_MS);
+    scheduleCompactionClear(compactionHost, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
+      phase: "active",
+      runId: operationId,
+    });
+    return;
   }
+
+  if (payload.phase !== "end") {
+    return;
+  }
+  if (
+    compactionHost.compactionStatus?.runId &&
+    compactionHost.compactionStatus.runId !== operationId
+  ) {
+    return;
+  }
+  clearCompactionTimer(compactionHost);
+  if (payload.completed === true) {
+    setCompactionComplete(compactionHost, operationId);
+    return;
+  }
+  compactionHost.compactionStatus = null;
+}
+
+export function handleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
+  const data = payload.data ?? {};
+  const phase = typeof data.phase === "string" ? data.phase : "";
+  const completed = data.completed === true;
+
+  clearCompactionTimer(host);
+
+  if (phase === "start") {
+    host.compactionStatus = {
+      phase: "active",
+      runId: payload.runId,
+      startedAt: Date.now(),
+      completedAt: null,
+    };
+    scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
+      phase: "active",
+      runId: payload.runId,
+    });
+    return;
+  }
+  if (phase === "end") {
+    if (data.willRetry === true && completed) {
+      // Compaction already succeeded, but the run is still retrying.
+      // Keep that distinct state until the matching lifecycle end arrives.
+      host.compactionStatus = {
+        phase: "retrying",
+        runId: payload.runId,
+        startedAt: host.compactionStatus?.startedAt ?? Date.now(),
+        completedAt: null,
+      };
+      scheduleCompactionClear(host, COMPACTION_ACTIVE_STALE_TIMEOUT_MS, {
+        phase: "retrying",
+        runId: payload.runId,
+      });
+      return;
+    }
+    if (completed) {
+      setCompactionComplete(host, payload.runId);
+      return;
+    }
+    host.compactionStatus = null;
+  }
+}
+
+function handleLifecycleCompactionEvent(host: CompactionHost, payload: AgentEventPayload) {
+  const data = payload.data ?? {};
+  const phase = toTrimmedString(data.phase);
+  if (phase !== "end" && phase !== "error") {
+    return;
+  }
+
+  // We scope lifecycle cleanup to the visible chat session first, then
+  // use runId only to match the specific compaction retry we started tracking.
+  const accepted = resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true });
+  if (!accepted.accepted) {
+    return;
+  }
+  if (host.compactionStatus?.phase !== "retrying") {
+    return;
+  }
+  if (host.compactionStatus.runId && host.compactionStatus.runId !== payload.runId) {
+    return;
+  }
+
+  setCompactionComplete(host, payload.runId);
 }
 
 function resolveAcceptedSession(
@@ -308,7 +638,10 @@ function resolveAcceptedSession(
   },
 ): { accepted: boolean; sessionKey?: string } {
   const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
-  if (sessionKey && sessionKey !== host.sessionKey) {
+  if (
+    sessionKey &&
+    !sessionKeyMatchesHost(host, sessionKey, toTrimmedString(payload.agentId) ?? undefined)
+  ) {
     return { accepted: false };
   }
   if (!host.chatRunId && options?.allowSessionScopedWhenIdle && sessionKey) {
@@ -394,13 +727,33 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
+  // Filter by session only. Don't check chatRunId because the client sets it
+  // to a client-generated UUID (via generateUUID in sendChatMessage), while
+  // agent events arrive with the server's engine runId.
+  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+  if (
+    sessionKey &&
+    !sessionKeyMatchesHost(host, sessionKey, toTrimmedString(payload.agentId) ?? undefined)
+  ) {
+    return;
+  }
+  if (!agentEventScopeMatches(host, payload)) {
+    return;
+  }
+
   // Handle compaction events
   if (payload.stream === "compaction") {
     handleCompactionEvent(host as CompactionHost, payload);
     return;
   }
 
-  if (payload.stream === "lifecycle" || payload.stream === "fallback") {
+  if (payload.stream === "lifecycle") {
+    handleLifecycleCompactionEvent(host as CompactionHost, payload);
+    handleLifecycleFallbackEvent(host as CompactionHost, payload);
+    return;
+  }
+
+  if (payload.stream === "fallback") {
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
     return;
   }
@@ -409,19 +762,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     return;
   }
 
-  // Filter by session only. Don't check chatRunId because the client sets it
-  // to a client-generated UUID (via generateUUID in sendChatMessage), while
-  // tool events arrive with the server's engine runId — they can never match.
-  const sessionKey = typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
-  if (sessionKey && sessionKey !== host.sessionKey) {
-    return;
-  }
-
   const data = payload.data ?? {};
   const toolCallId = typeof data.toolCallId === "string" ? data.toolCallId : "";
   if (!toolCallId) {
     return;
   }
+  updateActivityFromToolEvent(host, { ...payload, data });
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
   const args = phase === "start" ? data.args : undefined;
@@ -431,14 +777,25 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       : phase === "result"
         ? formatToolOutput(data.result)
         : undefined;
+  if (name === "session_status" && phase === "result") {
+    syncSessionStatusModelOverride(host, data);
+  }
 
   const now = Date.now();
   let entry = host.toolStreamById.get(toolCallId);
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
-    if (host.chatStream && host.chatStream.trim().length > 0) {
-      host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
+    if (
+      host.chatRunId &&
+      payload.runId === host.chatRunId &&
+      host.chatStream &&
+      host.chatStream.trim().length > 0
+    ) {
+      host.chatStreamSegments = [
+        ...host.chatStreamSegments,
+        { text: host.chatStream, ts: now, toolCallId },
+      ];
       host.chatStream = null;
       host.chatStreamStartedAt = null;
     }

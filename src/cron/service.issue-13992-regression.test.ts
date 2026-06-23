@@ -1,3 +1,4 @@
+// Cron service regression tests cover historical scheduling edge cases.
 import { describe, expect, it } from "vitest";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs.js";
@@ -98,6 +99,22 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     expect(job.state.nextRunAtMs).toBeGreaterThan(now);
   });
 
+  it("should repair nextRunAtMs=0 during maintenance", () => {
+    const now = Date.now();
+
+    const job = createCronSystemEventJob(now, {
+      state: {
+        nextRunAtMs: 0,
+      },
+    });
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state);
+
+    expect(typeof job.state.nextRunAtMs).toBe("number");
+    expect(job.state.nextRunAtMs).toBeGreaterThan(now);
+  });
+
   it("should clear nextRunAtMs for disabled jobs during maintenance", () => {
     const now = Date.now();
     const futureTime = now + 3600_000;
@@ -173,7 +190,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
 
     const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
 
-    expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
     expect(dueJob.state.nextRunAtMs).toBe(pastDue);
     expect(malformedJob.state.nextRunAtMs).toBeUndefined();
     expect(malformedJob.state.scheduleErrorCount).toBe(1);
@@ -252,5 +269,34 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
 
     expect(job.state.runningAtMs).toBeUndefined();
     expect(job.state.nextRunAtMs).toBe(pastDue);
+  });
+
+  it("advances overdue already-executed jobs when stale running marker is cleared", () => {
+    const now = Date.now();
+    const pastDue = now - 60_000;
+    const staleRunningAt = now - 3 * 60 * 60_000;
+
+    const job: CronJob = {
+      id: "stale-running-already-executed",
+      name: "stale running already executed",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+      payload: { kind: "systemEvent", text: "test" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      createdAtMs: now - 86400_000,
+      updatedAtMs: now - 86400_000,
+      state: {
+        nextRunAtMs: pastDue,
+        runningAtMs: staleRunningAt,
+        lastRunAtMs: pastDue + 1000,
+      },
+    };
+
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
+    recomputeNextRunsForMaintenance(state, { recomputeExpired: true, nowMs: now });
+
+    expect(job.state.runningAtMs).toBeUndefined();
+    expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);
   });
 });

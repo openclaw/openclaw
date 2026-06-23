@@ -1,3 +1,4 @@
+// Status update tests cover update check display and availability formatting.
 import { describe, expect, it } from "vitest";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import { VERSION } from "../version.js";
@@ -137,6 +138,24 @@ describe("formatUpdateOneLiner", () => {
 
     expect(formatUpdateOneLiner(update)).toBe(
       `Update: npm · up to date · npm latest ${VERSION} · deps ok`,
+    );
+  });
+
+  it("renders beta registry tags instead of calling them npm latest", () => {
+    const update = buildUpdate({
+      installKind: "package",
+      packageManager: "npm",
+      registry: { latestVersion: VERSION, tag: "beta" },
+      deps: {
+        manager: "npm",
+        status: "ok",
+        lockfilePath: "package-lock.json",
+        markerPath: "node_modules",
+      },
+    });
+
+    expect(formatUpdateOneLiner(update)).toBe(
+      `Update: npm · up to date · npm beta ${VERSION} · deps ok`,
     );
   });
 

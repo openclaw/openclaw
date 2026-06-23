@@ -1,10 +1,30 @@
+// Session memory transcript helpers persist compact session transcript excerpts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
 
+function extractTextMessageContent(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const candidate = block as { type?: unknown; text?: unknown };
+    if (candidate.type === "text" && typeof candidate.text === "string") {
+      return candidate.text;
+    }
+  }
+  return undefined;
+}
+
 export async function getRecentSessionContent(
   sessionFilePath: string,
-  messageCount: number = 15,
+  messageCount = 15,
 ): Promise<string | null> {
   try {
     const content = await fs.readFile(sessionFilePath, "utf-8");
@@ -15,16 +35,17 @@ export async function getRecentSessionContent(
       try {
         const entry = JSON.parse(line);
         if (entry.type === "message" && entry.message) {
-          const msg = entry.message;
+          const msg = entry.message as {
+            role?: unknown;
+            content?: unknown;
+            provenance?: unknown;
+          };
           const role = msg.role;
-          if ((role === "user" || role === "assistant") && msg.content) {
+          if ((role === "user" || role === "assistant") && "content" in msg && msg.content) {
             if (role === "user" && hasInterSessionUserProvenance(msg)) {
               continue;
             }
-            const text = Array.isArray(msg.content)
-              ? // oxlint-disable-next-line typescript/no-explicit-any
-                msg.content.find((c: any) => c.type === "text")?.text
-              : msg.content;
+            const text = extractTextMessageContent(msg.content);
             if (text && !text.startsWith("/")) {
               allMessages.push(`${role}: ${text}`);
             }
@@ -43,7 +64,7 @@ export async function getRecentSessionContent(
 
 export async function getRecentSessionContentWithResetFallback(
   sessionFilePath: string,
-  messageCount: number = 15,
+  messageCount = 15,
 ): Promise<string | null> {
   const primary = await getRecentSessionContent(sessionFilePath, messageCount);
   if (primary) {
@@ -68,7 +89,7 @@ export async function getRecentSessionContentWithResetFallback(
   }
 }
 
-export function stripResetSuffix(fileName: string): string {
+function stripResetSuffix(fileName: string): string {
   const resetIndex = fileName.indexOf(".reset.");
   return resetIndex === -1 ? fileName : fileName.slice(0, resetIndex);
 }

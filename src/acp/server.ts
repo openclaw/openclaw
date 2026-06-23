@@ -1,38 +1,54 @@
 #!/usr/bin/env node
+/** ACP stdio server that bridges Agent Client Protocol clients to the OpenClaw Gateway. */
 import { Readable, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk";
-import { loadConfig } from "../config/config.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import {
+  AGENT_METHODS,
+  AgentSideConnection,
+  PROTOCOL_VERSION,
+  ndJsonStream,
+} from "@agentclientprotocol/sdk";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient } from "../gateway/client.js";
-import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { isMainModule } from "../infra/is-main.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { routeLogsToStderr } from "../logging/console.js";
+import {
+  createSqliteAcpEventLedger,
+  migrateFileAcpEventLedgerToSqlite,
+  resolveDefaultAcpEventLedgerPath,
+} from "./event-ledger.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
 
+type AcpStreamMessage =
+  ReturnType<typeof ndJsonStream> extends {
+    readable: ReadableStream<infer Message>;
+  }
+    ? Message
+    : never;
+type JsonObject = Record<string, unknown>;
+
+/** Starts the ACP Gateway bridge and serves AgentSideConnection over stdio. */
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
-  const cfg = loadConfig();
-  const connection = buildGatewayConnectionDetails({
+  routeLogsToStderr();
+  const cfg = getRuntimeConfig();
+  const bootstrap = await resolveGatewayClientBootstrap({
     config: cfg,
-    url: opts.gatewayUrl,
-  });
-  const gatewayUrlOverrideSource =
-    connection.urlSource === "cli --url"
-      ? "cli"
-      : connection.urlSource === "env OPENCLAW_GATEWAY_URL"
-        ? "env"
-        : undefined;
-  const creds = await resolveGatewayConnectionAuth({
-    config: cfg,
+    gatewayUrl: opts.gatewayUrl,
     explicitAuth: {
       token: opts.gatewayToken,
       password: opts.gatewayPassword,
     },
     env: process.env,
-    urlOverride: gatewayUrlOverrideSource ? connection.url : undefined,
-    urlOverrideSource: gatewayUrlOverrideSource,
   });
 
   let agent: AcpGatewayAgent | null = null;
@@ -64,13 +80,15 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   };
 
   const gateway = new GatewayClient({
-    url: connection.url,
-    token: creds.token,
-    password: creds.password,
+    url: bootstrap.url,
+    token: bootstrap.auth.token,
+    password: bootstrap.auth.password,
+    preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     clientDisplayName: "ACP",
     clientVersion: "acp",
     mode: GATEWAY_CLIENT_MODES.CLI,
+    caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
     onEvent: (evt) => {
       void agent?.handleGatewayEvent(evt);
     },
@@ -111,8 +129,13 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   process.once("SIGTERM", shutdown);
 
   // Start gateway first and wait for hello before accepting ACP requests.
-  gateway.start();
-  await gatewayReady.catch((err) => {
+  const readiness = await startGatewayClientWhenEventLoopReady(gateway, {
+    clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+  });
+  if (!readiness.ready) {
+    rejectGatewayReady(new Error("gateway event loop readiness timeout"));
+  }
+  await gatewayReady.catch((err: unknown) => {
     shutdown();
     throw err;
   });
@@ -123,14 +146,61 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
+  const readable = stream.readable.pipeThrough(
+    new TransformStream<AcpStreamMessage, AcpStreamMessage>({
+      transform(message, controller) {
+        controller.enqueue(normalizeAcpInitializeProtocolVersion(message));
+      },
+    }),
+  );
+  await migrateFileAcpEventLedgerToSqlite({
+    filePath: resolveDefaultAcpEventLedgerPath(process.env),
+    archiveSource: true,
+  });
+  const eventLedger = createSqliteAcpEventLedger();
 
-  new AgentSideConnection((conn: AgentSideConnection) => {
-    agent = new AcpGatewayAgent(conn, gateway, opts);
-    agent.start();
-    return agent;
-  }, stream);
+  void new AgentSideConnection(
+    (conn: AgentSideConnection) => {
+      agent = new AcpGatewayAgent(conn, gateway, { ...opts, eventLedger });
+      agent.start();
+      return agent;
+    },
+    { ...stream, readable },
+  );
 
   return closed;
+}
+
+function normalizeAcpInitializeProtocolVersion(message: AcpStreamMessage): AcpStreamMessage {
+  if (!isJsonObject(message)) {
+    return message;
+  }
+  const messageObject: JsonObject = message;
+  if (messageObject.method !== AGENT_METHODS.initialize) {
+    return message;
+  }
+  const params = messageObject.params;
+  if (!isJsonObject(params) || isUint16Integer(params.protocolVersion)) {
+    return message;
+  }
+
+  // ACP SDK 0.22 validates this uint16 before the agent handler runs; some
+  // editors send MCP date strings here, so normalize only this handshake field.
+  return {
+    ...message,
+    params: {
+      ...params,
+      protocolVersion: PROTOCOL_VERSION,
+    },
+  } as AcpStreamMessage;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isUint16Integer(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0xffff;
 }
 
 function parseArgs(args: string[]): AcpServerOptions {
@@ -204,17 +274,21 @@ function parseArgs(args: string[]): AcpServerOptions {
       process.exit(0);
     }
   }
-  if (opts.gatewayToken?.trim() && tokenFile?.trim()) {
+  const gatewayToken = normalizeOptionalString(opts.gatewayToken);
+  const gatewayPassword = normalizeOptionalString(opts.gatewayPassword);
+  const normalizedTokenFile = normalizeOptionalString(tokenFile);
+  const normalizedPasswordFile = normalizeOptionalString(passwordFile);
+  if (gatewayToken && normalizedTokenFile) {
     throw new Error("Use either --token or --token-file.");
   }
-  if (opts.gatewayPassword?.trim() && passwordFile?.trim()) {
+  if (gatewayPassword && normalizedPasswordFile) {
     throw new Error("Use either --password or --password-file.");
   }
-  if (tokenFile?.trim()) {
-    opts.gatewayToken = readSecretFromFile(tokenFile, "Gateway token");
+  if (normalizedTokenFile) {
+    opts.gatewayToken = readSecretFromFile(normalizedTokenFile, "Gateway token");
   }
-  if (passwordFile?.trim()) {
-    opts.gatewayPassword = readSecretFromFile(passwordFile, "Gateway password");
+  if (normalizedPasswordFile) {
+    opts.gatewayPassword = readSecretFromFile(normalizedPasswordFile, "Gateway password");
   }
   return opts;
 }
@@ -254,7 +328,7 @@ if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
     );
   }
   const opts = parseArgs(argv);
-  serveAcpGateway(opts).catch((err) => {
+  serveAcpGateway(opts).catch((err: unknown) => {
     console.error(String(err));
     process.exit(1);
   });

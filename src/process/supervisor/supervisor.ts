@@ -1,6 +1,8 @@
+// Process supervisor manages long-running child and PTY process lifecycles.
 import crypto from "node:crypto";
+import { performance } from "node:perf_hooks";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getShellConfig } from "../../agents/shell-utils.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { createRunRegistry } from "./registry.js";
@@ -13,12 +15,22 @@ import type {
   TerminationReason,
 } from "./types.js";
 
-const log = createSubsystemLogger("process/supervisor");
+type SupervisorLogRuntime = typeof import("./supervisor-log.runtime.js");
 
 type ActiveRun = {
   run: ManagedRun;
   scopeKey?: string;
 };
+
+const GRACEFUL_CANCEL_TIMEOUT_MS = 5000;
+const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
+
+let supervisorLogRuntimePromise: Promise<SupervisorLogRuntime> | undefined;
+
+function loadSupervisorLogRuntime(): Promise<SupervisorLogRuntime> {
+  supervisorLogRuntimePromise ??= import("./supervisor-log.runtime.js");
+  return supervisorLogRuntimePromise;
+}
 
 function clampTimeout(value?: number): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -27,8 +39,58 @@ function clampTimeout(value?: number): number | undefined {
   return Math.max(1, Math.floor(value));
 }
 
+function clampCapturedOutputChars(value?: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_MAX_CAPTURED_OUTPUT_CHARS;
+  }
+  return Math.max(256, Math.floor(value));
+}
+
+function appendCapturedOutput(
+  current: string,
+  chunk: string,
+  stream: "stdout" | "stderr",
+  maxChars: number,
+) {
+  const next = current + chunk;
+  if (next.length <= maxChars) {
+    return next;
+  }
+  const marker = `[openclaw: captured ${stream} truncated to last ${maxChars} chars]\n`;
+  const tailChars = Math.max(0, maxChars - marker.length);
+  return `${marker}${next.slice(-tailChars)}`;
+}
+
 function isTimeoutReason(reason: TerminationReason) {
   return reason === "overall-timeout" || reason === "no-output-timeout";
+}
+
+function resolveElapsedTimeoutReason(params: {
+  nowMs: number;
+  overallTimeoutDeadlineMs: number | null;
+  noOutputTimeoutDeadlineMs: number | null;
+}): TerminationReason | null {
+  const elapsedDeadlines: Array<{ reason: TerminationReason; deadlineMs: number }> = [];
+  if (params.overallTimeoutDeadlineMs !== null && params.nowMs >= params.overallTimeoutDeadlineMs) {
+    elapsedDeadlines.push({
+      reason: "overall-timeout",
+      deadlineMs: params.overallTimeoutDeadlineMs,
+    });
+  }
+  if (
+    params.noOutputTimeoutDeadlineMs !== null &&
+    params.nowMs >= params.noOutputTimeoutDeadlineMs
+  ) {
+    elapsedDeadlines.push({
+      reason: "no-output-timeout",
+      deadlineMs: params.noOutputTimeoutDeadlineMs,
+    });
+  }
+  if (elapsedDeadlines.length === 0) {
+    return null;
+  }
+  elapsedDeadlines.sort((a, b) => a.deadlineMs - b.deadlineMs);
+  return elapsedDeadlines[0].reason;
 }
 
 export function createProcessSupervisor(): ProcessSupervisor {
@@ -59,16 +121,17 @@ export function createProcessSupervisor(): ProcessSupervisor {
   };
 
   const spawn = async (input: SpawnInput): Promise<ManagedRun> => {
-    const runId = input.runId?.trim() || crypto.randomUUID();
-    if (input.replaceExistingScope && input.scopeKey?.trim()) {
-      cancelScope(input.scopeKey, "manual-cancel");
+    const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
+    const scopeKey = normalizeOptionalString(input.scopeKey);
+    if (input.replaceExistingScope && scopeKey) {
+      cancelScope(scopeKey, "manual-cancel");
     }
     const startedAtMs = Date.now();
     const record: RunRecord = {
       runId,
       sessionId: input.sessionId,
       backendId: input.backendId,
-      scopeKey: input.scopeKey?.trim() || undefined,
+      scopeKey,
       state: "starting",
       startedAtMs,
       lastOutputAtMs: startedAtMs,
@@ -83,10 +146,14 @@ export function createProcessSupervisor(): ProcessSupervisor {
     let stderr = "";
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
+    let forceKillTimer: NodeJS.Timeout | null = null;
     const captureOutput = input.captureOutput !== false;
+    const maxCapturedOutputChars = clampCapturedOutputChars(input.maxCapturedOutputChars);
 
     const overallTimeoutMs = clampTimeout(input.timeoutMs);
     const noOutputTimeoutMs = clampTimeout(input.noOutputTimeoutMs);
+    let overallTimeoutDeadlineMs: number | null = null;
+    let noOutputTimeoutDeadlineMs: number | null = null;
 
     const setForcedReason = (reason: TerminationReason) => {
       if (forcedReason) {
@@ -108,6 +175,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
       if (!noOutputTimeoutMs || settled) {
         return;
       }
+      noOutputTimeoutDeadlineMs = performance.now() + noOutputTimeoutMs;
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
@@ -155,21 +223,33 @@ export function createProcessSupervisor(): ProcessSupervisor {
           clearTimeout(noOutputTimer);
           noOutputTimer = null;
         }
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = null;
+        }
       };
 
       cancelAdapter = (_reason: TerminationReason) => {
-        if (settled) {
+        if (settled || forceKillTimer) {
           return;
         }
-        adapter.kill("SIGKILL");
+        adapter.kill("SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          if (!settled) {
+            adapter.kill("SIGKILL");
+          }
+        }, GRACEFUL_CANCEL_TIMEOUT_MS);
+        forceKillTimer.unref?.();
       };
 
       if (overallTimeoutMs) {
+        overallTimeoutDeadlineMs = performance.now() + overallTimeoutMs;
         timeoutTimer = setTimeout(() => {
           requestCancel("overall-timeout");
         }, overallTimeoutMs);
       }
       if (noOutputTimeoutMs) {
+        noOutputTimeoutDeadlineMs = performance.now() + noOutputTimeoutMs;
         noOutputTimer = setTimeout(() => {
           requestCancel("no-output-timeout");
         }, noOutputTimeoutMs);
@@ -177,14 +257,14 @@ export function createProcessSupervisor(): ProcessSupervisor {
 
       adapter.onStdout((chunk) => {
         if (captureOutput) {
-          stdout += chunk;
+          stdout = appendCapturedOutput(stdout, chunk, "stdout", maxCapturedOutputChars);
         }
         input.onStdout?.(chunk);
         touchOutput();
       });
       adapter.onStderr((chunk) => {
         if (captureOutput) {
-          stderr += chunk;
+          stderr = appendCapturedOutput(stderr, chunk, "stderr", maxCapturedOutputChars);
         }
         input.onStderr?.(chunk);
         touchOutput();
@@ -192,16 +272,22 @@ export function createProcessSupervisor(): ProcessSupervisor {
 
       const waitPromise = (async (): Promise<RunExit> => {
         const result = await adapter.wait();
+        const deadlineReason = resolveElapsedTimeoutReason({
+          nowMs: performance.now(),
+          overallTimeoutDeadlineMs,
+          noOutputTimeoutDeadlineMs,
+        });
+        const terminalReason = forcedReason ?? deadlineReason;
         if (settled) {
           return {
-            reason: forcedReason ?? "exit",
+            reason: terminalReason ?? "exit",
             exitCode: result.code,
             exitSignal: result.signal,
             durationMs: Date.now() - startedAtMs,
             stdout,
             stderr,
-            timedOut: isTimeoutReason(forcedReason ?? "exit"),
-            noOutputTimedOut: forcedReason === "no-output-timeout",
+            timedOut: isTimeoutReason(terminalReason ?? "exit"),
+            noOutputTimedOut: terminalReason === "no-output-timeout",
           };
         }
         settled = true;
@@ -210,7 +296,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
         active.delete(runId);
 
         const reason: TerminationReason =
-          forcedReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
+          terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
         const exit: RunExit = {
           reason,
           exitCode: result.code,
@@ -218,8 +304,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
           durationMs: Date.now() - startedAtMs,
           stdout,
           stderr,
-          timedOut: isTimeoutReason(forcedReason ?? reason),
-          noOutputTimedOut: forcedReason === "no-output-timeout",
+          timedOut: isTimeoutReason(terminalReason ?? reason),
+          noOutputTimedOut: terminalReason === "no-output-timeout",
         };
         registry.finalize(runId, {
           reason: exit.reason,
@@ -227,7 +313,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
           exitSignal: exit.exitSignal,
         });
         return exit;
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         if (!settled) {
           settled = true;
           clearTimers();
@@ -255,7 +341,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
 
       active.set(runId, {
         run: managedRun,
-        scopeKey: input.scopeKey?.trim() || undefined,
+        scopeKey,
       });
       return managedRun;
     } catch (err) {
@@ -264,7 +350,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
         exitCode: null,
         exitSignal: null,
       });
-      log.warn(`spawn failed: runId=${runId} reason=${String(err)}`);
+      const { warnProcessSupervisorSpawnFailure } = await loadSupervisorLogRuntime();
+      warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       throw err;
     }
   };

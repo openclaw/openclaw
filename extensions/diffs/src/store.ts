@@ -1,6 +1,10 @@
+// Diffs plugin module implements store behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PluginLogger } from "../api.js";
 import type { DiffArtifactContext, DiffArtifactMeta, DiffOutputFormat } from "./types.js";
 
@@ -35,6 +39,7 @@ type StandaloneFileMeta = {
 };
 
 type ArtifactMetaFileName = "meta.json" | "file-meta.json";
+type ArtifactRoot = Awaited<ReturnType<typeof fsRoot>>;
 
 export class DiffArtifactStore {
   private readonly rootDir: string;
@@ -61,22 +66,24 @@ export class DiffArtifactStore {
     const htmlPath = path.join(artifactDir, "viewer.html");
     const ttlMs = normalizeTtlMs(params.ttlMs);
     const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + ttlMs);
+    const createdAtIso = createdAt.toISOString();
+    const expiresAt = resolveExpiresAtIso(createdAt.getTime(), ttlMs);
     const meta: DiffArtifactMeta = {
       id,
       token,
       title: params.title,
       inputKind: params.inputKind,
       fileCount: params.fileCount,
-      createdAt: createdAt.toISOString(),
-      expiresAt: expiresAt.toISOString(),
+      createdAt: createdAtIso,
+      expiresAt,
       viewerPath: `${VIEWER_PREFIX}/${id}/${token}`,
       htmlPath,
       ...(params.context ? { context: params.context } : {}),
     };
 
-    await fs.mkdir(artifactDir, { recursive: true });
-    await fs.writeFile(htmlPath, params.html, "utf8");
+    const root = await this.artifactRoot();
+    await root.mkdir(id);
+    await root.write(path.posix.join(id, "viewer.html"), params.html);
     await this.writeMeta(meta);
     this.scheduleCleanup();
     return meta;
@@ -103,7 +110,7 @@ export class DiffArtifactStore {
       throw new Error(`Diff artifact not found: ${id}`);
     }
     const htmlPath = this.normalizeStoredPath(meta.htmlPath, "htmlPath");
-    return await fs.readFile(htmlPath, "utf8");
+    return await (await this.artifactRoot()).readText(this.relativeStoredPath(htmlPath));
   }
 
   async updateFilePath(id: string, filePath: string): Promise<DiffArtifactMeta> {
@@ -140,17 +147,18 @@ export class DiffArtifactStore {
     const filePath = path.join(artifactDir, `preview.${format}`);
     const ttlMs = normalizeTtlMs(params.ttlMs);
     const createdAt = new Date();
-    const expiresAt = new Date(createdAt.getTime() + ttlMs).toISOString();
+    const createdAtIso = createdAt.toISOString();
+    const expiresAt = resolveExpiresAtIso(createdAt.getTime(), ttlMs);
     const meta: StandaloneFileMeta = {
       kind: "standalone_file",
       id,
-      createdAt: createdAt.toISOString(),
+      createdAt: createdAtIso,
       expiresAt,
       filePath: this.normalizeStoredPath(filePath, "filePath"),
       ...(params.context ? { context: params.context } : {}),
     };
 
-    await fs.mkdir(artifactDir, { recursive: true });
+    await (await this.artifactRoot()).mkdir(id);
     await this.writeStandaloneMeta(meta);
     this.scheduleCleanup();
     return {
@@ -170,13 +178,13 @@ export class DiffArtifactStore {
   }
 
   async cleanupExpired(): Promise<void> {
-    await this.ensureRoot();
-    const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
+    const root = await this.artifactRoot();
+    const entries = await root.list("", { withFileTypes: true }).catch(() => []);
     const now = Date.now();
 
     await Promise.all(
       entries
-        .filter((entry) => entry.isDirectory())
+        .filter((entry) => entry.isDirectory)
         .map(async (entry) => {
           const id = entry.name;
           const meta = await this.readMeta(id);
@@ -195,12 +203,7 @@ export class DiffArtifactStore {
             return;
           }
 
-          const artifactPath = this.artifactDir(id);
-          const stat = await fs.stat(artifactPath).catch(() => null);
-          if (!stat) {
-            return;
-          }
-          if (now - stat.mtimeMs > SWEEP_FALLBACK_AGE_MS) {
+          if (now - entry.mtimeMs > SWEEP_FALLBACK_AGE_MS) {
             await this.deleteArtifact(id);
           }
         }),
@@ -211,6 +214,11 @@ export class DiffArtifactStore {
     await fs.mkdir(this.rootDir, { recursive: true });
   }
 
+  private async artifactRoot(): Promise<ArtifactRoot> {
+    await this.ensureRoot();
+    return await fsRoot(this.rootDir);
+  }
+
   private maybeCleanupExpired(): void {
     const now = Date.now();
     if (this.cleanupInFlight || now < this.nextCleanupAt) {
@@ -219,7 +227,7 @@ export class DiffArtifactStore {
 
     this.nextCleanupAt = now + this.cleanupIntervalMs;
     const cleanupPromise = this.cleanupExpired()
-      .catch((error) => {
+      .catch((error: unknown) => {
         this.nextCleanupAt = 0;
         this.logger?.warn(`Failed to clean expired diff artifacts: ${String(error)}`);
       })
@@ -282,25 +290,21 @@ export class DiffArtifactStore {
     }
   }
 
-  private metaFilePath(id: string, fileName: ArtifactMetaFileName): string {
-    return path.join(this.artifactDir(id), fileName);
-  }
-
   private async writeJsonMeta(
     id: string,
     fileName: ArtifactMetaFileName,
     data: unknown,
   ): Promise<void> {
-    await fs.writeFile(this.metaFilePath(id, fileName), JSON.stringify(data, null, 2), "utf8");
+    await (await this.artifactRoot()).writeJson(path.posix.join(id, fileName), data, { space: 2 });
   }
 
   private async readJsonMeta(
     id: string,
     fileName: ArtifactMetaFileName,
     context: string,
-  ): Promise<unknown | null> {
+  ): Promise<unknown> {
     try {
-      const raw = await fs.readFile(this.metaFilePath(id, fileName), "utf8");
+      const raw = await (await this.artifactRoot()).readText(path.posix.join(id, fileName));
       return JSON.parse(raw) as unknown;
     } catch (error) {
       if (isFileNotFound(error)) {
@@ -329,6 +333,11 @@ export class DiffArtifactStore {
     return candidate;
   }
 
+  private relativeStoredPath(storedPath: string): string {
+    const relativePath = path.relative(this.rootDir, this.normalizeStoredPath(storedPath, "path"));
+    return relativePath.split(path.sep).join(path.posix.sep);
+  }
+
   private assertWithinRoot(candidate: string, label = "path"): void {
     const relative = path.relative(this.rootDir, candidate);
     if (
@@ -352,6 +361,14 @@ function normalizeTtlMs(value?: number): number {
   return Math.min(rounded, MAX_TTL_MS);
 }
 
+function resolveExpiresAtIso(createdAtMs: number, ttlMs: number): string {
+  return (
+    timestampMsToIsoString(createdAtMs + ttlMs) ??
+    timestampMsToIsoString(MAX_DATE_TIMESTAMP_MS) ??
+    "1970-01-01T00:00:00.000Z"
+  );
+}
+
 function isExpired(meta: { expiresAt: string }): boolean {
   const expiresAt = Date.parse(meta.expiresAt);
   if (!Number.isFinite(expiresAt)) {
@@ -361,7 +378,8 @@ function isExpired(meta: { expiresAt: string }): boolean {
 }
 
 function isFileNotFound(error: unknown): boolean {
-  return error instanceof Error && "code" in error && error.code === "ENOENT";
+  const code = error instanceof Error && "code" in error ? error.code : undefined;
+  return code === "ENOENT" || code === "not-found";
 }
 
 function normalizeArtifactContext(value: unknown): DiffArtifactContext | undefined {
@@ -378,8 +396,4 @@ function normalizeArtifactContext(value: unknown): DiffArtifactContext | undefin
   };
 
   return Object.values(context).some((entry) => entry !== undefined) ? context : undefined;
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }

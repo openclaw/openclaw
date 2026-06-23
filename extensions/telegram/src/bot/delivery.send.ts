@@ -1,39 +1,46 @@
+// Telegram plugin module implements delivery.send behavior.
 import { type Bot, GrammyError } from "grammy";
-import { formatErrorMessage } from "openclaw/plugin-sdk/infra-runtime";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml } from "../format.js";
+import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
+import {
+  buildTelegramSendParams,
+  getTelegramNativeQuoteReplyMessageId,
+  removeTelegramNativeQuoteParam,
+} from "../reply-parameters.js";
+import {
+  buildTelegramRichMessage,
+  getTelegramRichRawApi,
+  removeTelegramRichNativeQuoteParam,
+  toTelegramRichMessageContextParams,
+} from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
-import { buildTelegramThreadParams, type TelegramThreadSpec } from "./helpers.js";
+import type { TelegramThreadSpec } from "./helpers.js";
+
+export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
-const THREAD_NOT_FOUND_RE = /message thread not found/i;
+const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
-function isTelegramThreadNotFoundError(err: unknown): boolean {
+function isTelegramQuoteParamError(err: unknown): boolean {
   if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
-    return THREAD_NOT_FOUND_RE.test(err.description);
+    return QUOTE_PARAM_RE.test(err.description);
   }
-  return THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
+  return QUOTE_PARAM_RE.test(formatErrorMessage(err));
 }
 
-function hasMessageThreadIdParam(params: Record<string, unknown> | undefined): boolean {
-  if (!params) {
-    return false;
-  }
-  return typeof params.message_thread_id === "number";
-}
-
-function removeMessageThreadIdParam(
-  params: Record<string, unknown> | undefined,
-): Record<string, unknown> {
-  if (!params) {
-    return {};
-  }
-  const { message_thread_id: _ignored, ...rest } = params;
-  return rest;
+function createTelegramDeliverySendRetry() {
+  return createTelegramRetryRunner({
+    shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
+    strictShouldRetry: true,
+  });
 }
 
 export async function sendTelegramWithThreadFallback<T>(params: {
@@ -42,57 +49,45 @@ export async function sendTelegramWithThreadFallback<T>(params: {
   thread?: TelegramThreadSpec | null;
   requestParams: Record<string, unknown>;
   send: (effectiveParams: Record<string, unknown>) => Promise<T>;
+  removeNativeQuoteParam?: (requestParams: Record<string, unknown>) => Record<string, unknown>;
   shouldLog?: (err: unknown) => boolean;
 }): Promise<T> {
-  const allowThreadlessRetry = params.thread?.scope === "dm";
-  const hasThreadId = hasMessageThreadIdParam(params.requestParams);
+  const hasNativeQuote = getTelegramNativeQuoteReplyMessageId(params.requestParams) != null;
   const shouldSuppressFirstErrorLog = (err: unknown) =>
-    allowThreadlessRetry && hasThreadId && isTelegramThreadNotFoundError(err);
+    hasNativeQuote && isTelegramQuoteParamError(err);
   const mergedShouldLog = params.shouldLog
     ? (err: unknown) => params.shouldLog!(err) && !shouldSuppressFirstErrorLog(err)
     : (err: unknown) => !shouldSuppressFirstErrorLog(err);
+  const requestWithRetry = createTelegramDeliverySendRetry();
+  const runLoggedSend = (
+    operation: string,
+    requestParams: Record<string, unknown>,
+    shouldLog?: (err: unknown) => boolean,
+  ) =>
+    withTelegramApiErrorLogging({
+      operation,
+      runtime: params.runtime,
+      ...(shouldLog ? { shouldLog } : {}),
+      fn: () => requestWithRetry(() => params.send(requestParams), operation),
+    });
 
   try {
-    return await withTelegramApiErrorLogging({
-      operation: params.operation,
-      runtime: params.runtime,
-      shouldLog: mergedShouldLog,
-      fn: () => params.send(params.requestParams),
-    });
+    return await runLoggedSend(params.operation, params.requestParams, mergedShouldLog);
   } catch (err) {
-    if (!allowThreadlessRetry || !hasThreadId || !isTelegramThreadNotFoundError(err)) {
-      throw err;
+    if (hasNativeQuote && isTelegramQuoteParamError(err)) {
+      params.runtime.log?.(
+        `telegram ${params.operation}: native quote rejected; retrying with legacy reply_to_message_id`,
+      );
+      return await sendTelegramWithThreadFallback({
+        ...params,
+        operation: `${params.operation} (legacy reply retry)`,
+        requestParams: (params.removeNativeQuoteParam ?? removeTelegramNativeQuoteParam)(
+          params.requestParams,
+        ),
+      });
     }
-    const retryParams = removeMessageThreadIdParam(params.requestParams);
-    params.runtime.log?.(
-      `telegram ${params.operation}: message thread not found; retrying without message_thread_id`,
-    );
-    return await withTelegramApiErrorLogging({
-      operation: `${params.operation} (threadless retry)`,
-      runtime: params.runtime,
-      fn: () => params.send(retryParams),
-    });
+    throw err;
   }
-}
-
-export function buildTelegramSendParams(opts?: {
-  replyToMessageId?: number;
-  thread?: TelegramThreadSpec | null;
-  silent?: boolean;
-}): Record<string, unknown> {
-  const threadParams = buildTelegramThreadParams(opts?.thread);
-  const params: Record<string, unknown> = {};
-  if (opts?.replyToMessageId) {
-    params.reply_to_message_id = opts.replyToMessageId;
-    params.allow_sending_without_reply = true;
-  }
-  if (threadParams) {
-    params.message_thread_id = threadParams.message_thread_id;
-  }
-  if (opts?.silent === true) {
-    params.disable_notification = true;
-  }
-  return params;
 }
 
 export async function sendTelegramText(
@@ -102,24 +97,55 @@ export async function sendTelegramText(
   runtime: RuntimeEnv,
   opts?: {
     replyToMessageId?: number;
+    replyQuoteMessageId?: number;
     replyQuoteText?: string;
+    replyQuotePosition?: number;
+    replyQuoteEntities?: unknown[];
     thread?: TelegramThreadSpec | null;
     textMode?: "markdown" | "html";
     plainText?: string;
+    richMessages?: boolean;
     linkPreview?: boolean;
+    tableMode?: MarkdownTableMode;
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
 ): Promise<number> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
+    replyQuoteMessageId: opts?.replyQuoteMessageId,
+    replyQuoteText: opts?.replyQuoteText,
+    replyQuotePosition: opts?.replyQuotePosition,
+    replyQuoteEntities: opts?.replyQuoteEntities,
     thread: opts?.thread,
     silent: opts?.silent,
   });
+  const textMode = opts?.textMode ?? "markdown";
+  if (opts?.richMessages === true) {
+    const richMessage = buildTelegramRichMessage(text, textMode, {
+      skipEntityDetection: opts.linkPreview === false,
+      tableMode: opts.tableMode,
+    });
+    const res = await sendTelegramWithThreadFallback({
+      operation: "sendRichMessage",
+      runtime,
+      thread: opts.thread,
+      requestParams: toTelegramRichMessageContextParams(baseParams),
+      removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+      send: (effectiveParams) =>
+        getTelegramRichRawApi(bot.api).sendRichMessage({
+          chat_id: chatId,
+          rich_message: richMessage,
+          ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...effectiveParams,
+        }),
+    });
+    runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+    return res.message_id;
+  }
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
-  const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const fallbackText = opts?.plainText ?? text;
   const hasFallbackText = fallbackText.trim().length > 0;

@@ -1,3 +1,4 @@
+// Tests npm integrity parsing and drift detection.
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveNpmIntegrityDrift,
@@ -5,36 +6,34 @@ import {
 } from "./npm-integrity.js";
 
 describe("resolveNpmIntegrityDrift", () => {
-  it("returns proceed=true when integrity is missing or unchanged", async () => {
-    const createPayload = vi.fn(() => "unused");
-    const cases = [
-      {
-        expectedIntegrity: undefined,
-        resolution: { integrity: "sha512-same", resolvedAt: "2026-01-01T00:00:00.000Z" },
-      },
-      {
-        expectedIntegrity: "sha512-same",
-        resolution: { resolvedAt: "2026-01-01T00:00:00.000Z" },
-      },
-      {
-        expectedIntegrity: "sha512-same",
-        resolution: { integrity: "sha512-same", resolvedAt: "2026-01-01T00:00:00.000Z" },
-      },
-    ];
-
-    for (const testCase of cases) {
+  it.each([
+    {
+      expectedIntegrity: undefined,
+      resolution: { integrity: "sha512-same", resolvedAt: "2026-01-01T00:00:00.000Z" },
+    },
+    {
+      expectedIntegrity: "sha512-same",
+      resolution: { resolvedAt: "2026-01-01T00:00:00.000Z" },
+    },
+    {
+      expectedIntegrity: "sha512-same",
+      resolution: { integrity: "sha512-same", resolvedAt: "2026-01-01T00:00:00.000Z" },
+    },
+  ])(
+    "returns proceed=true when integrity is missing or unchanged: $expectedIntegrity",
+    async ({ expectedIntegrity, resolution }) => {
+      const createPayload = vi.fn(() => "unused");
       await expect(
         resolveNpmIntegrityDrift({
           spec: "@openclaw/test@1.0.0",
-          expectedIntegrity: testCase.expectedIntegrity,
-          resolution: testCase.resolution,
+          expectedIntegrity,
+          resolution,
           createPayload,
         }),
       ).resolves.toEqual({ proceed: true });
-    }
-
-    expect(createPayload).not.toHaveBeenCalled();
-  });
+      expect(createPayload).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses callback on integrity drift", async () => {
     const onIntegrityDrift = vi.fn(async () => false);
@@ -88,7 +87,7 @@ describe("resolveNpmIntegrityDrift", () => {
     });
   });
 
-  it("warns by default when no callback is provided", async () => {
+  it("warns and aborts by default when no callback is provided", async () => {
     const warn = vi.fn();
     const result = await resolveNpmIntegrityDrift({
       spec: "@openclaw/test@1.0.0",
@@ -102,7 +101,7 @@ describe("resolveNpmIntegrityDrift", () => {
     });
 
     expect(warn).toHaveBeenCalledWith({ spec: "@openclaw/test@1.0.0" });
-    expect(result.proceed).toBe(true);
+    expect(result.proceed).toBe(false);
   });
 
   it("formats default warning and abort error messages", async () => {
@@ -117,7 +116,9 @@ describe("resolveNpmIntegrityDrift", () => {
       },
       warn,
     });
-    expect(warningResult.error).toBeUndefined();
+    expect(warningResult.error).toBe(
+      "aborted: npm package integrity drift detected for @openclaw/test@1.0.0",
+    );
     expect(warn).toHaveBeenCalledWith(
       "Integrity drift detected for @openclaw/test@1.0.0: expected sha512-old, got sha512-new",
     );
@@ -140,7 +141,7 @@ describe("resolveNpmIntegrityDrift", () => {
   it("falls back to the original spec when resolvedSpec is missing", async () => {
     const warn = vi.fn();
 
-    await resolveNpmIntegrityDriftWithDefaultMessage({
+    const result = await resolveNpmIntegrityDriftWithDefaultMessage({
       spec: "@openclaw/test@1.0.0",
       expectedIntegrity: "sha512-old",
       resolution: {
@@ -150,6 +151,9 @@ describe("resolveNpmIntegrityDrift", () => {
       warn,
     });
 
+    expect(result.error).toBe(
+      "aborted: npm package integrity drift detected for @openclaw/test@1.0.0",
+    );
     expect(warn).toHaveBeenCalledWith(
       "Integrity drift detected for @openclaw/test@1.0.0: expected sha512-old, got sha512-new",
     );

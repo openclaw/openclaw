@@ -1,3 +1,4 @@
+// Control UI controller manages exec approvals gateway state.
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { cloneConfigObject, removePathValue, setPathValue } from "./config/form-utils.ts";
 
@@ -11,6 +12,9 @@ export type ExecApprovalsDefaults = {
 export type ExecApprovalsAllowlistEntry = {
   id?: string;
   pattern: string;
+  source?: "allow-always";
+  commandText?: string;
+  argPattern?: string;
   lastUsedAt?: number;
   lastUsedCommand?: string;
   lastResolvedPath?: string;
@@ -46,6 +50,7 @@ export type ExecApprovalsState = {
   execApprovalsForm: ExecApprovalsFile | null;
   execApprovalsSelectedAgent: string | null;
   lastError: string | null;
+  chatError?: string | null;
 };
 
 function resolveExecApprovalsRpc(target?: ExecApprovalsTarget | null): {
@@ -88,6 +93,7 @@ export async function loadExecApprovals(
   }
   state.execApprovalsLoading = true;
   state.lastError = null;
+  state.chatError = null;
   try {
     const rpc = resolveExecApprovalsRpc(target);
     if (!rpc) {
@@ -103,10 +109,7 @@ export async function loadExecApprovals(
   }
 }
 
-export function applyExecApprovalsSnapshot(
-  state: ExecApprovalsState,
-  snapshot: ExecApprovalsSnapshot,
-) {
+function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApprovalsSnapshot) {
   state.execApprovalsSnapshot = snapshot;
   if (!state.execApprovalsDirty) {
     state.execApprovalsForm = cloneConfigObject(snapshot.file ?? {});
@@ -122,6 +125,7 @@ export async function saveExecApprovals(
   }
   state.execApprovalsSaving = true;
   state.lastError = null;
+  state.chatError = null;
   try {
     const baseHash = state.execApprovalsSnapshot?.hash;
     if (!baseHash) {

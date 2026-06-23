@@ -1,3 +1,4 @@
+// Zalo tests cover token plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,6 +30,21 @@ describe("resolveZaloToken", () => {
     } as ZaloConfig;
     const res = resolveZaloToken(cfg, "default");
     expect(res.token).toBe("default-account-token");
+    expect(res.source).toBe("config");
+  });
+
+  it("uses configured defaultAccount token when accountId is omitted", () => {
+    const cfg = {
+      defaultAccount: "work",
+      botToken: "top-level-token",
+      accounts: {
+        work: {
+          botToken: "work-token",
+        },
+      },
+    } as ZaloConfig;
+    const res = resolveZaloToken(cfg);
+    expect(res.token).toBe("work-token");
     expect(res.source).toBe("config");
   });
 
@@ -69,9 +85,7 @@ describe("resolveZaloToken", () => {
     const cfg = {
       tokenFile: tokenLink,
     } as ZaloConfig;
-    const res = resolveZaloToken(cfg);
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
+    expect(() => resolveZaloToken(cfg)).toThrow(/Zalo token file.*must not be a symlink/);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

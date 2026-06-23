@@ -1,4 +1,7 @@
-import type { LineChannelData, OpenClawPluginApi, ReplyPayload } from "../api.js";
+// Line plugin module implements card command behavior.
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createActionCard,
   createImageCard,
@@ -7,7 +10,8 @@ import {
   createReceiptCard,
   type CardAction,
   type ListItem,
-} from "../api.js";
+} from "./flex-templates.js";
+import type { LineChannelData } from "./types.js";
 
 const CARD_USAGE = `Usage: /card <type> "title" "body" [options]
 
@@ -120,11 +124,12 @@ function parseReceiptItems(itemsStr: string): Array<{ name: string; value: strin
  * Parse quoted arguments from command string
  * Supports: /card type "arg1" "arg2" "arg3" --flag value
  */
-function parseCardArgs(argsStr: string): {
+function parseCardArgs(argsStrInput: string): {
   type: string;
   args: string[];
   flags: Record<string, string>;
 } {
+  let argsStr = argsStrInput;
   const result: { type: string; args: string[]; flags: Record<string, string> } = {
     type: "",
     args: [],
@@ -134,7 +139,7 @@ function parseCardArgs(argsStr: string): {
   // Extract type (first word)
   const typeMatch = argsStr.match(/^(\w+)/);
   if (typeMatch) {
-    result.type = typeMatch[1].toLowerCase();
+    result.type = normalizeLowercaseStringOrEmpty(typeMatch[1]);
     argsStr = argsStr.slice(typeMatch[0].length).trim();
   }
 

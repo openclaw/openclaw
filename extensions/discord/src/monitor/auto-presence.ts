@@ -1,4 +1,4 @@
-import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
+// Discord plugin module implements auto presence behavior.
 import {
   clearExpiredCooldowns,
   ensureAuthProfileStore,
@@ -10,8 +10,9 @@ import {
 import type {
   DiscordAccountConfig,
   DiscordAutoPresenceConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-contracts";
 import { warn } from "openclaw/plugin-sdk/runtime-env";
+import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { resolveDiscordPresenceUpdate } from "./presence.js";
 
 const DEFAULT_CUSTOM_ACTIVITY_TYPE = 4;
@@ -21,7 +22,7 @@ const DEFAULT_MIN_UPDATE_INTERVAL_MS = 15_000;
 const MIN_INTERVAL_MS = 5_000;
 const MIN_UPDATE_INTERVAL_MS = 1_000;
 
-export type DiscordAutoPresenceState = "healthy" | "degraded" | "exhausted";
+type DiscordAutoPresenceState = "healthy" | "degraded" | "exhausted";
 
 type ResolvedDiscordAutoPresenceConfig = {
   enabled: boolean;
@@ -32,7 +33,7 @@ type ResolvedDiscordAutoPresenceConfig = {
   exhaustedText?: string;
 };
 
-export type DiscordAutoPresenceDecision = {
+type DiscordAutoPresenceDecision = {
   state: DiscordAutoPresenceState;
   unavailableReason?: AuthProfileFailureReason | null;
   presence: UpdatePresenceData;
@@ -256,7 +257,7 @@ function stablePresenceSignature(payload: UpdatePresenceData): string {
   });
 }
 
-export type DiscordAutoPresenceController = {
+type DiscordAutoPresenceController = {
   start: () => void;
   stop: () => void;
   refresh: () => void;
@@ -298,7 +299,7 @@ export function createDiscordAutoPresenceController(params: {
   let lastAppliedAt = 0;
 
   const runEvaluation = (options?: { force?: boolean }) => {
-    let decision: DiscordAutoPresenceDecision | null = null;
+    let decision: DiscordAutoPresenceDecision | null;
     try {
       decision = resolveDiscordAutoPresenceDecision({
         discordConfig: params.discordConfig,
@@ -354,9 +355,3 @@ export function createDiscordAutoPresenceController(params: {
     },
   };
 }
-
-export const __testing = {
-  resolveAutoPresenceConfig,
-  resolveAuthAvailability,
-  stablePresenceSignature,
-};

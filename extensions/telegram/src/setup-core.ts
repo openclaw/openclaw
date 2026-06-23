@@ -1,38 +1,46 @@
+// Telegram plugin module implements setup core behavior.
+import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup-runtime";
 import {
   createEnvPatchedAccountSetupAdapter,
-  DEFAULT_ACCOUNT_ID,
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   splitSetupEntries,
+  createSetupTranslator,
   type OpenClawConfig,
   type WizardPrompter,
-} from "openclaw/plugin-sdk/setup";
-import type { ChannelSetupAdapter, ChannelSetupDmPolicy } from "openclaw/plugin-sdk/setup";
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import type { TelegramNetworkConfig } from "../runtime-api.js";
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
-import { lookupTelegramChatId } from "./api-fetch.js";
+import { isNumericTelegramSenderUserId } from "./allow-from.js";
+
+const t = createSetupTranslator();
 
 const channel = "telegram" as const;
 
-export const TELEGRAM_TOKEN_HELP_LINES = [
-  "1) Open Telegram and chat with @BotFather",
-  "2) Run /newbot (or /mybots)",
-  "3) Copy the token (looks like 123456:ABC...)",
-  "Tip: you can also set TELEGRAM_BOT_TOKEN in your env.",
-  `Docs: ${formatDocsLink("/telegram")}`,
-  "Website: https://openclaw.ai",
-];
+export function getTelegramTokenHelpLines(): string[] {
+  return [
+    t("wizard.telegram.tokenHelpOpenBotFather"),
+    t("wizard.telegram.tokenHelpNewBot"),
+    t("wizard.telegram.tokenHelpCopyToken"),
+    t("wizard.telegram.tokenEnvTip"),
+    t("wizard.channels.docs", { link: formatDocsLink("/telegram") }),
+    t("wizard.telegram.website", { url: "https://openclaw.ai" }),
+  ];
+}
 
-export const TELEGRAM_USER_ID_HELP_LINES = [
-  `1) DM your bot, then read from.id in \`${formatCliCommand("openclaw logs --follow")}\` (safest)`,
-  "2) Or call https://api.telegram.org/bot<bot_token>/getUpdates and read message.from.id",
-  "3) Third-party: DM @userinfobot or @getidsbot",
-  `Docs: ${formatDocsLink("/telegram")}`,
-  "Website: https://openclaw.ai",
-];
+export function getTelegramUserIdHelpLines(): string[] {
+  return [
+    t("wizard.telegram.userIdHelpLogs", {
+      command: formatCliCommand("openclaw logs --follow"),
+    }),
+    t("wizard.telegram.userIdHelpGetUpdates"),
+    t("wizard.telegram.userIdHelpThirdParty"),
+    t("wizard.channels.docs", { link: formatDocsLink("/telegram") }),
+    t("wizard.telegram.website", { url: "https://openclaw.ai" }),
+  ];
+}
 
-export function normalizeTelegramAllowFromInput(raw: string): string {
+function normalizeTelegramAllowFromInput(raw: string): string {
   return raw
     .trim()
     .replace(/^(telegram|tg):/i, "")
@@ -41,37 +49,7 @@ export function normalizeTelegramAllowFromInput(raw: string): string {
 
 export function parseTelegramAllowFromId(raw: string): string | null {
   const stripped = normalizeTelegramAllowFromInput(raw);
-  return /^\d+$/.test(stripped) ? stripped : null;
-}
-
-export async function resolveTelegramAllowFromEntries(params: {
-  entries: string[];
-  credentialValue?: string;
-  apiRoot?: string;
-  proxyUrl?: string;
-  network?: TelegramNetworkConfig;
-}) {
-  return await Promise.all(
-    params.entries.map(async (entry) => {
-      const numericId = parseTelegramAllowFromId(entry);
-      if (numericId) {
-        return { input: entry, resolved: true, id: numericId };
-      }
-      const stripped = normalizeTelegramAllowFromInput(entry);
-      if (!stripped || !params.credentialValue?.trim()) {
-        return { input: entry, resolved: false, id: null };
-      }
-      const username = stripped.startsWith("@") ? stripped : `@${stripped}`;
-      const id = await lookupTelegramChatId({
-        token: params.credentialValue,
-        chatId: username,
-        apiRoot: params.apiRoot,
-        proxyUrl: params.proxyUrl,
-        network: params.network,
-      });
-      return { input: entry, resolved: Boolean(id), id };
-    }),
-  );
+  return isNumericTelegramSenderUserId(stripped) ? stripped : null;
 }
 
 export async function promptTelegramAllowFromForAccount(params: {
@@ -81,31 +59,23 @@ export async function promptTelegramAllowFromForAccount(params: {
 }) {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   const resolved = resolveTelegramAccount({ cfg: params.cfg, accountId });
-  await params.prompter.note(TELEGRAM_USER_ID_HELP_LINES.join("\n"), "Telegram user id");
-  if (!resolved.token?.trim()) {
-    await params.prompter.note(
-      "Telegram token missing; username lookup is unavailable.",
-      "Telegram",
-    );
-  }
+  await params.prompter.note(
+    getTelegramUserIdHelpLines().join("\n"),
+    t("wizard.telegram.userIdTitle"),
+  );
   const unique = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolved.config.allowFrom ?? [],
-    token: resolved.token,
-    message: "Telegram allowFrom (numeric sender id; @username resolves to id)",
-    placeholder: "@username",
-    label: "Telegram allowlist",
+    message: t("wizard.telegram.allowFromPrompt"),
+    placeholder: "123456789",
+    label: t("wizard.telegram.allowlistTitle"),
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    invalidWithoutTokenNote:
-      "Telegram token missing; use numeric sender ids (usernames require a bot token).",
-    resolveEntries: async ({ entries, token }) =>
-      resolveTelegramAllowFromEntries({
-        credentialValue: token,
-        entries,
-        apiRoot: resolved.config.apiRoot,
-        proxyUrl: resolved.config.proxy,
-        network: resolved.config.network,
+    invalidWithoutTokenNote: t("wizard.telegram.allowFromInvalid"),
+    resolveEntries: async ({ entries }) =>
+      entries.map((entry) => {
+        const id = parseTelegramAllowFromId(entry);
+        return { input: entry, resolved: Boolean(id), id };
       }),
   });
   return patchChannelConfigForAccount({

@@ -1,11 +1,16 @@
+// Diffs tests cover store plugin behavior.
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMockServerResponse } from "../../../test/helpers/extensions/mock-http-response.js";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
 import { DiffArtifactStore } from "./store.js";
-import { createDiffStoreHarness } from "./test-helpers.js";
+import { createDiffStoreHarness, ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
+
+beforeAll(async () => {
+  await ensureCuratedViewerRuntimeForTests();
+});
 
 describe("DiffArtifactStore", () => {
   let rootDir: string;
@@ -48,6 +53,21 @@ describe("DiffArtifactStore", () => {
       agentAccountId: "default",
     });
     expect(await store.readHtml(artifact.id)).toBe("<html>demo</html>");
+  });
+
+  it("caps artifact expiry instead of throwing near the Date boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000 - 1_000));
+
+    const artifact = await store.createArtifact({
+      html: "<html>demo</html>",
+      title: "Demo",
+      inputKind: "patch",
+      fileCount: 1,
+      ttlMs: 60_000,
+    });
+
+    expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
   });
 
   it("expires artifacts after the ttl", async () => {
@@ -127,6 +147,15 @@ describe("DiffArtifactStore", () => {
     });
   });
 
+  it("caps standalone file expiry instead of throwing near the Date boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000 - 1_000));
+
+    const standalone = await store.createStandaloneFileArtifact({ ttlMs: 60_000 });
+
+    expect(standalone.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
+  });
+
   it("expires standalone file artifacts using ttl metadata", async () => {
     vi.useFakeTimers();
     const now = new Date("2026-02-27T16:00:00Z");
@@ -141,9 +170,12 @@ describe("DiffArtifactStore", () => {
     vi.setSystemTime(new Date(now.getTime() + 2_000));
     await store.cleanupExpired();
 
-    await expect(fs.stat(path.dirname(standalone.filePath))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    const error = await fs.stat(path.dirname(standalone.filePath)).then(
+      () => undefined,
+      (statError: unknown) => statError,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 
   it("supports image path aliases for backward compatibility", async () => {
@@ -288,7 +320,7 @@ describe("createDiffsHttpHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(String(res.body)).toContain("/plugins/diffs/assets/viewer-runtime.js?v=");
+    expect(String(res.body)).toContain("./viewer-runtime.js?v=");
   });
 
   it("serves the shared viewer runtime asset", async () => {
@@ -309,6 +341,18 @@ describe("createDiffsHttpHandler", () => {
 
   it.each([
     {
+      name: "allows direct loopback viewer access by default",
+      request: localReq,
+      allowRemoteViewer: false,
+      expectedStatusCode: 200,
+    },
+    {
+      name: "allows ipv4-mapped ipv6 loopback viewer access by default",
+      request: ipv4MappedLoopbackReq,
+      allowRemoteViewer: false,
+      expectedStatusCode: 200,
+    },
+    {
       name: "blocks non-loopback viewer access by default",
       request: remoteReq,
       allowRemoteViewer: false,
@@ -322,6 +366,21 @@ describe("createDiffsHttpHandler", () => {
       expectedStatusCode: 404,
     },
     {
+      name: "blocks trusted-proxy loopback requests without client-origin headers by default",
+      request: localReq,
+      trustedProxies: ["127.0.0.1"],
+      allowRemoteViewer: false,
+      expectedStatusCode: 404,
+    },
+    {
+      name: "blocks proxied loopback requests when trusted proxies are configured",
+      request: localReq,
+      headers: { "x-forwarded-for": "203.0.113.10" },
+      trustedProxies: ["127.0.0.1"],
+      allowRemoteViewer: false,
+      expectedStatusCode: 404,
+    },
+    {
       name: "allows remote access when allowRemoteViewer is enabled",
       request: remoteReq,
       allowRemoteViewer: true,
@@ -331,29 +390,33 @@ describe("createDiffsHttpHandler", () => {
       name: "allows proxied loopback requests when allowRemoteViewer is enabled",
       request: localReq,
       headers: { "x-forwarded-for": "203.0.113.10" },
+      trustedProxies: ["127.0.0.1"],
       allowRemoteViewer: true,
       expectedStatusCode: 200,
     },
-  ])("$name", async ({ request, headers, allowRemoteViewer, expectedStatusCode }) => {
-    const artifact = await createViewerArtifact(store);
+  ])(
+    "$name",
+    async ({ request, headers, trustedProxies, allowRemoteViewer, expectedStatusCode }) => {
+      const artifact = await createViewerArtifact(store);
 
-    const handler = createDiffsHttpHandler({ store, allowRemoteViewer });
-    const res = createMockServerResponse();
-    const handled = await handler(
-      request({
-        method: "GET",
-        url: artifact.viewerPath,
-        headers,
-      }),
-      res,
-    );
+      const handler = createDiffsHttpHandler({ store, allowRemoteViewer, trustedProxies });
+      const res = createMockServerResponse();
+      const handled = await handler(
+        request({
+          method: "GET",
+          url: artifact.viewerPath,
+          headers,
+        }),
+        res,
+      );
 
-    expect(handled).toBe(true);
-    expect(res.statusCode).toBe(expectedStatusCode);
-    if (expectedStatusCode === 200) {
-      expect(res.body).toBe("<html>viewer</html>");
-    }
-  });
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(expectedStatusCode);
+      if (expectedStatusCode === 200) {
+        expect(res.body).toBe("<html>viewer</html>");
+      }
+    },
+  );
 
   it("rate-limits repeated remote misses", async () => {
     const handler = createDiffsHttpHandler({ store, allowRemoteViewer: true });
@@ -412,5 +475,17 @@ function remoteReq(input: {
     ...input,
     headers: input.headers ?? {},
     socket: { remoteAddress: "203.0.113.10" },
+  } as unknown as IncomingMessage;
+}
+
+function ipv4MappedLoopbackReq(input: {
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+}): IncomingMessage {
+  return {
+    ...input,
+    headers: input.headers ?? {},
+    socket: { remoteAddress: "::ffff:127.0.0.1" },
   } as unknown as IncomingMessage;
 }

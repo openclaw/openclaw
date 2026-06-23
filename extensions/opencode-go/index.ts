@@ -1,9 +1,47 @@
+// Opencode Go plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
-import { OPENCODE_GO_DEFAULT_MODEL_REF } from "openclaw/plugin-sdk/provider-models";
-import { applyOpencodeGoConfig } from "./onboard.js";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import { applyOpencodeGoConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
+import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  buildOpencodeGoLiveProviderConfig,
+  buildStaticOpencodeGoProviderConfig,
+  listOpencodeGoModelCatalogEntries,
+  normalizeOpencodeGoBaseUrl,
+  normalizeOpencodeGoResolvedModel,
+  resolveOpencodeGoModel,
+} from "./provider-catalog.js";
+import { createOpencodeGoWrapper } from "./stream.js";
 
 const PROVIDER_ID = "opencode-go";
+const OPENCODE_SHARED_PROFILE_IDS = ["opencode:default", "opencode-go:default"] as const;
+const OPENCODE_SHARED_HINT = "Shared API key for Zen + Go catalogs";
+const OPENCODE_SHARED_WIZARD_GROUP = {
+  groupId: "opencode",
+  groupLabel: "OpenCode",
+  groupHint: OPENCODE_SHARED_HINT,
+} as const;
+
+type OpencodeGoCatalogAuth = {
+  apiKey?: string;
+  discoveryApiKey?: string;
+};
+
+function hasCatalogAuth(auth: OpencodeGoCatalogAuth): boolean {
+  return Boolean(auth.apiKey || auth.discoveryApiKey);
+}
+
+function resolveOpencodeGoCatalogAuth(
+  resolveProviderApiKey: (providerId: string) => OpencodeGoCatalogAuth,
+): OpencodeGoCatalogAuth | undefined {
+  const opencodeGoAuth = resolveProviderApiKey(PROVIDER_ID);
+  if (hasCatalogAuth(opencodeGoAuth)) {
+    return opencodeGoAuth;
+  }
+  const sharedOpencodeAuth = resolveProviderApiKey("opencode");
+  return hasCatalogAuth(sharedOpencodeAuth) ? sharedOpencodeAuth : undefined;
+}
 
 export default definePluginEntry({
   id: PROVIDER_ID,
@@ -20,15 +58,15 @@ export default definePluginEntry({
           providerId: PROVIDER_ID,
           methodId: "api-key",
           label: "OpenCode Go catalog",
-          hint: "Shared API key for Zen + Go catalogs",
+          hint: OPENCODE_SHARED_HINT,
           optionKey: "opencodeGoApiKey",
           flagName: "--opencode-go-api-key",
           envVar: "OPENCODE_API_KEY",
           promptMessage: "Enter OpenCode API key",
-          profileIds: ["opencode:default", "opencode-go:default"],
+          profileIds: [...OPENCODE_SHARED_PROFILE_IDS],
           defaultModel: OPENCODE_GO_DEFAULT_MODEL_REF,
-          expectedProviders: ["opencode", "opencode-go"],
           applyConfig: (cfg) => applyOpencodeGoConfig(cfg),
+          expectedProviders: ["opencode", "opencode-go"],
           noteMessage: [
             "OpenCode uses one API key across the Zen and Go catalogs.",
             "Go focuses on Kimi, GLM, and MiniMax coding models.",
@@ -38,18 +76,69 @@ export default definePluginEntry({
           wizard: {
             choiceId: "opencode-go",
             choiceLabel: "OpenCode Go catalog",
-            groupId: "opencode",
-            groupLabel: "OpenCode",
-            groupHint: "Shared API key for Zen + Go catalogs",
+            ...OPENCODE_SHARED_WIZARD_GROUP,
           },
         }),
       ],
-      capabilities: {
-        openAiCompatTurnValidation: false,
-        geminiThoughtSignatureSanitization: true,
-        geminiThoughtSignatureModelHints: ["gemini"],
+      normalizeConfig: ({ providerConfig }) => {
+        const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({
+          api: providerConfig.api,
+          baseUrl: providerConfig.baseUrl,
+        });
+        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
+          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
+          : undefined;
       },
+      normalizeResolvedModel: ({ model }) => {
+        const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({
+          api: model.api,
+          baseUrl: model.baseUrl,
+        });
+        const baseUrlNormalized =
+          normalizedBaseUrl && normalizedBaseUrl !== model.baseUrl
+            ? { ...model, baseUrl: normalizedBaseUrl }
+            : model;
+        const modelNormalized = normalizeOpencodeGoResolvedModel(baseUrlNormalized);
+        if (modelNormalized) {
+          return modelNormalized;
+        }
+        return baseUrlNormalized !== model ? baseUrlNormalized : undefined;
+      },
+      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
+        const normalizedBaseUrl = normalizeOpencodeGoBaseUrl({ api: apiLocal, baseUrl });
+        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
+          ? {
+              api: apiLocal,
+              baseUrl: normalizedBaseUrl,
+            }
+          : undefined;
+      },
+      resolveDynamicModel: ({ modelId }) => resolveOpencodeGoModel(modelId),
+      catalog: {
+        order: "simple",
+        run: async (ctx) => {
+          const auth = resolveOpencodeGoCatalogAuth(ctx.resolveProviderApiKey);
+          if (!auth) {
+            return null;
+          }
+          if (!auth.discoveryApiKey) {
+            return {
+              provider: buildStaticOpencodeGoProviderConfig(auth.apiKey),
+            };
+          }
+          return {
+            provider: await buildOpencodeGoLiveProviderConfig({
+              apiKey: auth.apiKey ?? auth.discoveryApiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+          };
+        },
+      },
+      augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
+      ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: () => true,
     });
+    api.registerMediaUnderstandingProvider(opencodeGoMediaUnderstandingProvider);
   },
 });

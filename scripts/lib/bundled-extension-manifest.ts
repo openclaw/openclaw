@@ -1,8 +1,6 @@
+// Bundled Extension Manifest script supports OpenClaw repository automation.
 import { validateMinHostVersion } from "../../src/plugins/min-host-version.ts";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
+import { isRecord } from "../../src/utils.js";
 
 export type ExtensionPackageJson = {
   name?: string;
@@ -11,6 +9,7 @@ export type ExtensionPackageJson = {
   optionalDependencies?: Record<string, string>;
   openclaw?: {
     install?: unknown;
+    releaseChecks?: unknown;
   };
 };
 

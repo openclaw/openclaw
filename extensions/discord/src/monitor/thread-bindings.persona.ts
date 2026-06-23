@@ -1,4 +1,5 @@
-import { SYSTEM_MARK } from "openclaw/plugin-sdk/infra-runtime";
+// Discord plugin module implements thread bindings.persona behavior.
+import { SYSTEM_MARK } from "openclaw/plugin-sdk/text-chunking";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const THREAD_BINDING_PERSONA_MAX_CHARS = 80;

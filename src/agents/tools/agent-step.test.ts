@@ -1,52 +1,135 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Agent step tests cover nested session handoff, transcript bookkeeping, and
+// MCP runtime retirement after completed nested turns.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CallGatewayOptions } from "../../gateway/call.js";
+import { runAgentStep, testing } from "./agent-step.js";
 
-const callGatewayMock = vi.fn();
-vi.mock("../../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
+const runWaitMocks = vi.hoisted(() => ({
+  waitForAgentRunAndReadUpdatedAssistantReply: vi.fn(),
 }));
 
-import { __testing, readLatestAssistantReply } from "./agent-step.js";
+const bundleMcpRuntimeMocks = vi.hoisted(() => ({
+  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
+}));
 
-describe("readLatestAssistantReply", () => {
-  beforeEach(() => {
-    callGatewayMock.mockClear();
-    __testing.setDepsForTest({
-      callGateway: async (opts) => await callGatewayMock(opts),
+vi.mock("../run-wait.js", () => ({
+  waitForAgentRunAndReadUpdatedAssistantReply:
+    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply,
+}));
+
+vi.mock("../agent-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
+}));
+
+describe("runAgentStep", () => {
+  afterEach(() => {
+    testing.setDepsForTest();
+    vi.clearAllMocks();
+  });
+
+  it("retires bundle MCP runtime after successful nested agent steps", async () => {
+    // Nested steps disable automatic delivery and carry provenance so the reply
+    // returns through the message tool path instead of the channel.
+    const gatewayCalls: CallGatewayOptions[] = [];
+    testing.setDepsForTest({
+      callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+        gatewayCalls.push(opts);
+        return { runId: "run-nested" } as T;
+      },
+    });
+    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+      status: "ok",
+      replyText: "done",
+    });
+
+    await expect(
+      runAgentStep({
+        sessionKey: "agent:main:subagent:child",
+        message: "hello",
+        extraSystemPrompt: "reply briefly",
+        timeoutMs: 10_000,
+      }),
+    ).resolves.toBe("done");
+
+    const params = gatewayCalls[0]?.params as
+      | {
+          message?: string;
+          sessionKey?: string;
+          deliver?: boolean;
+          sourceReplyDeliveryMode?: string;
+          lane?: string;
+          inputProvenance?: { kind?: string; sourceTool?: string };
+        }
+      | undefined;
+    expect(params?.message).toContain("[Inter-session message");
+    expect(params?.sessionKey).toBe("agent:main:subagent:child");
+    expect(params?.deliver).toBe(false);
+    expect(params?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(params?.lane).toBe("nested:agent:main:subagent:child");
+    expect(params?.inputProvenance?.kind).toBe("inter_session");
+    expect(params?.inputProvenance?.sourceTool).toBe("sessions_send");
+    expect(params?.message).toContain("isUser=false");
+    expect(params?.message).toContain("hello");
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
+      sessionKey: "agent:main:subagent:child",
+      reason: "nested-agent-step-complete",
     });
   });
 
-  it("returns the most recent assistant message when compaction markers trail history", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "All checks passed and changes were pushed." }],
-        },
-        { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
-        { role: "system", content: [{ type: "text", text: "Compaction" }] },
-      ],
+  it("does not retire bundle MCP runtime while nested agent steps are still pending", async () => {
+    testing.setDepsForTest({
+      callGateway: async <T = unknown>(): Promise<T> => ({ runId: "run-pending" }) as T,
+    });
+    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+      status: "timeout",
     });
 
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+    await expect(
+      runAgentStep({
+        sessionKey: "agent:main:subagent:child",
+        message: "hello",
+        extraSystemPrompt: "reply briefly",
+        timeoutMs: 10_000,
+      }),
+    ).resolves.toBeUndefined();
 
-    expect(result).toBe("All checks passed and changes were pushed.");
-    expect(callGatewayMock).toHaveBeenCalledWith({
-      method: "chat.history",
-      params: { sessionKey: "agent:main:child", limit: 50 },
-    });
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
   });
 
-  it("falls back to older assistant text when latest assistant has no text", async () => {
-    callGatewayMock.mockResolvedValue({
-      messages: [
-        { role: "assistant", content: [{ type: "text", text: "older output" }] },
-        { role: "assistant", content: [] },
-        { role: "system", content: [{ type: "text", text: "Compaction" }] },
-      ],
+  it("forwards explicit transcript bodies for nested bookkeeping turns", async () => {
+    const gatewayCalls: CallGatewayOptions[] = [];
+    const agentCommandFromIngress = vi.fn(async () => ({
+      payloads: [{ text: "done", mediaUrl: null }],
+      meta: { durationMs: 1 },
+    }));
+    testing.setDepsForTest({
+      agentCommandFromIngress,
+      callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+        gatewayCalls.push(opts);
+        return { runId: "run-nested" } as T;
+      },
+    });
+    runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply.mockResolvedValue({
+      status: "ok",
+      replyText: "done",
     });
 
-    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+    await runAgentStep({
+      sessionKey: "agent:main:subagent:child",
+      message: "internal announce step",
+      transcriptMessage: "",
+      extraSystemPrompt: "announce only",
+      timeoutMs: 10_000,
+    });
 
-    expect(result).toBe("older output");
+    expect(gatewayCalls).toStrictEqual([]);
+    expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
+    const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
+      [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
+    >;
+    const ingress = ingressCalls[0]?.[0];
+    expect(ingress?.message).toContain("internal announce step");
+    expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(ingress?.transcriptMessage).toBe("");
   });
 });

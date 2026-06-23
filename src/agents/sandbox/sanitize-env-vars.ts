@@ -1,3 +1,9 @@
+/**
+ * Filters environment variables before they cross into sandbox runtimes.
+ *
+ * The default path blocks common credential names and suspicious value shapes while allowing
+ * ordinary process environment needed for shells and Node-based tools.
+ */
 const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^ANTHROPIC_API_KEY$/i,
   /^OPENAI_API_KEY$/i,
@@ -30,7 +36,7 @@ const ALLOWED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^NODE_ENV$/i,
 ];
 
-export type EnvVarSanitizationResult = {
+type EnvVarSanitizationResult = {
   allowed: Record<string, string>;
   blocked: string[];
   warnings: string[];
@@ -42,6 +48,7 @@ export type EnvSanitizationOptions = {
   customAllowedPatterns?: ReadonlyArray<RegExp>;
 };
 
+/** Returns a warning or block reason for environment values that look unsafe to forward. */
 export function validateEnvVarValue(value: string): string | undefined {
   if (value.includes("\0")) {
     return "Contains null bytes";
@@ -59,8 +66,9 @@ function matchesAnyPattern(value: string, patterns: readonly RegExp[]): boolean 
   return patterns.some((pattern) => pattern.test(value));
 }
 
+/** Sanitizes inherited environment variables for automatic sandbox propagation. */
 export function sanitizeEnvVars(
-  envVars: Record<string, string>,
+  envVars: Record<string, string | undefined>,
   options: EnvSanitizationOptions = {},
 ): EnvVarSanitizationResult {
   const allowed: Record<string, string> = {};
@@ -72,7 +80,7 @@ export function sanitizeEnvVars(
 
   for (const [rawKey, value] of Object.entries(envVars)) {
     const key = rawKey.trim();
-    if (!key) {
+    if (!key || value === undefined) {
       continue;
     }
 
@@ -101,10 +109,31 @@ export function sanitizeEnvVars(
   return { allowed, blocked, warnings };
 }
 
-export function getBlockedPatterns(): string[] {
-  return BLOCKED_ENV_VAR_PATTERNS.map((pattern) => pattern.source);
-}
+/** Sanitizes env vars explicitly requested by config, preserving names but still validating values. */
+export function sanitizeExplicitSandboxEnvVars(
+  envVars: Record<string, string | undefined>,
+): EnvVarSanitizationResult {
+  const allowed: Record<string, string> = {};
+  const blocked: string[] = [];
+  const warnings: string[] = [];
 
-export function getAllowedPatterns(): string[] {
-  return ALLOWED_ENV_VAR_PATTERNS.map((pattern) => pattern.source);
+  for (const [rawKey, value] of Object.entries(envVars)) {
+    const key = rawKey.trim();
+    if (!key || value === undefined) {
+      continue;
+    }
+
+    const warning = validateEnvVarValue(value);
+    if (warning) {
+      if (warning === "Contains null bytes") {
+        blocked.push(key);
+        continue;
+      }
+      warnings.push(`${key}: ${warning}`);
+    }
+
+    allowed[key] = value;
+  }
+
+  return { allowed, blocked, warnings };
 }

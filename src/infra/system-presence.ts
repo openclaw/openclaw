@@ -1,5 +1,12 @@
+// Detects system command availability for setup and diagnostics.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 
@@ -21,7 +28,7 @@ export type SystemPresence = {
   ts: number;
 };
 
-export type SystemPresenceUpdate = {
+type SystemPresenceUpdate = {
   key: string;
   previous?: SystemPresence;
   next: SystemPresence;
@@ -32,16 +39,10 @@ export type SystemPresenceUpdate = {
 const entries = new Map<string, SystemPresence>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
+const SELF_INSTANCE_ID = randomUUID();
 
 function normalizePresenceKey(key: string | undefined): string | undefined {
-  if (!key) {
-    return undefined;
-  }
-  const trimmed = key.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  return trimmed.toLowerCase();
+  return normalizeOptionalLowercaseString(key);
 }
 
 function resolvePrimaryIPv4(): string | undefined {
@@ -58,7 +59,7 @@ function initSelfPresence() {
       const res = spawnSync("sysctl", ["-n", "hw.model"], {
         encoding: "utf-8",
       });
-      const out = typeof res.stdout === "string" ? res.stdout.trim() : "";
+      const out = normalizeOptionalString(res.stdout) ?? "";
       return out.length > 0 ? out : undefined;
     }
     return os.arch();
@@ -67,7 +68,7 @@ function initSelfPresence() {
     const res = spawnSync("sw_vers", ["-productVersion"], {
       encoding: "utf-8",
     });
-    const out = typeof res.stdout === "string" ? res.stdout.trim() : "";
+    const out = normalizeOptionalString(res.stdout) ?? "";
     return out.length > 0 ? out : os.release();
   };
   const platform = (() => {
@@ -104,10 +105,11 @@ function initSelfPresence() {
     modelIdentifier,
     mode: "gateway",
     reason: "self",
+    instanceId: SELF_INSTANCE_ID,
     text,
     ts: Date.now(),
   };
-  const key = host.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(host);
   entries.set(key, selfEntry);
 }
 
@@ -122,7 +124,7 @@ function ensureSelfPresence() {
 
 function touchSelfPresence() {
   const host = os.hostname();
-  const key = host.toLowerCase();
+  const key = normalizeLowercaseStringOrEmpty(host);
   const existing = entries.get(key);
   if (existing) {
     entries.set(key, { ...existing, ts: Date.now() });
@@ -181,7 +183,7 @@ function mergeStringList(...values: Array<string[] | undefined>): string[] | und
       continue;
     }
     for (const item of list) {
-      const trimmed = String(item).trim();
+      const trimmed = normalizeOptionalString(item) ?? "";
       if (trimmed) {
         out.add(trimmed);
       }
@@ -200,7 +202,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     normalizePresenceKey(parsed.host) ||
     parsed.ip ||
     parsed.text.slice(0, 64) ||
-    os.hostname().toLowerCase();
+    normalizeLowercaseStringOrEmpty(os.hostname());
   const hadExisting = entries.has(key);
   const existing = entries.get(key) ?? ({} as SystemPresence);
   const merged: SystemPresence = {
@@ -247,7 +249,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
   ensureSelfPresence();
-  const normalizedKey = normalizePresenceKey(key) ?? os.hostname().toLowerCase();
+  const normalizedKey = normalizePresenceKey(key) ?? normalizeLowercaseStringOrEmpty(os.hostname());
   const existing = entries.get(normalizedKey) ?? ({} as SystemPresence);
   const roles = mergeStringList(existing.roles, presence.roles);
   const scopes = mergeStringList(existing.scopes, presence.scopes);

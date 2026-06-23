@@ -1,10 +1,14 @@
+/** Handles /btw side-question commands against the active session context. */
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { runBtwSideQuestion } from "../../agents/btw.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { extractBtwQuestion } from "./btw-command.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
-const BTW_USAGE = "Usage: /btw <side question>";
+const BTW_USAGE = "Usage: /btw [side question]";
 
+/** Command handler for /btw side questions. */
 export const handleBtwCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -25,14 +29,22 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
     };
   }
 
-  if (!params.sessionEntry?.sessionId) {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+
+  if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
       reply: { text: "⚠️ /btw requires an active session with existing context." },
     };
   }
 
-  if (!params.agentDir) {
+  const sessionAgentId = params.sessionKey
+    ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
+    : params.agentId;
+  const agentDir =
+    (sessionAgentId ? resolveAgentDir(params.cfg, sessionAgentId) : undefined) ?? params.agentDir;
+
+  if (!agentDir) {
     return {
       shouldContinue: false,
       reply: {
@@ -43,15 +55,21 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
 
   try {
     await params.typing?.startTypingLoop();
+    const currentChannelId =
+      params.ctx.OriginatingTo?.trim() || params.command.to || params.command.channelId;
+    const groupId = resolveGroupSessionKey(params.ctx)?.id ?? targetSessionEntry.groupId;
     const reply = await runBtwSideQuestion({
       cfg: params.cfg,
-      agentDir: params.agentDir,
+      agentDir,
       provider: params.provider,
       model: params.model,
       question,
-      sessionEntry: params.sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionStore: params.sessionStore,
       sessionKey: params.sessionKey,
+      ...(params.ctx.RuntimePolicySessionKey
+        ? { sandboxSessionKey: params.ctx.RuntimePolicySessionKey }
+        : {}),
       storePath: params.storePath,
       // BTW is intentionally a quick side question, so do not inherit slower
       // session-level think/reasoning settings from the main run.
@@ -61,6 +79,37 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
       resolvedBlockStreamingBreak: params.resolvedBlockStreamingBreak,
       opts: params.opts,
       isNewSession: false,
+      ...(params.command.channel ? { messageChannel: params.command.channel } : {}),
+      ...(params.command.channel ? { messageProvider: params.command.channel } : {}),
+      ...(params.ctx.AccountId ? { agentAccountId: params.ctx.AccountId } : {}),
+      ...(currentChannelId ? { messageTo: currentChannelId } : {}),
+      ...(params.ctx.MessageThreadId !== undefined
+        ? { messageThreadId: params.ctx.MessageThreadId }
+        : params.ctx.TransportThreadId !== undefined
+          ? { messageThreadId: params.ctx.TransportThreadId }
+          : {}),
+      ...(groupId ? { groupId } : {}),
+      ...(params.ctx.GroupChannel || params.ctx.GroupSubject || targetSessionEntry.groupChannel
+        ? {
+            groupChannel:
+              params.ctx.GroupChannel ?? params.ctx.GroupSubject ?? targetSessionEntry.groupChannel,
+          }
+        : {}),
+      ...(params.ctx.GroupSpace || targetSessionEntry.space
+        ? { groupSpace: params.ctx.GroupSpace ?? targetSessionEntry.space }
+        : {}),
+      ...(params.ctx.MemberRoleIds ? { memberRoleIds: params.ctx.MemberRoleIds } : {}),
+      ...(targetSessionEntry.parentSessionKey
+        ? { spawnedBy: targetSessionEntry.parentSessionKey }
+        : {}),
+      ...(params.ctx.SenderId || params.command.senderId
+        ? { senderId: params.ctx.SenderId ?? params.command.senderId }
+        : {}),
+      ...(params.ctx.SenderName ? { senderName: params.ctx.SenderName } : {}),
+      ...(params.ctx.SenderUsername ? { senderUsername: params.ctx.SenderUsername } : {}),
+      ...(params.ctx.SenderE164 ? { senderE164: params.ctx.SenderE164 } : {}),
+      senderIsOwner: params.command.senderIsOwner,
+      ...(currentChannelId ? { currentChannelId } : {}),
     });
     return {
       shouldContinue: false,

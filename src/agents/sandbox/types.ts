@@ -1,5 +1,11 @@
-import type { SandboxBackendHandle, SandboxBackendId } from "./backend.js";
-import type { SandboxFsBridge } from "./fs-bridge.js";
+import type { SkillEligibilityContext } from "../../skills/types.js";
+/**
+ * Sandbox runtime configuration and context types.
+ *
+ * Shared by config resolution, backend creation, tool policy checks, and runtime prompt/tool wiring.
+ */
+import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
+import type { SandboxFsBridge } from "./fs-bridge.types.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
 
 export type { SandboxDockerConfig } from "./types.docker.js";
@@ -92,6 +98,8 @@ export type SandboxContext = {
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
+  skillsEligibility?: SkillEligibilityContext;
   workspaceAccess: SandboxWorkspaceAccess;
   runtimeId: string;
   runtimeLabel: string;
@@ -107,5 +115,8 @@ export type SandboxContext = {
 
 export type SandboxWorkspaceInfo = {
   workspaceDir: string;
-  containerWorkdir: string;
+  containerWorkdir?: string;
+  skillsWorkspaceDir?: string;
+  skillsEligibility?: SkillEligibilityContext;
+  workspaceAccess?: SandboxWorkspaceAccess;
 };

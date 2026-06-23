@@ -1,74 +1,46 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Irc tests cover inbound.behavior plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
 import type { RuntimeEnv } from "./runtime-api.js";
-import { setIrcRuntime } from "./runtime.js";
+import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const {
-  createChannelPairingControllerMock,
-  deliverFormattedTextWithAttachmentsMock,
-  dispatchInboundReplyWithBaseMock,
-  isDangerousNameMatchingEnabledMock,
-  logInboundDropMock,
-  readStoreAllowFromForDmPolicyMock,
-  resolveAllowlistProviderRuntimeGroupPolicyMock,
-  resolveControlCommandGateMock,
-  resolveDefaultGroupPolicyMock,
-  resolveEffectiveAllowFromListsMock,
-  warnMissingProviderGroupPolicyFallbackOnceMock,
+  buildMentionRegexesMock,
+  hasControlCommandMock,
+  matchesMentionPatternsMock,
+  readAllowFromStoreMock,
+  shouldHandleTextCommandsMock,
+  upsertPairingRequestMock,
 } = vi.hoisted(() => {
   return {
-    createChannelPairingControllerMock: vi.fn(),
-    deliverFormattedTextWithAttachmentsMock: vi.fn(),
-    dispatchInboundReplyWithBaseMock: vi.fn(),
-    isDangerousNameMatchingEnabledMock: vi.fn(),
-    logInboundDropMock: vi.fn(),
-    readStoreAllowFromForDmPolicyMock: vi.fn(),
-    resolveAllowlistProviderRuntimeGroupPolicyMock: vi.fn(),
-    resolveControlCommandGateMock: vi.fn(),
-    resolveDefaultGroupPolicyMock: vi.fn(),
-    resolveEffectiveAllowFromListsMock: vi.fn(),
-    warnMissingProviderGroupPolicyFallbackOnceMock: vi.fn(),
+    buildMentionRegexesMock: vi.fn(() => []),
+    hasControlCommandMock: vi.fn(() => false),
+    matchesMentionPatternsMock: vi.fn(() => false),
+    readAllowFromStoreMock: vi.fn(async () => []),
+    shouldHandleTextCommandsMock: vi.fn(() => false),
+    upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
   };
 });
-
-const sendMessageIrcMock = vi.hoisted(() => vi.fn());
-
-vi.mock("./runtime-api.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
-  return {
-    ...actual,
-    createChannelPairingController: createChannelPairingControllerMock,
-    deliverFormattedTextWithAttachments: deliverFormattedTextWithAttachmentsMock,
-    dispatchInboundReplyWithBase: dispatchInboundReplyWithBaseMock,
-    isDangerousNameMatchingEnabled: isDangerousNameMatchingEnabledMock,
-    logInboundDrop: logInboundDropMock,
-    readStoreAllowFromForDmPolicy: readStoreAllowFromForDmPolicyMock,
-    resolveAllowlistProviderRuntimeGroupPolicy: resolveAllowlistProviderRuntimeGroupPolicyMock,
-    resolveControlCommandGate: resolveControlCommandGateMock,
-    resolveDefaultGroupPolicy: resolveDefaultGroupPolicyMock,
-    resolveEffectiveAllowFromLists: resolveEffectiveAllowFromListsMock,
-    warnMissingProviderGroupPolicyFallbackOnce: warnMissingProviderGroupPolicyFallbackOnceMock,
-  };
-});
-
-vi.mock("./send.js", () => ({
-  sendMessageIrc: sendMessageIrcMock,
-}));
 
 function installIrcRuntime() {
   setIrcRuntime({
     channel: {
+      pairing: {
+        readAllowFromStore: readAllowFromStoreMock,
+        upsertPairingRequest: upsertPairingRequestMock,
+      },
       commands: {
-        shouldHandleTextCommands: vi.fn(() => false),
+        shouldHandleTextCommands: shouldHandleTextCommandsMock,
       },
       text: {
-        hasControlCommand: vi.fn(() => false),
+        hasControlCommand: hasControlCommandMock,
       },
       mentions: {
-        buildMentionRegexes: vi.fn(() => []),
-        matchesMentionPatterns: vi.fn(() => false),
+        buildMentionRegexes: buildMentionRegexesMock,
+        matchesMentionPatterns: matchesMentionPatternsMock,
       },
     },
   } as never);
@@ -111,41 +83,29 @@ function createMessage(overrides?: Partial<IrcInboundMessage>): IrcInboundMessag
   };
 }
 
+function resetInboundMocks() {
+  buildMentionRegexesMock.mockReset().mockReturnValue([]);
+  hasControlCommandMock.mockReset().mockReturnValue(false);
+  matchesMentionPatternsMock.mockReset().mockReturnValue(false);
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  shouldHandleTextCommandsMock.mockReset().mockReturnValue(false);
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "CODE", created: true });
+}
+
 describe("irc inbound behavior", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetInboundMocks();
     installIrcRuntime();
-    resolveDefaultGroupPolicyMock.mockReturnValue("allowlist");
-    resolveAllowlistProviderRuntimeGroupPolicyMock.mockReturnValue({
-      groupPolicy: "allowlist",
-      providerMissingFallbackApplied: false,
-    });
-    warnMissingProviderGroupPolicyFallbackOnceMock.mockReturnValue(undefined);
-    readStoreAllowFromForDmPolicyMock.mockResolvedValue([]);
-    isDangerousNameMatchingEnabledMock.mockReturnValue(false);
-    resolveEffectiveAllowFromListsMock.mockReturnValue({
-      effectiveAllowFrom: [],
-      effectiveGroupAllowFrom: [],
-    });
-    deliverFormattedTextWithAttachmentsMock.mockImplementation(async ({ payload, send }) => {
-      await send({ text: payload.text, replyToId: undefined });
-      return true;
-    });
+  });
+
+  afterEach(() => {
+    clearIrcRuntime();
   });
 
   it("issues a DM pairing challenge and sends the reply to the sender nick", async () => {
-    const issueChallenge = vi.fn(async ({ sendPairingReply }) => {
-      await sendPairingReply("pair me");
-    });
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(),
-      issueChallenge,
-    });
-    resolveControlCommandGateMock.mockReturnValue({
-      commandAuthorized: false,
-      shouldBlock: false,
-    });
-    const sendReply = vi.fn(async () => {});
+    const sendReply = vi.fn<(target: string, text: string, replyToId?: string) => Promise<void>>(
+      async () => {},
+    );
 
     await handleIrcInbound({
       message: createMessage(),
@@ -155,25 +115,37 @@ describe("irc inbound behavior", () => {
       sendReply,
     });
 
-    expect(issueChallenge).toHaveBeenCalledTimes(1);
-    expect(sendReply).toHaveBeenCalledWith("alice", "pair me", undefined);
-    expect(dispatchInboundReplyWithBaseMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalledWith({
+      channel: "irc",
+      accountId: "default",
+      id: "alice!ident@example.com",
+      meta: { name: "alice" },
+    });
+    expect(sendReply).toHaveBeenCalledTimes(1);
+    expect(sendReply).toHaveBeenCalledWith(
+      "alice",
+      [
+        "OpenClaw: access not configured.",
+        "",
+        "Your IRC id: alice!ident@example.com",
+        "Pairing code:",
+        "```",
+        "CODE",
+        "```",
+        "",
+        "Ask the bot owner to approve with:",
+        "```",
+        "openclaw pairing approve irc CODE",
+        "```",
+      ].join("\n"),
+      undefined,
+    );
   });
 
   it("drops unauthorized group control commands before dispatch", async () => {
-    createChannelPairingControllerMock.mockReturnValue({
-      readStoreForDmPolicy: vi.fn(),
-      issueChallenge: vi.fn(),
-    });
-    resolveEffectiveAllowFromListsMock.mockReturnValue({
-      effectiveAllowFrom: [],
-      effectiveGroupAllowFrom: ["alice!ident@example.com"],
-    });
-    resolveControlCommandGateMock.mockReturnValue({
-      commandAuthorized: false,
-      shouldBlock: true,
-    });
     const runtime = createRuntimeEnv();
+    shouldHandleTextCommandsMock.mockReturnValue(true);
+    hasControlCommandMock.mockReturnValue(true);
 
     await handleIrcInbound({
       message: createMessage({
@@ -186,9 +158,11 @@ describe("irc inbound behavior", () => {
           dmPolicy: "pairing",
           allowFrom: [],
           groupPolicy: "allowlist",
-          groupAllowFrom: ["alice!ident@example.com"],
+          groupAllowFrom: ["bob!ident@example.com"],
           groups: {
-            "#ops": {},
+            "#ops": {
+              allowFrom: ["alice!ident@example.com"],
+            },
           },
         },
       }),
@@ -196,13 +170,78 @@ describe("irc inbound behavior", () => {
       runtime,
     });
 
-    expect(logInboundDropMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "irc",
-        reason: "control command (unauthorized)",
-        target: "alice!ident@example.com",
-      }),
+    expect(runtime.log).toHaveBeenCalledWith(
+      "irc: drop control command (unauthorized) target=alice!ident@example.com",
     );
-    expect(dispatchInboundReplyWithBaseMock).not.toHaveBeenCalled();
+  });
+
+  it("passes the shared reply pipeline for dispatched replies", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage(),
+      account: createAccount({
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+      sendReply: vi.fn(async () => {}),
+    });
+
+    const assembledRequest = (
+      coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
+    expect(assembledRequest?.replyPipeline).toEqual({});
+  });
+
+  it("uses channel:# prefix for group channel From and OriginatingTo fields", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    const runtime = createRuntimeEnv();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage({
+        target: "#ops",
+        isGroup: true,
+        senderNick: "alice",
+        senderUser: "ident",
+        senderHost: "example.com",
+        text: "hello",
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          groups: {
+            "#ops": { enabled: true, requireMention: false },
+          },
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    const ctx = (
+      coreRuntime.channel.reply.finalizeInboundContext as unknown as {
+        mock: { calls: unknown[][] };
+      }
+    ).mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(
+      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls.length,
+    ).toBe(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(ctx?.From).toBe("channel:#ops");
+    expect(ctx?.To).toBe("channel:#ops");
+    expect(ctx?.OriginatingTo).toBe("channel:#ops");
   });
 });

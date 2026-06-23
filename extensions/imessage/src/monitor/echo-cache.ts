@@ -1,23 +1,61 @@
-export type SentMessageLookup = {
+// Imessage plugin module implements echo cache behavior.
+import { hasPersistedIMessageEcho } from "./persisted-echo-cache.js";
+
+type SentMessageLookup = {
   text?: string;
   messageId?: string;
 };
 
-export type SentMessageCache = {
-  remember: (scope: string, lookup: SentMessageLookup) => void;
-  has: (scope: string, lookup: SentMessageLookup) => boolean;
+type SentMessageLookupOptions = {
+  skipIdShortCircuit?: boolean;
+  includePendingText?: boolean;
 };
 
-// Keep the text fallback short so repeated user replies like "ok" are not
-// suppressed for long; delayed reflections should match the stronger message-id key.
-const SENT_MESSAGE_TEXT_TTL_MS = 5_000;
+export type SentMessageCache = {
+  remember: (scope: string, lookup: SentMessageLookup) => void;
+  /**
+   * Check whether an inbound message matches a recently-sent outbound message.
+   *
+   * @param skipIdShortCircuit - When true, skip the early return on message-ID
+   *   mismatch and fall through to text-based matching. Use this for self-chat
+   *   `is_from_me=true` messages where the inbound ID is a numeric SQLite row ID
+   *   that will never match the GUID outbound IDs, but text matching is still
+   *   the right way to identify agent reply echoes.
+   */
+  has: (
+    scope: string,
+    lookup: SentMessageLookup,
+    options?: boolean | SentMessageLookupOptions,
+  ) => boolean;
+};
+
+// Echo arrival observed at ~2.2s on M4 Mac Mini (SQLite poll interval is the bottleneck).
+// 4s provides ~80% margin. If echoes arrive after TTL expiry, the system degrades to
+// duplicate delivery (noisy but not lossy) — never message loss.
+const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
+
+function isLeadingEchoTextCorruptionMarker(code: number): boolean {
+  return (
+    code === 0x0000 || code === 0xfeff || code === 0xfffd || code === 0xfffe || code === 0xffff
+  );
+}
+
+function stripLeadingEchoTextCorruptionMarkers(text: string): string {
+  let offset = 0;
+  while (offset < text.length && isLeadingEchoTextCorruptionMarker(text.charCodeAt(offset))) {
+    offset += 1;
+  }
+  return offset === 0 ? text : text.slice(offset);
+}
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  const normalized = stripLeadingEchoTextCorruptionMarkers(
+    text.replace(/\r\n?/g, "\n").trim(),
+  ).trim();
   return normalized ? normalized : null;
 }
 
@@ -34,6 +72,7 @@ function normalizeEchoMessageIdKey(messageId: string | undefined): string | null
 
 class DefaultSentMessageCache implements SentMessageCache {
   private textCache = new Map<string, number>();
+  private textBackedByIdCache = new Map<string, number>();
   private messageIdCache = new Map<string, number>();
 
   remember(scope: string, lookup: SentMessageLookup): void {
@@ -44,20 +83,48 @@ class DefaultSentMessageCache implements SentMessageCache {
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
     if (messageIdKey) {
       this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
+      if (textKey) {
+        this.textBackedByIdCache.set(`${scope}:${textKey}`, Date.now());
+      }
     }
     this.cleanup();
   }
 
-  has(scope: string, lookup: SentMessageLookup): boolean {
+  has(
+    scope: string,
+    lookup: SentMessageLookup,
+    options: boolean | SentMessageLookupOptions = false,
+  ): boolean {
     this.cleanup();
+    const resolvedOptions =
+      typeof options === "boolean" ? { skipIdShortCircuit: options } : options;
+    if (
+      hasPersistedIMessageEcho({
+        scope,
+        ...lookup,
+        includePendingText: resolvedOptions.includePendingText,
+      })
+    ) {
+      return true;
+    }
+    const textKey = normalizeEchoTextKey(lookup.text);
     const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
     if (messageIdKey) {
       const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
       if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
         return true;
       }
+      const textTimestamp = textKey ? this.textCache.get(`${scope}:${textKey}`) : undefined;
+      const textBackedByIdTimestamp = textKey
+        ? this.textBackedByIdCache.get(`${scope}:${textKey}`)
+        : undefined;
+      const hasTextOnlyMatch =
+        typeof textTimestamp === "number" &&
+        (!textBackedByIdTimestamp || textTimestamp > textBackedByIdTimestamp);
+      if (!resolvedOptions.skipIdShortCircuit && !hasTextOnlyMatch) {
+        return false;
+      }
     }
-    const textKey = normalizeEchoTextKey(lookup.text);
     if (textKey) {
       const textTimestamp = this.textCache.get(`${scope}:${textKey}`);
       if (textTimestamp && Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
@@ -72,6 +139,11 @@ class DefaultSentMessageCache implements SentMessageCache {
     for (const [key, timestamp] of this.textCache.entries()) {
       if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
         this.textCache.delete(key);
+      }
+    }
+    for (const [key, timestamp] of this.textBackedByIdCache.entries()) {
+      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
+        this.textBackedByIdCache.delete(key);
       }
     }
     for (const [key, timestamp] of this.messageIdCache.entries()) {

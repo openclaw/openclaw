@@ -1,93 +1,46 @@
+// Startup control-UI origin tests cover runtime-only origin seeding for LAN
+// gateway binds without mutating persisted config.
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
-function makeLog() {
-  return { info: vi.fn(), warn: vi.fn() };
-}
-
-function mockWriteConfig() {
-  return vi.fn(async (_config: OpenClawConfig) => {});
-}
-
 describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
-  it("seeds origins when CLI --bind lan overrides a config with no bind set", async () => {
-    const config: OpenClawConfig = { gateway: { port: 3000 } };
-    const writeConfig = mockWriteConfig();
-    const log = makeLog();
+  it("applies origins seeded from runtime bind and port without persisting config", async () => {
+    const log = { info: vi.fn(), warn: vi.fn() };
 
     const result = await maybeSeedControlUiAllowedOriginsAtStartup({
-      config,
-      writeConfig,
+      config: { gateway: {} },
       log,
-      bindOverride: "lan",
+      runtimeBind: "lan",
+      runtimePort: 3000,
     });
 
-    expect(result.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:3000",
-      "http://127.0.0.1:3000",
-    ]);
-    expect(writeConfig).toHaveBeenCalledOnce();
-    // The persisted config should NOT contain bind=lan (CLI override stays transient).
-    expect(writeConfig.mock.calls[0][0].gateway?.bind).toBeUndefined();
-    expect(log.info).toHaveBeenCalledOnce();
+    const expectedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000"];
+    expect(result.seededAllowedOrigins).toBe(true);
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual(expectedOrigins);
+    expect(log.info).toHaveBeenCalledWith(
+      'gateway: seeded gateway.controlUi.allowedOrigins ["http://localhost:3000","http://127.0.0.1:3000"] for bind=lan (required since v2026.2.26; see issue #29385). Applied for this runtime without writing config; add other origins to gateway.controlUi.allowedOrigins if needed.',
+    );
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("does not seed when config already has allowedOrigins", async () => {
+  it("does not rewrite config when origins already exist", async () => {
     const config: OpenClawConfig = {
       gateway: {
-        bind: "lan",
-        port: 3000,
-        controlUi: { allowedOrigins: ["https://example.com"] },
+        controlUi: { allowedOrigins: ["https://control.example.com"] },
       },
     };
-    const writeConfig = mockWriteConfig();
-    const log = makeLog();
+    const log = { info: vi.fn(), warn: vi.fn() };
 
     const result = await maybeSeedControlUiAllowedOriginsAtStartup({
       config,
-      writeConfig,
       log,
-      bindOverride: "lan",
+      runtimeBind: "lan",
+      runtimePort: 3000,
     });
 
-    expect(result).toBe(config);
-    expect(writeConfig).not.toHaveBeenCalled();
-  });
-
-  it("does not seed when bind is loopback (no override)", async () => {
-    const config: OpenClawConfig = { gateway: { port: 3000 } };
-    const writeConfig = mockWriteConfig();
-    const log = makeLog();
-
-    const result = await maybeSeedControlUiAllowedOriginsAtStartup({
-      config,
-      writeConfig,
-      log,
-    });
-
-    expect(result).toBe(config);
-    expect(writeConfig).not.toHaveBeenCalled();
-  });
-
-  it("returns seeded origins even when writeConfig fails", async () => {
-    const config: OpenClawConfig = { gateway: { port: 4000 } };
-    const writeConfig = vi.fn(async (_config: OpenClawConfig) => {
-      throw new Error("read-only fs");
-    });
-    const log = makeLog();
-
-    const result = await maybeSeedControlUiAllowedOriginsAtStartup({
-      config,
-      writeConfig,
-      log,
-      bindOverride: "lan",
-    });
-
-    expect(result.gateway?.controlUi?.allowedOrigins).toEqual([
-      "http://localhost:4000",
-      "http://127.0.0.1:4000",
-    ]);
-    expect(log.warn).toHaveBeenCalledOnce();
+    expect(result).toEqual({ config, seededAllowedOrigins: false });
+    expect(log.info).not.toHaveBeenCalled();
+    expect(log.warn).not.toHaveBeenCalled();
   });
 });

@@ -1,73 +1,99 @@
+// Covers restart sentinel persistence, summaries, and messages.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { describe, expect, it } from "vitest";
+import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
-  consumeRestartSentinel,
+  buildRestartSuccessContinuation,
+  finalizeUpdateRestartSentinelRunningVersion,
   formatDoctorNonInteractiveHint,
   formatRestartSentinelMessage,
+  markUpdateRestartSentinelFailure,
   readRestartSentinel,
   resolveRestartSentinelPath,
   summarizeRestartSentinel,
   trimLogTail,
   writeRestartSentinel,
 } from "./restart-sentinel.js";
+import {
+  CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON,
+  buildControlPlaneUpdateRestartHealthPendingResult,
+  isPendingControlPlaneUpdateRestartSentinel,
+} from "./update-control-plane-sentinel.js";
+import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
+
+async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<void> {
+  await withTempDir({ prefix: "openclaw-sentinel-" }, async (tempDir) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, run);
+  });
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    const statError = error as NodeJS.ErrnoException;
+    expect({
+      code: statError.code,
+      path: statError.path,
+      syscall: statError.syscall,
+    }).toEqual({
+      code: "ENOENT",
+      path: targetPath,
+      syscall: "stat",
+    });
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
+}
 
 describe("restart sentinel", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
-  let tempDir: string;
+  it("writes and reads a sentinel", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const payload = {
+        kind: "update" as const,
+        status: "ok" as const,
+        ts: Date.now(),
+        sessionKey: "agent:main:mobilechat:dm:+15555550123",
+        continuation: {
+          kind: "agentTurn" as const,
+          message: "Reply with exactly: Yay! I did it!",
+        },
+        stats: { mode: "git" },
+      };
+      const filePath = await writeRestartSentinel(payload);
+      expect(filePath).toBe(resolveRestartSentinelPath());
 
-  beforeEach(async () => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sentinel-"));
-    process.env.OPENCLAW_STATE_DIR = tempDir;
-  });
-
-  afterEach(async () => {
-    envSnapshot.restore();
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
-
-  it("writes and consumes a sentinel", async () => {
-    const payload = {
-      kind: "update" as const,
-      status: "ok" as const,
-      ts: Date.now(),
-      sessionKey: "agent:main:whatsapp:dm:+15555550123",
-      stats: { mode: "git" },
-    };
-    const filePath = await writeRestartSentinel(payload);
-    expect(filePath).toBe(resolveRestartSentinelPath());
-
-    const read = await readRestartSentinel();
-    expect(read?.payload.kind).toBe("update");
-
-    const consumed = await consumeRestartSentinel();
-    expect(consumed?.payload.sessionKey).toBe(payload.sessionKey);
-
-    const empty = await readRestartSentinel();
-    expect(empty).toBeNull();
+      const read = await readRestartSentinel();
+      expect(read?.payload.kind).toBe("update");
+      expect(read?.payload.continuation).toEqual(payload.continuation);
+    });
   });
 
   it("drops invalid sentinel payloads", async () => {
-    const filePath = resolveRestartSentinelPath();
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, "not-json", "utf-8");
+    await withRestartSentinelStateDir(async () => {
+      const filePath = resolveRestartSentinelPath();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, "not-json", "utf-8");
 
-    const read = await readRestartSentinel();
-    expect(read).toBeNull();
+      const read = await readRestartSentinel();
+      expect(read).toBeNull();
 
-    await expect(fs.stat(filePath)).rejects.toThrow();
+      await expectPathMissing(filePath);
+    });
   });
 
   it("drops structurally invalid sentinel payloads", async () => {
-    const filePath = resolveRestartSentinelPath();
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
+    await withRestartSentinelStateDir(async () => {
+      const filePath = resolveRestartSentinelPath();
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, JSON.stringify({ version: 2, payload: null }), "utf-8");
 
-    await expect(readRestartSentinel()).resolves.toBeNull();
-    await expect(fs.stat(filePath)).rejects.toThrow();
+      await expect(readRestartSentinel()).resolves.toBeNull();
+      await expectPathMissing(filePath);
+    });
   });
 
   it("formatRestartSentinelMessage uses custom message when present", () => {
@@ -78,6 +104,20 @@ describe("restart sentinel", () => {
       message: "Config updated successfully",
     };
     expect(formatRestartSentinelMessage(payload)).toBe("Config updated successfully");
+  });
+
+  it("uses the exact auto-recovery message for config recovery notices", () => {
+    const payload = {
+      kind: "config-auto-recovery" as const,
+      status: "ok" as const,
+      ts: Date.now(),
+      message:
+        "Gateway recovered automatically after a failed config change and restored the last known good configuration.",
+      stats: { mode: "config-auto-recovery", reason: "gateway-run-invalid-config" },
+    };
+
+    expect(formatRestartSentinelMessage(payload)).toBe(payload.message);
+    expect(summarizeRestartSentinel(payload)).toBe("Gateway auto-recovery");
   });
 
   it("formatRestartSentinelMessage falls back to summary when no message", () => {
@@ -143,7 +183,8 @@ describe("restart sentinel", () => {
     const textA = formatRestartSentinelMessage(payloadA);
     const textB = formatRestartSentinelMessage(payloadB);
     expect(textA).toBe(textB);
-    expect(textA).toContain("Gateway restart restart ok");
+    expect(textA).toContain("Gateway restart ok");
+    expect(textA).not.toContain("Gateway restart restart");
     expect(textA).not.toContain('"ts"');
   });
 
@@ -157,6 +198,158 @@ describe("restart sentinel", () => {
     ).toBe("Gateway restart update skipped");
     expect(trimLogTail("hello\n")).toBe("hello");
     expect(trimLogTail(undefined)).toBeNull();
+  });
+
+  it("writes the running version back to update sentinels on startup", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts,
+        stats: {
+          after: { version: "expected-version" },
+        },
+      });
+
+      await finalizeUpdateRestartSentinelRunningVersion("actual-version");
+
+      await expect(readRestartSentinel()).resolves.toEqual({
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "ok",
+          ts,
+          stats: {
+            after: {
+              version: "actual-version",
+            },
+          },
+        },
+      });
+    });
+  });
+
+  it("does not rewrite update sentinels when the running version is already current", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts,
+        stats: {
+          after: { version: "actual-version" },
+        },
+      });
+
+      await expect(
+        finalizeUpdateRestartSentinelRunningVersion("actual-version"),
+      ).resolves.toBeNull();
+      await expect(readRestartSentinel()).resolves.toEqual({
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "ok",
+          ts,
+          stats: {
+            after: {
+              version: "actual-version",
+            },
+          },
+        },
+      });
+    });
+  });
+
+  it("marks update restart failures with a stable reason", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const ts = Date.now();
+      await writeRestartSentinel({
+        kind: "update",
+        status: "ok",
+        ts,
+        stats: {},
+      });
+
+      await markUpdateRestartSentinelFailure("restart-unhealthy");
+
+      await expect(readRestartSentinel()).resolves.toEqual({
+        version: 1,
+        payload: {
+          kind: "update",
+          status: "error",
+          ts,
+          stats: {
+            reason: "restart-unhealthy",
+          },
+        },
+      });
+    });
+  });
+});
+
+describe("restart success continuation", () => {
+  it("does not infer an agent turn from session context alone", () => {
+    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toBeNull();
+  });
+
+  it("keeps explicit continuation messages", () => {
+    expect(
+      buildRestartSuccessContinuation({
+        sessionKey: "agent:main:main",
+        continuationMessage: "wake after restart",
+      }),
+    ).toEqual({
+      kind: "agentTurn",
+      message: "wake after restart",
+    });
+  });
+
+  it("stays silent without session context", () => {
+    expect(buildRestartSuccessContinuation({})).toBeNull();
+  });
+});
+
+describe("control-plane update restart sentinel", () => {
+  it("keeps restart-health-pending sentinels continuation-free until final success", () => {
+    const result = {
+      status: "ok" as const,
+      mode: "npm" as const,
+      root: "/tmp/openclaw",
+      before: { version: "2026.4.23" },
+      after: { version: "2026.4.24" },
+      steps: [],
+      durationMs: 42,
+    };
+    const meta = {
+      sessionKey: "agent:main:webchat:dm:user-123",
+      continuationMessage: "Check the running version and finish the update report.",
+    };
+
+    const pendingResult = buildControlPlaneUpdateRestartHealthPendingResult(result);
+    const pendingPayload = buildUpdateRestartSentinelPayload({
+      result: pendingResult,
+      meta,
+      nowMs: 1,
+    });
+
+    expect(pendingPayload.status).toBe("skipped");
+    expect(pendingPayload.stats?.reason).toBe(CONTROL_PLANE_UPDATE_RESTART_HEALTH_PENDING_REASON);
+    expect(pendingPayload.continuation).toBeUndefined();
+    expect(isPendingControlPlaneUpdateRestartSentinel(pendingPayload)).toBe(true);
+
+    const finalPayload = buildUpdateRestartSentinelPayload({
+      result,
+      meta,
+      nowMs: 2,
+    });
+
+    expect(finalPayload.status).toBe("ok");
+    expect(finalPayload.continuation).toEqual({
+      kind: "agentTurn",
+      message: "Check the running version and finish the update report.",
+    });
+    expect(isPendingControlPlaneUpdateRestartSentinel(finalPayload)).toBe(false);
   });
 });
 
@@ -189,9 +382,20 @@ describe("restart sentinel message dedup", () => {
     expect(result).toContain("Reason: /restart");
   });
 
-  it("formats the non-interactive doctor command", () => {
-    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toContain(
-      "openclaw doctor --non-interactive",
+  it("formats the non-interactive doctor command as actionability guidance", () => {
+    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toBe(
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+    );
+  });
+
+  it("keeps profile-aware doctor guidance actionable outside constrained delivery surfaces", () => {
+    expect(
+      formatDoctorNonInteractiveHint({
+        OPENCLAW_PROFILE: "isolated",
+        PATH: "/usr/bin:/bin",
+      }),
+    ).toBe(
+      "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
     );
   });
 });

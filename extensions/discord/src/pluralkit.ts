@@ -1,6 +1,9 @@
-import { resolveFetch } from "openclaw/plugin-sdk/infra-runtime";
+// Discord plugin module implements pluralkit behavior.
+import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 
 const PLURALKIT_API_BASE = "https://api.pluralkit.me/v2";
+const PLURALKIT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;
@@ -50,7 +53,9 @@ export async function fetchPluralKitMessageInfo(params: {
     return null;
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
+    const text = await readResponseTextLimited(res, PLURALKIT_ERROR_BODY_LIMIT_BYTES).catch(
+      () => "",
+    );
     const detail = text.trim() ? `: ${text.trim()}` : "";
     throw new Error(`PluralKit API failed (${res.status})${detail}`);
   }

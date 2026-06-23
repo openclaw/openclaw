@@ -1,3 +1,4 @@
+// Windows command tests cover command quoting and shell resolution on Windows.
 import { describe, expect, it } from "vitest";
 import { resolveWindowsCommandShim } from "./windows-command.js";
 
@@ -16,10 +17,20 @@ describe("resolveWindowsCommandShim", () => {
     expect(
       resolveWindowsCommandShim({
         command: "pnpm",
-        cmdCommands: ["pnpm", "yarn"],
+        cmdCommands: ["corepack", "pnpm", "yarn"],
         platform: "win32",
       }),
     ).toBe("pnpm.cmd");
+  });
+
+  it("appends .cmd for corepack on Windows", () => {
+    expect(
+      resolveWindowsCommandShim({
+        command: "corepack",
+        cmdCommands: ["corepack", "pnpm", "yarn"],
+        platform: "win32",
+      }),
+    ).toBe("corepack.cmd");
   });
 
   it("keeps explicit extensions on Windows", () => {

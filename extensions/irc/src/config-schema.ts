@@ -1,15 +1,15 @@
-import { requireChannelOpenAllowFrom } from "openclaw/plugin-sdk/extension-shared";
-import { z } from "zod";
+// Irc helper module supports config schema behavior.
 import {
-  BlockStreamingCoalesceSchema,
-  DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
   ToolPolicySchema,
+  buildChannelConfigSchema,
   requireOpenAllowFrom,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "zod";
+import { ircChannelConfigUiHints } from "./config-ui-hints.js";
 
 const IrcGroupSchema = z
   .object({
@@ -43,7 +43,7 @@ const IrcNickServSchema = z
     }
   });
 
-export const IrcAccountSchemaBase = z
+const IrcAccountSchemaBase = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -69,13 +69,13 @@ export const IrcAccountSchemaBase = z
   })
   .strict();
 
-export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "irc",
+const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    requireOpenAllowFrom,
+    path: ["allowFrom"],
+    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
   });
 });
 
@@ -83,11 +83,15 @@ export const IrcConfigSchema = IrcAccountSchemaBase.extend({
   accounts: z.record(z.string(), IrcAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {
-  requireChannelOpenAllowFrom({
-    channel: "irc",
+  requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
     ctx,
-    requireOpenAllowFrom,
+    path: ["allowFrom"],
+    message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
   });
+});
+
+export const IrcChannelConfigSchema = buildChannelConfigSchema(IrcConfigSchema, {
+  uiHints: ircChannelConfigUiHints,
 });

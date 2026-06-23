@@ -1,11 +1,30 @@
+/**
+ * Core tool catalog and profile defaults.
+ * Drives built-in profile allowlists, group expansion, and UI section metadata
+ * for OpenClaw-owned tools.
+ */
+import {
+  CRON_TOOL_DISPLAY_SUMMARY,
+  EXEC_TOOL_DISPLAY_SUMMARY,
+  PROCESS_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
+  SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
+  SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
+  UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
+} from "./tool-description-presets.js";
+
+/** Built-in tool profile ids exposed in config and UI. */
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
+/** Allow/deny policy generated from a built-in tool profile. */
 type ToolProfilePolicy = {
   allow?: string[];
   deny?: string[];
 };
 
-export type CoreToolSection = {
+type CoreToolSection = {
   id: string;
   label: string;
   tools: Array<{
@@ -63,23 +82,31 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "apply_patch",
     label: "apply_patch",
-    description: "Patch files (OpenAI)",
+    description: "Patch files",
     sectionId: "fs",
     profiles: ["coding"],
   },
   {
     id: "exec",
     label: "exec",
-    description: "Run shell commands",
+    description: EXEC_TOOL_DISPLAY_SUMMARY,
     sectionId: "runtime",
     profiles: ["coding"],
   },
   {
     id: "process",
     label: "process",
-    description: "Manage background processes",
+    description: PROCESS_TOOL_DISPLAY_SUMMARY,
     sectionId: "runtime",
     profiles: ["coding"],
+  },
+  {
+    id: "code_execution",
+    label: "code_execution",
+    description: "Run sandboxed remote analysis",
+    sectionId: "runtime",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
   },
   {
     id: "web_search",
@@ -93,6 +120,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "web_fetch",
     label: "web_fetch",
     description: "Fetch web content",
+    sectionId: "web",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "x_search",
+    label: "x_search",
+    description: "Search X posts",
     sectionId: "web",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -116,7 +151,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_list",
     label: "sessions_list",
-    description: "List sessions",
+    description: SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -124,7 +159,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_history",
     label: "sessions_history",
-    description: "Session history",
+    description: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -132,7 +167,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_send",
     label: "sessions_send",
-    description: "Send to session",
+    description: SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -140,7 +175,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "sessions_spawn",
     label: "sessions_spawn",
-    description: "Spawn sub-agent",
+    description: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -164,7 +199,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "session_status",
     label: "session_status",
-    description: "Session status",
+    description: SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
     sectionId: "sessions",
     profiles: ["minimal", "coding", "messaging"],
     includeInOpenClawGroup: true,
@@ -180,10 +215,9 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "canvas",
     label: "canvas",
-    description: "Control canvases",
+    description: "Control node Canvas surfaces when the Canvas plugin is enabled",
     sectionId: "ui",
     profiles: [],
-    includeInOpenClawGroup: true,
   },
   {
     id: "message",
@@ -194,9 +228,17 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "heartbeat_respond",
+    label: "heartbeat_respond",
+    description: "Record heartbeat outcomes",
+    sectionId: "automation",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "cron",
     label: "cron",
-    description: "Schedule tasks",
+    description: CRON_TOOL_DISPLAY_SUMMARY,
     sectionId: "automation",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -226,6 +268,47 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "get_goal",
+    label: "get_goal",
+    description: "Get current thread goal",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "create_goal",
+    label: "create_goal",
+    description: "Create a thread goal",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "update_goal",
+    label: "update_goal",
+    description: "Complete or block a thread goal",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "update_plan",
+    label: "update_plan",
+    description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "skill_workshop",
+    label: "skill_workshop",
+    description:
+      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "image",
     label: "image",
     description: "Image understanding",
@@ -237,6 +320,22 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     id: "image_generate",
     label: "image_generate",
     description: "Image generation",
+    sectionId: "media",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "music_generate",
+    label: "music_generate",
+    description: "Music generation",
+    sectionId: "media",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "video_generate",
+    label: "video_generate",
+    description: "Video generation",
     sectionId: "media",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -266,12 +365,14 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
     allow: listCoreToolIdsForProfile("minimal"),
   },
   coding: {
-    allow: listCoreToolIdsForProfile("coding"),
+    allow: [...listCoreToolIdsForProfile("coding"), "bundle-mcp"],
   },
   messaging: {
-    allow: listCoreToolIdsForProfile("messaging"),
+    allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
   },
-  full: {},
+  full: {
+    allow: ["*"],
+  },
 };
 
 function buildCoreToolGroupMap() {
@@ -291,8 +392,10 @@ function buildCoreToolGroupMap() {
   };
 }
 
+/** Built-in core tool groups keyed by group id. */
 export const CORE_TOOL_GROUPS = buildCoreToolGroupMap();
 
+/** Profile options shown in model/tool configuration UIs. */
 export const PROFILE_OPTIONS = [
   { id: "minimal", label: "Minimal" },
   { id: "coding", label: "Coding" },
@@ -300,6 +403,7 @@ export const PROFILE_OPTIONS = [
   { id: "full", label: "Full" },
 ] as const;
 
+/** Resolves the allow/deny policy for a built-in tool profile. */
 export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   if (!profile) {
     return undefined;
@@ -317,6 +421,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
   };
 }
 
+/** Lists core tools grouped into UI sections. */
 export function listCoreToolSections(): CoreToolSection[] {
   return CORE_TOOL_SECTION_ORDER.map((section) => ({
     id: section.id,
@@ -329,6 +434,7 @@ export function listCoreToolSections(): CoreToolSection[] {
   })).filter((section) => section.tools.length > 0);
 }
 
+/** Lists built-in profile ids that include a core tool. */
 export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
   const tool = CORE_TOOL_BY_ID.get(toolId);
   if (!tool) {
@@ -337,6 +443,7 @@ export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
   return [...tool.profiles];
 }
 
+/** Returns true when a tool id is a known core tool. */
 export function isKnownCoreToolId(toolId: string): boolean {
   return CORE_TOOL_BY_ID.has(toolId);
 }

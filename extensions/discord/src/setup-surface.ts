@@ -1,26 +1,26 @@
+// Discord plugin module implements setup surface behavior.
 import {
+  createSetupTranslator,
+  type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
-  type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
+import { resolveDiscordAccountAllowFrom } from "./accounts.js";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import {
   resolveDefaultDiscordSetupAccountId,
   resolveDiscordSetupAccountConfig,
 } from "./setup-account-state.js";
-import {
-  createDiscordSetupWizardBase,
-  DISCORD_TOKEN_HELP_LINES,
-  parseDiscordAllowFromId,
-  setDiscordGuildChannelAllowlist,
-} from "./setup-core.js";
+import { createDiscordSetupWizardBase, parseDiscordAllowFromId } from "./setup-core.js";
 import {
   promptLegacyChannelAllowFromForAccount,
   resolveEntriesWithOptionalToken,
 } from "./setup-runtime-helpers.js";
 import { resolveDiscordToken } from "./token.js";
+
+const t = createSetupTranslator();
 
 const channel = "discord" as const;
 
@@ -59,24 +59,22 @@ async function promptDiscordAllowFrom(params: {
     accountId: params.accountId,
     defaultAccountId: resolveDefaultDiscordSetupAccountId(params.cfg),
     resolveAccount: (cfg, accountId) => resolveDiscordSetupAccountConfig({ cfg, accountId }),
-    noteTitle: "Discord allowlist",
+    noteTitle: t("wizard.discord.allowlistTitle"),
     noteLines: [
-      "Allowlist Discord DMs by username (we resolve to user ids).",
-      "Examples:",
+      t("wizard.discord.allowlistIntro"),
+      t("wizard.discord.examples"),
       "- 123456789012345678",
       "- @alice",
       "- alice#1234",
-      "Multiple entries: comma-separated.",
-      `Docs: ${formatDocsLink("/discord", "discord")}`,
+      t("wizard.discord.multipleEntries"),
+      t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
     ],
-    message: "Discord allowFrom (usernames or ids)",
+    message: t("wizard.discord.allowFromPrompt"),
     placeholder: "@alice, 123456789012345678",
     parseId: parseDiscordAllowFromId,
-    invalidWithoutTokenNote: "Bot token missing; use numeric user ids (or mention form) only.",
-    resolveExisting: (account) => {
-      const config = account.config;
-      return config.allowFrom ?? config.dm?.allowFrom ?? [];
-    },
+    invalidWithoutTokenNote: t("wizard.discord.allowFromInvalidWithoutToken"),
+    resolveExisting: (account, cfg) =>
+      resolveDiscordAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
     resolveToken: (account) =>
       resolveDiscordToken(params.cfg, { accountId: account.accountId }).token,
     resolveEntries: async ({ token, entries }) =>

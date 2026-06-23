@@ -1,7 +1,9 @@
+// Telegram tests cover network errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   getTelegramNetworkErrorOrigin,
   isRecoverableTelegramNetworkError,
+  isTelegramRateLimitError,
   isSafeToRetrySendError,
   isTelegramClientRejection,
   isTelegramPollingNetworkError,
@@ -13,6 +15,49 @@ const errorWithCode = (message: string, code: string) =>
   Object.assign(new Error(message), { code });
 const errorWithTelegramCode = (message: string, error_code: number) =>
   Object.assign(new Error(message), { error_code });
+
+const plainErrorPredicateCases = [
+  {
+    name: "isTelegramServerError",
+    predicate: isTelegramServerError,
+    error: new Error("500: Internal Server Error"),
+  },
+  {
+    name: "isTelegramClientRejection",
+    predicate: isTelegramClientRejection,
+    error: new Error("400: Bad Request"),
+  },
+];
+
+const nestedErrorCodePredicateCases = [
+  {
+    name: "isTelegramRateLimitError",
+    predicate: isTelegramRateLimitError,
+    inner: Object.assign(new Error("Too Many Requests"), { error_code: 429 }),
+  },
+  {
+    name: "isTelegramClientRejection",
+    predicate: isTelegramClientRejection,
+    inner: Object.assign(new Error("Forbidden"), { error_code: 403 }),
+  },
+];
+
+describe("Telegram error_code predicate contracts", () => {
+  it.each(plainErrorPredicateCases)(
+    "$name returns false for plain Error",
+    ({ error, predicate }) => {
+      expect(predicate(error)).toBe(false);
+    },
+  );
+
+  it.each(nestedErrorCodePredicateCases)(
+    "$name detects error_code in nested cause",
+    ({ inner, predicate }) => {
+      const outer = Object.assign(new Error("wrapped"), { cause: inner });
+      expect(predicate(outer)).toBe(true);
+    },
+  );
+});
 
 describe("isRecoverableTelegramNetworkError", () => {
   it("tracks Telegram polling origin separately from generic network matching", () => {
@@ -39,6 +84,7 @@ describe("isRecoverableTelegramNetworkError", () => {
 
   it.each([
     ["ETIMEDOUT", "timeout"],
+    ["ENETDOWN", "network down"],
     ["ECONNABORTED", "aborted"],
     ["ERR_NETWORK", "network"],
   ])("detects recoverable error code %s", (code, message) => {
@@ -160,10 +206,21 @@ describe("isRecoverableTelegramNetworkError", () => {
 });
 
 describe("isSafeToRetrySendError", () => {
+  class MockHttpError extends Error {
+    constructor(
+      message: string,
+      public readonly error: unknown,
+    ) {
+      super(message);
+      this.name = "HttpError";
+    }
+  }
+
   it.each([
     ["ECONNREFUSED", "connect ECONNREFUSED", true],
     ["ENOTFOUND", "getaddrinfo ENOTFOUND", true],
     ["EAI_AGAIN", "getaddrinfo EAI_AGAIN", true],
+    ["ENETDOWN", "connect ENETDOWN", true],
     ["ENETUNREACH", "connect ENETUNREACH", true],
     ["EHOSTUNREACH", "connect EHOSTUNREACH", true],
     ["ECONNRESET", "read ECONNRESET", false],
@@ -184,6 +241,51 @@ describe("isSafeToRetrySendError", () => {
     const wrapped = Object.assign(new Error("fetch failed"), { cause: root });
     expect(isSafeToRetrySendError(wrapped)).toBe(true);
   });
+
+  it("detects pre-connect error wrapped in grammY HttpError", () => {
+    const root = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause: root });
+    const wrapped = new MockHttpError("Network request for 'sendMessage' failed!", fetchError);
+    expect(isSafeToRetrySendError(wrapped)).toBe(true);
+  });
+
+  it("does not infer safe send retry from a plain grammY network envelope", () => {
+    const wrapped = new MockHttpError(
+      "Network request for 'sendMessage' failed!",
+      new TypeError("fetch failed"),
+    );
+    expect(isSafeToRetrySendError(wrapped)).toBe(false);
+  });
+
+  it.each([
+    ["status", Object.assign(new Error("Misdirected Request"), { status: 421 })],
+    ["statusCode", Object.assign(new Error("Misdirected Request"), { statusCode: "421" })],
+    ["error_code", errorWithTelegramCode("Misdirected Request", 421)],
+    ["message", new Error("421 Misdirected Request")],
+    [
+      "nested cause",
+      Object.assign(new Error("Network request for 'sendMessage' failed!"), {
+        cause: Object.assign(new Error("Misdirected Request"), { status: 421 }),
+      }),
+    ],
+    [
+      "grammY HttpError",
+      new MockHttpError(
+        "Network request for 'sendMessage' failed!",
+        Object.assign(new Error("Misdirected Request"), { status: 421 }),
+      ),
+    ],
+  ])("treats Telegram 421 Misdirected Request as safe to retry via %s", (_name, err) => {
+    expect(isSafeToRetrySendError(err)).toBe(true);
+  });
+
+  it("does not parse malformed status strings as Telegram 421", () => {
+    expect(
+      isSafeToRetrySendError(
+        Object.assign(new Error("Misdirected Request"), { statusCode: "421abc" }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("isTelegramServerError", () => {
@@ -194,9 +296,19 @@ describe("isTelegramServerError", () => {
   ])("returns %s for error_code %s", (message, errorCode, expected) => {
     expect(isTelegramServerError(errorWithTelegramCode(message, errorCode))).toBe(expected);
   });
+});
 
-  it("returns false for plain Error", () => {
-    expect(isTelegramServerError(new Error("500: Internal Server Error"))).toBe(false);
+describe("isTelegramRateLimitError", () => {
+  it("returns true for Telegram 429 errors", () => {
+    expect(isTelegramRateLimitError(errorWithTelegramCode("Too Many Requests", 429))).toBe(true);
+  });
+
+  it("detects wrapped 429 retry_after errors without error_code", () => {
+    const wrapped = {
+      message: "429 Too Many Requests",
+      response: { parameters: { retry_after: 1 } },
+    };
+    expect(isTelegramRateLimitError(wrapped)).toBe(true);
   });
 });
 
@@ -207,15 +319,5 @@ describe("isTelegramClientRejection", () => {
     ["Bad Gateway", 502, false],
   ])("returns %s for error_code %s", (message, errorCode, expected) => {
     expect(isTelegramClientRejection(errorWithTelegramCode(message, errorCode))).toBe(expected);
-  });
-
-  it("returns false for plain Error", () => {
-    expect(isTelegramClientRejection(new Error("400: Bad Request"))).toBe(false);
-  });
-
-  it("detects error_code in nested cause", () => {
-    const inner = Object.assign(new Error("Forbidden"), { error_code: 403 });
-    const outer = Object.assign(new Error("wrapped"), { cause: inner });
-    expect(isTelegramClientRejection(outer)).toBe(true);
   });
 });

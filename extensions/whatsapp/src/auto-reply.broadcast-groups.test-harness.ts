@@ -1,15 +1,16 @@
+// Whatsapp plugin module implements auto reply.broadcast groups harness behavior.
 import { vi } from "vitest";
-import { monitorWebChannel } from "./auto-reply.js";
 import {
   createWebInboundDeliverySpies,
   createWebListenerFactoryCapture,
   sendWebDirectInboundMessage,
 } from "./auto-reply.test-harness.js";
-import type { WebInboundMessage } from "./inbound.js";
+import { monitorWebChannel } from "./auto-reply/monitor.js";
+import type { WebInboundMessageInput } from "./inbound.js";
 
 export async function monitorWebChannelWithCapture(resolver: unknown): Promise<{
   spies: ReturnType<typeof createWebInboundDeliverySpies>;
-  onMessage: (msg: WebInboundMessage) => Promise<void>;
+  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
 }> {
   const spies = createWebInboundDeliverySpies();
   const { listenerFactory, getOnMessage } = createWebListenerFactoryCapture();

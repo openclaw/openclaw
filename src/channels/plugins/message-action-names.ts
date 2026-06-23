@@ -1,3 +1,6 @@
+/**
+ * Canonical message action names accepted by channel message tool dispatch.
+ */
 export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "send",
   "broadcast",
@@ -55,6 +58,10 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "set-presence",
   "set-profile",
   "download-file",
+  "upload-file",
 ] as const;
 
+/**
+ * Message action name union derived from the canonical action list.
+ */
 export type ChannelMessageActionName = (typeof CHANNEL_MESSAGE_ACTION_NAMES)[number];

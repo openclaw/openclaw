@@ -1,10 +1,21 @@
+/**
+ * Top-level `openclaw onboard` command entrypoint.
+ *
+ * It validates global setup flags, performs optional reset handling, and then
+ * routes to interactive or non-interactive onboarding.
+ */
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { isDeprecatedAuthChoice, normalizeLegacyOnboardAuthChoice } from "./auth-choice-legacy.js";
+import {
+  formatDeprecatedNonInteractiveAuthChoiceError,
+  isDeprecatedAuthChoice,
+  normalizeLegacyOnboardAuthChoice,
+  resolveDeprecatedAuthChoiceReplacement,
+} from "./auth-choice-legacy.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveSetup } from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
@@ -12,28 +23,31 @@ import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
+/** Runs the onboard command after normalizing legacy flags and setup mode. */
 export async function setupWizardCommand(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   assertSupportedRuntime(runtime);
   const originalAuthChoice = opts.authChoice;
-  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice);
-  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice)) {
+  const normalizedAuthChoice = normalizeLegacyOnboardAuthChoice(originalAuthChoice, {
+    env: process.env,
+  });
+  if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+    // Non-interactive output must be deterministic; reject deprecated aliases
+    // instead of printing prompts or compatibility guidance mid-flow.
     runtime.error(
-      [
-        `Auth choice "${String(originalAuthChoice)}" is deprecated.`,
-        'Use "--auth-choice token" (Anthropic setup-token) or "--auth-choice openai-codex".',
-      ].join("\n"),
+      formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
+        env: process.env,
+      })!,
     );
     runtime.exit(1);
     return;
   }
-  if (originalAuthChoice === "claude-cli") {
-    runtime.log('Auth choice "claude-cli" is deprecated; using setup-token flow instead.');
-  }
-  if (originalAuthChoice === "codex-cli") {
-    runtime.log('Auth choice "codex-cli" is deprecated; using OpenAI Codex OAuth instead.');
+  if (isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+    runtime.log(
+      resolveDeprecatedAuthChoiceReplacement(originalAuthChoice, { env: process.env })!.message,
+    );
   }
   const flow = opts.flow === "manual" ? ("advanced" as const) : opts.flow;
   const normalizedOpts =
@@ -45,18 +59,24 @@ export async function setupWizardCommand(
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
     normalizedOpts.secretInputMode !== "ref" // pragma: allowlist secret
   ) {
-    runtime.error('Invalid --secret-input-mode. Use "plaintext" or "ref".');
+    runtime.error(
+      `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for the interactive setup.`,
+    );
     runtime.exit(1);
     return;
   }
 
   if (normalizedOpts.resetScope && !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)) {
-    runtime.error('Invalid --reset-scope. Use "config", "config+creds+sessions", or "full".');
+    runtime.error(
+      `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
+    );
     runtime.exit(1);
     return;
   }
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
+    // Non-interactive setup can write credentials and daemon config without a
+    // prompt, so the operator must acknowledge the security docs explicitly.
     runtime.error(
       [
         "Non-interactive setup requires explicit risk acknowledgement.",
@@ -69,8 +89,10 @@ export async function setupWizardCommand(
   }
 
   if (normalizedOpts.reset) {
+    // Reset runs before setup mode dispatch so both interactive and
+    // non-interactive setup start from the same cleaned state.
     const snapshot = await readConfigFileSnapshot();
-    const baseConfig = snapshot.valid ? snapshot.config : {};
+    const baseConfig = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const workspaceDefault =
       normalizedOpts.workspace ?? baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;
     const resetScope: ResetScope = normalizedOpts.resetScope ?? "config+creds+sessions";
@@ -97,6 +119,3 @@ export async function setupWizardCommand(
 }
 
 export const onboardCommand = setupWizardCommand;
-
-export type { OnboardOptions } from "./onboard-types.js";
-export type { OnboardOptions as SetupWizardOptions } from "./onboard-types.js";

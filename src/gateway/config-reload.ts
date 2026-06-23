@@ -1,79 +1,126 @@
-import { isDeepStrictEqual } from "node:util";
+// Gateway config hot-reload watcher.
+// Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
-import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
+import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { isPlainObject } from "../utils.js";
-import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
+import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
+} from "../plugins/installed-plugin-index-records.js";
+import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
+import { diffConfigPaths } from "./config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  listPluginInstallTimestampMetadataPaths,
+  listPluginInstallWholeRecordPaths,
+  resolveConfigReloadMetadata,
+  type GatewayReloadPlan,
+} from "./config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 
-export { buildGatewayReloadPlan };
+export {
+  buildGatewayReloadPlan,
+  diffConfigPaths,
+  listPluginInstallTimestampMetadataPaths,
+  listPluginInstallWholeRecordPaths,
+  resolveConfigReloadMetadata,
+  resolveGatewayReloadSettings,
+};
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
-
-export type GatewayReloadSettings = {
-  mode: GatewayReloadMode;
-  debounceMs: number;
-};
-
-const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
-  mode: "hybrid",
-  debounceMs: 300,
-};
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
 
-export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
-  if (prev === next) {
-    return [];
-  }
-  if (isPlainObject(prev) && isPlainObject(next)) {
-    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
-    const paths: string[] = [];
-    for (const key of keys) {
-      const prevValue = prev[key];
-      const nextValue = next[key];
-      if (prevValue === undefined && nextValue === undefined) {
-        continue;
-      }
-      const childPrefix = prefix ? `${prefix}.${key}` : key;
-      const childPaths = diffConfigPaths(prevValue, nextValue, childPrefix);
-      if (childPaths.length > 0) {
-        paths.push(...childPaths);
-      }
+// Watcher 'error' events (for example EMFILE/ENOSPC inotify exhaustion) close
+// the chokidar watcher. Re-create it with bounded backoff so a transient fault
+// does not permanently kill config hot-reload. If all native retries are
+// exhausted (typical when the host has insufficient inotify watches), fall
+// back to polling mode before giving up entirely.
+const WATCHER_RECREATE_MAX_RETRIES = 3;
+const WATCHER_RECREATE_BACKOFF_MS = [500, 2000, 5000] as const;
+
+function resolveChokidarUsePolling(degradedToPolling: boolean): boolean {
+  const envPoll = process.env.CHOKIDAR_USEPOLLING;
+  if (envPoll !== undefined) {
+    const envLower = envPoll.toLowerCase();
+    if (envLower === "false" || envLower === "0") {
+      return false;
     }
-    return paths;
-  }
-  if (Array.isArray(prev) && Array.isArray(next)) {
-    // Arrays can contain object entries (for example memory.qmd.paths/scope.rules);
-    // compare structurally so identical values are not reported as changed.
-    if (isDeepStrictEqual(prev, next)) {
-      return [];
+    if (envLower === "true" || envLower === "1") {
+      return true;
     }
+    return Boolean(envLower);
   }
-  return [prefix || "<root>"];
+  return Boolean(process.env.VITEST) || degradedToPolling;
 }
 
-export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {
-  const rawMode = cfg.gateway?.reload?.mode;
-  const mode =
-    rawMode === "off" || rawMode === "restart" || rawMode === "hot" || rawMode === "hybrid"
-      ? rawMode
-      : DEFAULT_RELOAD_SETTINGS.mode;
-  const debounceRaw = cfg.gateway?.reload?.debounceMs;
-  const debounceMs =
-    typeof debounceRaw === "number" && Number.isFinite(debounceRaw)
-      ? Math.max(0, Math.floor(debounceRaw))
-      : DEFAULT_RELOAD_SETTINGS.debounceMs;
-  return { mode, debounceMs };
+/**
+ * Paths under `skills.*` always change the snapshot that sessions cache in
+ * sessions.json. Any prefix match here (for example `skills.allowBundled`,
+ * `skills.entries.X.enabled`, `skills.profile`) forces sessions to rebuild
+ * their snapshot on the next turn rather than silently advertising stale
+ * tools to the model.
+ */
+const SKILLS_INVALIDATION_PREFIXES = ["skills"] as const;
+
+function matchesSkillsInvalidationPrefix(path: string): boolean {
+  return SKILLS_INVALIDATION_PREFIXES.some(
+    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
+  );
 }
 
-export type GatewayConfigReloader = {
+function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
+  return changedPaths.find(matchesSkillsInvalidationPrefix);
+}
+
+function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
+  return (
+    !plan.restartGateway &&
+    plan.hotReasons.length === 0 &&
+    !plan.reloadHooks &&
+    !plan.restartGmailWatcher &&
+    !plan.restartCron &&
+    !plan.restartHeartbeat &&
+    !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
+    !plan.disposeMcpRuntimes &&
+    plan.restartChannels.size === 0
+  );
+}
+
+// Hot-reload stays "active" while a watcher is live. It flips to "disabled" only
+// after watcher re-creation fails past the retry budget, so operators/callers
+// can detect silent degradation instead of assuming reloads still fire.
+export type GatewayHotReloadStatus = "active" | "disabled";
+
+type GatewayConfigReloader = {
   stop: () => Promise<void>;
+  hotReloadStatus: () => GatewayHotReloadStatus;
 };
+
+type PluginInstallRecords = Record<string, PluginInstallRecord>;
+
+function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
+  return {
+    plugins: {
+      installs: records,
+    },
+  };
+}
 
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
+  initialCompareConfig?: OpenClawConfig;
+  initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
+  initialPluginInstallRecords?: PluginInstallRecords;
+  readPluginInstallRecords?: () => Promise<PluginInstallRecords>;
+  subscribeToWrites?: (listener: (event: ConfigWriteNotification) => void) => () => void;
   log: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -82,6 +129,7 @@ export function startGatewayConfigReloader(opts: {
   watchPath: string;
 }): GatewayConfigReloader {
   let currentConfig = opts.initialConfig;
+  let currentCompareConfig = opts.initialCompareConfig ?? opts.initialConfig;
   let settings = resolveGatewayReloadSettings(currentConfig);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pending = false;
@@ -89,11 +137,24 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
+  let pendingInProcessConfig: {
+    config: OpenClawConfig;
+    compareConfig: OpenClawConfig;
+    persistedHash: string;
+    afterWrite?: ConfigWriteNotification["afterWrite"];
+  } | null = null;
+  let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
+  let currentPluginInstallRecords =
+    opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
+  const readPluginInstallRecords =
+    opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
       return;
     }
+    // Coalesce filesystem/write-listener bursts into one reload pass. Config
+    // writes often touch temp and final paths in quick succession.
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }
@@ -147,18 +208,93 @@ export function startGatewayConfigReloader(opts: {
     return true;
   };
 
-  const applySnapshot = async (nextConfig: OpenClawConfig) => {
-    const changedPaths = diffConfigPaths(currentConfig, nextConfig);
+  const applySnapshot = async (
+    nextConfig: OpenClawConfig,
+    nextCompareConfig: OpenClawConfig,
+    afterWrite?: ConfigWriteNotification["afterWrite"],
+  ) => {
+    const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
+    const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+      currentCompareConfig,
+      nextCompareConfig,
+    );
+    const configPluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
+      currentCompareConfig,
+      nextCompareConfig,
+    );
+    let nextPluginInstallRecords = currentPluginInstallRecords;
+    try {
+      nextPluginInstallRecords = await readPluginInstallRecords();
+    } catch (err) {
+      opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
+    }
+    const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);
+    const nextPluginInstallConfig = asPluginInstallConfig(nextPluginInstallRecords);
+    const pluginInstallRecordChangedPaths = diffConfigPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordWholeRecordPaths = listPluginInstallWholeRecordPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const changedPaths = [...configChangedPaths, ...pluginInstallRecordChangedPaths];
+    const pluginInstallTimestampNoopPaths = [
+      ...configPluginInstallTimestampNoopPaths,
+      ...pluginInstallRecordTimestampNoopPaths,
+    ];
+    const pluginInstallWholeRecordPaths = [
+      ...configPluginInstallWholeRecordPaths,
+      ...pluginInstallRecordWholeRecordPaths,
+    ];
     currentConfig = nextConfig;
+    currentCompareConfig = nextCompareConfig;
+    currentPluginInstallRecords = nextPluginInstallRecords;
     settings = resolveGatewayReloadSettings(nextConfig);
     if (changedPaths.length === 0) {
       return;
     }
 
+    // Invalidate cached skills snapshots (persisted in sessions.json) whenever
+    // the user touches skills.* config. Without this, sessions keep advertising
+    // tools that no longer exist in the allowlist, which causes infinite
+    // tool-not-found loops against the model.
+    const skillsChangedPath = firstSkillsChangedPath(changedPaths);
+    if (skillsChangedPath !== undefined) {
+      bumpSkillsSnapshotVersion({ reason: "config-change", changedPath: skillsChangedPath });
+      opts.log.info(`skills snapshot invalidated by config change (${skillsChangedPath})`);
+    }
+
+    const followUp = resolveConfigWriteFollowUp(afterWrite);
     opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
-    const plan = buildGatewayReloadPlan(changedPaths);
+    if (followUp.mode === "none") {
+      opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
+      return;
+    }
+    const plan = buildGatewayReloadPlan(changedPaths, {
+      noopPaths: pluginInstallTimestampNoopPaths,
+      forceChangedPaths: pluginInstallWholeRecordPaths,
+    });
+    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
+      return;
+    }
     if (settings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
+      return;
+    }
+    if (followUp.requiresRestart) {
+      queueRestart(
+        {
+          ...plan,
+          restartGateway: true,
+          restartReasons: [...plan.restartReasons, followUp.reason],
+        },
+        nextConfig,
+      );
       return;
     }
     if (settings.mode === "restart") {
@@ -181,6 +317,32 @@ export function startGatewayConfigReloader(opts: {
     await opts.onHotReload(plan, nextConfig);
   };
 
+  const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
+    if (!opts.promoteSnapshot || !snapshot.exists || !snapshot.valid) {
+      return;
+    }
+    try {
+      await opts.promoteSnapshot(snapshot, reason);
+    } catch (err) {
+      opts.log.warn(`config reload last-known-good promotion failed: ${String(err)}`);
+    }
+  };
+
+  const promoteAcceptedInProcessWrite = async (persistedHash: string) => {
+    if (!opts.promoteSnapshot) {
+      return;
+    }
+    try {
+      const snapshot = await opts.readSnapshot();
+      if (snapshot.hash !== persistedHash || !snapshot.valid) {
+        return;
+      }
+      await promoteAcceptedSnapshot(snapshot, "in-process-write");
+    } catch (err) {
+      opts.log.warn(`config reload in-process last-known-good promotion failed: ${String(err)}`);
+    }
+  };
+
   const runReload = async () => {
     if (stopped) {
       return;
@@ -195,14 +357,34 @@ export function startGatewayConfigReloader(opts: {
       debounceTimer = null;
     }
     try {
+      if (pendingInProcessConfig) {
+        const pendingWrite = pendingInProcessConfig;
+        pendingInProcessConfig = null;
+        missingConfigRetries = 0;
+        await applySnapshot(
+          pendingWrite.config,
+          pendingWrite.compareConfig,
+          pendingWrite.afterWrite,
+        );
+        await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
+        return;
+      }
       const snapshot = await opts.readSnapshot();
+      if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
+        if (snapshot.hash === lastAppliedWriteHash) {
+          return;
+        }
+        lastAppliedWriteHash = null;
+      }
       if (handleMissingSnapshot(snapshot)) {
         return;
       }
-      if (handleInvalidSnapshot(snapshot)) {
+      if (!snapshot.valid) {
+        handleInvalidSnapshot(snapshot);
         return;
       }
-      await applySnapshot(snapshot.config);
+      await applySnapshot(snapshot.config, snapshot.sourceConfig);
+      await promoteAcceptedSnapshot(snapshot, "valid-config");
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
     } finally {
@@ -214,24 +396,100 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const watcher = chokidar.watch(opts.watchPath, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-    usePolling: Boolean(process.env.VITEST),
-  });
+  const scheduleFromWatcher = () => {
+    schedule();
+  };
 
-  watcher.on("add", schedule);
-  watcher.on("change", schedule);
-  watcher.on("unlink", schedule);
-  let watcherClosed = false;
-  watcher.on("error", (err) => {
-    if (watcherClosed) {
+  const unsubscribeFromWrites =
+    opts.subscribeToWrites?.((event) => {
+      if (event.configPath !== opts.watchPath) {
+        return;
+      }
+      pendingInProcessConfig = {
+        config: event.runtimeConfig,
+        compareConfig: event.sourceConfig,
+        persistedHash: event.persistedHash,
+        afterWrite: event.afterWrite,
+      };
+      lastAppliedWriteHash = event.persistedHash;
+      scheduleAfter(0);
+    }) ?? (() => {});
+
+  let watcher: ReturnType<typeof chokidar.watch> | null = null;
+  let watcherRecreateRetries = 0;
+  let watcherRecreateTimer: ReturnType<typeof setTimeout> | null = null;
+  let hotReloadStatus: GatewayHotReloadStatus = "active";
+  let degradedToPolling = false;
+  let watcherUsesPolling = false;
+
+  const createWatcher = () => {
+    if (stopped) {
       return;
     }
-    watcherClosed = true;
-    opts.log.warn(`config watcher error: ${String(err)}`);
-    void watcher.close().catch(() => {});
-  });
+    const usePolling = resolveChokidarUsePolling(degradedToPolling);
+    const next = chokidar.watch(opts.watchPath, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      usePolling,
+    });
+    next.on("add", scheduleFromWatcher);
+    next.on("change", scheduleFromWatcher);
+    next.on("unlink", scheduleFromWatcher);
+    next.on("error", (err) => {
+      handleWatcherError(next, err);
+    });
+    watcher = next;
+    watcherUsesPolling = next.options.usePolling;
+    hotReloadStatus = "active";
+  };
+
+  const handleWatcherError = (source: typeof watcher, err: unknown) => {
+    // Ignore stale errors from a watcher we already replaced or stopped.
+    if (stopped || source !== watcher) {
+      return;
+    }
+    const failedWatcherUsedPolling = watcherUsesPolling;
+    watcher = null;
+    watcherUsesPolling = false;
+    void source?.close().catch(() => {});
+    if (watcherRecreateRetries >= WATCHER_RECREATE_MAX_RETRIES) {
+      // All native (inotify/kqueue) retries exhausted — fall back to polling
+      // mode so config hot-reload survives on hosts where inotify resources
+      // are constrained (e.g. low fs.inotify.max_user_watches).
+      if (!failedWatcherUsedPolling && resolveChokidarUsePolling(true)) {
+        degradedToPolling = true;
+        watcherRecreateRetries = 0;
+        opts.log.warn(
+          `config watcher native retries exhausted; degrading to polling mode: ${String(err)}`,
+        );
+        watcherRecreateTimer = setTimeout(() => {
+          watcherRecreateTimer = null;
+          createWatcher();
+        }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
+        return;
+      }
+      const mode = failedWatcherUsedPolling ? "polling mode" : "native mode";
+      hotReloadStatus = "disabled";
+      opts.log.error(
+        `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts in ${mode}: ${String(err)}`,
+      );
+      return;
+    }
+    const backoff =
+      WATCHER_RECREATE_BACKOFF_MS[watcherRecreateRetries] ??
+      WATCHER_RECREATE_BACKOFF_MS[WATCHER_RECREATE_BACKOFF_MS.length - 1] ??
+      0;
+    watcherRecreateRetries += 1;
+    opts.log.warn(
+      `config watcher error; re-creating watcher (attempt ${watcherRecreateRetries}/${WATCHER_RECREATE_MAX_RETRIES} in ${backoff}ms): ${String(err)}`,
+    );
+    watcherRecreateTimer = setTimeout(() => {
+      watcherRecreateTimer = null;
+      createWatcher();
+    }, backoff);
+  };
+
+  createWatcher();
 
   return {
     stop: async () => {
@@ -240,8 +498,15 @@ export function startGatewayConfigReloader(opts: {
         clearTimeout(debounceTimer);
       }
       debounceTimer = null;
-      watcherClosed = true;
-      await watcher.close().catch(() => {});
+      if (watcherRecreateTimer) {
+        clearTimeout(watcherRecreateTimer);
+        watcherRecreateTimer = null;
+      }
+      unsubscribeFromWrites();
+      const active = watcher;
+      watcher = null;
+      await active?.close().catch(() => {});
     },
+    hotReloadStatus: () => hotReloadStatus,
   };
 }

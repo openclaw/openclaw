@@ -1,6 +1,12 @@
-import { stopBrowserBridgeServer } from "../../browser/bridge-server.js";
-import { loadConfig } from "../../config/config.js";
+/**
+ * Sandbox registry pruning.
+ *
+ * Removes stale runtime containers and browser bridges on a best-effort schedule.
+ */
+import { getRuntimeConfig } from "../../config/config.js";
+import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { defaultRuntime } from "../../runtime.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { getSandboxBackendManager } from "./backend.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
@@ -27,14 +33,18 @@ function shouldPruneSandboxEntry(cfg: SandboxConfig, now: number, entry: Pruneab
   if (idleHours === 0 && maxAgeDays === 0) {
     return false;
   }
-  const idleMs = now - entry.lastUsedAtMs;
-  const ageMs = now - entry.createdAtMs;
+  const nowMs = asDateTimestampMs(now) ?? 0;
+  const lastUsedAtMs = asDateTimestampMs(entry.lastUsedAtMs) ?? 0;
+  const createdAtMs = asDateTimestampMs(entry.createdAtMs) ?? 0;
+  const idleMs = nowMs - lastUsedAtMs;
+  const ageMs = nowMs - createdAtMs;
   return (
     (idleHours > 0 && idleMs > idleHours * 60 * 60 * 1000) ||
     (maxAgeDays > 0 && ageMs > maxAgeDays * 24 * 60 * 60 * 1000)
   );
 }
 
+/** Removes expired registry entries and their backing runtime resources. */
 async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(params: {
   cfg: SandboxConfig;
   read: () => Promise<{ entries: TEntry[] }>;
@@ -53,17 +63,25 @@ async function pruneSandboxRegistryEntries<TEntry extends SandboxRegistryEntry>(
     }
     try {
       await params.removeRuntime(entry);
-    } catch {
-      // ignore prune failures
-    } finally {
       await params.remove(entry.containerName);
       await params.onRemoved?.(entry);
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : JSON.stringify(error);
+      defaultRuntime.error?.(
+        `Sandbox prune failed to remove ${entry.containerName}: ${message ?? "unknown error"}`,
+      );
     }
   }
 }
 
+/** Prunes ordinary sandbox runtime containers from the configured backend manager. */
 async function pruneSandboxContainers(cfg: SandboxConfig) {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   await pruneSandboxRegistryEntries<SandboxRegistryEntry>({
     cfg,
     read: readRegistry,
@@ -78,8 +96,9 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
   });
 }
 
+/** Prunes browser bridge containers and closes matching in-process bridge servers. */
 async function pruneSandboxBrowsers(cfg: SandboxConfig) {
-  const config = loadConfig();
+  const config = getRuntimeConfig();
   await pruneSandboxRegistryEntries<
     SandboxBrowserRegistryEntry & {
       backendId?: string;
@@ -111,6 +130,7 @@ async function pruneSandboxBrowsers(cfg: SandboxConfig) {
   });
 }
 
+/** Runs sandbox pruning at most once per throttle window. */
 export async function maybePruneSandboxes(cfg: SandboxConfig) {
   const now = Date.now();
   if (now - lastPruneAtMs < 5 * 60 * 1000) {

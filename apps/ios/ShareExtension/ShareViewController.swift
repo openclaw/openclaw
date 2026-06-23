@@ -17,7 +17,7 @@ final class ShareViewController: UIViewController {
         var attachments: [ShareAttachment]
     }
 
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "ShareExtension")
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "ShareExtension")
     private var statusLabel: UILabel?
     private let draftTextView = UITextView()
     private let sendButton = UIButton(type: .system)
@@ -89,9 +89,11 @@ final class ShareViewController: UIViewController {
         let extracted = await self.extractSharedContent()
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments
+        self.logger.info("share payload trace=\(traceId, privacy: .public)")
         self.logger.info(
-            "share payload trace=\(traceId, privacy: .public) titleChars=\(payload.title?.count ?? 0) textChars=\(payload.text?.count ?? 0) hasURL=\(payload.url != nil) imageAttachments=\(self.pendingAttachments.count)"
-        )
+            "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
+        self.logger.info(
+            "share attachments hasURL=\(payload.url != nil) images=\(self.pendingAttachments.count)")
         let message = self.composeDraft(from: payload)
         await MainActor.run {
             self.draftTextView.text = message
@@ -182,7 +184,8 @@ final class ShareViewController: UIViewController {
                 clientId: clientId,
                 clientMode: "node",
                 clientDisplayName: "OpenClaw Share",
-                includeDeviceIdentity: false)
+                deviceIdentityProfile: .shareExtension,
+                includeDeviceIdentity: true)
         }
 
         do {
@@ -287,7 +290,7 @@ final class ShareViewController: UIViewController {
             let isInvalidConnectParams =
                 (code.contains("invalid") && code.contains("connect"))
                 || message.contains("invalid connect params")
-            if isInvalidConnectParams && mentionsClientIdPath {
+            if isInvalidConnectParams, mentionsClientIdPath {
                 return true
             }
         }
@@ -405,7 +408,6 @@ final class ShareViewController: UIViewController {
                 } else {
                     unknownCount += 1
                 }
-
             }
         }
 
@@ -475,7 +477,7 @@ final class ShareViewController: UIViewController {
         if provider.hasItemConformingToTypeIdentifier(UTType.text.identifier) {
             if let text = await self.loadTextValue(from: provider, typeIdentifier: UTType.text.identifier),
                let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)),
-                   url.scheme != nil
+               url.scheme != nil
             {
                 return url
             }

@@ -1,3 +1,4 @@
+// Setup group access tests cover group access setup flow decisions and outputs.
 import { describe, expect, it, vi } from "vitest";
 import {
   formatAllowlistEntries,
@@ -51,18 +52,17 @@ describe("promptChannelAllowlist", () => {
     });
 
     const result = await promptChannelAllowlist({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Test",
       currentEntries: ["alpha", "beta"],
     });
 
     expect(result).toEqual(["one", "two"]);
-    expect(prompter.text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialValue: "alpha, beta",
-      }),
-    );
+    expect(prompter.text).toHaveBeenCalledWith({
+      message: "Test allowlist (comma-separated)",
+      placeholder: undefined,
+      initialValue: "alpha, beta",
+    });
   });
 });
 
@@ -73,7 +73,6 @@ describe("promptChannelAccessPolicy", () => {
     });
 
     const result = await promptChannelAccessPolicy({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Discord",
       currentPolicy: "allowlist",
@@ -83,7 +82,7 @@ describe("promptChannelAccessPolicy", () => {
   });
 });
 
-describe("promptChannelAccessConfig", () => {
+describe("promptChannelAccessConfig policy-only entries", () => {
   it("skips the allowlist text prompt when entries are policy-only", async () => {
     const prompter = createPrompter({
       confirm: async () => true,
@@ -94,7 +93,6 @@ describe("promptChannelAccessConfig", () => {
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Twitch chat",
       skipAllowlistEntries: true,
@@ -104,14 +102,13 @@ describe("promptChannelAccessConfig", () => {
   });
 });
 
-describe("promptChannelAccessConfig", () => {
+describe("promptChannelAccessConfig skip flow", () => {
   it("returns null when user skips configuration", async () => {
     const prompter = createPrompter({
       confirm: async () => false,
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Slack",
     });
@@ -127,7 +124,6 @@ describe("promptChannelAccessConfig", () => {
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Slack",
     });
@@ -145,7 +141,6 @@ describe("promptChannelAccessConfig", () => {
     });
 
     const result = await promptChannelAccessConfig({
-      // oxlint-disable-next-line typescript/no-explicit-any
       prompter: prompter as any,
       label: "Slack",
       allowDisabled: true,

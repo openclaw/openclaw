@@ -1,12 +1,26 @@
+// Test Report Utils tests cover test report utils script behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  collectVitestAssertionDurations,
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
   tryReadJsonFile,
 } from "../../scripts/test-report-utils.mjs";
+
+const { spawnSyncMock } = vi.hoisted(() => ({
+  spawnSyncMock: vi.fn(),
+}));
+
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return {
+    ...actual,
+    spawnSync: spawnSyncMock,
+  };
+});
 
 describe("scripts/test-report-utils normalizeTrackedRepoPath", () => {
   it("normalizes repo-local absolute paths to repo-relative slash paths", () => {
@@ -51,6 +65,31 @@ describe("scripts/test-report-utils collectVitestFileDurations", () => {
   });
 });
 
+describe("scripts/test-report-utils collectVitestAssertionDurations", () => {
+  it("extracts per-test durations with normalized files", () => {
+    const report = {
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src", "alpha.test.ts"),
+          assertionResults: [
+            { duration: 25, fullName: "alpha fast", status: "passed" },
+            { duration: 0, fullName: "alpha zero", status: "passed" },
+          ],
+        },
+      ],
+    };
+
+    expect(collectVitestAssertionDurations(report, normalizeTrackedRepoPath)).toEqual([
+      {
+        file: "src/alpha.test.ts",
+        durationMs: 25,
+        fullName: "alpha fast",
+        status: "passed",
+      },
+    ]);
+  });
+});
+
 describe("scripts/test-report-utils tryReadJsonFile", () => {
   it("returns the fallback when the file is missing", () => {
     const missingPath = path.join(os.tmpdir(), `openclaw-missing-${Date.now()}.json`);
@@ -66,6 +105,77 @@ describe("scripts/test-report-utils tryReadJsonFile", () => {
       expect(tryReadJsonFile(tempPath, null)).toEqual({ ok: true });
     } finally {
       fs.unlinkSync(tempPath);
+    }
+  });
+});
+
+describe("scripts/test-report-utils runVitestJsonReport", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    spawnSyncMock.mockReset();
+  });
+
+  it("launches Vitest through pnpm exec", async () => {
+    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
+    const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-${Date.now()}.json`);
+    spawnSyncMock.mockImplementation(() => {
+      fs.writeFileSync(reportPath, `${JSON.stringify({ testResults: [] })}\n`, "utf8");
+      return { status: 0 };
+    });
+
+    try {
+      expect(
+        runVitestJsonReport({
+          config: "test/vitest/vitest.unit.config.ts",
+          reportPath,
+        }),
+      ).toBe(reportPath);
+    } finally {
+      fs.rmSync(reportPath, { force: true });
+    }
+
+    expect(spawnSyncMock).toHaveBeenCalledWith(
+      "pnpm",
+      [
+        "exec",
+        "vitest",
+        "run",
+        "--config",
+        "test/vitest/vitest.unit.config.ts",
+        "--reporter=json",
+        "--outputFile",
+        reportPath,
+      ],
+      {
+        stdio: "inherit",
+        env: process.env,
+      },
+    );
+  });
+
+  it("fails when Vitest exits successfully without writing a JSON report", async () => {
+    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
+    spawnSyncMock.mockReturnValue({ status: 0 });
+    const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-missing-${Date.now()}.json`);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`process.exit ${String(code)}`);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      expect(() =>
+        runVitestJsonReport({
+          config: "test/vitest/vitest.unit.config.ts",
+          reportPath,
+        }),
+      ).toThrow("process.exit 1");
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[test-report-utils] missing Vitest JSON report:"),
+      );
+    } finally {
+      exitSpy.mockRestore();
+      errorSpy.mockRestore();
+      fs.rmSync(reportPath, { force: true });
     }
   });
 });

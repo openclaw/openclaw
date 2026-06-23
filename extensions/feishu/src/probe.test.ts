@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Feishu tests cover probe plugin behavior.
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearProbeCache, FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu } from "./probe.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
 
@@ -6,20 +8,10 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-async function importProbeModule(scope: string) {
-  void scope;
-  vi.resetModules();
-  return await import("./probe.js");
-}
-
-let FEISHU_PROBE_REQUEST_TIMEOUT_MS: typeof import("./probe.js").FEISHU_PROBE_REQUEST_TIMEOUT_MS;
-let probeFeishu: typeof import("./probe.js").probeFeishu;
-let clearProbeCache: typeof import("./probe.js").clearProbeCache;
-
 const DEFAULT_CREDS = { appId: "cli_123", appSecret: "secret" } as const; // pragma: allowlist secret
 const DEFAULT_SUCCESS_RESPONSE = {
   code: 0,
-  bot: { bot_name: "TestBot", open_id: "ou_abc123" },
+  data: { pingBotInfo: { botName: "TestBot", botID: "ou_abc123" } },
 } as const;
 const DEFAULT_SUCCESS_RESULT = {
   ok: true,
@@ -29,8 +21,13 @@ const DEFAULT_SUCCESS_RESULT = {
 } as const;
 const BOT1_RESPONSE = {
   code: 0,
-  bot: { bot_name: "Bot1", open_id: "ou_1" },
+  data: { pingBotInfo: { botName: "Bot1", botID: "ou_1" } },
 } as const;
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.resetModules();
+});
 
 function makeRequestFn(response: Record<string, unknown>) {
   return vi.fn().mockResolvedValue(response);
@@ -77,8 +74,9 @@ async function expectErrorResultCached(params: {
 
   const first = await probeFeishu(DEFAULT_CREDS);
   const second = await probeFeishu(DEFAULT_CREDS);
-  expect(first).toMatchObject({ ok: false, error: params.expectedError });
-  expect(second).toMatchObject({ ok: false, error: params.expectedError });
+  const expected = { ok: false, appId: DEFAULT_CREDS.appId, error: params.expectedError };
+  expect(first).toEqual(expected);
+  expect(second).toEqual(expected);
   expect(params.requestFn).toHaveBeenCalledTimes(1);
 
   vi.advanceTimersByTime(params.ttlMs + 1);
@@ -106,10 +104,7 @@ async function readSequentialDefaultProbePair() {
 }
 
 describe("probeFeishu", () => {
-  beforeEach(async () => {
-    ({ FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu, clearProbeCache } = await importProbeModule(
-      `probe-${Date.now()}-${Math.random()}`,
-    ));
+  beforeEach(() => {
     clearProbeCache();
     vi.restoreAllMocks();
   });
@@ -145,13 +140,12 @@ describe("probeFeishu", () => {
 
     await probeFeishu(DEFAULT_CREDS);
 
-    expect(requestFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "GET",
-        url: "/open-apis/bot/v3/info",
-        timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
-      }),
-    );
+    expect(requestFn).toHaveBeenCalledWith({
+      method: "POST",
+      url: "/open-apis/bot/v1/openclaw_bot/ping",
+      data: { needBotInfo: true },
+      timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+    });
   });
 
   it("returns timeout error when request exceeds timeout", async () => {
@@ -163,7 +157,11 @@ describe("probeFeishu", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       const result = await promise;
 
-      expect(result).toMatchObject({ ok: false, error: "probe timed out after 1000ms" });
+      expect(result).toEqual({
+        ok: false,
+        appId: DEFAULT_CREDS.appId,
+        error: "probe timed out after 1000ms",
+      });
     });
   });
 
@@ -177,7 +175,7 @@ describe("probeFeishu", () => {
       { abortSignal: abortController.signal },
     );
 
-    expect(result).toMatchObject({ ok: false, error: "probe aborted" });
+    expect(result).toEqual({ ok: false, appId: "cli_123", error: "probe aborted" });
     expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
   it("returns cached result on subsequent calls within TTL", async () => {
@@ -188,6 +186,32 @@ describe("probeFeishu", () => {
     expect(first).toEqual(second);
     // Only one API call should have been made
     expect(requestFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache probe results when the expiry would exceed a valid Date", async () => {
+    await withFakeTimers(async () => {
+      vi.setSystemTime(new Date(8_640_000_000_000_000));
+      const requestFn = setupSuccessClient();
+
+      const { first, second } = await readSequentialDefaultProbePair();
+
+      expect(first).toEqual(second);
+      expect(requestFn).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("evicts cached probe results when the current clock is invalid", async () => {
+    const requestFn = setupSuccessClient();
+
+    await probeFeishu(DEFAULT_CREDS);
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      await probeFeishu(DEFAULT_CREDS);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
   it("makes a fresh API call after cache expires", async () => {
@@ -271,10 +295,10 @@ describe("probeFeishu", () => {
     });
   });
 
-  it("handles response.data.bot fallback path", async () => {
+  it("handles response with pingBotInfo in data", async () => {
     setupClient({
       code: 0,
-      data: { bot: { bot_name: "DataBot", open_id: "ou_data" } },
+      data: { pingBotInfo: { botName: "DataBot", botID: "ou_data" } },
     });
 
     await expectDefaultSuccessResult(DEFAULT_CREDS, {

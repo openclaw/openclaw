@@ -1,8 +1,13 @@
+// Local media access helpers validate workspace-local media path access.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { assertNoWindowsNetworkPath } from "../infra/local-file-access.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
+import { resolveInboundMediaReference } from "./media-reference.js";
 
+/** Machine-readable reasons local media path validation can fail. */
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"
@@ -13,6 +18,7 @@ export type LocalMediaAccessErrorCode =
   | "invalid-path"
   | "not-file";
 
+/** Error raised when a local media path escapes the configured allowlist. */
 export class LocalMediaAccessError extends Error {
   code: LocalMediaAccessErrorCode;
 
@@ -23,15 +29,22 @@ export class LocalMediaAccessError extends Error {
   }
 }
 
+/** Returns the default root allowlist for local media reads. */
 export function getDefaultLocalRoots(): readonly string[] {
   return getDefaultMediaLocalRoots();
 }
 
+/** Verifies that a local media path is managed inbound media or lives under allowed roots. */
 export async function assertLocalMediaAllowed(
   mediaPath: string,
   localRoots: readonly string[] | "any" | undefined,
+  options?: { inboundRoots?: readonly string[] },
 ): Promise<void> {
   if (localRoots === "any") {
+    return;
+  }
+  const inboundReference = await resolveInboundMediaReference(mediaPath).catch(() => null);
+  if (inboundReference) {
     return;
   }
   try {
@@ -40,6 +53,12 @@ export async function assertLocalMediaAllowed(
     throw new LocalMediaAccessError("network-path-not-allowed", (err as Error).message, {
       cause: err,
     });
+  }
+  if (
+    options?.inboundRoots?.length &&
+    isInboundPathAllowed({ filePath: mediaPath, roots: options.inboundRoots })
+  ) {
+    return;
   }
   const roots = localRoots ?? getDefaultLocalRoots();
   let resolved: string;
@@ -50,11 +69,12 @@ export async function assertLocalMediaAllowed(
   }
 
   if (localRoots === undefined) {
+    // Unscoped default roots include workspace, but not sibling workspace-* agent sandboxes.
     const workspaceRoot = roots.find((root) => path.basename(root) === "workspace");
     if (workspaceRoot) {
       const stateDir = path.dirname(workspaceRoot);
       const rel = path.relative(stateDir, resolved);
-      if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) {
+      if (rel && isPathInside(stateDir, resolved)) {
         const firstSegment = rel.split(path.sep)[0] ?? "";
         if (firstSegment.startsWith("workspace-")) {
           throw new LocalMediaAccessError(
@@ -79,7 +99,7 @@ export async function assertLocalMediaAllowed(
         `Invalid localRoots entry (refuses filesystem root): ${root}. Pass a narrower directory.`,
       );
     }
-    if (resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)) {
+    if (isPathInside(resolvedRoot, resolved)) {
       return;
     }
   }

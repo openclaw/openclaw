@@ -1,17 +1,67 @@
+// Voice Call tests cover events plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "../config.js";
 import type { VoiceCallProvider } from "../providers/base.js";
-import type { HangupCallInput, NormalizedEvent } from "../types.js";
+import { clearVoiceCallStateRuntime, setVoiceCallStateRuntime } from "../runtime-state.js";
+import type { AnswerCallInput, HangupCallInput, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { processEvent } from "./events.js";
+import { speakInitialMessage } from "./outbound.js";
+import { flushPendingCallRecordWritesForTest } from "./store.js";
+
+const contexts: CallManagerContext[] = [];
+
+function installStateRuntime(): void {
+  setVoiceCallStateRuntime({
+    state: {
+      resolveStateDir: () => "",
+      openKeyedStore: (() => {
+        throw new Error("openKeyedStore is not used by voice-call event tests");
+      }) as never,
+      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openChannelIngressQueue: (() => {
+        throw new Error("openChannelIngressQueue is not used by voice-call event tests");
+      }) as never,
+    },
+  });
+}
+
+beforeEach(() => {
+  resetPluginStateStoreForTests();
+  installStateRuntime();
+});
+
+afterEach(async () => {
+  for (const ctx of contexts.splice(0)) {
+    for (const timer of ctx.maxDurationTimers.values()) {
+      clearTimeout(timer);
+    }
+    ctx.maxDurationTimers.clear();
+    for (const waiter of ctx.transcriptWaiters.values()) {
+      clearTimeout(waiter.timeout);
+    }
+    ctx.transcriptWaiters.clear();
+    await flushPendingCallRecordWritesForTest();
+    fs.rmSync(ctx.storePath, { recursive: true, force: true });
+  }
+  clearVoiceCallStateRuntime();
+  resetPluginStateStoreForTests();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 function createContext(overrides: Partial<CallManagerContext> = {}): CallManagerContext {
-  const storePath = path.join(os.tmpdir(), `openclaw-voice-call-events-test-${Date.now()}`);
-  fs.mkdirSync(storePath, { recursive: true });
-  return {
+  const storePath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-events-test-"));
+  const ctx: CallManagerContext = {
     activeCalls: new Map(),
     providerCallIdMap: new Map(),
     processedEventIds: new Set(),
@@ -30,6 +80,8 @@ function createContext(overrides: Partial<CallManagerContext> = {}): CallManager
     initialMessageInFlight: new Set(),
     ...overrides,
   };
+  contexts.push(ctx);
+  return ctx;
 }
 
 function createProvider(overrides: Partial<VoiceCallProvider> = {}): VoiceCallProvider {
@@ -157,10 +209,49 @@ describe("processEvent (functional)", () => {
 
     expect(ctx.activeCalls.size).toBe(0);
     expect(hangupCalls).toEqual([
-      expect.objectContaining({
+      {
+        callId: "prov-dup",
         providerCallId: "prov-dup",
         reason: "hangup-bot",
+      },
+    ]);
+  });
+
+  it("answers accepted inbound calls when the provider requires an answer command", () => {
+    const answerCalls: AnswerCallInput[] = [];
+    const provider = createProvider({
+      answerCall: async (input: AnswerCallInput): Promise<void> => {
+        answerCalls.push(input);
+      },
+    });
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "telnyx",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        telnyx: {
+          apiKey: "KEY123",
+          connectionId: "CONN456",
+        },
+        skipSignatureVerification: true,
       }),
+      provider,
+    });
+    const event = createInboundInitiatedEvent({
+      id: "evt-answer",
+      providerCallId: "call-control-1",
+      from: "+15552222222",
+    });
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(answerCalls).toEqual([
+      {
+        callId: call.callId,
+        providerCallId: "call-control-1",
+      },
     ]);
   });
 
@@ -199,6 +290,48 @@ describe("processEvent (functional)", () => {
     expect(ctx.providerCallIdMap.has("request-uuid")).toBe(false);
   });
 
+  it("does not burn replay keys for unknown calls before a later replay can resolve them", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    const event: NormalizedEvent = {
+      id: "evt-late-call",
+      dedupeKey: "stable-late-call",
+      type: "call.answered",
+      callId: "call-late",
+      providerCallId: "provider-late",
+      timestamp: now + 1,
+    };
+
+    processEvent(ctx, event);
+
+    expect(ctx.processedEventIds.size).toBe(0);
+
+    ctx.activeCalls.set("call-late", {
+      callId: "call-late",
+      providerCallId: "provider-late",
+      provider: "plivo",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550000002",
+      to: "+15550000000",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-late", "call-late");
+
+    processEvent(ctx, event);
+
+    const call = ctx.activeCalls.get("call-late");
+    if (!call) {
+      throw new Error("expected replayed event to resolve after call registration");
+    }
+    expect(call.state).toBe("answered");
+    expect(call.answeredAt).toBe(now + 1);
+    expect(Array.from(ctx.processedEventIds)).toEqual(["stable-late-call"]);
+  });
+
   it("invokes onCallAnswered hook for answered events", () => {
     const now = Date.now();
     let answeredCallId: string | null = null;
@@ -233,7 +366,156 @@ describe("processEvent (functional)", () => {
     expect(answeredCallId).toBe("call-2");
   });
 
-  it("when hangup throws, logs and does not throw", () => {
+  it.each([
+    {
+      name: "speaking",
+      expectedState: "speaking",
+      createEvent: (timestamp: number): NormalizedEvent => ({
+        id: "evt-live-speaking",
+        type: "call.speaking",
+        callId: "call-live",
+        providerCallId: "provider-live",
+        timestamp,
+        text: "hello",
+      }),
+    },
+    {
+      name: "listening",
+      expectedState: "listening",
+      createEvent: (timestamp: number): NormalizedEvent => ({
+        id: "evt-live-listening",
+        type: "call.speech",
+        callId: "call-live",
+        providerCallId: "provider-live",
+        timestamp,
+        transcript: "hello",
+        isFinal: true,
+      }),
+    },
+  ])(
+    "starts max-duration enforcement when $name arrives before answered",
+    async ({ expectedState, createEvent }) => {
+      const now = new Date("2026-03-22T12:00:00.000Z").getTime();
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      const hangupCalls: HangupCallInput[] = [];
+      const ctx = createContext({
+        config: VoiceCallConfigSchema.parse({
+          enabled: true,
+          provider: "plivo",
+          fromNumber: "+15550000000",
+          maxDurationSeconds: 1,
+        }),
+        provider: createProvider({
+          hangupCall: async (input: HangupCallInput): Promise<void> => {
+            hangupCalls.push(input);
+          },
+        }),
+      });
+      ctx.activeCalls.set("call-live", {
+        callId: "call-live",
+        providerCallId: "provider-live",
+        provider: "plivo",
+        direction: "inbound",
+        state: "ringing",
+        from: "+15550000002",
+        to: "+15550000000",
+        startedAt: now - 120_000,
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      });
+      ctx.providerCallIdMap.set("provider-live", "call-live");
+      const liveTimestamp = now + 250;
+
+      processEvent(ctx, createEvent(liveTimestamp));
+
+      const call = ctx.activeCalls.get("call-live");
+      if (!call) {
+        throw new Error("expected live call to remain active");
+      }
+      expect(call.state).toBe(expectedState);
+      expect(call.answeredAt).toBe(liveTimestamp);
+      expect(ctx.maxDurationTimers.has("call-live")).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(hangupCalls).toEqual([
+        {
+          callId: "call-live",
+          providerCallId: "provider-live",
+          reason: "timeout",
+        },
+      ]);
+      expect(ctx.activeCalls.has("call-live")).toBe(false);
+      vi.useRealTimers();
+    },
+  );
+
+  it("enforces max duration for Twilio initial-message streams without answeredAt", async () => {
+    const now = new Date("2026-03-22T12:00:00.000Z").getTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const hangupCalls: HangupCallInput[] = [];
+    const provider = createProvider({
+      name: "twilio",
+      hangupCall: async (input: HangupCallInput): Promise<void> => {
+        hangupCalls.push(input);
+      },
+    }) as VoiceCallProvider & { isConversationStreamConnectEnabled?: () => boolean };
+    provider.isConversationStreamConnectEnabled = () => true;
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "twilio",
+        fromNumber: "+15550000000",
+        maxDurationSeconds: 1,
+        streaming: { enabled: true },
+      }),
+      provider,
+    });
+    ctx.activeCalls.set("call-stream", {
+      callId: "call-stream",
+      providerCallId: "provider-stream",
+      provider: "twilio",
+      direction: "inbound",
+      state: "active",
+      from: "+15550000002",
+      to: "+15550000000",
+      startedAt: now - 120_000,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {
+        initialMessage: "Hello from the bot.",
+        mode: "conversation",
+      },
+    });
+    ctx.providerCallIdMap.set("provider-stream", "call-stream");
+
+    await speakInitialMessage(ctx, "provider-stream");
+
+    const call = ctx.activeCalls.get("call-stream");
+    if (!call) {
+      throw new Error("expected initial-message call to remain active");
+    }
+    expect(call.state).toBe("speaking");
+    expect(call.answeredAt).toBe(now);
+    expect(ctx.maxDurationTimers.has("call-stream")).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(hangupCalls).toEqual([
+      {
+        callId: "call-stream",
+        providerCallId: "provider-stream",
+        reason: "timeout",
+      },
+    ]);
+    expect(ctx.activeCalls.has("call-stream")).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("removes active call even when hangup rejects", () => {
     const provider = createProvider({
       hangupCall: async (): Promise<void> => {
         throw new Error("provider down");
@@ -249,7 +531,7 @@ describe("processEvent (functional)", () => {
       from: "+15553333333",
     });
 
-    expect(() => processEvent(ctx, event)).not.toThrow();
+    processEvent(ctx, event);
     expect(ctx.activeCalls.size).toBe(0);
   });
 
@@ -327,6 +609,66 @@ describe("processEvent (functional)", () => {
     expect(call.direction).toBe("inbound");
   });
 
+  it("assigns per-call session keys to inbound calls when configured", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        sessionScope: "per-call",
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-inbound-session-scope",
+      type: "call.initiated",
+      callId: "CA-inbound-session-scope",
+      providerCallId: "CA-inbound-session-scope",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+15550000000",
+    };
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(call.sessionKey).toBe(`voice:call:${call.callId}`);
+  });
+
+  it("applies per-number inbound greeting and stores the matched route key", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        inboundGreeting: "Hello from global.",
+        numbers: {
+          "+15550002222": {
+            inboundGreeting: "Silver Fox Cards, how can I help?",
+          },
+        },
+      }),
+    });
+    const event: NormalizedEvent = {
+      id: "evt-inbound-number-route",
+      type: "call.initiated",
+      callId: "CA-inbound-number-route",
+      providerCallId: "CA-inbound-number-route",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+1 (555) 000-2222",
+    };
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(call.metadata?.initialMessage).toBe("Silver Fox Cards, how can I help?");
+    expect(call.metadata?.numberRouteKey).toBe("+15550002222");
+  });
+
   it("deduplicates by dedupeKey even when event IDs differ", () => {
     const now = Date.now();
     const ctx = createContext();
@@ -373,5 +715,46 @@ describe("processEvent (functional)", () => {
     }
     expect(call.transcript).toHaveLength(1);
     expect(Array.from(ctx.processedEventIds)).toEqual(["stable-key-1"]);
+  });
+
+  it("keeps retryable call.error events replayable", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    ctx.activeCalls.set("call-retryable-error", {
+      callId: "call-retryable-error",
+      providerCallId: "provider-retryable-error",
+      provider: "plivo",
+      direction: "outbound",
+      state: "active",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-retryable-error", "call-retryable-error");
+
+    const event: NormalizedEvent = {
+      id: "evt-retryable-error",
+      dedupeKey: "stable-retryable-error",
+      type: "call.error",
+      callId: "call-retryable-error",
+      providerCallId: "provider-retryable-error",
+      timestamp: now + 1,
+      error: "temporary upstream failure",
+      retryable: true,
+    };
+
+    processEvent(ctx, event);
+    processEvent(ctx, event);
+
+    const call = ctx.activeCalls.get("call-retryable-error");
+    if (!call) {
+      throw new Error("expected retryable error call to remain active");
+    }
+    expect(call.state).toBe("active");
+    expect(Array.from(ctx.processedEventIds)).toStrictEqual([]);
+    expect(call.processedEventIds).toStrictEqual([]);
   });
 });

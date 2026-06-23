@@ -1,36 +1,29 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../../src/config/config.js";
-import { isNumericTelegramUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
+// Telegram tests cover targets plugin behavior.
+import { describe, expect, it } from "vitest";
+import {
+  isNumericTelegramSenderUserId,
+  isNumericTelegramUserId,
+  normalizeTelegramAllowFromEntry,
+} from "./allow-from.js";
 import {
   resolveTelegramGroupRequireMention,
   resolveTelegramGroupToolPolicy,
 } from "./group-policy.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
+import { installMaybePersistResolvedTelegramTargetTests } from "./target-writeback.test-shared.js";
 import {
   isNumericTelegramChatId,
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
+  normalizeTelegramOutboundTarget,
   parseTelegramTarget,
   stripTelegramInternalPrefixes,
 } from "./targets.js";
 
-const readConfigFileSnapshotForWrite = vi.fn();
-const writeConfigFile = vi.fn();
-const loadCronStore = vi.fn();
-const resolveCronStorePath = vi.fn();
-const saveCronStore = vi.fn();
-
-vi.mock("openclaw/plugin-sdk/config-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/config-runtime")>();
-  return {
-    ...actual,
-    readConfigFileSnapshotForWrite,
-    writeConfigFile,
-    loadCronStore,
-    resolveCronStorePath,
-    saveCronStore,
-  };
-});
+const numericTelegramTargetNormalizers = [
+  { name: "normalizeTelegramChatId", normalize: normalizeTelegramChatId },
+  { name: "normalizeTelegramLookupTarget", normalize: normalizeTelegramLookupTarget },
+];
 
 describe("stripTelegramInternalPrefixes", () => {
   it("strips telegram prefix", () => {
@@ -96,6 +89,17 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("does not route unsafe topic suffixes", () => {
+    expect(parseTelegramTarget("-1001234567890:9007199254740992")).toEqual({
+      chatId: "-1001234567890:9007199254740992",
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("-1001234567890:topic:9007199254740992")).toEqual({
+      chatId: "-1001234567890:topic:9007199254740992",
+      chatType: "unknown",
+    });
+  });
+
   it("strips internal prefixes before parsing", () => {
     expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual({
       chatId: "-1001234567890",
@@ -105,17 +109,41 @@ describe("parseTelegramTarget", () => {
   });
 });
 
+describe("telegram numeric target normalization", () => {
+  it.each(numericTelegramTargetNormalizers)(
+    "$name keeps numeric chat ids unchanged",
+    ({ normalize }) => {
+      expect(normalize("-1001234567890")).toBe("-1001234567890");
+      expect(normalize("123456789")).toBe("123456789");
+    },
+  );
+});
+
+describe("normalizeTelegramOutboundTarget", () => {
+  it("normalizes legacy durable group retry targets for Telegram sends", () => {
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890")).toBe("-1001234567890");
+  });
+
+  it("normalizes legacy durable group retry targets with topic suffixes", () => {
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:topic:77")).toBe(
+      "-1001234567890:topic:77",
+    );
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:77")).toBe("-1001234567890:77");
+  });
+
+  it("keeps already-valid numeric and non-numeric targets on the send path", () => {
+    expect(normalizeTelegramOutboundTarget("-1001234567890")).toBe("-1001234567890");
+    expect(normalizeTelegramOutboundTarget("group:not-a-number")).toBe("group:not-a-number");
+    expect(normalizeTelegramOutboundTarget("@mychannel")).toBe("@mychannel");
+  });
+});
+
 describe("normalizeTelegramChatId", () => {
   it("rejects username and t.me forms", () => {
     expect(normalizeTelegramChatId("telegram:https://t.me/MyChannel")).toBeUndefined();
     expect(normalizeTelegramChatId("tg:t.me/mychannel")).toBeUndefined();
     expect(normalizeTelegramChatId("@MyChannel")).toBeUndefined();
     expect(normalizeTelegramChatId("MyChannel")).toBeUndefined();
-  });
-
-  it("keeps numeric chat ids unchanged", () => {
-    expect(normalizeTelegramChatId("-1001234567890")).toBe("-1001234567890");
-    expect(normalizeTelegramChatId("123456789")).toBe("123456789");
   });
 
   it("returns undefined for empty input", () => {
@@ -129,11 +157,6 @@ describe("normalizeTelegramLookupTarget", () => {
     expect(normalizeTelegramLookupTarget("tg:t.me/mychannel")).toBe("@mychannel");
     expect(normalizeTelegramLookupTarget("@MyChannel")).toBe("@MyChannel");
     expect(normalizeTelegramLookupTarget("MyChannel")).toBe("@MyChannel");
-  });
-
-  it("keeps numeric chat ids unchanged", () => {
-    expect(normalizeTelegramLookupTarget("-1001234567890")).toBe("-1001234567890");
-    expect(normalizeTelegramLookupTarget("123456789")).toBe("123456789");
   });
 
   it("rejects invalid username forms", () => {
@@ -177,7 +200,6 @@ describe("telegram group policy", () => {
           },
         },
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
     } as any;
     expect(
       resolveTelegramGroupRequireMention({ cfg: telegramCfg, groupId: "-1001:topic:77" }),
@@ -187,6 +209,48 @@ describe("telegram group policy", () => {
         allow: ["message.send"],
       },
     );
+  });
+
+  it("honors account-scoped topic requireMention overrides", () => {
+    const telegramCfg = {
+      channels: {
+        telegram: {
+          botToken: "telegram-test",
+          groups: {
+            "-1001": {
+              requireMention: true,
+              topics: {
+                "77": {
+                  requireMention: true,
+                },
+              },
+            },
+          },
+          accounts: {
+            work: {
+              botToken: "telegram-work",
+              groups: {
+                "-1001": {
+                  topics: {
+                    "77": {
+                      requireMention: false,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } as any;
+
+    expect(
+      resolveTelegramGroupRequireMention({
+        cfg: telegramCfg,
+        accountId: "work",
+        groupId: "-1001:topic:77",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -212,6 +276,17 @@ describe("telegram allow-from helpers", () => {
       expect(isNumericTelegramUserId(testCase.value)).toBe(testCase.expected);
     }
   });
+
+  it("accepts only positive numeric sender user IDs", () => {
+    const cases = [
+      { value: "123456789", expected: true },
+      { value: "-1001234567890", expected: false },
+      { value: "@someone", expected: false },
+    ] as const;
+    for (const testCase of cases) {
+      expect(isNumericTelegramSenderUserId(testCase.value)).toBe(testCase.expected);
+    }
+  });
 });
 
 describe("telegram target normalization", () => {
@@ -235,165 +310,4 @@ describe("telegram target normalization", () => {
   });
 });
 
-describe("maybePersistResolvedTelegramTarget", () => {
-  let maybePersistResolvedTelegramTarget: typeof import("./target-writeback.js").maybePersistResolvedTelegramTarget;
-
-  beforeEach(async () => {
-    vi.resetModules();
-    ({ maybePersistResolvedTelegramTarget } = await import("./target-writeback.js"));
-    readConfigFileSnapshotForWrite.mockReset();
-    writeConfigFile.mockReset();
-    loadCronStore.mockReset();
-    resolveCronStorePath.mockReset();
-    saveCronStore.mockReset();
-    resolveCronStorePath.mockReturnValue("/tmp/cron/jobs.json");
-  });
-
-  it("skips writeback when target is already numeric", async () => {
-    await maybePersistResolvedTelegramTarget({
-      cfg: {} as OpenClawConfig,
-      rawTarget: "-100123",
-      resolvedChatId: "-100123",
-    });
-
-    expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
-    expect(loadCronStore).not.toHaveBeenCalled();
-  });
-
-  it("writes back matching config and cron targets", async () => {
-    readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: {
-        config: {
-          channels: {
-            telegram: {
-              defaultTo: "t.me/mychannel",
-              accounts: {
-                alerts: {
-                  defaultTo: "@mychannel",
-                },
-              },
-            },
-          },
-        },
-      },
-      writeOptions: { expectedConfigPath: "/tmp/openclaw.json" },
-    });
-    loadCronStore.mockResolvedValue({
-      version: 1,
-      jobs: [
-        { id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } },
-        { id: "b", delivery: { channel: "slack", to: "C123" } },
-      ],
-    });
-
-    await maybePersistResolvedTelegramTarget({
-      cfg: {
-        cron: { store: "/tmp/cron/jobs.json" },
-      } as OpenClawConfig,
-      rawTarget: "t.me/mychannel",
-      resolvedChatId: "-100123",
-    });
-
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    expect(writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          telegram: {
-            defaultTo: "-100123",
-            accounts: {
-              alerts: {
-                defaultTo: "-100123",
-              },
-            },
-          },
-        },
-      }),
-      expect.objectContaining({ expectedConfigPath: "/tmp/openclaw.json" }),
-    );
-    expect(saveCronStore).toHaveBeenCalledTimes(1);
-    expect(saveCronStore).toHaveBeenCalledWith(
-      "/tmp/cron/jobs.json",
-      expect.objectContaining({
-        jobs: [
-          { id: "a", delivery: { channel: "telegram", to: "-100123" } },
-          { id: "b", delivery: { channel: "slack", to: "C123" } },
-        ],
-      }),
-    );
-  });
-
-  it("preserves topic suffix style in writeback target", async () => {
-    readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: {
-        config: {
-          channels: {
-            telegram: {
-              defaultTo: "t.me/mychannel:topic:9",
-            },
-          },
-        },
-      },
-      writeOptions: {},
-    });
-    loadCronStore.mockResolvedValue({ version: 1, jobs: [] });
-
-    await maybePersistResolvedTelegramTarget({
-      cfg: {} as OpenClawConfig,
-      rawTarget: "t.me/mychannel:topic:9",
-      resolvedChatId: "-100123",
-    });
-
-    expect(writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          telegram: {
-            defaultTo: "-100123:topic:9",
-          },
-        },
-      }),
-      expect.any(Object),
-    );
-  });
-
-  it("matches username targets case-insensitively", async () => {
-    readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: {
-        config: {
-          channels: {
-            telegram: {
-              defaultTo: "https://t.me/mychannel",
-            },
-          },
-        },
-      },
-      writeOptions: {},
-    });
-    loadCronStore.mockResolvedValue({
-      version: 1,
-      jobs: [{ id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } }],
-    });
-
-    await maybePersistResolvedTelegramTarget({
-      cfg: {} as OpenClawConfig,
-      rawTarget: "@MyChannel",
-      resolvedChatId: "-100123",
-    });
-
-    expect(writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channels: {
-          telegram: {
-            defaultTo: "-100123",
-          },
-        },
-      }),
-      expect.any(Object),
-    );
-    expect(saveCronStore).toHaveBeenCalledWith(
-      "/tmp/cron/jobs.json",
-      expect.objectContaining({
-        jobs: [{ id: "a", delivery: { channel: "telegram", to: "-100123" } }],
-      }),
-    );
-  });
-});
+installMaybePersistResolvedTelegramTargetTests({ includeGatewayScopeCases: true });

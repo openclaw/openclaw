@@ -1,3 +1,6 @@
+// Whatsapp plugin module implements util behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export function elide(text?: string, limit = 400) {
   if (!text) {
     return text;
@@ -6,6 +9,20 @@ export function elide(text?: string, limit = 400) {
     return text;
   }
   return `${text.slice(0, limit)}… (truncated ${text.length - limit} chars)`;
+}
+
+export function markWhatsAppVisibleDeliveryError(error: unknown): unknown {
+  if (typeof error === "object" && error !== null && !Array.isArray(error)) {
+    try {
+      Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
+      return error;
+    } catch {
+      // Fall back to a wrapper when a platform error object is non-extensible.
+    }
+  }
+  const visibleError = new Error("visible WhatsApp reply delivery failed", { cause: error });
+  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
+  return visibleError;
 }
 
 export function isLikelyWhatsAppCryptoError(reason: unknown) {
@@ -45,7 +62,7 @@ export function isLikelyWhatsAppCryptoError(reason: unknown) {
   };
   const raw =
     reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}` : formatReason(reason);
-  const haystack = raw.toLowerCase();
+  const haystack = normalizeLowercaseStringOrEmpty(raw);
   const hasAuthError =
     haystack.includes("unsupported state or unable to authenticate data") ||
     haystack.includes("bad mac");
@@ -53,7 +70,6 @@ export function isLikelyWhatsAppCryptoError(reason: unknown) {
     return false;
   }
   return (
-    haystack.includes("@whiskeysockets/baileys") ||
     haystack.includes("baileys") ||
     haystack.includes("noise-handler") ||
     haystack.includes("aesdecryptgcm")

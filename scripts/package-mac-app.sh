@@ -5,9 +5,13 @@ set -euo pipefail
 # Outputs to dist/OpenClaw.app
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
 APP_ROOT="$ROOT_DIR/dist/OpenClaw.app"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="OpenClaw"
+MLX_TTS_HELPER_PRODUCT="openclaw-mlx-tts"
+MLX_TTS_HELPER_ROOT="$ROOT_DIR/apps/macos-mlx-tts"
+MLX_TTS_HELPER_BUILD_ROOT="$MLX_TTS_HELPER_ROOT/.build"
 BUNDLE_ID="${BUNDLE_ID:-ai.openclaw.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -38,7 +42,7 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
 fi
 
 sparkle_canonical_build_from_version() {
-  node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1"
+  (cd "$ROOT_DIR" && node --import tsx "$ROOT_DIR/scripts/sparkle-build.ts" canonical-build "$1")
 }
 
 build_path_for_arch() {
@@ -49,8 +53,40 @@ bin_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$PRODUCT"
 }
 
+helper_build_path_for_arch() {
+  echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
+}
+
+helper_bin_for_arch() {
+  echo "$(helper_build_path_for_arch "$1")/$BUILD_CONFIG/$MLX_TTS_HELPER_PRODUCT"
+}
+
 sparkle_framework_for_arch() {
   echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
+}
+
+PNPM_CMD=()
+
+resolve_pnpm_cmd() {
+  if command -v pnpm >/dev/null 2>&1; then
+    PNPM_CMD=(pnpm)
+    return 0
+  fi
+
+  if command -v corepack >/dev/null 2>&1 && (cd "$ROOT_DIR" && corepack pnpm --version >/dev/null 2>&1); then
+    PNPM_CMD=(corepack pnpm)
+    return 0
+  fi
+
+  echo "ERROR: pnpm is not on PATH and corepack pnpm is unavailable. Install pnpm or run with Node/Corepack on PATH." >&2
+  exit 1
+}
+
+run_pnpm() {
+  if [[ "${#PNPM_CMD[@]}" -eq 0 ]]; then
+    resolve_pnpm_cmd
+  fi
+  (cd "$ROOT_DIR" && "${PNPM_CMD[@]}" "$@")
 }
 
 merge_framework_machos() {
@@ -115,8 +151,8 @@ merge_framework_machos() {
 }
 
 if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]; then
-  echo "📦 Ensuring deps (pnpm install)"
-  (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
+  echo "📦 Ensuring deps (pnpm install --frozen-lockfile)"
+  run_pnpm install --frozen-lockfile --config.node-linker=hoisted
 else
   echo "📦 Skipping pnpm install (SKIP_PNPM_INSTALL=1)"
 fi
@@ -141,7 +177,7 @@ fi
 
 if [[ "${SKIP_TSC:-0}" != "1" ]]; then
   echo "📦 Building JS (pnpm build)"
-  (cd "$ROOT_DIR" && pnpm build)
+  run_pnpm build
 else
   echo "📦 Skipping JS build (SKIP_TSC=1)"
 fi
@@ -159,6 +195,7 @@ echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
 for arch in "${BUILD_ARCHS[@]}"; do
   BUILD_PATH="$(build_path_for_arch "$arch")"
   swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+  swift build --package-path "$MLX_TTS_HELPER_ROOT" -c "$BUILD_CONFIG" --product "$MLX_TTS_HELPER_PRODUCT" --build-path "$(helper_build_path_for_arch "$arch")" --arch "$arch"
 done
 
 BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
@@ -176,20 +213,14 @@ if [ ! -f "$INFO_PLIST_SRC" ]; then
   exit 1
 fi
 cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_BUILD}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :OpenClawBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :OpenClawGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :SUFeedURL ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" \
-  || /usr/libexec/PlistBuddy -c "Add :SUFeedURL string ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :SUPublicEDKey ${SPARKLE_PUBLIC_ED_KEY}" "$APP_ROOT/Contents/Info.plist" \
-  || /usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string ${SPARKLE_PUBLIC_ED_KEY}" "$APP_ROOT/Contents/Info.plist" || true
-if /usr/libexec/PlistBuddy -c "Set :SUEnableAutomaticChecks ${AUTO_CHECKS}" "$APP_ROOT/Contents/Info.plist"; then
-  true
-else
-  /usr/libexec/PlistBuddy -c "Add :SUEnableAutomaticChecks bool ${AUTO_CHECKS}" "$APP_ROOT/Contents/Info.plist" || true
-fi
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleIdentifier "$BUNDLE_ID"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleShortVersionString "$APP_VERSION"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" CFBundleVersion "$APP_BUILD"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawBuildTimestamp "$BUILD_TS"
+plist_set_string_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit "$GIT_COMMIT"
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUFeedURL "$SPARKLE_FEED_URL"
+plist_set_or_add_string "$APP_ROOT/Contents/Info.plist" SUPublicEDKey "$SPARKLE_PUBLIC_ED_KEY"
+plist_set_or_add_bool "$APP_ROOT/Contents/Info.plist" SUEnableAutomaticChecks "$AUTO_CHECKS"
 
 echo "🚚 Copying binary"
 cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/OpenClaw"
@@ -203,6 +234,18 @@ fi
 chmod +x "$APP_ROOT/Contents/MacOS/OpenClaw"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/OpenClaw" 2>/dev/null || true
+
+echo "🚚 Copying MLX TTS helper"
+cp "$(helper_bin_for_arch "$PRIMARY_ARCH")" "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+  HELPER_BIN_INPUTS=()
+  for arch in "${BUILD_ARCHS[@]}"; do
+    HELPER_BIN_INPUTS+=("$(helper_bin_for_arch "$arch")")
+  done
+  /usr/bin/lipo -create "${HELPER_BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+fi
+chmod +x "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT"
+/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/$MLX_TTS_HELPER_PRODUCT" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
@@ -226,6 +269,9 @@ SWIFT_COMPAT_LIB="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib
 if [ -f "$SWIFT_COMPAT_LIB" ]; then
   cp "$SWIFT_COMPAT_LIB" "$APP_ROOT/Contents/Frameworks/"
   chmod +x "$APP_ROOT/Contents/Frameworks/libswiftCompatibilitySpan.dylib"
+elif [[ "$BUILD_CONFIG" == "release" ]]; then
+  echo "ERROR: Swift compatibility library not found at $SWIFT_COMPAT_LIB" >&2
+  exit 1
 else
   echo "WARN: Swift compatibility library not found at $SWIFT_COMPAT_LIB (continuing)" >&2
 fi
@@ -236,15 +282,6 @@ cp "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/OpenClaw.icns" "$APP_ROOT/Co
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
-
-echo "📦 Copying model catalog"
-MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@mariozechner/pi-ai/dist/models.generated.js"
-MODEL_CATALOG_DEST="$APP_ROOT/Contents/Resources/models.generated.js"
-if [ -f "$MODEL_CATALOG_SRC" ]; then
-  cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
-else
-  echo "WARN: model catalog missing at $MODEL_CATALOG_SRC (continuing)" >&2
-fi
 
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
@@ -263,7 +300,8 @@ if [ -d "$OPENCLAWKIT_BUNDLE" ]; then
   rm -rf "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
   cp -R "$OPENCLAWKIT_BUNDLE" "$APP_ROOT/Contents/Resources/OpenClawKit_OpenClawKit.bundle"
 else
-  echo "WARN: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE (continuing)" >&2
+  echo "ERROR: OpenClawKit resource bundle not found at $OPENCLAWKIT_BUNDLE" >&2
+  exit 1
 fi
 
 echo "📦 Copying Textual resources"
@@ -293,8 +331,63 @@ else
   fi
 fi
 
-echo "⏹  Stopping any running OpenClaw"
-killall -q OpenClaw 2>/dev/null || true
+running_packaged_app_pids() {
+  command -v pgrep >/dev/null 2>&1 || return 0
+  local app_binary="$APP_ROOT/Contents/MacOS/OpenClaw"
+  local pid
+  pgrep -x "$PRODUCT" 2>/dev/null | while IFS= read -r pid; do
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+    if command -v lsof >/dev/null 2>&1 &&
+      lsof -a -p "$pid" -d txt -Fn 2>/dev/null | sed 's/^n//' | grep -Fx "$app_binary" >/dev/null; then
+      printf '%s\n' "$pid"
+      continue
+    fi
+    local command_line
+    command_line="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+    if [[ "$command_line" == "$app_binary" || "$command_line" == "$app_binary "* ]]; then
+      printf '%s\n' "$pid"
+    fi
+  done
+}
+
+stop_packaged_app_if_running() {
+  local pids=()
+  local pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] && pids+=("$pid")
+  done < <(running_packaged_app_pids)
+  if [[ "${#pids[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "⏹  Stopping packaged OpenClaw bundle (${pids[*]})"
+  kill "${pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 40); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    [[ "$alive" == "0" ]] && return 0
+    sleep 0.25
+  done
+  kill -KILL "${pids[@]}" 2>/dev/null || true
+  for _ in $(seq 1 20); do
+    local alive=0
+    for pid in "${pids[@]}"; do
+      if kill -0 "$pid" 2>/dev/null; then
+        alive=1
+      fi
+    done
+    [[ "$alive" == "0" ]] && return 0
+    sleep 0.1
+  done
+  echo "ERROR: Packaged OpenClaw bundle did not exit: ${pids[*]}" >&2
+  return 1
+}
+
+stop_packaged_app_if_running
 
 echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"

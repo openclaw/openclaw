@@ -1,6 +1,7 @@
+// Defines Discord channel configuration types.
 import type {
-  BlockStreamingChunkConfig,
-  BlockStreamingCoalesceConfig,
+  ChannelPreviewStreamingConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
@@ -10,18 +11,25 @@ import type {
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
-import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
+} from "./types.channel-health.js";
+import type {
+  DmConfig,
+  MentionPatternsPolicyConfig,
+  ProviderCommandsConfig,
+} from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
+export type DiscordChannelStreamingConfig = ChannelPreviewStreamingConfig;
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;
   token?: string;
 };
+
+export type DiscordMentionAliasesConfig = Record<string, string>;
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -37,7 +45,6 @@ export type DiscordDmConfig = {
 };
 
 export type DiscordGuildChannelConfig = {
-  allow?: boolean;
   requireMention?: boolean;
   /**
    * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
@@ -117,6 +124,8 @@ export type DiscordIntentsConfig = {
   presence?: boolean;
   /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */
   guildMembers?: boolean;
+  /** Enable Guild Voice States intent. Defaults to voice.enabled, unless explicitly set. */
+  voiceStates?: boolean;
 };
 
 export type DiscordVoiceAutoJoinConfig = {
@@ -126,23 +135,98 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordVoiceAllowedChannelConfig = {
+  /** Guild ID that owns the voice channel. */
+  guildId: string;
+  /** Voice channel ID allowed for realtime voice sessions. */
+  channelId: string;
+};
+
+export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
+
+export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
+
+export type DiscordVoiceRealtimeToolPolicy = "safe-read-only" | "owner" | "none";
+
+export type DiscordVoiceRealtimeBootstrapContextFile = "IDENTITY.md" | "USER.md" | "SOUL.md";
+
+export type DiscordVoiceRealtimeConfig = {
+  /** Realtime voice provider id, for example "openai". */
+  provider?: string;
+  /** Provider realtime session model, for example "gpt-realtime-2". */
+  model?: string;
+  /** Provider realtime output voice name, for example "cedar". */
+  speakerVoice?: string;
+  /** Provider realtime output voice id. */
+  speakerVoiceId?: string;
+  /** @deprecated Use speakerVoice. */
+  voice?: string;
+  /** System instructions passed to the realtime provider. */
+  instructions?: string;
+  /** Tool policy for bidi realtime consult calls. */
+  toolPolicy?: DiscordVoiceRealtimeToolPolicy;
+  /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
+  consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** Require a wake name before OpenAI agent-proxy realtime Discord voice responds. */
+  requireWakeName?: boolean;
+  /** Wake names that allow OpenAI agent-proxy realtime Discord voice to respond. Defaults to the routed agent name, then agent id. */
+  wakeNames?: string[];
+  /** Agent profile bootstrap files to include in realtime provider instructions. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable. */
+  bootstrapContextFiles?: DiscordVoiceRealtimeBootstrapContextFile[];
+  /** Allow Discord speaker-start events to interrupt active realtime playback. */
+  bargeIn?: boolean;
+  /** Minimum assistant playback duration before a barge-in truncates audio. Default: 250ms; set 0 for immediate interruption. */
+  minBargeInAudioEndMs?: number;
+  /** Debounce window before buffered transcripts are sent to the OpenClaw agent. */
+  debounceMs?: number;
+  /** Provider-specific realtime voice config keyed by provider id. */
+  providers?: Record<string, Record<string, unknown> | undefined>;
+};
+
+export type DiscordVoiceAgentSessionConfig = {
+  /** Which OpenClaw conversation should receive voice turns. Default: "voice". */
+  mode?: "voice" | "target";
+  /** Discord target used when mode is "target", for example "channel:123". */
+  target?: string;
+};
+
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
+  /** Voice conversation mode. Default: agent-proxy. */
+  mode?: DiscordVoiceMode;
+  /** Route voice turns through an existing OpenClaw Discord conversation. */
+  agentSession?: DiscordVoiceAgentSessionConfig;
+  /** Optional LLM model override for Discord voice channel responses. */
+  model?: string;
+  /** Realtime provider settings for agent-proxy or bidi modes. */
+  realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** If false, configured followUsers are ignored without removing the saved user list. */
+  followUsersEnabled?: boolean;
+  /** Discord user IDs whose current voice channel the bot should follow. */
+  followUsers?: string[];
+  /** Voice channels the bot is allowed to join or remain in. Unset means any voice channel is allowed. */
+  allowedChannels?: DiscordVoiceAllowedChannelConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
   decryptionFailureTolerance?: number;
+  /** Initial @discordjs/voice Ready wait in milliseconds (default: 30000). */
+  connectTimeoutMs?: number;
+  /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
+  reconnectGraceMs?: number;
+  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2000). */
+  captureSilenceGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
 
 export type DiscordExecApprovalConfig = {
-  /** Enable exec approval forwarding to Discord DMs. Default: false. */
-  enabled?: boolean;
-  /** Discord user IDs to receive approval prompts. Required if enabled. */
+  /** Enable mode for Discord exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
+  /** Discord user IDs to receive approval prompts. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: string[];
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
@@ -152,13 +236,15 @@ export type DiscordExecApprovalConfig = {
   cleanupAfterResolve?: boolean;
   /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
    *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
-   *  are only usable by configured approvers; other users receive an ephemeral denial. */
+   *  are only usable by resolved approvers; other users receive an ephemeral denial. */
   target?: "dm" | "channel" | "both";
 };
 
 export type DiscordAgentComponentsConfig = {
   /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
   enabled?: boolean;
+  /** Time in milliseconds before sent Discord component callbacks expire. Default: 1800000. */
+  ttlMs?: number;
 };
 
 export type DiscordUiComponentsConfig = {
@@ -188,13 +274,21 @@ export type DiscordThreadBindingsConfig = {
    */
   maxAgeHours?: number;
   /**
-   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Discord
-   * threads for subagent sessions. Default: false (opt-in).
+   * Allow session spawns to auto-create + bind Discord threads.
+   * Applies to native subagent and ACP thread spawns. Default: true.
+   */
+  spawnSessions?: boolean;
+  /**
+   * Default context mode for native subagents spawned into a bound Discord thread.
+   * Default: "fork".
+   */
+  defaultSpawnContext?: "isolated" | "fork";
+  /**
+   * @deprecated Use spawnSessions instead.
    */
   spawnSubagentSessions?: boolean;
   /**
-   * Allow `/acp spawn` to auto-create + bind Discord threads for ACP
-   * sessions. Default: false (opt-in).
+   * @deprecated Use spawnSessions instead.
    */
   spawnAcpSessions?: boolean;
 };
@@ -202,6 +296,11 @@ export type DiscordThreadBindingsConfig = {
 export type DiscordSlashCommandConfig = {
   /** Reply ephemerally (default: true). */
   ephemeral?: boolean;
+};
+
+export type DiscordThreadConfig = {
+  /** If true, Discord thread sessions inherit the parent channel transcript. Default: false. */
+  inheritParent?: boolean;
 };
 
 export type DiscordAutoPresenceConfig = {
@@ -233,15 +332,42 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: SecretInput;
+  /** Optional Discord application/client ID. Set this when REST application lookup is blocked. */
+  applicationId?: string;
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
+  /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */
+  gatewayInfoTimeoutMs?: number;
+  /** Startup wait for the gateway READY event before restarting the socket. Default: 15000. */
+  gatewayReadyTimeoutMs?: number;
+  /** Runtime reconnect wait for the gateway READY event before force-stopping the lifecycle. Default: 30000. */
+  gatewayRuntimeReadyTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
+  /**
+   * Sliding-window guard that suppresses runaway two-bot exchanges. Default on
+   * whenever `allowBots` lets bot messages reach dispatch. See #58789.
+   */
+  botLoopProtection?: {
+    /** Enable the bot-pair sliding-window guard (default: true when allowBots is set). */
+    enabled?: boolean;
+    /** Maximum messages a single bot pair may exchange in the configured window. Default: 20. */
+    maxEventsPerWindow?: number;
+    /** Sliding window length in seconds. Default: 60. */
+    windowSeconds?: number;
+    /** Cooldown seconds applied to a bot pair after the limit is hit. Default: 60. */
+    cooldownSeconds?: number;
+  };
   /**
    * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
    * Default behavior is ID-only matching.
    */
   dangerouslyAllowNameMatching?: boolean;
+  /**
+   * Deterministic outbound @handle rewrites for known Discord users.
+   * Keys are handles without the leading @; values are Discord user IDs.
+   */
+  mentionAliases?: DiscordMentionAliasesConfig;
   /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies
@@ -249,30 +375,19 @@ export type DiscordAccountConfig = {
    * - "allowlist": only allow channels present in discord.guilds.*.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Scope configured groupChat mentionPatterns to selected Discord channel IDs. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
   /**
-   * Live stream preview mode:
-   * - "off": disable preview updates
-   * - "partial": edit a single preview message
-   * - "block": stream in chunked preview updates
-   * - "progress": alias that maps to "partial" on Discord
-   *
-   * Legacy boolean values are still accepted and auto-migrated.
+   * Suppress Discord-generated link embeds for outbound messages. Default: true.
+   * Explicit `embeds` payloads are still sent normally.
    */
-  streaming?: DiscordStreamMode | boolean;
-  /**
-   * @deprecated Legacy key; migrated automatically to `streaming`.
-   */
-  streamMode?: "partial" | "block" | "off";
-  /** Chunking config for Discord stream previews in `streaming: "block"`. */
-  draftChunk?: BlockStreamingChunkConfig;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  suppressEmbeds?: boolean;
+  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
+  streaming?: DiscordChannelStreamingConfig;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines
@@ -289,15 +404,17 @@ export type DiscordAccountConfig = {
   retry?: OutboundRetryConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: DiscordActionConfig;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** Thread session behavior. */
+  thread?: DiscordThreadConfig;
   /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM policy key. Doctor migrates legacy channels.discord.dm.policy here.
    * Legacy key: channels.discord.dm.policy.
    */
   dmPolicy?: DmPolicy;
   /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM allowlist. Doctor migrates legacy channels.discord.dm.allowFrom here.
    * Legacy key: channels.discord.dm.allowFrom.
    */
   allowFrom?: string[];
@@ -346,18 +463,18 @@ export type DiscordAccountConfig = {
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
   /**
-   * In-process worker settings for queued inbound Discord runs.
-   * This is separate from Carbon's eventQueue listener budget.
+   * Legacy compatibility block. Discord no longer enforces channel-owned
+   * timeouts for queued inbound agent runs.
    */
   inboundWorker?: {
     /**
-     * Max time (ms) a queued inbound run may execute before OpenClaw aborts it.
-     * Defaults to 1800000 (30 minutes). Set 0 to disable the worker-owned timeout.
+     * Ignored. Queued Discord agent runs are governed by the session/tool/runtime
+     * lifecycle, not by Discord channel config.
      */
     runTimeoutMs?: number;
   };
   /**
-   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
+   * Discord EventQueue configuration. Controls how Discord gateway events are processed.
    * `listenerTimeout` only covers gateway listener work such as normalization and enqueue.
    * It does not control the lifetime of queued inbound agent turns.
    */

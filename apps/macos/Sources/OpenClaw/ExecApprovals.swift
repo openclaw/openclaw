@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import OSLog
 import Security
@@ -84,7 +85,7 @@ enum ExecAsk: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum ExecApprovalDecision: String, Codable {
+enum ExecApprovalDecision: String, Codable, Equatable {
     case allowOnce = "allow-once"
     case allowAlways = "allow-always"
     case deny
@@ -227,6 +228,19 @@ enum ExecApprovalsStore {
     private static let defaultAskFallback: ExecSecurity = .deny
     private static let defaultAutoAllowSkills = false
     private static let secureStateDirPermissions = 0o700
+    private static let fileLock = NSRecursiveLock()
+
+    private enum LegacyMigrationResult {
+        case notNeeded
+        case migrated
+        case blocked
+    }
+
+    private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
+        self.fileLock.lock()
+        defer { self.fileLock.unlock() }
+        return try body()
+    }
 
     static func fileURL() -> URL {
         OpenClawPaths.stateDirURL.appendingPathComponent("exec-approvals.json")
@@ -234,6 +248,195 @@ enum ExecApprovalsStore {
 
     static func socketPath() -> String {
         OpenClawPaths.stateDirURL.appendingPathComponent("exec-approvals.sock").path
+    }
+
+    private static func legacyStateDirURLs() -> [URL] {
+        if let home = OpenClawEnv.path("OPENCLAW_HOME") {
+            var urls = [
+                URL(fileURLWithPath: home, isDirectory: true)
+                    .appendingPathComponent(".openclaw", isDirectory: true),
+            ]
+            let osHomeURL = FileManager().homeDirectoryForCurrentUser
+                .appendingPathComponent(".openclaw", isDirectory: true)
+            if !urls.contains(where: {
+                $0.standardizedFileURL.path == osHomeURL.standardizedFileURL.path
+            }) {
+                urls.append(osHomeURL)
+            }
+            return urls
+        }
+        return [
+            FileManager().homeDirectoryForCurrentUser
+                .appendingPathComponent(".openclaw", isDirectory: true),
+        ]
+    }
+
+    private static func legacyFileURLIfPending() -> URL? {
+        guard OpenClawEnv.path("OPENCLAW_STATE_DIR") != nil else { return nil }
+        let targetURL = self.fileURL()
+        for stateDirURL in self.legacyStateDirURLs() {
+            let legacyURL = stateDirURL
+                .appendingPathComponent("exec-approvals.json", isDirectory: false)
+            guard legacyURL.standardizedFileURL.path != targetURL.standardizedFileURL.path else {
+                continue
+            }
+            guard FileManager().fileExists(atPath: legacyURL.path) else { continue }
+            guard !FileManager().fileExists(atPath: targetURL.path) else { return nil }
+            return legacyURL
+        }
+        return nil
+    }
+
+    private static func unmigratedLegacyFallbackFile() -> ExecApprovalsFile {
+        ExecApprovalsFile(
+            version: 1,
+            socket: nil,
+            defaults: ExecApprovalsDefaults(
+                security: .deny,
+                ask: .always,
+                askFallback: .deny,
+                autoAllowSkills: nil),
+            agents: [:])
+    }
+
+    private static func isLegacyDefaultSocketPath(_ raw: String, legacyFileURL: URL) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        let expanded = self.expandPath(trimmed)
+        let legacySocket = legacyFileURL.deletingLastPathComponent()
+            .appendingPathComponent("exec-approvals.sock", isDirectory: false)
+            .path
+        return URL(fileURLWithPath: expanded).standardizedFileURL.path
+            == URL(fileURLWithPath: legacySocket).standardizedFileURL.path
+    }
+
+    private static func hasSymlinkParent(_ url: URL) -> Bool {
+        var cursor = url.deletingLastPathComponent()
+        let manager = FileManager()
+        while true {
+            var isDirectory = ObjCBool(false)
+            if manager.fileExists(atPath: cursor.path, isDirectory: &isDirectory) {
+                if (try? manager.destinationOfSymbolicLink(atPath: cursor.path)) != nil {
+                    return true
+                }
+            }
+            let parent = cursor.deletingLastPathComponent()
+            if parent.path == cursor.path { return false }
+            cursor = parent
+        }
+    }
+
+    private static func archiveMigratedLegacyFile(_ legacyURL: URL) throws -> URL {
+        let manager = FileManager()
+        var archiveURL = URL(fileURLWithPath: "\(legacyURL.path).migrated")
+        if manager.fileExists(atPath: archiveURL.path) {
+            archiveURL = URL(fileURLWithPath: "\(archiveURL.path)-\(UUID().uuidString)")
+        }
+        try manager.moveItem(at: legacyURL, to: archiveURL)
+        return archiveURL
+    }
+
+    private static func writeMigratedFileExclusively(_ data: Data, to targetURL: URL) throws -> Bool {
+        let tempURL = targetURL.deletingLastPathComponent()
+            .appendingPathComponent(".exec-approvals.migration.\(UUID().uuidString)")
+        let fd = open(tempURL.path, O_WRONLY | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR)
+        if fd == -1 {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        var closed = false
+        defer {
+            if !closed { close(fd) }
+        }
+        do {
+            try data.withUnsafeBytes { rawBuffer in
+                guard let base = rawBuffer.baseAddress else { return }
+                var offset = 0
+                while offset < rawBuffer.count {
+                    let written = Darwin.write(
+                        fd,
+                        base.advanced(by: offset),
+                        rawBuffer.count - offset)
+                    if written < 0 {
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                    offset += written
+                }
+            }
+            close(fd)
+            closed = true
+            let copied = copyfile(
+                tempURL.path,
+                targetURL.path,
+                nil,
+                copyfile_flags_t(COPYFILE_DATA | COPYFILE_EXCL))
+            if copied == -1 {
+                if errno == EEXIST {
+                    try? FileManager().removeItem(at: tempURL)
+                    return false
+                }
+                try? FileManager().removeItem(at: targetURL)
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            try? FileManager().removeItem(at: tempURL)
+            return true
+        } catch {
+            try? FileManager().removeItem(at: tempURL)
+            throw error
+        }
+    }
+
+    private static func migrateLegacyFileIfNeeded() -> LegacyMigrationResult {
+        guard let legacyURL = self.legacyFileURLIfPending() else { return .notNeeded }
+        let targetURL = self.fileURL()
+        do {
+            if self.hasSymlinkParent(targetURL) {
+                throw NSError(domain: "ExecApprovals", code: 10, userInfo: [
+                    NSLocalizedDescriptionKey: "target path has a symlink parent",
+                ])
+            }
+            let data = try Data(contentsOf: legacyURL)
+            var file = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
+            guard file.version == 1 else {
+                throw NSError(domain: "ExecApprovals", code: 11, userInfo: [
+                    NSLocalizedDescriptionKey: "unsupported legacy approvals version",
+                ])
+            }
+            file = self.normalizeIncoming(file)
+            let rawSocketPath = file.socket?.path?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if self.isLegacyDefaultSocketPath(rawSocketPath, legacyFileURL: legacyURL) {
+                if file.socket == nil {
+                    file.socket = ExecApprovalsSocketConfig(path: nil, token: nil)
+                }
+                file.socket?.path = self.socketPath()
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let migrated = try encoder.encode(file)
+            self.ensureSecureStateDirectory()
+            try FileManager().createDirectory(
+                at: targetURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            if FileManager().fileExists(atPath: targetURL.path) { return .notNeeded }
+            let created = try self.writeMigratedFileExclusively(migrated, to: targetURL)
+            if !created { return .notNeeded }
+            try? FileManager().setAttributes(
+                [.posixPermissions: 0o600],
+                ofItemAtPath: targetURL.path)
+            do {
+                _ = try self.archiveMigratedLegacyFile(legacyURL)
+            } catch {
+                self.logger
+                    .warning(
+                        "exec approvals legacy archive failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return .migrated
+        } catch {
+            self.logger
+                .error(
+                    "exec approvals legacy migration failed: \(error.localizedDescription, privacy: .public)")
+            return .blocked
+        }
     }
 
     static func normalizeIncoming(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
@@ -270,27 +473,39 @@ enum ExecApprovalsStore {
     }
 
     static func readSnapshot() -> ExecApprovalsSnapshot {
-        let url = self.fileURL()
-        guard FileManager().fileExists(atPath: url.path) else {
+        self.withFileLock {
+            if self.legacyFileURLIfPending() != nil {
+                let file = self.unmigratedLegacyFallbackFile()
+                return ExecApprovalsSnapshot(
+                    path: self.fileURL().path,
+                    exists: false,
+                    hash: self.hashRaw(nil),
+                    file: file)
+            }
+            let url = self.fileURL()
+            guard FileManager().fileExists(atPath: url.path) else {
+                return ExecApprovalsSnapshot(
+                    path: url.path,
+                    exists: false,
+                    hash: self.hashRaw(nil),
+                    file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
+            }
+            let raw = try? String(contentsOf: url, encoding: .utf8)
+            let data = raw.flatMap { $0.data(using: .utf8) }
+            let decoded: ExecApprovalsFile = {
+                if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data),
+                   file.version == 1
+                {
+                    return file
+                }
+                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            }()
             return ExecApprovalsSnapshot(
                 path: url.path,
-                exists: false,
-                hash: self.hashRaw(nil),
-                file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
+                exists: true,
+                hash: self.hashRaw(raw),
+                file: decoded)
         }
-        let raw = try? String(contentsOf: url, encoding: .utf8)
-        let data = raw.flatMap { $0.data(using: .utf8) }
-        let decoded: ExecApprovalsFile = {
-            if let data, let file = try? JSONDecoder().decode(ExecApprovalsFile.self, from: data), file.version == 1 {
-                return file
-            }
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-        }()
-        return ExecApprovalsSnapshot(
-            path: url.path,
-            exists: true,
-            hash: self.hashRaw(raw),
-            file: decoded)
     }
 
     static func redactForSnapshot(_ file: ExecApprovalsFile) -> ExecApprovalsFile {
@@ -310,62 +525,84 @@ enum ExecApprovalsStore {
     }
 
     static func loadFile() -> ExecApprovalsFile {
-        let url = self.fileURL()
-        guard FileManager().fileExists(atPath: url.path) else {
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
-        }
-        do {
-            let data = try Data(contentsOf: url)
-            let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
-            if decoded.version != 1 {
+        self.withFileLock {
+            if self.legacyFileURLIfPending() != nil {
+                switch self.migrateLegacyFileIfNeeded() {
+                case .migrated, .notNeeded:
+                    break
+                case .blocked:
+                    return self.unmigratedLegacyFallbackFile()
+                }
+            }
+            let url = self.fileURL()
+            guard FileManager().fileExists(atPath: url.path) else {
                 return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
             }
-            return decoded
-        } catch {
-            self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
-            return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            do {
+                let data = try Data(contentsOf: url)
+                let decoded = try JSONDecoder().decode(ExecApprovalsFile.self, from: data)
+                if decoded.version != 1 {
+                    return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+                }
+                return decoded
+            } catch {
+                self.logger.warning("exec approvals load failed: \(error.localizedDescription, privacy: .public)")
+                return ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:])
+            }
         }
     }
 
     static func saveFile(_ file: ExecApprovalsFile) {
-        do {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(file)
-            let url = self.fileURL()
-            self.ensureSecureStateDirectory()
-            try FileManager().createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
-            try data.write(to: url, options: [.atomic])
-            try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        } catch {
-            self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+        self.withFileLock {
+            do {
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(file)
+                let url = self.fileURL()
+                self.ensureSecureStateDirectory()
+                try FileManager().createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true)
+                try data.write(to: url, options: [.atomic])
+                try? FileManager().setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            } catch {
+                self.logger.error("exec approvals save failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 
     static func ensureFile() -> ExecApprovalsFile {
-        self.ensureSecureStateDirectory()
-        let url = self.fileURL()
-        let existed = FileManager().fileExists(atPath: url.path)
-        let loaded = self.loadFile()
-        let loadedHash = self.hashFile(loaded)
+        self.withFileLock {
+            if self.legacyFileURLIfPending() != nil {
+                switch self.migrateLegacyFileIfNeeded() {
+                case .migrated, .notNeeded:
+                    break
+                case .blocked:
+                    return self.unmigratedLegacyFallbackFile()
+                }
+            }
+            self.ensureSecureStateDirectory()
+            let url = self.fileURL()
+            let existed = FileManager().fileExists(atPath: url.path)
+            let loaded = self.loadFile()
+            let loadedHash = self.hashFile(loaded)
 
-        var file = self.normalizeIncoming(loaded)
-        if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
-        let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if path.isEmpty {
-            file.socket?.path = self.socketPath()
+            var file = self.normalizeIncoming(loaded)
+            if file.socket == nil { file.socket = ExecApprovalsSocketConfig(path: nil, token: nil) }
+            let path = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if path.isEmpty {
+                file.socket?.path = self.socketPath()
+            }
+            let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if token.isEmpty {
+                file.socket?.token = self.generateToken()
+            }
+            if file.agents == nil { file.agents = [:] }
+            if !existed || loadedHash != self.hashFile(file) {
+                self.saveFile(file)
+            }
+            return file
         }
-        let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if token.isEmpty {
-            file.socket?.token = self.generateToken()
-        }
-        if file.agents == nil { file.agents = [:] }
-        if !existed || loadedHash != self.hashFile(file) {
-            self.saveFile(file)
-        }
-        return file
     }
 
     static func resolve(agentId: String?) -> ExecApprovalsResolved {
@@ -533,9 +770,11 @@ enum ExecApprovalsStore {
     }
 
     private static func updateFile(_ mutate: (inout ExecApprovalsFile) -> Void) {
-        var file = self.ensureFile()
-        mutate(&file)
-        self.saveFile(file)
+        self.withFileLock {
+            var file = self.ensureFile()
+            mutate(&file)
+            self.saveFile(file)
+        }
     }
 
     private static func ensureSecureStateDirectory() {
@@ -615,6 +854,18 @@ enum ExecApprovalsStore {
         let trimmedPattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedResolved = entry.lastResolvedPath?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let normalizedResolved = trimmedResolved.isEmpty ? nil : trimmedResolved
+
+        if !ExecApprovalHelpers.patternHasPathSelector(trimmedPattern),
+           !trimmedResolved.isEmpty,
+           case let .valid(migratedPattern) = ExecApprovalHelpers.validateAllowlistPattern(trimmedResolved)
+        {
+            return ExecAllowlistEntry(
+                id: entry.id,
+                pattern: migratedPattern,
+                lastUsedAt: entry.lastUsedAt,
+                lastUsedCommand: entry.lastUsedCommand,
+                lastResolvedPath: normalizedResolved)
+        }
 
         switch ExecApprovalHelpers.validateAllowlistPattern(trimmedPattern) {
         case let .valid(pattern):
@@ -724,17 +975,21 @@ enum ExecApprovalHelpers {
     static func validateAllowlistPattern(_ pattern: String?) -> ExecAllowlistPatternValidation {
         let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else { return .invalid(.empty) }
-        guard self.containsPathComponent(trimmed) else { return .invalid(.missingPathComponent) }
         return .valid(trimmed)
     }
 
-    static func isPathPattern(_ pattern: String?) -> Bool {
+    static func isValidAllowlistPattern(_ pattern: String?) -> Bool {
         switch self.validateAllowlistPattern(pattern) {
         case .valid:
             true
         case .invalid:
             false
         }
+    }
+
+    static func isPathPattern(_ pattern: String?) -> Bool {
+        let trimmed = pattern?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return self.patternHasPathSelector(trimmed)
     }
 
     static func parseDecision(_ raw: String?) -> ExecApprovalDecision? {
@@ -759,7 +1014,7 @@ enum ExecApprovalHelpers {
         return pattern.isEmpty ? nil : pattern
     }
 
-    private static func containsPathComponent(_ pattern: String) -> Bool {
+    static func patternHasPathSelector(_ pattern: String) -> Bool {
         pattern.contains("/") || pattern.contains("~") || pattern.contains("\\")
     }
 }

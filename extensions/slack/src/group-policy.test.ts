@@ -1,3 +1,4 @@
+// Slack tests cover group policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 
@@ -21,7 +22,6 @@ const cfg = {
       },
     },
   },
-  // oxlint-disable-next-line typescript/no-explicit-any
 } as any;
 
 describe("slack group policy", () => {

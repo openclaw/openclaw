@@ -6,18 +6,21 @@
  */
 
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
+import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/core";
-import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  buildPassiveProbedChannelStatusSummary,
+  runStoppablePassiveMonitor,
+} from "openclaw/plugin-sdk/extension-shared";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import type { OpenClawConfig } from "../api.js";
-import { buildChannelConfigSchema } from "../api.js";
 import { twitchMessageActions } from "./actions.js";
 import { removeClientManager } from "./client-manager-registry.js";
 import { TwitchConfigSchema } from "./config-schema.js";
@@ -25,10 +28,11 @@ import {
   DEFAULT_ACCOUNT_ID,
   getAccountConfig,
   listAccountIds,
+  resolveDefaultTwitchAccountId,
   resolveTwitchAccountContext,
   resolveTwitchSnapshotAccountId,
 } from "./config.js";
-import { twitchOutbound } from "./outbound.js";
+import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
 import { twitchSetupAdapter, twitchSetupWizard } from "./setup-surface.js";
@@ -77,11 +81,12 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
       capabilities: {
         chatTypes: ["group"],
       },
+      message: twitchMessageAdapter,
       configSchema: buildChannelConfigSchema(TwitchConfigSchema),
       config: {
         listAccountIds: (cfg: OpenClawConfig): string[] => listAccountIds(cfg),
         resolveAccount: (cfg: OpenClawConfig, accountId?: string | null): ResolvedTwitchAccount => {
-          const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
+          const resolvedAccountId = accountId ?? resolveDefaultTwitchAccountId(cfg);
           const account = getAccountConfig(cfg, resolvedAccountId);
           if (!account) {
             return {
@@ -98,9 +103,9 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
             ...account,
           };
         },
-        defaultAccountId: (): string => DEFAULT_ACCOUNT_ID,
+        defaultAccountId: (cfg: OpenClawConfig): string => resolveDefaultTwitchAccountId(cfg),
         isConfigured: (_account: unknown, cfg: OpenClawConfig): boolean =>
-          resolveTwitchAccountContext(cfg, DEFAULT_ACCOUNT_ID).configured,
+          resolveTwitchAccountContext(cfg).configured,
         isEnabled: (account: ResolvedTwitchAccount | undefined): boolean =>
           account?.enabled !== false,
         describeAccount: (account: TwitchAccountConfig | undefined) =>
@@ -130,7 +135,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
           kind: ChannelResolveKind;
           runtime: import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
         }): Promise<ChannelResolveResult[]> => {
-          const account = getAccountConfig(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
+          const account = getAccountConfig(cfg, accountId ?? resolveDefaultTwitchAccountId(cfg));
           if (!account) {
             return inputs.map((input) => ({
               input,
@@ -178,15 +183,32 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
 
           ctx.log?.info(`Starting Twitch connection for ${account.username}`);
 
-          // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-          const { monitorTwitchProvider } = await import("./monitor.js");
-          await monitorTwitchProvider({
-            account,
-            accountId,
-            config: ctx.cfg,
-            runtime: ctx.runtime,
-            abortSignal: ctx.abortSignal,
-          });
+          // Keep startAccount pending until abort fires; otherwise the channel
+          // supervisor reads the settled task as `channel exited without an
+          // error` and triggers a restart loop. See #60071.
+          try {
+            await runStoppablePassiveMonitor({
+              abortSignal: ctx.abortSignal,
+              start: async () => {
+                // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+                const { monitorTwitchProvider } = await import("./monitor.js");
+                return monitorTwitchProvider({
+                  account,
+                  accountId,
+                  config: ctx.cfg,
+                  runtime: ctx.runtime,
+                  abortSignal: ctx.abortSignal,
+                });
+              },
+            });
+          } catch (error) {
+            ctx.setStatus?.({
+              accountId,
+              running: false,
+              lastStopAt: Date.now(),
+            });
+            throw error;
+          }
         },
         stopAccount: async (ctx): Promise<void> => {
           const account = ctx.account;

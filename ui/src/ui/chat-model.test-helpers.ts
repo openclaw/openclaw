@@ -1,3 +1,4 @@
+// Control UI module implements chat model helpers behavior.
 import type {
   GatewaySessionRow,
   ModelCatalogEntry,
@@ -60,6 +61,10 @@ export function createSessionsListResult(
     modelProvider?: string | null;
     defaultsModel?: string | null;
     defaultsProvider?: string | null;
+    defaultsThinkingLevels?: SessionsListResult["defaults"]["thinkingLevels"];
+    defaultsThinkingOptions?: string[];
+    defaultsThinkingDefault?: string;
+    thinkingDefault?: string;
     omitSessionFromList?: boolean;
   } = {},
 ): SessionsListResult {
@@ -68,6 +73,10 @@ export function createSessionsListResult(
     modelProvider = model ? "openai" : null,
     defaultsModel = "gpt-5",
     defaultsProvider = defaultsModel ? "openai" : null,
+    defaultsThinkingLevels,
+    defaultsThinkingOptions,
+    defaultsThinkingDefault,
+    thinkingDefault,
     omitSessionFromList = false,
   } = params;
 
@@ -79,6 +88,9 @@ export function createSessionsListResult(
       modelProvider: defaultsProvider,
       model: defaultsModel,
       contextTokens: null,
+      ...(defaultsThinkingLevels ? { thinkingLevels: defaultsThinkingLevels } : {}),
+      ...(defaultsThinkingOptions ? { thinkingOptions: defaultsThinkingOptions } : {}),
+      ...(defaultsThinkingDefault ? { thinkingDefault: defaultsThinkingDefault } : {}),
     },
     sessions: omitSessionFromList
       ? []
@@ -86,6 +98,7 @@ export function createSessionsListResult(
           createMainSessionRow({
             ...(modelProvider ? { modelProvider } : {}),
             ...(model ? { model } : {}),
+            ...(thinkingDefault ? { thinkingDefault } : {}),
           }),
         ],
   };

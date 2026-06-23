@@ -1,19 +1,19 @@
+// Verifies cron retention schema parsing and defaults.
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema cron retention and run-log validation", () => {
   it("accepts valid cron.sessionRetention and runLog values", () => {
-    expect(() =>
-      OpenClawSchema.parse({
-        cron: {
-          sessionRetention: "1h30m",
-          runLog: {
-            maxBytes: "5mb",
-            keepLines: 2500,
-          },
+    const result = OpenClawSchema.safeParse({
+      cron: {
+        sessionRetention: "1h30m",
+        runLog: {
+          maxBytes: "5mb",
+          keepLines: 2500,
         },
-      }),
-    ).not.toThrow();
+      },
+    });
+    expect(result.success).toBe(true);
   });
 
   it("rejects invalid cron.sessionRetention", () => {

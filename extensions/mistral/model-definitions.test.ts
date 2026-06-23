@@ -1,53 +1,79 @@
+// Mistral tests cover model definitions plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildMistralCatalogModels,
   buildMistralModelDefinition,
-  MISTRAL_DEFAULT_CONTEXT_WINDOW,
-  MISTRAL_DEFAULT_COST,
-  MISTRAL_DEFAULT_MAX_TOKENS,
   MISTRAL_DEFAULT_MODEL_ID,
 } from "./model-definitions.js";
 
-describe("mistral model definitions", () => {
-  it("uses current Pi pricing for the bundled default model", () => {
-    expect(buildMistralModelDefinition()).toMatchObject({
-      id: MISTRAL_DEFAULT_MODEL_ID,
-      contextWindow: MISTRAL_DEFAULT_CONTEXT_WINDOW,
-      maxTokens: MISTRAL_DEFAULT_MAX_TOKENS,
-      cost: MISTRAL_DEFAULT_COST,
-    });
+function catalogModelById(models: ReturnType<typeof buildMistralCatalogModels>, id: string) {
+  const model = models.find((candidate) => candidate.id === id);
+  if (!model) {
+    throw new Error(`expected Mistral catalog model ${id}`);
+  }
+  return model;
+}
 
-    expect(MISTRAL_DEFAULT_COST).toEqual({
+describe("mistral model definitions", () => {
+  it("uses current OpenClaw pricing for the bundled default model", () => {
+    const model = buildMistralModelDefinition();
+    expect(model.id).toBe(MISTRAL_DEFAULT_MODEL_ID);
+    expect(model.contextWindow).toBe(262144);
+    expect(model.maxTokens).toBe(16384);
+    expect(model.cost).toEqual({
       input: 0.5,
       output: 1.5,
-      cacheRead: 0,
+      cacheRead: 0.05,
       cacheWrite: 0,
     });
   });
 
+  it("prices cached Mistral input tokens at ten percent of standard input tokens", () => {
+    const models = buildMistralCatalogModels();
+
+    for (const model of models) {
+      expect(model.cost.cacheRead).toBeCloseTo(model.cost.input * 0.1, 10);
+      expect(model.cost.cacheWrite).toBe(0);
+    }
+  });
+
+  it("charges nonzero cost for cached-token usage on the default model", () => {
+    const model = buildMistralModelDefinition();
+    const cacheReadTokens = 20_000;
+    const cacheReadCost = (model.cost.cacheRead / 1_000_000) * cacheReadTokens;
+
+    expect(cacheReadCost).toBeCloseTo(0.001, 10);
+    expect(cacheReadCost).toBeGreaterThan(0);
+  });
+
   it("publishes a curated set of current Mistral catalog models", () => {
-    expect(buildMistralCatalogModels()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "codestral-latest",
-          input: ["text"],
-          contextWindow: 256000,
-          maxTokens: 4096,
-        }),
-        expect.objectContaining({
-          id: "magistral-small",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 128000,
-          maxTokens: 40000,
-        }),
-        expect.objectContaining({
-          id: "pixtral-large-latest",
-          input: ["text", "image"],
-          contextWindow: 128000,
-          maxTokens: 32768,
-        }),
-      ]),
-    );
+    const models = buildMistralCatalogModels();
+    const codestral = catalogModelById(models, "codestral-latest");
+    expect(codestral.input).toEqual(["text"]);
+    expect(codestral.contextWindow).toBe(256000);
+    expect(codestral.maxTokens).toBe(4096);
+
+    const magistralSmall = catalogModelById(models, "magistral-small");
+    expect(magistralSmall.reasoning).toBe(true);
+    expect(magistralSmall.input).toEqual(["text"]);
+    expect(magistralSmall.contextWindow).toBe(128000);
+    expect(magistralSmall.maxTokens).toBe(40000);
+
+    const medium = catalogModelById(models, "mistral-medium-3-5");
+    expect(medium.reasoning).toBe(true);
+    expect(medium.input).toEqual(["text", "image"]);
+    expect(medium.contextWindow).toBe(262144);
+    expect(medium.maxTokens).toBe(8192);
+
+    const smallLatest = catalogModelById(models, "mistral-small-latest");
+    expect(smallLatest.reasoning).toBe(true);
+    expect(smallLatest.input).toEqual(["text", "image"]);
+    expect(smallLatest.contextWindow).toBe(128000);
+    expect(smallLatest.maxTokens).toBe(16384);
+
+    const pixtralLarge = catalogModelById(models, "pixtral-large-latest");
+    expect(pixtralLarge.input).toEqual(["text", "image"]);
+    expect(pixtralLarge.contextWindow).toBe(128000);
+    expect(pixtralLarge.maxTokens).toBe(32768);
   });
 });

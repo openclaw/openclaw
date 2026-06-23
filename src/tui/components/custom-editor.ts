@@ -1,5 +1,48 @@
-import { Editor, Key, matchesKey } from "@mariozechner/pi-tui";
+// Custom editor component handles multiline TUI input and key bindings.
+import { Editor, isKeyRelease, Key, matchesKey } from "@earendil-works/pi-tui";
 
+// Kitty keyboard protocol uses CSI-u sequences for AltGr on international layouts.
+const KITTY_CSI_U_SUFFIX_REGEX = /^(\d+)(?::(\d*))?(?::(\d+))?(?:;(\d+))?(?::(\d+))?u$/u;
+const KITTY_MODIFIERS = {
+  alt: 2,
+  ctrl: 4,
+};
+const LOCK_MODIFIER_MASK = 64 + 128;
+
+// Decodes Ctrl+Alt layout output into the intended printable AltGr character.
+function decodeAltGrPrintable(data: string): string | undefined {
+  if (!data.startsWith("\u001b[")) {
+    return undefined;
+  }
+
+  const match = data.slice(2).match(KITTY_CSI_U_SUFFIX_REGEX);
+  if (!match) {
+    return undefined;
+  }
+
+  const codepoint = Number.parseInt(match[1] ?? "", 10);
+  const baseLayoutKey = match[3] ? Number.parseInt(match[3], 10) : undefined;
+  const modifierValue = match[4] ? Number.parseInt(match[4], 10) : 1;
+  const modifier = (Number.isFinite(modifierValue) ? modifierValue - 1 : 0) & ~LOCK_MODIFIER_MASK;
+
+  if (modifier !== (KITTY_MODIFIERS.alt | KITTY_MODIFIERS.ctrl)) {
+    return undefined;
+  }
+  if (typeof baseLayoutKey !== "number" || baseLayoutKey === codepoint) {
+    return undefined;
+  }
+  if (!Number.isFinite(codepoint) || codepoint < 32) {
+    return undefined;
+  }
+
+  try {
+    return String.fromCodePoint(codepoint);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Editor with OpenClaw TUI shortcuts layered on top of pi-tui text editing. */
 export class CustomEditor extends Editor {
   onEscape?: () => void;
   onCtrlC?: () => void;
@@ -11,10 +54,20 @@ export class CustomEditor extends Editor {
   onCtrlT?: () => void;
   onShiftTab?: () => void;
   onAltEnter?: () => void;
+  onAltUp?: () => void;
 
-  handleInput(data: string): void {
+  /** Dispatches TUI shortcuts before falling back to normal editor input handling. */
+  override handleInput(data: string): void {
+    if (isKeyRelease(data)) {
+      return;
+    }
+
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
       this.onAltEnter();
+      return;
+    }
+    if (matchesKey(data, Key.alt("up")) && this.onAltUp) {
+      this.onAltUp();
       return;
     }
     if (matchesKey(data, Key.ctrl("l")) && this.onCtrlL) {
@@ -55,6 +108,13 @@ export class CustomEditor extends Editor {
       }
       return;
     }
+
+    const altGrPrintable = decodeAltGrPrintable(data);
+    if (altGrPrintable !== undefined) {
+      super.handleInput(altGrPrintable);
+      return;
+    }
+
     super.handleInput(data);
   }
 }

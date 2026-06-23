@@ -1,7 +1,15 @@
+// Hooks CLI for listing, checking, toggling, installing, and updating hook integrations.
 import type { Command } from "commander";
+import {
+  decorativeEmoji,
+  decorativePrefix,
+} from "../../packages/terminal-core/src/decorative-emoji.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig, writeConfigFile } from "../config/io.js";
+import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,
@@ -10,13 +18,12 @@ import {
 import { resolveHookEntries } from "../hooks/policy.js";
 import type { HookEntry } from "../hooks/types.js";
 import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
-import { buildPluginStatusReport } from "../plugins/status.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
@@ -44,9 +51,10 @@ function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntr
 }
 
 function buildHooksReport(config: OpenClawConfig): HookStatusReport {
+  // Plugin-managed and workspace hooks share one resolved policy view for status/actions.
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
-  const pluginReport = buildPluginStatusReport({ config, workspaceDir });
+  const pluginReport = buildPluginDiagnosticsReport({ config, workspaceDir });
   const pluginEntries = pluginReport.hooks.map((hook) => hook.entry);
   const entries = mergeHookEntries(pluginEntries, workspaceEntries);
   return buildWorkspaceHookStatus(workspaceDir, { config, entries });
@@ -101,14 +109,15 @@ function formatHookStatus(hook: HookStatusEntry): string {
     return theme.success("✓ ready");
   }
   if (!hook.enabledByConfig) {
-    return theme.warn("⏸ disabled");
+    return theme.warn(decorativePrefix("⏸", "disabled"));
   }
   return theme.error("✗ missing");
 }
 
 function formatHookName(hook: HookStatusEntry): string {
-  const emoji = hook.emoji ?? "🔗";
-  return `${emoji} ${theme.command(hook.name)}`;
+  const emoji = hook.emoji ?? decorativeEmoji("🔗");
+  const name = theme.command(hook.name);
+  return emoji ? `${emoji} ${name}` : name;
 }
 
 function formatHookSource(hook: HookStatusEntry): string {
@@ -139,9 +148,7 @@ function formatHookMissingSummary(hook: HookStatusEntry): string {
 }
 
 function exitHooksCliWithError(err: unknown): never {
-  defaultRuntime.error(
-    `${theme.error("Error:")} ${err instanceof Error ? err.message : String(err)}`,
-  );
+  defaultRuntime.error(`${theme.error("Error:")} ${formatErrorMessage(err)}`);
   process.exit(1);
 }
 
@@ -266,14 +273,14 @@ export function formatHookInfo(
   }
 
   const lines: string[] = [];
-  const emoji = hook.emoji ?? "🔗";
+  const emoji = hook.emoji ?? decorativeEmoji("🔗");
   const status = hook.loadable
     ? theme.success("✓ Ready")
     : !hook.enabledByConfig
-      ? theme.warn("⏸ Disabled")
+      ? theme.warn(decorativePrefix("⏸", "Disabled"))
       : theme.error("✗ Missing requirements");
 
-  lines.push(`${emoji} ${theme.heading(hook.name)} ${status}`);
+  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${status}`);
   lines.push("");
   lines.push(hook.description);
   lines.push("");
@@ -409,7 +416,8 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
       if (hook.missing.os.length > 0) {
         reasons.push(`os: ${hook.missing.os.join(", ")}`);
       }
-      lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
+      const emoji = hook.emoji ?? decorativeEmoji("🔗");
+      lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
     }
   }
 
@@ -417,7 +425,8 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
 }
 
 export async function enableHook(hookName: string): Promise<void> {
-  const config = loadConfig();
+  const snapshot = await readConfigFileSnapshot();
+  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(buildHooksReport(config), hookName, { requireEligible: true });
   const nextConfig = buildConfigWithHookEnabled({
     config,
@@ -426,20 +435,27 @@ export async function enableHook(hookName: string): Promise<void> {
     ensureHooksEnabled: true,
   });
 
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+  });
   defaultRuntime.log(
-    `${theme.success("✓")} Enabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
+    `${theme.success("✓")} Enabled hook: ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
   );
 }
 
 export async function disableHook(hookName: string): Promise<void> {
-  const config = loadConfig();
+  const snapshot = await readConfigFileSnapshot();
+  const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(buildHooksReport(config), hookName);
   const nextConfig = buildConfigWithHookEnabled({ config, hookName, enabled: false });
 
-  await writeConfigFile(nextConfig);
+  await replaceConfigFile({
+    nextConfig,
+    ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+  });
   defaultRuntime.log(
-    `${theme.warn("⏸")} Disabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
+    `${theme.warn(decorativePrefix("⏸", "Disabled hook:"))} ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
   );
 }
 
@@ -461,7 +477,7 @@ export function registerHooksCli(program: Command): void {
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts) =>
       runHooksCliAction(async () => {
-        const config = loadConfig();
+        const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksList(report, opts), opts.json);
       }),
@@ -473,7 +489,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) =>
       runHooksCliAction(async () => {
-        const config = loadConfig();
+        const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHookInfo(report, name, opts), opts.json);
       }),
@@ -485,7 +501,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (opts) =>
       runHooksCliAction(async () => {
-        const config = loadConfig();
+        const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksCheck(report, opts), opts.json);
       }),
@@ -510,6 +526,24 @@ export function registerHooksCli(program: Command): void {
     );
 
   hooks
+    .command("relay", { hidden: true })
+    .description("Internal native harness hook relay")
+    .requiredOption("--provider <provider>", "Native harness provider")
+    .requiredOption("--relay-id <id>", "Native hook relay id")
+    .option("--generation <generation>", "Native hook relay registration generation")
+    .requiredOption("--event <event>", "Native hook event")
+    .option(
+      "--pre-tool-use-unavailable <mode>",
+      "PreToolUse fallback mode when the originating relay is unavailable",
+    )
+    .option("--timeout <ms>", "Gateway timeout in ms", "5000")
+    .action(async (opts: NativeHookRelayCliOptions) =>
+      runHooksCliAction(async () => {
+        process.exitCode = await runNativeHookRelayCli(opts);
+      }),
+    );
+
+  hooks
     .command("install")
     .description("Deprecated: install a hook pack via `openclaw plugins install`")
     .argument("<path-or-spec>", "Path to a hook pack or npm package spec")
@@ -519,7 +553,7 @@ export function registerHooksCli(program: Command): void {
       defaultRuntime.log(
         theme.warn("`openclaw hooks install` is deprecated; use `openclaw plugins install`."),
       );
-      await runPluginInstallCommand({ raw, opts });
+      await runPluginInstallCommand({ raw, opts, invalidateRuntimeCache: false });
     });
 
   hooks
@@ -537,7 +571,7 @@ export function registerHooksCli(program: Command): void {
 
   hooks.action(async () =>
     runHooksCliAction(async () => {
-      const config = loadConfig();
+      const config = getRuntimeConfig();
       const report = buildHooksReport(config);
       defaultRuntime.log(formatHooksList(report, {}));
     }),

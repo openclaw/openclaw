@@ -1,10 +1,13 @@
+/** Coordinates provider OAuth flows exposed by plugin-owned auth integrations. */
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
+/** Prompt payload used when OAuth flow code entry needs user input. */
 export type OAuthPrompt = { message: string; placeholder?: string };
 
 const validateRequiredInput = (value: string) => (value.trim().length > 0 ? undefined : "Required");
 
+/** Creates OAuth callbacks that use local browser auth locally and manual code entry on VPS hosts. */
 export function createVpsAwareOAuthHandlers(params: {
   isRemote: boolean;
   prompter: WizardPrompter;
@@ -18,6 +21,7 @@ export function createVpsAwareOAuthHandlers(params: {
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
 } {
   const manualPromptMessage = params.manualPromptMessage ?? "Paste the redirect URL";
+  // Remote hosts cannot open the user's browser, so auth starts in onAuth and finishes in onPrompt.
   let manualCodePromise: Promise<string> | undefined;
 
   return {
@@ -25,12 +29,10 @@ export function createVpsAwareOAuthHandlers(params: {
       if (params.isRemote) {
         params.spin.stop("OAuth URL ready");
         params.runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
-        manualCodePromise = params.prompter
-          .text({
-            message: manualPromptMessage,
-            validate: validateRequiredInput,
-          })
-          .then((value) => String(value));
+        manualCodePromise = params.prompter.text({
+          message: manualPromptMessage,
+          validate: validateRequiredInput,
+        });
         return;
       }
 
@@ -47,7 +49,7 @@ export function createVpsAwareOAuthHandlers(params: {
         placeholder: prompt.placeholder,
         validate: validateRequiredInput,
       });
-      return String(code);
+      return code;
     },
   };
 }

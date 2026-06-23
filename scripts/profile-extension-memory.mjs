@@ -1,20 +1,28 @@
 #!/usr/bin/env node
 
+// Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
+// report suitable for extension memory budget review.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { ensureExtensionMemoryBuild } from "./ensure-extension-memory-build.mjs";
+import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
+import { formatErrorMessage } from "./lib/error-format.mjs";
 
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_COMBINED_TIMEOUT_MS = 180_000;
 const DEFAULT_TOP = 10;
+const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
+const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
 const RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 
 function printHelp() {
   console.log(`Usage: node scripts/profile-extension-memory.mjs [options]
 
-Profiles peak RSS for built extension entrypoints in dist/extensions/*/index.js.
+Profiles peak RSS for built bundled plugin entrypoints.
 Run pnpm build first if you want stats for the latest source changes.
 
 Options:
@@ -36,14 +44,22 @@ Examples:
 }
 
 function parsePositiveInt(raw, flagName) {
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${flagName} must be a positive integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${flagName} must be a positive integer`);
   }
   return parsed;
 }
 
-function parseArgs(argv) {
+/**
+ * Parses extension memory profiler options after pnpm's optional separator.
+ */
+export function parseArgs(argv) {
+  const args = stripLeadingPackageManagerSeparator(argv);
   const options = {
     extensions: [],
     concurrency: DEFAULT_CONCURRENCY,
@@ -54,14 +70,14 @@ function parseArgs(argv) {
     skipCombined: false,
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
+  parseArgv: for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
     switch (arg) {
       case "--":
-        break;
+        break parseArgv;
       case "--extension":
       case "-e": {
-        const next = argv[index + 1];
+        const next = args[index + 1];
         if (!next) {
           throw new Error(`${arg} requires a value`);
         }
@@ -70,23 +86,23 @@ function parseArgs(argv) {
         break;
       }
       case "--concurrency":
-        options.concurrency = parsePositiveInt(argv[index + 1], arg);
+        options.concurrency = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--timeout-ms":
-        options.timeoutMs = parsePositiveInt(argv[index + 1], arg);
+        options.timeoutMs = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--combined-timeout-ms":
-        options.combinedTimeoutMs = parsePositiveInt(argv[index + 1], arg);
+        options.combinedTimeoutMs = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--top":
-        options.top = parsePositiveInt(argv[index + 1], arg);
+        options.top = parsePositiveInt(args[index + 1], arg);
         index += 1;
         break;
       case "--json": {
-        const next = argv[index + 1];
+        const next = args[index + 1];
         if (!next) {
           throw new Error(`${arg} requires a value`);
         }
@@ -115,13 +131,65 @@ function parseMaxRssMb(stderr) {
   return last ? Number(last[1]) / 1024 : null;
 }
 
-function summarizeStderr(stderr, lines = 8) {
-  return stderr.trim().split("\n").filter(Boolean).slice(0, lines).join("\n");
+function createOutputCapture() {
+  return { text: "", truncatedChars: 0 };
 }
 
-async function runCase({ repoRoot, env, hookPath, name, body, timeoutMs }) {
+function appendBoundedOutput(capture, chunk, maxChars = OUTPUT_CAPTURE_MAX_CHARS) {
+  const nextText = capture.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return capture.truncatedChars === 0
+      ? { text: nextText, truncatedChars: 0 }
+      : { text: nextText, truncatedChars: capture.truncatedChars };
+  }
+  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatCapturedOutput(capture) {
+  if (capture.truncatedChars === 0) {
+    return capture.text;
+  }
+  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
+}
+
+function scanMaxRssMb(tail, chunk, current) {
+  const text = `${tail}${String(chunk)}`;
+  const parsed = parseMaxRssMb(text);
+  const lineBreakIndex = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r"));
+  const openLine = lineBreakIndex === -1 ? text : text.slice(lineBreakIndex + 1);
+  return {
+    maxRssMb: parsed ?? current,
+    tail: openLine.slice(-(RSS_MARKER.length + 32)),
+  };
+}
+
+function summarizeStderr(stderr, lines = 8, maxChars = STDERR_PREVIEW_MAX_CHARS) {
+  const text = stderr.trim().split("\n").filter(Boolean).slice(0, lines).join("\n");
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const firstLine = text.split("\n", 1)[0] ?? "";
+  const prefix = firstLine.startsWith("[output truncated") ? `${firstLine}\n` : "";
+  return `${prefix}[stderr preview truncated ${text.length - maxChars} chars; showing tail]\n${text.slice(
+    -maxChars,
+  )}`;
+}
+
+/**
+ * Runs one import scenario in a child process and captures bounded output plus RSS.
+ */
+export async function runCase({
+  repoRoot,
+  env,
+  hookPath,
+  name,
+  body,
+  timeoutMs,
+  spawnImpl = spawn,
+}) {
   return await new Promise((resolve) => {
-    const child = spawn(
+    const child = spawnImpl(
       process.execPath,
       ["--import", hookPath, "--input-type=module", "--eval", body],
       {
@@ -131,30 +199,60 @@ async function runCase({ repoRoot, env, hookPath, name, body, timeoutMs }) {
       },
     );
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = createOutputCapture();
+    let stderr = createOutputCapture();
+    let stderrRssTail = "";
+    let maxRssMb = null;
     let timedOut = false;
+    let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
     }, timeoutMs);
+    timer.unref?.();
+
+    function settle(result) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    }
 
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedOutput(stdout, chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      const rssScan = scanMaxRssMb(stderrRssTail, chunk, maxRssMb);
+      stderrRssTail = rssScan.tail;
+      maxRssMb = rssScan.maxRssMb;
+      stderr = appendBoundedOutput(stderr, chunk);
+    });
+    child.on("error", (error) => {
+      const stderrText = formatCapturedOutput(stderr);
+      settle({
+        name,
+        code: null,
+        signal: null,
+        timedOut,
+        error: formatErrorMessage(error),
+        stdout: formatCapturedOutput(stdout),
+        stderr: stderrText,
+        maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
+      });
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      resolve({
+      const stderrText = formatCapturedOutput(stderr);
+      settle({
         name,
         code,
         signal,
         timedOut,
-        stdout,
-        stderr,
-        maxRssMb: parseMaxRssMb(stderr),
+        error: null,
+        stdout: formatCapturedOutput(stdout),
+        stderr: stderrText,
+        maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
       });
     });
   });
@@ -179,7 +277,7 @@ function findExtensionEntries(repoRoot) {
     .toSorted((a, b) => a.dir.localeCompare(b.dir));
 
   if (entries.length === 0) {
-    throw new Error("No built extension entrypoints found under dist/extensions/*/index.js");
+    throw new Error("No built bundled plugin entrypoints found in the dist plugin tree");
   }
   return entries;
 }
@@ -187,6 +285,10 @@ function findExtensionEntries(repoRoot) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const repoRoot = process.cwd();
+  ensureExtensionMemoryBuild({
+    rootDir: repoRoot,
+    requiredExtensionIds: options.extensions,
+  });
   const allEntries = findExtensionEntries(repoRoot);
   const selectedEntries =
     options.extensions.length === 0
@@ -208,9 +310,10 @@ async function main() {
   writeFileSync(
     hookPath,
     [
+      "import { writeSync } from 'node:fs';",
       "process.on('exit', () => {",
       "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
-      `  if (usage && typeof usage.maxRSS === 'number') console.error('${RSS_MARKER}' + String(usage.maxRSS));`,
+      `  if (usage && typeof usage.maxRSS === 'number') writeSync(2, '${RSS_MARKER}' + String(usage.maxRSS) + '\\n');`,
       "});",
       "",
     ].join("\n"),
@@ -331,6 +434,7 @@ async function main() {
       results,
     };
 
+    mkdirSync(path.dirname(jsonPath), { recursive: true });
     writeFileSync(jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 
     console.log(`[extension-memory] report: ${jsonPath}`);
@@ -346,14 +450,46 @@ async function main() {
         2,
       ),
     );
+
+    const failures = [];
+    if (report.baseline.status !== "ok") {
+      failures.push(`baseline import ${report.baseline.status}`);
+    }
+    if (report.baseline.maxRssMb === null) {
+      failures.push("baseline import did not report RSS");
+    }
+    if (report.combined !== null) {
+      if (report.combined.status !== "ok") {
+        failures.push(`combined import ${report.combined.status}`);
+      }
+      if (report.combined.maxRssMb === null) {
+        failures.push("combined import did not report RSS");
+      }
+    }
+    for (const result of report.results) {
+      if (result.status !== "ok") {
+        failures.push(`${result.dir} import ${result.status}`);
+      }
+      if (result.maxRssMb === null) {
+        failures.push(`${result.dir} import did not report RSS`);
+      }
+    }
+    if (failures.length > 0) {
+      for (const failure of failures) {
+        console.error(`[extension-memory] ${failure}`);
+      }
+      process.exitCode = 1;
+    }
   } finally {
     rmSync(tmpHome, { recursive: true, force: true });
   }
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(`[extension-memory] ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    await main();
+  } catch (error) {
+    console.error(`[extension-memory] ${formatErrorMessage(error)}`);
+    process.exit(1);
+  }
 }

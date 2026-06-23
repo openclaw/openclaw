@@ -1,7 +1,13 @@
+// Gateway live tool probe utilities.
+// Classifies nonce probe replies and retry conditions for live provider checks.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
+/** Returns true when both expected tool-read nonces are present. */
 export function hasExpectedToolNonce(text: string, nonceA: string, nonceB: string): boolean {
   return text.includes(nonceA) && text.includes(nonceB);
 }
 
+/** Returns true when the expected exec-read nonce is present. */
 export function hasExpectedSingleNonce(text: string, nonce: string): boolean {
   return text.includes(nonce);
 }
@@ -20,6 +26,13 @@ const NONCE_REFUSAL_MARKERS = [
   "can't comply",
   "can’t comply",
   "cannot comply",
+  "no `read`",
+  "no read tool",
+  "no `read`/`read` tool",
+  "no read/read tool",
+  "no read tool available",
+  "won't output",
+  "won’t output",
   "isn't a real openclaw probe",
   "is not a real openclaw probe",
   "not a real openclaw probe",
@@ -31,10 +44,13 @@ const PROBE_REFUSAL_MARKERS = [
   "not a legitimate self-test",
   "not legitimate self-test",
   "authorized integration probe",
+  "authorizing me to execute",
+  "authorizing me to run",
 ];
 
+/** Detects likely safety refusals for authorized nonce probes. */
 export function isLikelyToolNonceRefusal(text: string): boolean {
-  const lower = text.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(text);
   if (PROBE_REFUSAL_MARKERS.some((marker) => lower.includes(marker))) {
     return true;
   }
@@ -49,14 +65,20 @@ function hasMalformedToolOutput(text: string): boolean {
   if (!trimmed) {
     return true;
   }
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (trimmed.includes("[object Object]")) {
     return true;
   }
   if (
     lower.includes("try reading the file again") ||
+    lower.includes("try again with a slightly different approach") ||
     lower.includes("trying to read the file again") ||
-    lower.includes("try the read tool again")
+    lower.includes("try the read tool again") ||
+    lower.includes("file wasn't found immediately after") ||
+    lower.includes("file wasn't found immediately") ||
+    lower.includes("verify the file exists and read it again") ||
+    lower.includes("file read failed because the file was not found") ||
+    lower.includes("verify the file creation and read it again")
   ) {
     return true;
   }
@@ -66,6 +88,7 @@ function hasMalformedToolOutput(text: string): boolean {
   return false;
 }
 
+/** Returns true when a file-read tool probe should retry before failing. */
 export function shouldRetryToolReadProbe(params: {
   text: string;
   nonceA: string;
@@ -86,13 +109,14 @@ export function shouldRetryToolReadProbe(params: {
   if (params.provider === "anthropic" && isLikelyToolNonceRefusal(params.text)) {
     return true;
   }
-  const lower = params.text.trim().toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(params.text);
   if (params.provider === "mistral" && (lower.includes("noncea=") || lower.includes("nonceb="))) {
     return true;
   }
   return false;
 }
 
+/** Returns true when an exec-read probe should retry before failing. */
 export function shouldRetryExecReadProbe(params: {
   text: string;
   nonce: string;

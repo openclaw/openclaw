@@ -1,3 +1,9 @@
+/**
+ * Public sandbox barrel for agent runtime code.
+ *
+ * Keep sandbox implementation modules behind this export surface so callers use
+ * the same config, backend, Docker, SSH, filesystem, and policy contracts.
+ */
 export {
   resolveSandboxBrowserConfig,
   resolveSandboxConfigForAgent,
@@ -14,11 +20,12 @@ export { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandb
 export {
   getSandboxBackendFactory,
   getSandboxBackendManager,
+  getSandboxBackendWorkdirResolver,
   registerSandboxBackend,
   requireSandboxBackendFactory,
 } from "./sandbox/backend.js";
 
-export { buildSandboxCreateArgs } from "./sandbox/docker.js";
+export { buildSandboxCreateArgs, isDockerDaemonUnavailable } from "./sandbox/docker.js";
 export {
   listSandboxBrowsers,
   listSandboxContainers,
@@ -32,12 +39,13 @@ export {
   resolveSandboxRuntimeStatus,
 } from "./sandbox/runtime-status.js";
 
-export { resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
+export { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./sandbox/fs-bridge.js";
 export {
   buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromConfigText,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
@@ -45,7 +53,9 @@ export {
   shellEscape,
   uploadDirectoryToSshTarget,
 } from "./sandbox/ssh.js";
+export { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
 export { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
+export { createWritableRenameTargetResolver } from "./sandbox/fs-bridge-rename-targets.js";
 export { resolveWritableRenameTargets } from "./sandbox/fs-bridge-rename-targets.js";
 export { resolveWritableRenameTargetsForBridge } from "./sandbox/fs-bridge-rename-targets.js";
 
@@ -60,6 +70,7 @@ export type {
   SandboxBackendManager,
   SandboxBackendRegistration,
   SandboxBackendRuntimeInfo,
+  SandboxBackendWorkdirResolver,
 } from "./sandbox/backend.js";
 export type { RemoteShellSandboxHandle } from "./sandbox/remote-fs-bridge.js";
 export type {

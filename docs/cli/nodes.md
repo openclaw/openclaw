@@ -1,9 +1,9 @@
 ---
-summary: "CLI reference for `openclaw nodes` (list/status/approve/invoke, camera/canvas/screen)"
+summary: "CLI reference for `openclaw nodes` (status, pairing, invoke, camera/canvas/screen)"
 read_when:
-  - You’re managing paired nodes (cameras, screen, canvas)
+  - You're managing paired nodes (cameras, screen, canvas)
   - You need to approve requests or invoke node commands
-title: "nodes"
+title: "Nodes"
 ---
 
 # `openclaw nodes`
@@ -28,6 +28,9 @@ openclaw nodes list --connected
 openclaw nodes list --last-connected 24h
 openclaw nodes pending
 openclaw nodes approve <requestId>
+openclaw nodes reject <requestId>
+openclaw nodes remove --node <id|name|ip>
+openclaw nodes rename --node <id|name|ip> --name <displayName>
 openclaw nodes status
 openclaw nodes status --connected
 openclaw nodes status --last-connected 24h
@@ -36,14 +39,30 @@ openclaw nodes status --last-connected 24h
 `nodes list` prints pending/paired tables. Paired rows include the most recent connect age (Last Connect).
 Use `--connected` to only show currently-connected nodes. Use `--last-connected <duration>` to
 filter to nodes that connected within a duration (e.g. `24h`, `7d`).
+Use `nodes remove --node <id|name|ip>` to remove a node pairing. For a
+device-backed node this revokes the device's `node` role in `devices/paired.json`
+and disconnects its node-role sessions (a mixed-role device keeps its row and
+only loses the `node` role; a node-only device is deleted); it also clears any
+matching legacy gateway-owned node pairing record. `operator.pairing` can remove
+non-operator node rows; a device-token caller revoking its own node role on a
+mixed-role device additionally needs `operator.admin`.
 
-## Invoke / run
+Approval note:
+
+- `openclaw nodes pending` only needs pairing scope.
+- `gateway.nodes.pairing.autoApproveCidrs` can skip the pending step only for
+  explicitly trusted, first-time `role: node` device pairing. It is off by
+  default and does not approve upgrades.
+- `openclaw nodes approve <requestId>` inherits extra scope requirements from the
+  pending request:
+  - commandless request: pairing only
+  - non-exec node commands: pairing + write
+  - `system.run` / `system.run.prepare` / `system.which`: pairing + admin
+
+## Invoke
 
 ```bash
 openclaw nodes invoke --node <id|name|ip> --command <command> --params <json>
-openclaw nodes run --node <id|name|ip> <command...>
-openclaw nodes run --raw "git status"
-openclaw nodes run --agent main --node <id|name|ip> --raw "git status"
 ```
 
 Invoke flags:
@@ -51,25 +70,13 @@ Invoke flags:
 - `--params <json>`: JSON object string (default `{}`).
 - `--invoke-timeout <ms>`: node invoke timeout (default `15000`).
 - `--idempotency-key <key>`: optional idempotency key.
+- `system.run` and `system.run.prepare` are blocked here; use the `exec` tool with `host=node` for shell execution.
 
-### Exec-style defaults
+For shell execution on a node, use the `exec` tool with `host=node` instead of `openclaw nodes run`.
+The `nodes` CLI is now capability-focused: direct RPC via `nodes invoke`, plus pairing, camera,
+screen, location, Canvas, and notifications. Canvas commands are implemented by the bundled experimental Canvas plugin; core keeps a compatibility hook so they remain under `openclaw nodes canvas`.
 
-`nodes run` mirrors the model’s exec behavior (defaults + approvals):
+## Related
 
-- Reads `tools.exec.*` (plus `agents.list[].tools.exec.*` overrides).
-- Uses exec approvals (`exec.approval.request`) before invoking `system.run`.
-- `--node` can be omitted when `tools.exec.node` is set.
-- Requires a node that advertises `system.run` (macOS companion app or headless node host).
-
-Flags:
-
-- `--cwd <path>`: working directory.
-- `--env <key=val>`: env override (repeatable). Note: node hosts ignore `PATH` overrides (and `tools.exec.pathPrepend` is not applied to node hosts).
-- `--command-timeout <ms>`: command timeout.
-- `--invoke-timeout <ms>`: node invoke timeout (default `30000`).
-- `--needs-screen-recording`: require screen recording permission.
-- `--raw <command>`: run a shell string (`/bin/sh -lc` or `cmd.exe /c`).
-  In allowlist mode on Windows node hosts, `cmd.exe /c` shell-wrapper runs require approval
-  (allowlist entry alone does not auto-allow the wrapper form).
-- `--agent <id>`: agent-scoped approvals/allowlists (defaults to configured agent).
-- `--ask <off|on-miss|always>`, `--security <deny|allowlist|full>`: overrides.
+- [CLI reference](/cli)
+- [Nodes](/nodes)

@@ -1,3 +1,9 @@
+// Mattermost plugin module implements monitor resources behavior.
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fetchMattermostChannel,
   fetchMattermostUser,
@@ -20,20 +26,13 @@ export type MattermostMediaInfo = {
 const CHANNEL_CACHE_TTL_MS = 5 * 60_000;
 const USER_CACHE_TTL_MS = 10 * 60_000;
 
-type FetchRemoteMedia = (params: {
+type SaveRemoteMedia = (params: {
   url: string;
   requestInit?: RequestInit;
   filePathHint?: string;
   maxBytes: number;
   ssrfPolicy?: { allowedHostnames?: string[] };
-}) => Promise<{ buffer: Uint8Array; contentType?: string | null }>;
-
-type SaveMediaBuffer = (
-  buffer: Uint8Array,
-  contentType: string | undefined,
-  direction: "inbound" | "outbound",
-  maxBytes: number,
-) => Promise<{ path: string; contentType?: string | null }>;
+}) => Promise<{ path: string; contentType?: string | null }>;
 
 export function createMattermostMonitorResources(params: {
   accountId: string;
@@ -41,8 +40,7 @@ export function createMattermostMonitorResources(params: {
   client: MattermostClient;
   logger: { debug?: (...args: unknown[]) => void };
   mediaMaxBytes: number;
-  fetchRemoteMedia: FetchRemoteMedia;
-  saveMediaBuffer: SaveMediaBuffer;
+  saveRemoteMedia: SaveRemoteMedia;
   mediaKindFromMime: (contentType?: string) => MattermostMediaKind | null | undefined;
 }) {
   const {
@@ -51,24 +49,52 @@ export function createMattermostMonitorResources(params: {
     client,
     logger,
     mediaMaxBytes,
-    fetchRemoteMedia,
-    saveMediaBuffer,
+    saveRemoteMedia,
     mediaKindFromMime,
   } = params;
   const channelCache = new Map<string, { value: MattermostChannel | null; expiresAt: number }>();
   const userCache = new Map<string, { value: MattermostUser | null; expiresAt: number }>();
 
+  const getCachedValue = <T>(
+    cache: Map<string, { value: T | null; expiresAt: number }>,
+    key: string,
+    nowMs: number | undefined,
+  ): T | null | undefined => {
+    const cached = cache.get(key);
+    if (!cached) {
+      return undefined;
+    }
+    if (nowMs !== undefined && cached.expiresAt > nowMs) {
+      return cached.value;
+    }
+    cache.delete(key);
+    return undefined;
+  };
+
+  const setCachedValue = <T>(
+    cache: Map<string, { value: T | null; expiresAt: number }>,
+    key: string,
+    value: T | null,
+    ttlMs: number,
+    rawNowMs: number,
+  ): void => {
+    const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNowMs });
+    if (expiresAt !== undefined) {
+      cache.set(key, { value, expiresAt });
+    }
+  };
+
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
   ): Promise<MattermostMediaInfo[]> => {
-    const ids = (fileIds ?? []).map((id) => id?.trim()).filter(Boolean);
+    const ids = normalizeStringEntries(fileIds ?? []);
     if (ids.length === 0) {
       return [];
     }
     const out: MattermostMediaInfo[] = [];
     for (const fileId of ids) {
       try {
-        const fetched = await fetchRemoteMedia({
+        const saved = await saveRemoteMedia({
           url: `${client.apiBaseUrl}/files/${fileId}`,
           requestInit: {
             headers: {
@@ -79,13 +105,7 @@ export function createMattermostMonitorResources(params: {
           maxBytes: mediaMaxBytes,
           ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
         });
-        const saved = await saveMediaBuffer(
-          Buffer.from(fetched.buffer),
-          fetched.contentType ?? undefined,
-          "inbound",
-          mediaMaxBytes,
-        );
-        const contentType = saved.contentType ?? fetched.contentType ?? undefined;
+        const contentType = saved.contentType ?? undefined;
         out.push({
           path: saved.path,
           contentType,
@@ -103,45 +123,35 @@ export function createMattermostMonitorResources(params: {
   };
 
   const resolveChannelInfo = async (channelId: string): Promise<MattermostChannel | null> => {
-    const cached = channelCache.get(channelId);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.value;
+    const rawNow = Date.now();
+    const cached = getCachedValue(channelCache, channelId, asDateTimestampMs(rawNow));
+    if (cached !== undefined) {
+      return cached;
     }
     try {
       const info = await fetchMattermostChannel(client, channelId);
-      channelCache.set(channelId, {
-        value: info,
-        expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS,
-      });
+      setCachedValue(channelCache, channelId, info, CHANNEL_CACHE_TTL_MS, rawNow);
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: channel lookup failed: ${String(err)}`);
-      channelCache.set(channelId, {
-        value: null,
-        expiresAt: Date.now() + CHANNEL_CACHE_TTL_MS,
-      });
+      setCachedValue(channelCache, channelId, null, CHANNEL_CACHE_TTL_MS, rawNow);
       return null;
     }
   };
 
   const resolveUserInfo = async (userId: string): Promise<MattermostUser | null> => {
-    const cached = userCache.get(userId);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.value;
+    const rawNow = Date.now();
+    const cached = getCachedValue(userCache, userId, asDateTimestampMs(rawNow));
+    if (cached !== undefined) {
+      return cached;
     }
     try {
       const info = await fetchMattermostUser(client, userId);
-      userCache.set(userId, {
-        value: info,
-        expiresAt: Date.now() + USER_CACHE_TTL_MS,
-      });
+      setCachedValue(userCache, userId, info, USER_CACHE_TTL_MS, rawNow);
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: user lookup failed: ${String(err)}`);
-      userCache.set(userId, {
-        value: null,
-        expiresAt: Date.now() + USER_CACHE_TTL_MS,
-      });
+      setCachedValue(userCache, userId, null, USER_CACHE_TTL_MS, rawNow);
       return null;
     }
   };
@@ -157,17 +167,17 @@ export function createMattermostMonitorResources(params: {
       buttons,
     });
 
-  const updateModelPickerPost = async (params: {
+  const updateModelPickerPost = async (paramsLocal: {
     channelId: string;
     postId: string;
     message: string;
     buttons?: Array<unknown>;
   }): Promise<MattermostInteractionResponse> => {
-    const props = buildModelPickerProps(params.channelId, params.buttons ?? []) ?? {
+    const props = buildModelPickerProps(paramsLocal.channelId, paramsLocal.buttons ?? []) ?? {
       attachments: [],
     };
-    await updateMattermostPost(client, params.postId, {
-      message: params.message,
+    await updateMattermostPost(client, paramsLocal.postId, {
+      message: paramsLocal.message,
       props,
     });
     return {};

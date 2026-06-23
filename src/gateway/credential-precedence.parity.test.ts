@@ -1,5 +1,7 @@
+// Credential precedence parity tests keep call, probe, status, and auth surfaces
+// aligned on local/remote gateway token and password resolution.
 import { describe, expect, it } from "vitest";
-import { resolveGatewayProbeAuth as resolveStatusGatewayProbeAuth } from "../commands/status.gateway-probe.js";
+import { resolveGatewayProbeAuthResolution } from "../commands/status.gateway-probe.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
@@ -101,7 +103,7 @@ describe("gateway credential precedence coverage", () => {
       expected: {
         call: { token: "remote-token", password: "env-password" }, // pragma: allowlist secret
         probe: { token: "remote-token", password: "env-password" }, // pragma: allowlist secret
-        status: { token: "remote-token", password: "remote-password" }, // pragma: allowlist secret
+        status: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
         auth: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
       },
     },
@@ -114,7 +116,7 @@ describe("gateway credential precedence coverage", () => {
       expected: {
         call: { token: "env-token", password: "env-password" }, // pragma: allowlist secret
         probe: { token: undefined, password: "env-password" }, // pragma: allowlist secret
-        status: { token: undefined, password: "remote-password" }, // pragma: allowlist secret
+        status: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
         auth: { token: "local-token", password: "local-password" }, // pragma: allowlist secret
       },
     },
@@ -154,7 +156,9 @@ describe("gateway credential precedence coverage", () => {
       mode,
       env,
     });
-    const status = await withGatewayAuthEnv(env, () => resolveStatusGatewayProbeAuth(cfg));
+    const status = (
+      await withGatewayAuthEnv(env, () => resolveGatewayProbeAuthResolution(cfg))
+    ).auth;
     const auth = resolveGatewayAuth({
       authConfig: cfg.gateway?.auth,
       env,

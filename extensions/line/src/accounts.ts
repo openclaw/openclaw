@@ -1,3 +1,4 @@
+// Line plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId as normalizeSharedAccountId,
@@ -5,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
-import { tryReadSecretFileSync } from "openclaw/plugin-sdk/infra-runtime";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/core";
 import type {
   LineAccountConfig,
   LineConfig,
@@ -94,7 +95,7 @@ export function resolveLineAccount(params: {
   accountId?: string;
 }): ResolvedLineAccount {
   const cfg = params.cfg;
-  const accountId = normalizeSharedAccountId(params.accountId);
+  const accountId = normalizeSharedAccountId(params.accountId ?? resolveDefaultLineAccountId(cfg));
   const lineConfig = cfg.channels?.line as LineConfig | undefined;
   const accounts = lineConfig?.accounts;
   const accountConfig =

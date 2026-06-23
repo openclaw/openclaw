@@ -1,5 +1,5 @@
 ---
-summary: "Install OpenClaw — installer script, npm/pnpm, from source, Docker, and more"
+summary: "Install OpenClaw - installer script, npm/pnpm/bun, from source, Docker, and more"
 read_when:
   - You need an install method other than the Getting Started quickstart
   - You want to deploy to a cloud platform
@@ -7,11 +7,19 @@ read_when:
 title: "Install"
 ---
 
-# Install
+## System requirements
+
+- **Node 24** (recommended) or Node 22.19+ - the installer script handles this automatically
+- **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
+- `pnpm` is only needed if you build from source
 
 ## Recommended: installer script
 
 The fastest way to install. It detects your OS, installs Node if needed, installs OpenClaw, and launches onboarding.
+
+<Note>
+Windows desktop users can also install the native [Windows Hub](/platforms/windows#recommended-windows-hub) companion app, which includes setup, tray status, chat, node mode, and local MCP mode.
+</Note>
 
 <Tabs>
   <Tab title="macOS / Linux / WSL2">
@@ -43,15 +51,25 @@ To install without running onboarding:
 
 For all flags and CI/automation options, see [Installer internals](/install/installer).
 
-## System requirements
-
-- **Node 24** (recommended) or Node 22.14+ — the installer script handles this automatically
-- **macOS, Linux, or Windows** — both native Windows and WSL2 are supported; WSL2 is more stable. See [Windows](/platforms/windows).
-- `pnpm` is only needed if you build from source
-
 ## Alternative install methods
 
-### npm or pnpm
+### Local prefix installer (`install-cli.sh`)
+
+Use this when you want OpenClaw and Node kept under a local prefix such as
+`~/.openclaw`, without depending on a system-wide Node install:
+
+```bash
+curl -fsSL https://openclaw.ai/install-cli.sh | bash
+```
+
+It supports npm installs by default, plus git-checkout installs under the same
+prefix flow. Full reference: [Installer internals](/install/installer#install-clish).
+
+Already installed? Switch between package and git installs with
+`openclaw update --channel dev` and `openclaw update --channel stable`. See
+[Updating](/install/updating#switch-between-npm-and-git-installs).
+
+### npm, pnpm, or bun
 
 If you already manage Node yourself:
 
@@ -61,6 +79,13 @@ If you already manage Node yourself:
     npm install -g openclaw@latest
     openclaw onboard --install-daemon
     ```
+
+    <Note>
+    The hosted installer clears npm freshness filters such as `min-release-age`
+    for the OpenClaw package install. If you install manually with npm, your own
+    npm policy still applies.
+    </Note>
+
   </Tab>
   <Tab title="pnpm">
     ```bash
@@ -74,16 +99,18 @@ If you already manage Node yourself:
     </Note>
 
   </Tab>
+  <Tab title="bun">
+    ```bash
+    bun add -g openclaw@latest
+    openclaw onboard --install-daemon
+    ```
+
+    <Note>
+    Bun is supported for the global CLI install path. For the Gateway runtime, Node remains the recommended daemon runtime.
+    </Note>
+
+  </Tab>
 </Tabs>
-
-<Accordion title="Troubleshooting: sharp build errors (npm)">
-  If `sharp` fails due to a globally installed libvips:
-
-```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
-```
-
-</Accordion>
 
 ### From source
 
@@ -92,17 +119,17 @@ For contributors or anyone who wants to run from a local checkout:
 ```bash
 git clone https://github.com/openclaw/openclaw.git
 cd openclaw
-pnpm install && pnpm ui:build && pnpm build
+pnpm install && pnpm build && pnpm ui:build
 pnpm link --global
 openclaw onboard --install-daemon
 ```
 
 Or skip the link and use `pnpm openclaw ...` from inside the repo. See [Setup](/start/setup) for full development workflows.
 
-### Install from GitHub main
+### Install from the GitHub main checkout
 
 ```bash
-npm install -g github:openclaw/openclaw#main
+curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --version main
 ```
 
 ### Containers and package managers
@@ -133,21 +160,47 @@ openclaw doctor         # check for config issues
 openclaw gateway status # verify the Gateway is running
 ```
 
+If you want managed startup after install:
+
+- macOS: LaunchAgent via `openclaw onboard --install-daemon` or `openclaw gateway install`
+- Linux/WSL2: systemd user service via the same commands
+- Native Windows: Scheduled Task first, with a per-user Startup-folder login item fallback if task creation is denied
+
 ## Hosting and deployment
 
 Deploy OpenClaw on a cloud server or VPS:
 
 <CardGroup cols={3}>
-  <Card title="VPS" href="/vps">Any Linux VPS</Card>
-  <Card title="Docker VM" href="/install/docker-vm-runtime">Shared Docker steps</Card>
-  <Card title="Kubernetes" href="/install/kubernetes">K8s</Card>
-  <Card title="Fly.io" href="/install/fly">Fly.io</Card>
-  <Card title="Hetzner" href="/install/hetzner">Hetzner</Card>
-  <Card title="GCP" href="/install/gcp">Google Cloud</Card>
-  <Card title="Azure" href="/install/azure">Azure</Card>
-  <Card title="Railway" href="/install/railway">Railway</Card>
-  <Card title="Render" href="/install/render">Render</Card>
-  <Card title="Northflank" href="/install/northflank">Northflank</Card>
+  <Card title="VPS" href="/vps">
+    Any Linux VPS.
+  </Card>
+  <Card title="Docker VM" href="/install/docker-vm-runtime">
+    Shared Docker steps.
+  </Card>
+  <Card title="Kubernetes" href="/install/kubernetes">
+    K8s deployment.
+  </Card>
+  <Card title="Fly.io" href="/install/fly">
+    Deploy on Fly.io.
+  </Card>
+  <Card title="Hetzner" href="/install/hetzner">
+    Hetzner deployment.
+  </Card>
+  <Card title="GCP" href="/install/gcp">
+    Google Cloud deployment.
+  </Card>
+  <Card title="Azure" href="/install/azure">
+    Azure deployment.
+  </Card>
+  <Card title="Railway" href="/install/railway">
+    Railway deployment.
+  </Card>
+  <Card title="Render" href="/install/render">
+    Render deployment.
+  </Card>
+  <Card title="Northflank" href="/install/northflank">
+    Northflank deployment.
+  </Card>
 </CardGroup>
 
 ## Update, migrate, or uninstall
