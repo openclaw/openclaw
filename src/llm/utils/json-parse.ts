@@ -114,6 +114,15 @@ export function parseJsonWithRepair(json: string): unknown {
 
 function looksLikeWindowsPathPrefix(prefix: string): boolean {
   const tail = prefix.slice(-160);
+  // Reject obvious code-context markers (parentheses, braces, equals,
+  // semicolons, single-quotes, commas, shell redirects/pipes). A Windows
+  // path tail will not contain these, but a Python/JS/shell block opener
+  // like "if x:" or "for x:" or "def foo(x):" will — and without this
+  // guard we treat the next \n as a path separator and emit a literal
+  // backslash-n instead of a real newline. See issue #93139.
+  if (/[()=;{}',<>|]/.test(tail)) {
+    return false;
+  }
   return /(?:^|[^A-Za-z0-9])[A-Za-z]:(?:[\\/][^"\\/:*?<>|\r\n]*)*$/.test(tail);
 }
 
