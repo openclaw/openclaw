@@ -1,7 +1,7 @@
 // Runner entry guard tests cover malformed decision data formatting without
 // depending on provider execution.
 import { describe, expect, it } from "vitest";
-import { formatDecisionSummary } from "./runner.entries.js";
+import { formatDecisionSummary, formatMissingProviderHint } from "./runner.entries.js";
 import type { MediaUnderstandingDecision } from "./types.js";
 
 describe("media-understanding formatDecisionSummary guards", () => {
@@ -43,5 +43,59 @@ describe("media-understanding formatDecisionSummary guards", () => {
         ],
       } as unknown as MediaUnderstandingDecision),
     ).toBe("audio: failed (0/1)");
+  });
+});
+
+describe("media-understanding formatMissingProviderHint", () => {
+  it("returns the catalog hint for a known externalized provider (amazon-bedrock)", () => {
+    const hint = formatMissingProviderHint("amazon-bedrock");
+    expect(hint).toContain("openclaw plugins install @openclaw/amazon-bedrock-provider");
+    expect(hint).toContain("openclaw plugins registry --refresh");
+    expect(hint).toContain("restart the gateway");
+    expect(hint).toContain("openclaw doctor --fix");
+    expect(hint).toContain("official external plugin");
+  });
+
+  it("returns empty string for a non-cataloged id (no convention fallback)", () => {
+    // Newly externalized providers must register with the official external
+    // catalog to receive an actionable hint; the previous convention
+    // fallback (`@openclaw/<id>-provider`) was removed to avoid emitting
+    // misleading package hints for non-externalized ids.
+    const hint = formatMissingProviderHint("mystery-provider");
+    expect(hint).toBe("");
+  });
+
+  it("returns empty string for an empty/whitespace id", () => {
+    expect(formatMissingProviderHint("")).toBe("");
+    expect(formatMissingProviderHint("   ")).toBe("");
+  });
+
+  it("returns empty string for an id that does not look like a plugin id", () => {
+    expect(formatMissingProviderHint("bad/id")).toBe("");
+    expect(formatMissingProviderHint("a")).toBe("");
+    // Multi-segment path with slash is not a plugin id.
+    expect(formatMissingProviderHint("some/long/path")).toBe("");
+  });
+
+  it("produces a hint suffix that, when appended to the legacy message, preserves the legacy prefix (catalog-known id)", () => {
+    const providerId = "amazon-bedrock";
+    const legacyPrefix = `Media provider not available: ${providerId}`;
+    const hint = formatMissingProviderHint(providerId);
+    const composed = `${legacyPrefix}${hint}`;
+    expect(composed).toMatch(
+      /^Media provider not available: amazon-bedrock .*openclaw plugins install/,
+    );
+    // Tier 1 includes the "official" prefix in the wording.
+    expect(composed).toMatch(/official external plugin/);
+    // Tier 1 also includes the gateway restart step.
+    expect(composed).toMatch(/restart the gateway/);
+  });
+
+  it("returns a hint that preserves the legacy prefix verbatim when the id is not cataloged", () => {
+    const providerId = "mystery-provider";
+    const legacyPrefix = `Media provider not available: ${providerId}`;
+    const hint = formatMissingProviderHint(providerId);
+    // No fallback; the legacy prefix is preserved exactly.
+    expect(`${legacyPrefix}${hint}`).toBe(legacyPrefix);
   });
 });
