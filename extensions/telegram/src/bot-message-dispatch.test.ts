@@ -5016,10 +5016,56 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(bot.api["editForumTopic"]).not.toHaveBeenCalled();
   });
 
-  it("does not emit a silent-reply fallback when the dispatcher reports a queued final reply", async () => {
+  it("emits a failure fallback when visible final delivery is not confirmed", async () => {
+    deliverReplies.mockResolvedValueOnce({ delivered: false }).mockResolvedValueOnce({
+      delivered: true,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 1, tool: 0 },
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies.mock.calls[1]?.[0]?.replies).toEqual([
+      { text: "I generated a reply, but Telegram did not confirm delivery. Please try again." },
+    ]);
+  });
+
+  it("emits a failure fallback when routed final delivery is not confirmed", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
-      queuedFinal: true,
-      counts: { block: 0, final: 1, tool: 0 },
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      attemptedVisibleFinalDelivery: true,
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies.mock.calls[0]?.[0]?.replies).toEqual([
+      { text: "I generated a reply, but Telegram did not confirm delivery. Please try again." },
+    ]);
+  });
+
+  it("keeps normalized NO_REPLY final turns silent when no visible final was attempted", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+      attemptedVisibleFinalDelivery: false,
     });
 
     await dispatchWithContext({
@@ -5030,6 +5076,46 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps normalized empty final turns silent when no visible final was attempted", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("returns retryable when visible final delivery is unconfirmed and fallback is suppressed", async () => {
+    deliverReplies.mockResolvedValue({ delivered: false });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 1, tool: 0 },
+      };
+    });
+
+    const result = await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+      retryDispatchErrors: true,
+      suppressFailureFallback: true,
+    });
+
+    expect(result).toMatchObject({ kind: "failed-retryable" });
+    expect((result as { error?: unknown }).error).toBeInstanceOf(Error);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
   });
 
   it("does not emit a silent-reply fallback for no-response DM turns", async () => {

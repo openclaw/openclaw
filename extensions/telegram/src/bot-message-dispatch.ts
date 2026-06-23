@@ -1526,6 +1526,8 @@ export const dispatchTelegramMessage = async ({
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
   let queuedFinal = false;
+  let finalDeliveryCallbackObserved = false;
+  let visibleFinalDeliveryAttempted = false;
   let skippedDuplicateAnswerBlockDraftDelivery = false;
   let suppressSilentReplyFallback = false;
   let hadErrorReplyFailureOrSkip = false;
@@ -1857,6 +1859,7 @@ export const dispatchTelegramMessage = async ({
         await answerLane.stream?.clear();
         resetDraftLaneState(answerLane);
       }
+      visibleFinalDeliveryAttempted = true;
       const delivered = await sendPayload(applyTextToPayload(payload, text), { durable: true });
       if (!delivered) {
         return { kind: "skipped" };
@@ -1951,20 +1954,23 @@ export const dispatchTelegramMessage = async ({
                     return undefined;
                   },
                   deliver: async (payload, info) => {
+                    if (info.kind === "final") {
+                      finalDeliveryCallbackObserved = true;
+                    }
                     if (isDispatchSuperseded()) {
-                      return;
+                      return false;
                     }
 
                     const normalizedPayload = normalizeDeliveryPayload(payload);
                     if (!normalizedPayload) {
-                      return;
+                      return false;
                     }
                     const deduped =
                       info.kind === "final"
                         ? deduplicateBlockSentMedia(normalizedPayload, sentBlockMediaUrls)
                         : normalizedPayload;
                     if (deduped === undefined) {
-                      return;
+                      return false;
                     }
                     const effectivePayload = deduped;
 
@@ -1976,7 +1982,7 @@ export const dispatchTelegramMessage = async ({
                       })
                     ) {
                       queuedFinal = true;
-                      return;
+                      return false;
                     }
                     const telegramButtons = resolvePayloadTelegramInlineButtons(effectivePayload);
                     const lanePayload =
@@ -2013,7 +2019,7 @@ export const dispatchTelegramMessage = async ({
                       !reply.hasMedia &&
                       !hasExecApprovalPayload(effectivePayload)
                     ) {
-                      return;
+                      return false;
                     }
                     if (payload.isError === true) {
                       hadErrorReplyFailureOrSkip = true;
@@ -2027,6 +2033,7 @@ export const dispatchTelegramMessage = async ({
                       const finalText = await resolveTranscriptBackedFinalText(text);
                       const deliverPostFinalFollowUpText = async () => {
                         await prepareAnswerLaneForText();
+                        visibleFinalDeliveryAttempted = true;
                         return deliverLaneText({
                           laneName: "answer",
                           text: finalText,
@@ -2044,6 +2051,7 @@ export const dispatchTelegramMessage = async ({
                       if (!(await rotateAnswerLaneAfterToolProgress())) {
                         await rotateAnswerLaneAfterQueuedBlocksSettle();
                       }
+                      visibleFinalDeliveryAttempted = true;
                       const result = await deliverLaneText({
                         laneName: "answer",
                         text: finalText,
@@ -2237,12 +2245,13 @@ export const dispatchTelegramMessage = async ({
 
                     if (segments.length > 0) {
                       trackBlockMedia(blockDelivered);
-                      return;
+                      return blockDelivered;
                     }
                     if (split.suppressedReasoningOnly) {
                       let delivered = false;
                       if (reply.hasMedia) {
                         if (info.kind === "final") {
+                          visibleFinalDeliveryAttempted = true;
                           await rotateAnswerLaneAfterToolProgress();
                           await answerLane.stream?.stop();
                           await reasoningLane.stream?.stop();
@@ -2263,7 +2272,7 @@ export const dispatchTelegramMessage = async ({
                         await flushBufferedFinalAnswer();
                       }
                       trackBlockMedia(delivered);
-                      return;
+                      return delivered;
                     }
 
                     if (info.kind === "final") {
@@ -2277,7 +2286,10 @@ export const dispatchTelegramMessage = async ({
                       if (info.kind === "final") {
                         await flushBufferedFinalAnswer();
                       }
-                      return;
+                      return false;
+                    }
+                    if (info.kind === "final") {
+                      visibleFinalDeliveryAttempted = true;
                     }
                     const delivered = await sendPayload(effectivePayload, {
                       durable: info.kind === "final",
@@ -2289,6 +2301,7 @@ export const dispatchTelegramMessage = async ({
                       await flushBufferedFinalAnswer();
                     }
                     trackBlockMedia(delivered);
+                    return delivered;
                   },
                   onSkip: (payload, info) => {
                     if (info.kind === "block") {
@@ -2568,9 +2581,12 @@ export const dispatchTelegramMessage = async ({
       if (!turnResult.dispatched) {
         return { kind: "completed" };
       }
-      ({ queuedFinal } = turnResult.dispatchResult);
-      suppressSilentReplyFallback =
-        turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
+      const dispatchResult = turnResult.dispatchResult;
+      ({ queuedFinal } = dispatchResult);
+      if (!finalDeliveryCallbackObserved && dispatchResult.attemptedVisibleFinalDelivery === true) {
+        visibleFinalDeliveryAttempted = true;
+      }
+      suppressSilentReplyFallback = dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
     } catch (err) {
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
@@ -2637,16 +2653,21 @@ export const dispatchTelegramMessage = async ({
   }
   let sentFallback = false;
   const deliverySummary = deliveryState.snapshot();
+  const visibleFinalDeliveryWithoutConfirmation =
+    visibleFinalDeliveryAttempted && !deliverySummary.delivered && !suppressSilentReplyFallback;
   const shouldSendFailureFallback =
     !isRoomEvent &&
     !suppressFailureFallback &&
     (dispatchError ||
+      visibleFinalDeliveryWithoutConfirmation ||
       (!deliverySummary.delivered &&
         (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
   if (shouldSendFailureFallback) {
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
-      : EMPTY_RESPONSE_FALLBACK;
+      : visibleFinalDeliveryWithoutConfirmation
+        ? "I generated a reply, but Telegram did not confirm delivery. Please try again."
+        : EMPTY_RESPONSE_FALLBACK;
     const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
       replies: [{ text: fallbackText }],
       ...deliveryBaseOptions,
@@ -2696,7 +2717,9 @@ export const dispatchTelegramMessage = async ({
     deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
   const deliveryFailureWithoutFinalResponse =
     !deliverySummary.delivered &&
-    (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
+    (visibleFinalDeliveryWithoutConfirmation ||
+      deliverySummary.skippedNonSilent > 0 ||
+      deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
     dispatchError ??
     (deliveryFailureWithoutFinalResponse

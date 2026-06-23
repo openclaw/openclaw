@@ -108,6 +108,8 @@ type RouteReplyParams = {
 type RouteReplyResult = {
   /** Whether the reply was sent successfully. */
   ok: boolean;
+  /** True when normalized visible content reached provider delivery. */
+  attemptedDelivery?: boolean;
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
   /** Suppression reason when delivery was intentionally skipped. */
@@ -258,6 +260,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     replyToId: resolvedReplyToId,
   };
 
+  let attemptedDelivery = false;
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
@@ -275,6 +278,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
+    attemptedDelivery = true;
     const send = await sendDurableMessageBatch({
       cfg,
       channel: channelId,
@@ -328,11 +332,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     const results = send.status === "sent" ? send.results : [];
 
     const last = results.at(-1);
-    return { ok: true, messageId: last?.messageId };
+    return { ok: true, attemptedDelivery: true, messageId: last?.messageId };
   } catch (err) {
     const message = formatErrorMessage(err);
     return {
       ok: false,
+      ...(attemptedDelivery ? { attemptedDelivery: true } : {}),
       error: `Failed to route reply to ${channel}: ${message}`,
     };
   }

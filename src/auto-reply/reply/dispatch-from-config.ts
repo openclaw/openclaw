@@ -803,10 +803,12 @@ async function mirrorDeliveredReplyToTranscript(params: {
 
 /** Reads final outcome counters from dispatchers that expose them. */
 export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCountsView): {
+  delivered: number;
   cancelled: number;
   failed: number;
 } {
   return {
+    delivered: dispatcher.getDeliveredCounts?.().final ?? 0,
     cancelled: dispatcher.getCancelledCounts?.().final ?? 0,
     failed: readDispatcherFailedCounts(dispatcher).final,
   };
@@ -892,23 +894,25 @@ function captureDeliveredTranscriptMirror(params: {
 
 async function mirrorTranscriptAfterDispatcherDelivery(params: {
   dispatcher: ReplyDispatcher;
-  before: { cancelled: number; failed: number };
+  before: { delivered: number; cancelled: number; failed: number };
   metadata: () => TranscriptMirror | undefined;
   cfg: OpenClawConfig;
-}): Promise<void> {
+}): Promise<boolean> {
   await params.dispatcher.waitForIdle();
   const after = getDispatcherFinalOutcomeCounts(params.dispatcher);
+  const delivered = after.delivered > params.before.delivered;
   if (after.cancelled > params.before.cancelled || after.failed > params.before.failed) {
-    return;
+    return false;
   }
   const metadata = params.metadata();
   if (!metadata) {
-    return;
+    return delivered;
   }
   await mirrorDeliveredReplyToTranscript({
     metadata,
     cfg: params.cfg,
   });
+  return delivered;
 }
 
 function runWithDispatchAbortSignal<T>(
@@ -976,6 +980,9 @@ function createAbortAwareDispatcher(params: {
       }
     },
   };
+  if (params.dispatcher.getDeliveredCounts) {
+    dispatcher.getDeliveredCounts = () => params.dispatcher.getDeliveredCounts!();
+  }
   if (params.dispatcher.getCancelledCounts) {
     dispatcher.getCancelledCounts = () => params.dispatcher.getCancelledCounts!();
   }
@@ -1615,6 +1622,10 @@ export async function dispatchReplyFromConfig(
   });
   const routeReplyTo = replyRoute.to;
   const deliveryChannel = shouldRouteToOriginating ? routeReplyChannel : currentSurface;
+  const requiresConfirmedRoutedFinalDelivery =
+    normalizeMessageChannel(deliveryChannel) === "telegram";
+  const requiresConfirmedDispatcherFinalDelivery =
+    requiresConfirmedRoutedFinalDelivery && typeof dispatcher.getDeliveredCounts === "function";
   const shouldPrepareRoutedReplyDelivery = shouldRouteToOriginating && Boolean(routeReplyChannel);
   const replyContextAccountId = routeReplyChannel
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
@@ -1699,8 +1710,14 @@ export async function dispatchReplyFromConfig(
     });
   };
 
-  const isRoutedReplyDelivered = (result: { ok: boolean; suppressed?: boolean }) =>
-    result.ok && result.suppressed !== true;
+  const hasRoutedReplyMessageIdentity = (result: { messageId?: string }) =>
+    result.messageId !== undefined && result.messageId.trim().length > 0;
+  const isRoutedReplyDelivered = (result: {
+    ok: boolean;
+    attemptedDelivery?: boolean;
+    suppressed?: boolean;
+    messageId?: string;
+  }) => result.ok && result.suppressed !== true && hasRoutedReplyMessageIdentity(result);
 
   /**
    * Helper to send a payload via route-reply (async).
@@ -2159,8 +2176,9 @@ export async function dispatchReplyFromConfig(
         } satisfies ReplyPayload;
         const result = await routeReplyToOriginating(payload);
         if (result) {
-          queuedFinal = result.ok;
-          if (isRoutedReplyDelivered(result)) {
+          const routedDelivered = isRoutedReplyDelivered(result);
+          queuedFinal = requiresConfirmedRoutedFinalDelivery ? routedDelivered : result.ok;
+          if (routedDelivered) {
             routedFinalCount += 1;
           }
           if (!result.ok) {
@@ -2314,7 +2332,11 @@ export async function dispatchReplyFromConfig(
     const sendFinalPayload = async (
       payload: ReplyPayload,
       options: { abortSignal?: AbortSignal; deliveryId?: string } = {},
-    ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+    ): Promise<{
+      queuedFinal: boolean;
+      routedFinalCount: number;
+      visibleFinalDeliveryAttempted: boolean;
+    }> => {
       const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
       const throwIfFinalDeliveryAborted = () => {
         if (abortSignal?.aborted) {
@@ -2370,15 +2392,17 @@ export async function dispatchReplyFromConfig(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
-        if (isRoutedReplyDelivered(result)) {
+        const routedDelivered = isRoutedReplyDelivered(result);
+        if (routedDelivered) {
           await mirrorDeliveredReplyToTranscript({
             metadata: sourceReplyTranscriptMirror,
             cfg,
           });
         }
         return {
-          queuedFinal: result.ok,
-          routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
+          queuedFinal: requiresConfirmedRoutedFinalDelivery ? routedDelivered : result.ok,
+          routedFinalCount: routedDelivered ? 1 : 0,
+          visibleFinalDeliveryAttempted: result.attemptedDelivery === true,
         };
       }
       throwIfFinalDeliveryAborted();
@@ -2425,8 +2449,9 @@ export async function dispatchReplyFromConfig(
         metadata: transcriptMirror,
       });
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
+      let directFinalDelivered = false;
       if (queuedFinal) {
-        await mirrorTranscriptAfterDispatcherDelivery({
+        directFinalDelivered = await mirrorTranscriptAfterDispatcherDelivery({
           dispatcher,
           before: finalOutcomeBefore,
           metadata: deliveredTranscriptMirror,
@@ -2434,8 +2459,9 @@ export async function dispatchReplyFromConfig(
         });
       }
       return {
-        queuedFinal,
+        queuedFinal: requiresConfirmedDispatcherFinalDelivery ? directFinalDelivered : queuedFinal,
         routedFinalCount: 0,
+        visibleFinalDeliveryAttempted: queuedFinal,
       };
     };
 
@@ -2477,6 +2503,7 @@ export async function dispatchReplyFromConfig(
         const text = beforeDispatchResult.text;
         let queuedFinal = false;
         let routedFinalCount = 0;
+        let attemptedVisibleFinalDelivery = false;
         if (text && !suppressDelivery) {
           const handledReply = await sendFinalPayload(
             { text },
@@ -2487,6 +2514,7 @@ export async function dispatchReplyFromConfig(
           );
           queuedFinal = handledReply.queuedFinal;
           routedFinalCount += handledReply.routedFinalCount;
+          attemptedVisibleFinalDelivery = handledReply.visibleFinalDeliveryAttempted;
         }
         const counts = dispatcher.getQueuedCounts();
         counts.final += routedFinalCount;
@@ -2494,7 +2522,13 @@ export async function dispatchReplyFromConfig(
         markIdle("message_completed");
         commitInboundDedupeIfClaimed();
         completeDispatchReplyOperation();
-        return attachSourceReplyDeliveryMode({ queuedFinal, counts });
+        return attachSourceReplyDeliveryMode({
+          queuedFinal,
+          counts,
+          ...(!queuedFinal && attemptedVisibleFinalDelivery
+            ? { attemptedVisibleFinalDelivery: true }
+            : {}),
+        });
       }
     }
 
@@ -3329,7 +3363,7 @@ export async function dispatchReplyFromConfig(
 
     let queuedFinal = false;
     let routedFinalCount = 0;
-    let attemptedFinalDelivery = false;
+    let attemptedVisibleFinalDelivery = false;
     let finalDeliveryFailed = false;
     // Explicit command turns (native or authorized text-slash like /compact) are
     // user-initiated, so a marked terminal reply for the command bypasses
@@ -3366,16 +3400,21 @@ export async function dispatchReplyFromConfig(
         }
         continue;
       }
-      attemptedFinalDelivery = true;
       const finalReply = await sendFinalPayload(reply, { deliveryId: String(replyIndex) });
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
-      if (!finalReply.queuedFinal && finalReply.routedFinalCount === 0) {
+      attemptedVisibleFinalDelivery =
+        finalReply.visibleFinalDeliveryAttempted || attemptedVisibleFinalDelivery;
+      if (
+        finalReply.visibleFinalDeliveryAttempted &&
+        !finalReply.queuedFinal &&
+        finalReply.routedFinalCount === 0
+      ) {
         finalDeliveryFailed = true;
       }
     }
 
-    if (attemptedFinalDelivery && !finalDeliveryFailed) {
+    if (attemptedVisibleFinalDelivery && !finalDeliveryFailed) {
       // The final reply already shipped, so clear the durable pending-final
       // bookkeeping before honoring a late abort. A stuck-session recovery abort
       // racing this window (#89115) otherwise strands pendingFinalDelivery=true,
@@ -3437,8 +3476,10 @@ export async function dispatchReplyFromConfig(
               kind: "final",
             });
             if (result) {
-              queuedFinal = result.ok || queuedFinal;
-              if (isRoutedReplyDelivered(result)) {
+              const routedDelivered = isRoutedReplyDelivered(result);
+              queuedFinal =
+                (requiresConfirmedRoutedFinalDelivery ? routedDelivered : result.ok) || queuedFinal;
+              if (routedDelivered) {
                 routedFinalCount += 1;
               }
               if (!result.ok) {
@@ -3484,6 +3525,9 @@ export async function dispatchReplyFromConfig(
       ...(observedReplyDelivery ? { observedReplyDelivery } : {}),
       ...(!queuedFinal && !observedReplyDelivery && !emptyFinalAllowedAsSilent
         ? { noVisibleReplyFallbackEligible: true }
+        : {}),
+      ...(!queuedFinal && attemptedVisibleFinalDelivery
+        ? { attemptedVisibleFinalDelivery: true }
         : {}),
       ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
     });

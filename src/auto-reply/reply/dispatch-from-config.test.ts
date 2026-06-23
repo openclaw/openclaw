@@ -7311,6 +7311,52 @@ describe("dispatchReplyFromConfig", () => {
     expect((finalCalls[0]?.[0] as ReplyPayload | undefined)?.text).toBe("The answer is 42");
   });
 
+  it("does not mark exact NO_REPLY finals as attempted visible delivery", async () => {
+    setNoAbort();
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:123",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "NO_REPLY" }) satisfies ReplyPayload,
+    });
+
+    await dispatcher.waitForIdle();
+    expect(result.queuedFinal).toBe(false);
+    expect(result.attemptedVisibleFinalDelivery).toBeUndefined();
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("does not mark empty finals as attempted visible delivery", async () => {
+    setNoAbort();
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:123",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "   " }) satisfies ReplyPayload,
+    });
+
+    await dispatcher.waitForIdle();
+    expect(result.queuedFinal).toBe(false);
+    expect(result.attemptedVisibleFinalDelivery).toBeUndefined();
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("suppresses isReasoning payloads from block replies (generic dispatch path)", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

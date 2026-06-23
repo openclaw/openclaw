@@ -182,6 +182,7 @@ async function expectSlackNoDelivery(
     ...overrides,
   });
   expect(res.ok).toBe(true);
+  expect(res.attemptedDelivery).toBeUndefined();
   expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   return res;
 }
@@ -304,6 +305,7 @@ describe("routeReply", () => {
     });
 
     expect(res.ok).toBe(true);
+    expect(res.attemptedDelivery).toBe(true);
     expect(lastDeliveryPayload()).toMatchObject({ text: "hello" });
     expect(lastDelivery().replyPayloadSendingHook).toMatchObject({
       kind: "block",
