@@ -973,6 +973,26 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
+  it("does not emit quadruple newlines when chunks already carry their paragraph boundary (#42106)", async () => {
+    // Post-fix the block chunker attaches the consumed "\n\n" to each emitted
+    // chunk. Re-applying the "\n\n" joiner verbatim would yield "\n\n\n\n"; the
+    // coalescer must collapse the seam to exactly one paragraph separator.
+    vi.useFakeTimers();
+    const { flushes, coalescer } = createBlockCoalescerHarness({
+      minChars: 1,
+      maxChars: 2000,
+      idleMs: 50,
+      joiner: "\n\n",
+    });
+
+    coalescer.enqueue({ text: "First paragraph\n\n" });
+    coalescer.enqueue({ text: "Second paragraph" });
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(flushes).toEqual(["First paragraph\n\nSecond paragraph"]);
+    coalescer.stop();
+  });
+
   it("force flushes buffered newline-style chunks even below minChars", async () => {
     const { flushes, coalescer } = createBlockCoalescerHarness({
       minChars: 100,

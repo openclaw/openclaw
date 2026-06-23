@@ -992,12 +992,20 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
-    const blockReplyText = stripDowngradedToolCallText(
+    const stripped = stripDowngradedToolCallText(
       stripBlockTags(text, state.blockState, {
         final: options?.final === true,
         completeMarkdownChunk: options?.completeMarkdownChunk === true,
       }),
-    ).trimEnd();
+    );
+    // Preserve a single trailing paragraph boundary the chunker attached (#42106)
+    // on non-final deliveries so successive separate deliveries reconstruct "\n\n";
+    // otherwise trim exactly as before. Never preserve it on the terminal/final
+    // delivery — the last block has no successor to concatenate with.
+    const endedAtParagraphBoundary = options?.final !== true && /\n[ \t]*\n[ \t]*$/.test(stripped);
+    const blockReplyText = endedAtParagraphBoundary
+      ? `${stripped.trimEnd()}\n\n`
+      : stripped.trimEnd();
     if (!blockReplyText) {
       return;
     }
@@ -1035,6 +1043,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
 
+    // assistantTexts records the visible per-message text; the trailing paragraph
+    // boundary (#42106) is a delivery-reconstruction artifact that must not leak
+    // into the recorded visible text, so strip it for the assistantTexts record
+    // only. The delivered payload below still carries the boundary.
+    const visibleChunk = chunk.replace(/\n[ \t]*\n[ \t]*$/, "");
+
     // Only check committed (successful) messaging tool texts - checking pending texts
     // is risky because if the tool fails after suppression, the user gets no response
     const normalizedChunk = normalizeTextForComparison(chunk);
@@ -1064,7 +1078,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
 
     if (!params.onBlockReply) {
-      pushAssistantText(chunk);
+      pushAssistantText(visibleChunk);
       markBlockReplyTextHandled();
       return;
     }
@@ -1089,7 +1103,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       }
       return;
     }
-    pushAssistantText(chunk);
+    pushAssistantText(visibleChunk);
     emitBlockReply(
       {
         text: cleanedText,
