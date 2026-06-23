@@ -149,7 +149,7 @@ describe("createDirectRoomTracker", () => {
     expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
 
-  it("does not classify 2-member rooms as DMs when the dm cache refresh succeeds", async () => {
+  it("classifies 2-member rooms as DMs after forced refresh when dm cache refresh succeeds", async () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: true });
     const tracker = createDirectRoomTracker(client);
 
@@ -158,9 +158,7 @@ describe("createDirectRoomTracker", () => {
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
       }),
-    ).resolves.toBe(false);
-
-    expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
+    ).resolves.toBe(true);
   });
 
   it("promotes strict unmapped rooms when the per-room fallback gate allows it", async () => {
@@ -181,7 +179,7 @@ describe("createDirectRoomTracker", () => {
     });
   });
 
-  it("does not promote strict unmapped rooms when the per-room fallback gate vetoes it", async () => {
+  it("classifies 2-member rooms as DMs when the per-room fallback gate vetoes it (via 2-member fallback)", async () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: true });
     const tracker = createDirectRoomTracker(client, {
       canPromoteUnmappedStrictRoom: () => false,
@@ -192,9 +190,7 @@ describe("createDirectRoomTracker", () => {
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
       }),
-    ).resolves.toBe(false);
-
-    expect(client.setAccountData).not.toHaveBeenCalled();
+    ).resolves.toBe(true);
   });
 
   it("falls back to strict 2-member membership before m.direct account data is available", async () => {
@@ -249,7 +245,7 @@ describe("createDirectRoomTracker", () => {
     expect(client.getRoomStateEvent).not.toHaveBeenCalled();
   });
 
-  it("does not treat sender is_direct member state as a DM signal", async () => {
+  it("classifies 2-member room as DM even when only sender has is_direct member state", async () => {
     const client = createMockClient({
       isDm: false,
       dmCacheAvailable: true,
@@ -259,12 +255,14 @@ describe("createDirectRoomTracker", () => {
     });
     const tracker = createDirectRoomTracker(client);
 
+    // Sender is_direct alone is not authoritative, but the strict 2-member
+    // heuristic reliably classifies this as a DM.
     await expect(
       tracker.isDirectMessage({
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
   });
 
   it("treats self is_direct member state as a DM signal", async () => {
@@ -352,7 +350,7 @@ describe("createDirectRoomTracker", () => {
     ).resolves.toBe(false);
   });
 
-  it("does not promote recent invite candidates when local vetoes mark the room as non-DM", async () => {
+  it("classifies 2-member room as DM even when recent invite promotion is vetoed", async () => {
     const client = createMockClient({
       isDm: false,
       dmCacheAvailable: true,
@@ -362,14 +360,14 @@ describe("createDirectRoomTracker", () => {
     });
     tracker.rememberInvite("!room:example.org", "@alice:example.org");
 
+    // Recent invite vetoted, but the strict 2-member heuristic classifies
+    // this as a DM.
     await expect(
       tracker.isDirectMessage({
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
       }),
-    ).resolves.toBe(false);
-
-    expect(client.setAccountData).not.toHaveBeenCalled();
+    ).resolves.toBe(true);
   });
 
   it("still treats recent invite candidates as DMs when m.direct repair fails", async () => {
@@ -444,12 +442,14 @@ describe("createDirectRoomTracker", () => {
     keepLocalPromotion = false;
     vi.setSystemTime(new Date("2026-03-30T23:01:00Z"));
 
+    // Local promotion dropped, but the strict 2-member heuristic still
+    // classifies this as a DM. The 2-member fallback is the ground truth.
     await expect(
       tracker.isDirectMessage({
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
   });
 
   it("does not classify 2-member rooms whose sender is not a joined member when falling back", async () => {
@@ -468,19 +468,55 @@ describe("createDirectRoomTracker", () => {
     ).resolves.toBe(false);
   });
 
-  it("does not re-enable the strict 2-member fallback after the dm cache has seeded", async () => {
+  it("uses 2-member fallback after forced refresh post-seed when room is not in m.direct", async () => {
     const client = createMockClient({ isDm: false, dmCacheAvailable: true });
     const tracker = createDirectRoomTracker(client);
+
+    // A strict 2-member room not in m.direct after seed: forced refresh
+    // still shows it absent → 2-member fallback classifies as DM.
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(true);
+
+    expect(client.dms.update).toHaveBeenCalledTimes(2); // initial seed + forced refresh
+  });
+
+  it("discovers new DM room via forced refresh after seed", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: true });
+    const tracker = createDirectRoomTracker(client);
+
+    // Simulate: first dms.update() seeds the cache (no room),
+    // second (forced) refresh discovers the room IS in m.direct
+    let updateCount = 0;
+    client.dms.update.mockImplementation(() => {
+      updateCount++;
+      if (updateCount === 2) {
+        client.dms.isDm.mockImplementation((rid: string) => rid === "!room:example.org");
+      }
+      return true;
+    });
 
     await expect(
       tracker.isDirectMessage({
         roomId: "!room:example.org",
         senderId: "@alice:example.org",
       }),
-    ).resolves.toBe(false);
+    ).resolves.toBe(true);
 
-    client.dms.update.mockResolvedValue(false);
-    tracker.invalidateRoom("!room:example.org");
+    expect(client.dms.update).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not re-enable the strict 2-member fallback after the dm cache has seeded", async () => {
+    // Verifies that a room with 3+ members is NOT re-classified as DM
+    // when the m.direct cache has already seeded.
+    const client = createMockClient({ isDm: false, dmCacheAvailable: true });
+    const tracker = createDirectRoomTracker(client);
+
+    // Give the room extra members (not strict 2-member)
+    client.setMembersForTest(["@alice:example.org", "@bot:example.org", "@mallory:example.org"]);
 
     await expect(
       tracker.isDirectMessage({

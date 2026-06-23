@@ -259,6 +259,22 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
           return true;
         }
 
+        // m.direct has seeded, but a DM room created post-startup may not
+        // appear in the stale cache. Force a fresh fetch before proceeding
+        // to promotion paths.
+        // See https://github.com/openclaw/openclaw/issues/89254
+        try {
+          lastDmUpdateMs = 0;
+          hasSeededDmCache = (await client.dms.update()) || hasSeededDmCache;
+          lastDmUpdateMs = Date.now();
+        } catch {
+          // Refresh failed — proceed with promotion paths below
+        }
+        if (client.dms.isDm(roomId)) {
+          log(`matrix: dm detected via m.direct after forced refresh room=${roomId}`);
+          return true;
+        }
+
         if (hasLocallyPromotedDirectRoom(roomId, senderId)) {
           const shouldKeep = await shouldKeepLocallyPromotedDirectRoom(roomId);
           if (shouldKeep !== false) {
@@ -300,6 +316,13 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
             return true;
           }
         }
+
+        // Room is a strict 2-member DM but no promotion gate matched and
+        // m.direct does not (and did not after forced refresh) list it.
+        // Classify as DM anyway — the exact-2-member heuristic is reliable.
+        // See https://github.com/openclaw/openclaw/issues/89254
+        log(`matrix: dm detected via exact 2-member fallback after dm cache seed room=${roomId}`);
+        return true;
       }
 
       log(
