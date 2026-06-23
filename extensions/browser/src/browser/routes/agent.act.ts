@@ -27,6 +27,7 @@ import {
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { resolveTargetIdFromTabs } from "../target-id.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import {
@@ -441,7 +442,14 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          if (action.targetId && action.targetId !== tab.targetId) {
+          // The route already resolved `tab` from the request targetId, which
+          // may be any supported alias form (tabId/label/suggestedTargetId/raw
+          // id or unique prefix). An explicit action targetId must reference
+          // that same tab; reject only ids that resolve to a different tab, not
+          // alias spellings of the current one.
+          const targetIdReferencesCurrentTab = (raw: string): boolean =>
+            resolveTargetIdFromTabs(raw, [tab]).ok;
+          if (action.targetId && !targetIdReferencesCurrentTab(action.targetId)) {
             return jsonActError(
               res,
               403,
@@ -662,7 +670,10 @@ export function registerBrowserAgentActRoutes(
             return;
           }
           if (action.kind === "batch") {
-            const targetIdError = validateBatchTargetIds(action.actions, tab.targetId);
+            const targetIdError = validateBatchTargetIds(
+              action.actions,
+              targetIdReferencesCurrentTab,
+            );
             if (targetIdError) {
               return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
             }

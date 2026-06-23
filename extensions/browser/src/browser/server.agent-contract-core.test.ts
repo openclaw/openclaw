@@ -197,6 +197,44 @@ describe("browser control server", () => {
   );
 
   it(
+    "accepts a unique targetId prefix that resolves to the request tab",
+    async () => {
+      const base = await startServerAndBase();
+      // "abcd" is a unique prefix of the canonical targetId "abcd1234"; aliases
+      // and prefixes are documented tab references and must not trip the
+      // top-level targetId match.
+      const response = await postJson<{ ok: boolean }>(`${base}/act`, {
+        kind: "click",
+        ref: "1",
+        targetId: "abcd",
+      });
+
+      expect(response.ok).toBe(true);
+      const clickArgs = mockFirstArg(pwMocks.clickViaPlaywright, 0, "click");
+      expect((clickArgs as { targetId?: string }).targetId).toBe("abcd1234");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
+    "accepts a batched sub-action targetId alias for the request tab",
+    async () => {
+      const base = await startServerAndBase();
+      const response = await postJson<{ ok: boolean }>(`${base}/act`, {
+        kind: "batch",
+        targetId: "abcd1234",
+        // Sub-action references the same tab via a unique prefix alias.
+        actions: [{ kind: "click", ref: "1", targetId: "abcd" }],
+      });
+
+      expect(response.ok).toBe(true);
+      const batchArgs = mockFirstArg(pwMocks.batchViaPlaywright, 0, "batch");
+      expect((batchArgs as { targetId?: string }).targetId).toBe("abcd1234");
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns the replacement targetId after an action-triggered target swap",
     async () => {
       const base = await startServerAndBase();

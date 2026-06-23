@@ -45,17 +45,23 @@ function countBatchActions(actions: BrowserActRequest[]): number {
   return count;
 }
 
-/** Validate that nested batch actions cannot drift to a different target tab. */
+/**
+ * Validate that nested batch actions cannot drift to a different target tab.
+ * `referencesRequestTab` resolves an action's targetId through the same tab
+ * alias resolution the route used, so a sub-action may reuse any supported alias
+ * form (tabId/label/suggestedTargetId/raw id or unique prefix) of the request
+ * tab; only ids that resolve to a different tab are rejected.
+ */
 export function validateBatchTargetIds(
   actions: BrowserActRequest[],
-  targetId: string,
+  referencesRequestTab: (targetId: string) => boolean,
 ): string | null {
   for (const action of actions) {
-    if (action.targetId && action.targetId !== targetId) {
+    if (action.targetId && !referencesRequestTab(action.targetId)) {
       return "batched action targetId must match request targetId";
     }
     if (action.kind === "batch") {
-      const nestedError = validateBatchTargetIds(action.actions, targetId);
+      const nestedError = validateBatchTargetIds(action.actions, referencesRequestTab);
       if (nestedError) {
         return nestedError;
       }
