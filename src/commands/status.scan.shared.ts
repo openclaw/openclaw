@@ -285,7 +285,6 @@ export async function resolveGatewayProbeSnapshot(params: {
     localStatusRpcFallback?: boolean;
   };
 }): Promise<GatewayProbeSnapshot> {
-  let gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
   const { gatewayMode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
   const shouldResolveAuth =
     params.opts.skipProbe !== true &&
@@ -293,6 +292,10 @@ export async function resolveGatewayProbeSnapshot(params: {
   const shouldProbe =
     params.opts.skipProbe !== true &&
     (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
+  let gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
+    config: params.cfg,
+    allowConfiguredSshTransport: shouldProbe,
+  });
   const gatewayProbeAuthResolution = shouldResolveAuth
     ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>
         resolveGatewayProbeAuthResolution(params.cfg),

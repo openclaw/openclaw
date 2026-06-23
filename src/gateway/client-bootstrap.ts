@@ -40,6 +40,7 @@ export async function resolveGatewayClientBootstrap(params: {
   const connection = buildGatewayConnectionDetailsWithResolvers({
     config: params.config,
     url: params.gatewayUrl,
+    allowConfiguredSshTransport: true,
   });
   const urlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
   // Only direct CLI/env URL overrides should constrain token/password fallback. Config-derived

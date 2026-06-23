@@ -29,6 +29,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    allowConfiguredSshTransport?: boolean;
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
@@ -75,6 +76,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
 
   const allowPrivateWs = process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS === "1";
   const usesConfiguredSshTransport =
+    options.allowConfiguredSshTransport === true &&
     !urlOverride &&
     Boolean(remoteUrl) &&
     remote?.transport === "ssh" &&

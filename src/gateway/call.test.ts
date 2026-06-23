@@ -1519,7 +1519,7 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("openclaw doctor --fix");
   });
 
-  it("allows plaintext ws remote URLs when configured SSH transport owns the tunnel", () => {
+  it("rejects plaintext ws remote URLs by default when SSH transport has sshTarget", () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {
         mode: "remote",
@@ -1533,7 +1533,24 @@ describe("buildGatewayConnectionDetails", () => {
     });
     resolveGatewayPort.mockReturnValue(18789);
 
-    const details = buildGatewayConnectionDetails();
+    expect(() => buildGatewayConnectionDetails()).toThrow("SECURITY ERROR");
+  });
+
+  it("allows plaintext ws remote URLs when the caller opts into owning the SSH tunnel", () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          transport: "ssh",
+          sshTarget: "user@gateway.example",
+        },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    const details = buildGatewayConnectionDetails({ allowConfiguredSshTransport: true });
 
     expect(details.url).toBe("ws://remote.example.com:18789");
     expect(details.urlSource).toBe("config gateway.remote.url");

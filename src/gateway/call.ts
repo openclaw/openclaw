@@ -435,6 +435,7 @@ export function buildGatewayConnectionDetails(
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
     localPortOverride?: number;
+    allowConfiguredSshTransport?: boolean;
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
@@ -1153,6 +1154,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     urlSource: context.urlOverrideSource,
     ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
     localPortOverride: opts.localPortOverride,
+    allowConfiguredSshTransport: true,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const ssh = await startGatewayRemoteSshTunnel({
@@ -1260,6 +1262,7 @@ export async function buildGatewayProbeConnectionDetails(
     urlSource: context.urlOverrideSource,
     ignoreEnvUrlOverride: opts.localPortOverride !== undefined,
     localPortOverride: opts.localPortOverride,
+    allowConfiguredSshTransport: true,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const ssh = await startGatewayRemoteSshTunnel({
