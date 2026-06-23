@@ -997,6 +997,54 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow("Firecrawl fetch failed: malformed JSON response");
   });
 
+  it("parses a well-formed Firecrawl JSON body under the byte cap", async () => {
+    const response = new Response(JSON.stringify({ success: true, data: [{ url: "x" }] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(
+      firecrawlClientTesting.readFirecrawlJsonResponse(response, "Firecrawl Search API error"),
+    ).resolves.toEqual({ success: true, data: [{ url: "x" }] });
+  });
+
+  it("caps oversized successful Firecrawl JSON bodies instead of buffering them", async () => {
+    // Streaming fixture proves the bounded reader stops before consuming the whole body and
+    // cancels the underlying stream, mirroring a self-hosted Firecrawl endpoint that streams an
+    // unbounded JSON payload with no Content-Length.
+    const chunkSize = 64 * 1024;
+    const chunkCount = 512;
+    let pulls = 0;
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulls >= chunkCount) {
+          controller.close();
+          return;
+        }
+        pulls += 1;
+        controller.enqueue(encoder.encode("a".repeat(chunkSize)));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(
+      firecrawlClientTesting.readFirecrawlJsonResponse(response, "Firecrawl Search API error"),
+    ).rejects.toThrow(/JSON response exceeds \d+ bytes/);
+
+    // The whole body is chunkCount * chunkSize = 32MiB, well over the 16MiB cap, so the reader
+    // must stop early and cancel the stream rather than buffer everything.
+    expect(pulls).toBeLessThan(chunkCount);
+    expect(cancelled).toBe(true);
+  });
+
   it("respects positive numeric overrides for scrape and cache behavior", () => {
     const cfg = {
       tools: {

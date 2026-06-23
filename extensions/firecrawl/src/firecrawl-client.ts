@@ -12,6 +12,7 @@ import {
   withStrictWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -41,6 +42,10 @@ const SCRAPE_CACHE = new Map<
 >();
 const DEFAULT_SEARCH_COUNT = 5;
 const DEFAULT_SCRAPE_MAX_CHARS = 50_000;
+// Cap successful Firecrawl JSON bodies so a self-hosted or custom endpoint cannot force the
+// runtime to buffer an unbounded payload before parsing. Aligned with the provider JSON cap
+// established by the #95103/#95108 response-limit campaign (e.g. #95218).
+const FIRECRAWL_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const ALLOWED_FIRECRAWL_HOSTS = new Set(["api.firecrawl.dev"]);
 const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
   "Firecrawl custom baseUrl must target a private or internal self-hosted endpoint.";
@@ -66,8 +71,11 @@ async function readFirecrawlJsonResponse(
   response: Response,
   label: string,
 ): Promise<Record<string, unknown>> {
+  const bytes = await readResponseWithLimit(response, FIRECRAWL_JSON_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => new Error(`${label}: JSON response exceeds ${maxBytes} bytes`),
+  });
   try {
-    return (await response.json()) as Record<string, unknown>;
+    return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }
@@ -613,8 +621,10 @@ export const testing = {
   assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
+  readFirecrawlJsonResponse,
   resolveEndpoint,
   validateFirecrawlBaseUrl,
   resolveSearchItems,
+  FIRECRAWL_JSON_RESPONSE_MAX_BYTES,
 };
 export { testing as __testing };
