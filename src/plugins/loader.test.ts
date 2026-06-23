@@ -8800,13 +8800,13 @@ module.exports = {
   it("omits the truncated plugins.allow snippet when more than six plugins are discovered", () => {
     const ids = Array.from({ length: 8 }, (_, index) => `discovered-plugin-${index + 1}`);
     const warnings: string[] = [];
+    const seenWarningKeys = new Set<string>();
     const cache = {
-      __seen: new Set<string>(),
       hasOpenAllowlistWarning(key: string) {
-        return this.__seen.has(key);
+        return seenWarningKeys.has(key);
       },
       recordOpenAllowlistWarning(key: string) {
-        this.__seen.add(key);
+        seenWarningKeys.add(key);
       },
     };
     warnWhenAllowlistIsOpen({
