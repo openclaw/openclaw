@@ -408,7 +408,7 @@ describe("buildMinimaxSpeechProvider", () => {
       return JSON.parse(init.body) as Record<string, unknown>;
     }
 
-    it("makes correct API call and decodes hex response", async () => {
+    it("requests non-streaming hex audio and decodes the hex response", async () => {
       const hexAudio = Buffer.from("fake-audio-data").toString("hex");
       const mockFetch = vi.mocked(globalThis.fetch);
       mockFetch.mockResolvedValueOnce(
@@ -437,6 +437,8 @@ describe("buildMinimaxSpeechProvider", () => {
       const body = firstFetchBody();
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
+      expect(body.stream).toBe(false);
+      expect(body.output_format).toBe("hex");
       expect((body.voice_setting as Record<string, unknown>).voice_id).toBe(
         "English_expressive_narrator",
       );

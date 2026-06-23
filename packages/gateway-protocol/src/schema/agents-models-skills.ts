@@ -323,6 +323,7 @@ export const SkillsUploadCommitParamsSchema = Type.Object(
 export const SkillsInstallParamsSchema = Type.Union([
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       name: NonEmptyString,
       installId: NonEmptyString,
       dangerouslyForceUnsafeInstall: Type.Optional(
@@ -338,6 +339,7 @@ export const SkillsInstallParamsSchema = Type.Union([
   ),
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       source: Type.Literal("clawhub"),
       slug: NonEmptyString,
       version: Type.Optional(NonEmptyString),
@@ -348,6 +350,7 @@ export const SkillsInstallParamsSchema = Type.Union([
   ),
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       source: Type.Literal("upload"),
       uploadId: NonEmptyString,
       slug: NonEmptyString,
@@ -372,6 +375,7 @@ export const SkillsUpdateParamsSchema = Type.Union([
   ),
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       source: Type.Literal("clawhub"),
       slug: Type.Optional(NonEmptyString),
       all: Type.Optional(Type.Boolean()),
@@ -783,7 +787,13 @@ export const SkillsProposalRequestRevisionParamsSchema = Type.Object(
 export const SkillsProposalRequestRevisionResultSchema = Type.Object(
   {
     runId: NonEmptyString,
-    status: Type.Union([Type.Literal("started"), Type.Literal("in_flight"), Type.Literal("ok")]),
+    status: Type.Union([
+      Type.Literal("started"),
+      Type.Literal("in_flight"),
+      Type.Literal("ok"),
+      Type.Literal("timeout"),
+      Type.Literal("error"),
+    ]),
   },
   { additionalProperties: true },
 );

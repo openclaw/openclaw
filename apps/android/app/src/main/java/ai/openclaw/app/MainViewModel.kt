@@ -111,6 +111,8 @@ class MainViewModel(
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val isNodeConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.nodeConnected }
+  val nodeCapabilityApprovalState: StateFlow<GatewayNodeApprovalState> =
+    runtimeState(initial = GatewayNodeApprovalState.Loading) { it.nodeCapabilityApprovalState }
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
@@ -202,6 +204,9 @@ class MainViewModel(
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
+  val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = runtimeState(initial = emptyList()) { it.execApprovals }
+  val execApprovalsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.execApprovalsRefreshing }
+  val execApprovalsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.execApprovalsErrorText }
 
   val canvas: CanvasController
     get() = ensureRuntime().canvas
@@ -533,6 +538,17 @@ class MainViewModel(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun refreshExecApprovals() {
+    ensureRuntime().refreshExecApprovals()
+  }
+
+  fun resolveExecApproval(
+    id: String,
+    decision: String,
+  ) {
+    ensureRuntime().resolveExecApproval(id = id, decision = decision)
   }
 
   fun refreshChannels() {

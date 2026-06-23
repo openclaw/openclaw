@@ -8,7 +8,8 @@ import {
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionStore } from "../config/sessions.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.js";
@@ -34,6 +35,8 @@ import { resolveTranscriptPathForComparison } from "./session-transcript-path.js
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesWithSourceAsync,
+} from "./session-transcript-readers.js";
+import {
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
@@ -145,9 +148,13 @@ export async function handleSessionHistoryHttpRequest(
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
       ? await readRecentSessionMessagesWithStatsAsync(
-          entry.sessionId,
-          target.storePath,
-          entry.sessionFile,
+          {
+            agentId: target.agentId,
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
+            storePath: target.storePath,
+          },
           {
             ...resolveSessionHistoryTailReadOptions(limit),
             allowResetArchiveFallback: true,
@@ -159,9 +166,13 @@ export async function handleSessionHistoryHttpRequest(
   const fullSnapshot =
     boundedSnapshot === undefined && entry?.sessionId
       ? await readSessionMessagesWithSourceAsync(
-          entry.sessionId,
-          target.storePath,
-          entry.sessionFile,
+          {
+            agentId: target.agentId,
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
+            storePath: target.storePath,
+          },
           {
             mode: "full",
             reason: "session history cursor pagination",
@@ -204,9 +215,11 @@ export async function handleSessionHistoryHttpRequest(
   let sentHistory = history;
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
+      agentId: target.agentId,
+      sessionEntry: entry,
       sessionId: entry.sessionId,
+      sessionKey: target.canonicalKey,
       storePath: target.storePath,
-      sessionFile: entry.sessionFile,
     },
     rawMessages: rawSnapshot,
     rawTranscriptSeq: boundedSnapshot?.totalMessages,
@@ -296,17 +309,20 @@ export async function handleSessionHistoryHttpRequest(
     });
   }, 15_000);
 
-  const unsubscribe: (() => void) | undefined = onSessionTranscriptUpdate((update) => {
+  const unsubscribe: (() => void) | undefined = onInternalSessionTranscriptUpdate((update) => {
     // Filter to candidate sessions synchronously before enqueueing any async
-    // work. `onSessionTranscriptUpdate` is a global fan-out listener, so every
+    // work. Transcript updates use a global fan-out listener, so every
     // transcript write in the gateway would otherwise append a Promise-chain
     // entry capturing `update.message` to every open SSE stream's queue —
     // O(streams × updates) for busy deployments.
     if (!entry?.sessionId) {
       return;
     }
+    const updateMatchesIdentity =
+      update.target?.sessionId === entry.sessionId &&
+      normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
     const updatePath = resolveTranscriptPathForComparison(update.sessionFile);
-    if (!updatePath || !transcriptCandidates.has(updatePath)) {
+    if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {
       return;
     }
     queueStreamWork(async () => {

@@ -1,5 +1,5 @@
 // Qa Lab tests cover docker harness plugin behavior.
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,6 +19,7 @@ function parseComposeServices(compose: string) {
     services?: Record<
       string,
       {
+        build?: { context?: string };
         environment?: Record<string, string>;
         volumes?: string[];
       }
@@ -52,7 +53,7 @@ describe("qa docker harness", () => {
       path.join(outputDir, "state", "openclaw.json"),
       path.join(outputDir, "state", "seed-workspace", "QA_KICKOFF_TASK.md"),
       path.join(outputDir, "state", "seed-workspace", "QA_SCENARIO_PLAN.md"),
-      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.md"),
+      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.yaml"),
       path.join(outputDir, "state", "seed-workspace", "IDENTITY.md"),
     ]) {
       expect(result.files).toContain(expectedFile);
@@ -90,7 +91,7 @@ describe("qa docker harness", () => {
     expect(compose).toContain(":/opt/openclaw-repo:ro");
     expect(compose).toContain("./state:/opt/openclaw-scaffold:ro");
     expect(compose).toContain(
-      "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/",
+      "cp -R /opt/openclaw-scaffold/seed-workspace/. /tmp/openclaw/workspace/ && rm -rf /tmp/openclaw/workspace/repo && ln -s /opt/openclaw-repo /tmp/openclaw/workspace/repo",
     );
     expect(compose).toContain("OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json");
     expect(compose).toContain("OPENCLAW_STATE_DIR: /tmp/openclaw/state");
@@ -125,10 +126,10 @@ describe("qa docker harness", () => {
     expect(kickoff).toContain("Lobster Invaders");
 
     const scenarios = await readFile(
-      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.md"),
+      path.join(outputDir, "state", "seed-workspace", "QA_SCENARIOS.yaml"),
       "utf8",
     );
-    expect(scenarios).toContain("```yaml qa-pack");
+    expect(scenarios).toContain("pack:");
     expect(scenarios).toContain("subagent-fanout-synthesis");
 
     const readme = await readFile(path.join(outputDir, "README.md"), "utf8");
@@ -155,5 +156,33 @@ describe("qa docker harness", () => {
     expect(calls).toEqual([
       "docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS=qa-channel qa-lab -f Dockerfile . @/repo/openclaw",
     ]);
+  });
+
+  it("quotes generated compose paths so shell-sensitive repo paths survive YAML parsing", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-docker-paths-"));
+    const outputDir = path.join(tempRoot, "scaffold");
+    const repoRoot = path.join(tempRoot, "repo #hash");
+    cleanups.push(async () => {
+      await rm(tempRoot, { recursive: true, force: true });
+    });
+    await mkdir(repoRoot, { recursive: true });
+
+    await writeQaDockerHarnessFiles({
+      outputDir,
+      repoRoot,
+      gatewayToken: "qa-token",
+      usePrebuiltImage: false,
+      bindUiDist: true,
+    });
+
+    const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
+    const services = parseComposeServices(compose);
+    expect(services["qa-mock-openai"]?.build?.context).toBe("../repo #hash");
+    expect(services["qa-lab"]?.volumes).toContain(
+      "../repo #hash/extensions/qa-lab/web/dist:/opt/openclaw-qa-lab-ui:ro",
+    );
+    expect(services["openclaw-qa-gateway"]?.volumes).toContain(
+      "../repo #hash:/opt/openclaw-repo:ro",
+    );
   });
 });

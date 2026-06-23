@@ -43,13 +43,15 @@ type EmbeddedSubscribeLogger = {
 /** Per-tool metadata tracked between tool start/update/end events. */
 export type ToolCallSummary = {
   meta?: string;
+  instanceReplaySafe: boolean;
+  replaySafe: boolean;
   mutatingAction: boolean;
   actionFingerprint?: string;
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 
 /** User-visible assistant stream payload emitted to subscribers. */
-export type AssistantStreamData = {
+type AssistantStreamData = {
   text: string;
   delta: string;
   replace?: true;
@@ -58,7 +60,7 @@ export type AssistantStreamData = {
 };
 
 /** Deferred assistant stream event plus whether it should emit partial replies. */
-export type AssistantStreamDelivery = {
+type AssistantStreamDelivery = {
   data: AssistantStreamData;
   emitPartialReply: boolean;
 };
@@ -69,6 +71,7 @@ export type EmbeddedAgentSubscribeState = {
   toolMetas: Array<{
     toolName?: string;
     meta?: string;
+    replaySafe?: boolean;
     asyncStarted?: boolean;
     asyncTaskRunId?: string;
     asyncTaskId?: string;
@@ -169,6 +172,7 @@ export type EmbeddedAgentSubscribeState = {
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
   pendingToolTrustedLocalMedia: boolean;
+  hasToolMediaBlockReply: boolean;
   visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
@@ -270,6 +274,7 @@ type ToolHandlerParams = Pick<
   | "runId"
   | "onBlockReplyFlush"
   | "onAgentEvent"
+  | "onToolStreamBoundary"
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
   | "onAgentToolResult"
@@ -285,6 +290,7 @@ type ToolHandlerParams = Pick<
   | "hasRepliedRef"
   | "sessionId"
   | "agentId"
+  | "replaySafeToolNames"
   | "toolResultFormat"
   | "toolProgressDetail"
   | "sourceReplyDeliveryMode"

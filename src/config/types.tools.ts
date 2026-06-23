@@ -511,7 +511,6 @@ export type MemorySearchConfig = {
   /** Index storage configuration. */
   store?: {
     driver?: "sqlite";
-    path?: string;
     fts?: {
       /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
       tokenizer?: "unicode61" | "trigram";
@@ -622,7 +621,7 @@ export type ToolsConfig = {
       openaiCodex?: {
         /** Enable native Codex web search for eligible models. */
         enabled?: boolean;
-        /** Use cached or live external web access. Default: "cached". */
+        /** Prefer cached or explicitly request live access. Unrestricted Codex turns resolve cached to live. */
         mode?: "cached" | "live";
         /** Optional allowlist of domains passed to the native Codex tool. */
         allowedDomains?: string[];

@@ -11,6 +11,7 @@ import { collectReleaseVersionFloorErrors, resolveNpmPublishPlan } from "./npm-p
 export type PluginPackageJson = {
   name?: string;
   version?: string;
+  type?: string;
   private?: boolean;
   repository?:
     | string
@@ -80,12 +81,21 @@ export type PublishablePluginPackageCandidate<
   extensionId: string;
   packageDir: string;
   packageJson: TPackageJson;
+  readmeText?: string;
 };
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 
 function readPluginPackageJson(path: string): unknown {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function readOptionalTextFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 export function collectExtensionPackageJsonCandidates<
@@ -106,6 +116,7 @@ export function collectExtensionPackageJsonCandidates<
         extensionId: dir.name,
         packageDir,
         packageJson: readPluginPackageJson(packageJsonPath) as TPackageJson,
+        readmeText: readOptionalTextFile(join(absolutePackageDir, "README.md")),
       });
     } catch {
       continue;
@@ -175,23 +186,23 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
       continue;
     }
     if (arg === "--plugins") {
-      selection = parsePluginReleaseSelection(argv[index + 1]);
+      selection = parsePluginReleaseSelection(readRequiredArgValue(argv, index, arg, true));
       pluginsFlagProvided = true;
       index += 1;
       continue;
     }
     if (arg === "--selection-mode") {
-      selectionMode = parsePluginReleaseSelectionMode(argv[index + 1]);
+      selectionMode = parsePluginReleaseSelectionMode(readRequiredArgValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--base-ref") {
-      baseRef = argv[index + 1];
+      baseRef = readRequiredArgValue(argv, index, arg);
       index += 1;
       continue;
     }
     if (arg === "--head-ref") {
-      headRef = argv[index + 1];
+      headRef = readRequiredArgValue(argv, index, arg);
       index += 1;
       continue;
     }
@@ -220,6 +231,21 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   return { selection, selectionMode, pluginsFlagProvided, baseRef, headRef };
 }
 
+function readRequiredArgValue(
+  argv: string[],
+  index: number,
+  flag: string,
+  allowBlank = false,
+): string {
+  const value = argv[index + 1];
+  const missingValue =
+    value === undefined || value.startsWith("--") || (!allowBlank && value.trim() === "");
+  if (missingValue) {
+    throw new Error(`${flag} requires a value.`);
+  }
+  return value;
+}
+
 export function collectPublishablePluginPackageErrors(
   candidate: PublishablePluginPackageCandidate,
 ): string[] {
@@ -241,6 +267,12 @@ export function collectPublishablePluginPackageErrors(
   }
   if (packageJson.private === true) {
     errors.push("package.json private must not be true.");
+  }
+  if (packageJson.type !== "module") {
+    errors.push('package.json type must be "module" so built .js runtime entries load as ESM.');
+  }
+  if (!candidate.readmeText?.trim()) {
+    errors.push("README.md must exist and contain package documentation.");
   }
   if (repositoryUrl !== OPENCLAW_PLUGIN_NPM_REPOSITORY_URL) {
     errors.push(

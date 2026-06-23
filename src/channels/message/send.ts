@@ -43,13 +43,13 @@ export type DurableMessageBatchSendParams = Omit<
   previousReceipt?: MessageReceipt;
 };
 
-export type DurableMessageSuppressionReason =
+type DurableMessageSuppressionReason =
   | OutboundPayloadDeliverySuppressionReason
   | "no_visible_result";
 
-export type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";
+type DurableMessageFailureStage = "platform_send" | "queue" | "unknown";
 
-export type DurableMessagePayloadDeliveryOutcome =
+type DurableMessagePayloadDeliveryOutcome =
   | {
       index: number;
       status: "sent";
@@ -103,8 +103,6 @@ export type DurableMessageBatchSendResult =
       stage?: DurableMessageFailureStage;
       payloadOutcomes?: DurableMessagePayloadDeliveryOutcome[];
     };
-
-export type DurableMessageDeliveryOutcome = DurableMessageBatchSendResult;
 
 const neverAbortedSignal = new AbortController().signal;
 

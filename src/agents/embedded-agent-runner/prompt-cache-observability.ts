@@ -4,7 +4,7 @@
 import crypto from "node:crypto";
 import type { NormalizedUsage } from "../usage.js";
 
-export type PromptCacheChangeCode =
+type PromptCacheChangeCode =
   | "cacheRetention"
   | "model"
   | "streamStrategy"
@@ -17,7 +17,7 @@ export type PromptCacheChange = {
   detail: string;
 };
 
-export type PromptCacheSnapshot = {
+type PromptCacheSnapshot = {
   provider: string;
   modelId: string;
   modelApi?: string | null;
@@ -30,7 +30,7 @@ export type PromptCacheSnapshot = {
   toolNames: string[];
 };
 
-export type PromptCacheObservationStart = {
+type PromptCacheObservationStart = {
   snapshot: PromptCacheSnapshot;
   changes: PromptCacheChange[] | null;
   previousCacheRead: number | null;

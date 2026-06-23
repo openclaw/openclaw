@@ -3,14 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
-  resolveAgentAttachments,
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
@@ -693,6 +692,34 @@ describe("tryDispatchAcpReply", () => {
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
+  it("skips media understanding for cached stickers while preserving their attachment", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("cached sticker");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const stickerPath = path.join(tempDir, "sticker.webp");
+    try {
+      await fs.writeFile(stickerPath, "image-bytes");
+
+      await runDispatch({
+        bodyForAgent: "[Sticker] Cached description",
+        ctxOverrides: {
+          MediaPath: stickerPath,
+          MediaPaths: [stickerPath],
+          MediaType: "image/webp",
+          MediaTypes: ["image/webp"],
+          Sticker: { cachedDescription: "Cached description" },
+          StickerMediaIncluded: true,
+          SkipStickerMediaUnderstanding: true,
+        },
+      });
+
+      expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+      expect(managerMocks.runTurn).toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes the ACP agent directory to media understanding", async () => {
     setReadyAcpResolution();
     mockVisibleTextTurn("image turn");
@@ -729,60 +756,6 @@ describe("tryDispatchAcpReply", () => {
           "media understanding",
         ).agentDir,
       ).toBe(agentDir);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("forwards normalized image attachments into agent runtime turns", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
-    const imagePath = path.join(tempDir, "inbound.png");
-    try {
-      await fs.writeFile(imagePath, "image-bytes");
-      const attachments = await resolveAgentAttachments({
-        cfg: createAcpTestConfig({
-          channels: {
-            imessage: {
-              attachmentRoots: [tempDir],
-            },
-          },
-        }),
-        ctx: buildTestCtx({
-          Provider: "imessage",
-          Surface: "imessage",
-          MediaPath: imagePath,
-          MediaType: "image/png",
-        }),
-        runtime: {
-          MediaAttachmentCache: class {
-            async getBuffer() {
-              return {
-                buffer: Buffer.from("image-bytes"),
-                mime: "image/png",
-                fileName: "inbound.png",
-                size: "image-bytes".length,
-              };
-            }
-          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
-          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
-            false,
-          normalizeAttachments: (ctx) => [
-            {
-              path: ctx.MediaPath,
-              mime: ctx.MediaType,
-              index: 0,
-            },
-          ],
-          resolveMediaAttachmentLocalRoots: () => [tempDir],
-        },
-      });
-
-      expect(attachments).toEqual([
-        {
-          mediaType: "image/png",
-          data: Buffer.from("image-bytes").toString("base64"),
-        },
-      ]);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

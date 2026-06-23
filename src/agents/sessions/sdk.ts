@@ -178,7 +178,9 @@ function getAttributionHeaders(
     return undefined;
   }
 
-  if (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")) {
+  const baseUrl = (model as { baseUrl?: string }).baseUrl ?? "";
+
+  if (model.provider === "openrouter" || baseUrl.includes("openrouter.ai")) {
     return {
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
@@ -189,8 +191,8 @@ function getAttributionHeaders(
   if (
     model.provider === "cloudflare-workers-ai" ||
     model.provider === "cloudflare-ai-gateway" ||
-    model.baseUrl.includes("api.cloudflare.com") ||
-    model.baseUrl.includes("gateway.ai.cloudflare.com")
+    baseUrl.includes("api.cloudflare.com") ||
+    baseUrl.includes("gateway.ai.cloudflare.com")
   ) {
     return {
       "User-Agent": "openclaw",

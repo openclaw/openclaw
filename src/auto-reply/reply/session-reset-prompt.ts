@@ -113,6 +113,3 @@ export function buildBareSessionResetPrompt(
     nowMs ?? Date.now(),
   );
 }
-
-/** @deprecated Use buildBareSessionResetPrompt(cfg) instead */
-export const BARE_SESSION_RESET_PROMPT = BARE_SESSION_RESET_PROMPT_BASE;

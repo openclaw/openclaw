@@ -105,6 +105,7 @@ export const MessageActionParamsSchema = Type.Object(
     action: NonEmptyString,
     params: Type.Record(Type.String(), Type.Unknown()),
     accountId: Type.Optional(Type.String()),
+    requesterAccountId: Type.Optional(Type.String()),
     requesterSenderId: Type.Optional(Type.String()),
     // Honored only when the RPC caller has the full operator scope set
     // (shared-secret bearer or `operator.admin`). For narrowly-scoped
@@ -205,8 +206,8 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
-    // Backward-compatible no-op. Older CLI clients sent this field on gateway
-    // agent requests; the gateway accepts but intentionally ignores it.
+    // One-shot CLI gateway requests can ask the gateway to close process-wide
+    // bundle MCP resources after the run instead of keeping them warm.
     cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
     modelRun: Type.Optional(Type.Boolean()),
     promptMode: Type.Optional(

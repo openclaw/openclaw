@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -19,6 +20,7 @@ let addDurableCommandApproval: ExecApprovalsModule["addDurableCommandApproval"];
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
+let persistAllowAlwaysDecision: ExecApprovalsModule["persistAllowAlwaysDecision"];
 let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
 let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
@@ -32,8 +34,7 @@ let resolveExecApprovalsTranscriptPath: ExecApprovalsModule["resolveExecApproval
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
 
 const tempDirs: string[] = [];
-const originalOpenClawHome = process.env.OPENCLAW_HOME;
-const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+const testEnvSnapshot = captureEnv(["OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 
 beforeAll(async () => {
   ({
@@ -42,6 +43,7 @@ beforeAll(async () => {
     ensureExecApprovals,
     mergeExecApprovalsSocketDefaults,
     normalizeExecApprovals,
+    persistAllowAlwaysDecision,
     persistAllowAlwaysPatterns,
     readExecApprovalsSnapshot,
     recordAllowlistMatchesUse,
@@ -62,16 +64,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  if (originalOpenClawHome === undefined) {
-    delete process.env.OPENCLAW_HOME;
-  } else {
-    process.env.OPENCLAW_HOME = originalOpenClawHome;
-  }
-  if (originalOpenClawStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
-  }
+  testEnvSnapshot.restore();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -80,8 +73,8 @@ afterEach(() => {
 function createHomeDir(): string {
   const dir = makeTempDir();
   tempDirs.push(dir);
-  process.env.OPENCLAW_HOME = dir;
-  delete process.env.OPENCLAW_STATE_DIR;
+  setTestEnvValue("OPENCLAW_HOME", dir);
+  deleteTestEnvValue("OPENCLAW_STATE_DIR");
   return dir;
 }
 
@@ -142,7 +135,7 @@ describe("exec approvals store helpers", () => {
   it("uses OPENCLAW_STATE_DIR for default file and socket paths", () => {
     const dir = createHomeDir();
     const stateDir = path.join(dir, "custom-state");
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
     expect(path.normalize(resolveExecApprovalsPath())).toBe(
       path.normalize(stateApprovalsFilePath(stateDir)),
@@ -180,7 +173,7 @@ describe("exec approvals store helpers", () => {
       })}\n`,
       "utf8",
     );
-    process.env.OPENCLAW_STATE_DIR = stateDir;
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
     const resolved = resolveExecApprovals("main", {
       security: "full",
@@ -655,7 +648,7 @@ describe("exec approvals store helpers", () => {
     const linkedHome = `${realHome}-link`;
     tempDirs.push(realHome, linkedHome);
     fs.symlinkSync(realHome, linkedHome, "dir");
-    process.env.OPENCLAW_HOME = linkedHome;
+    setTestEnvValue("OPENCLAW_HOME", linkedHome);
 
     saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
 
@@ -672,7 +665,7 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(linkedStateTarget, { recursive: true });
     fs.symlinkSync(realHome, linkedHome, "dir");
     fs.symlinkSync(linkedStateTarget, path.join(realHome, ".openclaw"), "dir");
-    process.env.OPENCLAW_HOME = linkedHome;
+    setTestEnvValue("OPENCLAW_HOME", linkedHome);
 
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
@@ -704,6 +697,30 @@ describe("exec approvals store helpers", () => {
 
     const approvals = ensureExecApprovals();
     addDurableCommandApproval(approvals, "worker", 'printenv API_KEY="secret-value"');
+
+    const allowlist = allowlistEntries(dir, "worker");
+    expect(allowlist).toHaveLength(1);
+    expectAllowlistEntryFields(allowlist[0] ?? {}, {
+      source: "allow-always",
+      lastUsedAt: 321_000,
+    });
+    expect(allowlist[0]?.pattern).toMatch(/^=command:[0-9a-f]{16}$/i);
+    expect(allowlist[0]).not.toHaveProperty("commandText");
+  });
+
+  it("persists exact-command allow-always decisions as durable command approvals", () => {
+    const dir = createHomeDir();
+    vi.spyOn(Date, "now").mockReturnValue(321_000);
+
+    const approvals = ensureExecApprovals();
+    persistAllowAlwaysDecision({
+      approvals,
+      agentId: "worker",
+      decision: {
+        kind: "exact-command",
+        commandText: 'printenv API_KEY="secret-value"',
+      },
+    });
 
     const allowlist = allowlistEntries(dir, "worker");
     expect(allowlist).toHaveLength(1);
@@ -956,12 +973,8 @@ describe("exec approvals store helpers", () => {
       ],
     });
 
-    const echoPattern = partialPatterns[0]?.pattern;
-    expect(echoPattern).toMatch(/\/echo$/);
+    expect(partialPatterns).toEqual([]);
     allowlist = allowlistEntries(dir, "worker");
-    expect(
-      allowlist.map((entry) => entry.pattern).filter((pattern) => pattern === echoPattern),
-    ).toHaveLength(1);
     expect(
       allowlist.some(
         (entry) =>

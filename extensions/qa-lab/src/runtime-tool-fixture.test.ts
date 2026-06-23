@@ -98,6 +98,69 @@ async function writeLiveRuntimeToolEvidence(env: QaSuiteRuntimeEnv, toolName = "
   ]);
 }
 
+async function runMockRuntimeToolFixtureWithOutputs(params: {
+  toolName: string;
+  happyArgs: Record<string, unknown>;
+  failureArgs: Record<string, unknown>;
+  happyOutput: string;
+  failureOutput: string;
+}) {
+  const env = await makeEnv({
+    mock: { baseUrl: "http://127.0.0.1:9999" },
+  });
+  const promptSnippet = `target=${params.toolName}`;
+  const failurePromptSnippet = `failure target=${params.toolName}`;
+  const happyCallId = `call-${params.toolName}-happy`;
+  const failureCallId = `call-${params.toolName}-failure`;
+  const fetchJson = vi
+    .fn()
+    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([
+      {
+        allInputText: promptSnippet,
+        plannedToolCallId: happyCallId,
+        plannedToolName: params.toolName,
+        plannedToolArgs: params.happyArgs,
+      },
+      {
+        allInputText: promptSnippet,
+        toolOutputCallId: happyCallId,
+        toolOutput: params.happyOutput,
+      },
+      {
+        allInputText: failurePromptSnippet,
+        plannedToolCallId: failureCallId,
+        plannedToolName: params.toolName,
+        plannedToolArgs: params.failureArgs,
+      },
+      {
+        allInputText: failurePromptSnippet,
+        toolOutputCallId: failureCallId,
+        toolOutput: params.failureOutput,
+      },
+    ]);
+
+  return runRuntimeToolFixture(
+    env,
+    {
+      toolName: params.toolName,
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+      },
+      promptSnippet,
+      failurePromptSnippet,
+    },
+    {
+      createSession: vi.fn(async (_env, _label, key) => key!),
+      readEffectiveTools: vi.fn(async () => new Set([params.toolName])),
+      runAgentPrompt: vi.fn(async () => ({})),
+      fetchJson,
+      ensureImageGenerationConfigured: vi.fn(),
+    },
+  );
+}
+
 afterEach(async () => {
   await Promise.all(
     tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
@@ -593,6 +656,59 @@ describe("runtime tool fixture", () => {
         },
       ),
     ).rejects.toThrow("expected mock failure-path tool failure output for read");
+  });
+
+  it.each([
+    {
+      name: "required-field",
+      toolName: "sessions_spawn",
+      happyArgs: { task: "reply ok" },
+      happyOutput: "accepted",
+      failureOutput: "task required",
+    },
+    {
+      name: "unavailable-provider",
+      toolName: "web_search",
+      happyArgs: { query: "OpenClaw runtime parity fixed query" },
+      happyOutput: "result",
+      failureOutput: "web_search is disabled or no provider is available.",
+    },
+  ])("accepts $name messages as mock failure fixture output", async (fixture) => {
+    const details = await runMockRuntimeToolFixtureWithOutputs({
+      ...fixture,
+      failureArgs: { __qaFailureMode: "denied-input" },
+    });
+
+    expect(details).toContain(`${fixture.toolName} mock provider failure planned args`);
+  });
+
+  it.each([
+    {
+      name: "neutral required-text",
+      toolName: "sessions_spawn",
+      happyArgs: { task: "reply ok" },
+      happyOutput: "accepted",
+      failureOutput: "no action required",
+      expectedError: "expected mock failure-path tool failure output for sessions_spawn",
+    },
+    {
+      name: "unavailable-provider happy output",
+      toolName: "web_search",
+      happyArgs: { query: "OpenClaw runtime parity fixed query" },
+      happyOutput: "web_search is disabled or no provider is available.",
+      failureOutput: "web_search is disabled or no provider is available.",
+      expectedError: "expected mock happy-path successful tool output for web_search",
+    },
+  ])("rejects $name as mock fixture output", async (fixture) => {
+    await expect(
+      runMockRuntimeToolFixtureWithOutputs({
+        toolName: fixture.toolName,
+        happyArgs: fixture.happyArgs,
+        failureArgs: { __qaFailureMode: "denied-input" },
+        happyOutput: fixture.happyOutput,
+        failureOutput: fixture.failureOutput,
+      }),
+    ).rejects.toThrow(fixture.expectedError);
   });
 
   it("allows successful happy-path tool output to mention errors", async () => {

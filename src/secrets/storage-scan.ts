@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
-import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
@@ -13,13 +12,6 @@ import { parseEnvValue } from "./shared.js";
 /** Parses one .env assignment value using the shared shell-ish env parser. */
 export function parseEnvAssignmentValue(raw: string): string {
   return parseEnvValue(raw);
-}
-
-/** Lists canonical auth-profile stores visible to secrets audit/apply storage scanners. */
-export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
-  return listAuthProfileStoreAgentDirs(config, stateDir).map((agentDir) =>
-    resolveAuthProfileDatabasePath(agentDir),
-  );
 }
 
 /** Lists agent directories that own canonical auth-profile stores. */

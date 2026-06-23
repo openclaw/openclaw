@@ -61,12 +61,12 @@ describe("subscribeEmbeddedAgentSession", () => {
     // Default trusted media tools to built-ins so tests that opt into custom
     // builtin sets get matching local media trust behavior.
     const { session, emit } = createStubSessionHarness();
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       ...options,
       trustedLocalMediaToolNames: options.trustedLocalMediaToolNames ?? options.builtinToolNames,
     });
-    return { emit };
+    return { emit, subscription };
   }
 
   function emitAssistantTextDelta(
@@ -359,6 +359,29 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+  it("suppressLiveStreamOutput skips per-chunk preview but still delivers final text", () => {
+    const onAgentEvent = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onAgentEvent,
+      suppressLiveStreamOutput: true,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Hello ");
+    emitAssistantTextDelta(emit, "world");
+
+    // No live preview events while suppressed (the per-chunk parsing path is skipped).
+    expect(extractAgentEventPayloads(onAgentEvent.mock.calls)).toHaveLength(0);
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+    emit({ type: "message_end", message: assistantMessage });
+    expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+  });
+
   it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
     const onToolResult = vi.fn();
     const { emit } = createSubscribedHarness({
@@ -501,7 +524,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("does not attach generated image media to an early streamed chunk before explicit MEDIA", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
-    const { emit } = createSubscribedHarness({
+    const { emit, subscription } = createSubscribedHarness({
       runId: "run",
       onToolResult,
       onBlockReply,
@@ -574,6 +597,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       .map(([payload]) => payload)
       .filter((payload) => payload.mediaUrls?.includes("/tmp/generated.png"));
     expect(mediaPayloads).toHaveLength(1);
+    expect(subscription.hasToolMediaBlockReply()).toBe(true);
   });
 
   it("attaches media from internal completion events even when assistant omits MEDIA lines", async () => {
@@ -776,6 +800,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       audioAsVoice: true,
     });
     expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.hasToolMediaBlockReply()).toBe(true);
     expect(subscription.getVisibleBlockReplyCount()).toBe(1);
   });
 
@@ -962,6 +987,20 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Visible answer");
     expect(payloads[0]?.delta).toBe("Visible answer");
+  });
+
+  it("replaces leaked MiniMax reasoning when its orphan close arrives in a later delta", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain");
+    emitAssistantTextDelta(emit, "</mm:think>Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toMatchObject([
+      { text: "private chain", delta: "private chain" },
+      { text: "Visible answer", delta: "", replace: true },
+    ]);
   });
 
   it("replaces malformed streamed reasoning when orphan close tags split across deltas", () => {

@@ -119,16 +119,25 @@ export const webHandlers: GatewayRequestHandlers = {
         channelId: provider.id,
         accountId,
       });
-      await context.stopChannel(provider.id, accountId);
+      const forceLogin = Boolean(params.force);
+      const stoppedBeforeLogin = forceLogin || !wasRunning;
+      if (stoppedBeforeLogin) {
+        await context.stopChannel(provider.id, accountId);
+      }
       const result = await run({
-        force: Boolean(params.force),
+        force: forceLogin,
         timeoutMs: typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
         verbose: Boolean(params.verbose),
         accountId,
       });
-      if (result.connected) {
+      const stoppedAfterQrTakeover = !stoppedBeforeLogin && Boolean(result.qrDataUrl);
+      if (stoppedAfterQrTakeover) {
+        await context.stopChannel(provider.id, accountId);
+      }
+      const stoppedForLogin = stoppedBeforeLogin || stoppedAfterQrTakeover;
+      if (result.connected && stoppedForLogin) {
         await context.startChannel(provider.id, accountId);
-      } else if (wasRunning && !result.qrDataUrl) {
+      } else if (wasRunning && stoppedForLogin && !result.qrDataUrl) {
         // When start fails before producing a QR code, restore the previously
         // running channel/account so a transient login failure does not stop it.
         await context.startChannel(provider.id, accountId);

@@ -131,6 +131,9 @@ vi.mock("../apply-patch.js", () => ({
 }));
 
 vi.mock("../agent-tools.before-tool-call.js", () => ({
+  copyBeforeToolCallHookMarker: vi.fn(),
+  isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
+  rewrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
   wrapToolWithBeforeToolCallHook: vi.fn((tool) => tool),
 }));
 
@@ -778,7 +781,7 @@ function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProv
     loadImageWebMediaRuntime: async () => ({
       loadWebMedia: async (mediaUrl, options) => {
         const inboundRoots =
-          options && typeof options === "object" && "inboundRoots" in options
+          options && typeof options !== "number" && "inboundRoots" in options
             ? options.inboundRoots
             : [];
         if (

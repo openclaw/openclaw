@@ -112,6 +112,53 @@ describe("overflow compaction in run loop", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
+  it("keeps fallback unsafe when an overflow retry follows a mutating attempt", async () => {
+    const overflowError = makeOverflowError();
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: overflowError,
+          toolMetas: [{ toolName: "exec" }],
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "web_fetch" }],
+          replayMetadata: {
+            hadPotentialSideEffects: false,
+            replaySafe: true,
+          },
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "toolUse",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 1).initialReplayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    expect(result.meta.error?.fallbackSafe).toBe(false);
+  });
+
   it("uses provider thinking policy for configless embedded MiniMax-M3 runs", async () => {
     mockedResolveModelAsync.mockResolvedValueOnce({
       model: {

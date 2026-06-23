@@ -49,6 +49,7 @@ function makeEvidenceSummary(status: "pass" | "fail" | "blocked" | "skipped") {
     kind: "openclaw.qa.evidence-summary",
     schemaVersion: 2,
     generatedAt: "2026-05-01T00:00:00.000Z",
+    evidenceMode: "full",
     entries: [
       {
         test: {
@@ -56,7 +57,7 @@ function makeEvidenceSummary(status: "pass" | "fail" | "blocked" | "skipped") {
           id: "whatsapp-mention-gating",
           title: "WhatsApp mention gating",
         },
-        mapping: { profile: "release", coverage: [] },
+        coverage: [],
         execution: {
           runner: "host",
           environment: { ref: null, os: "darwin", nodeVersion: "v24.0.0" },

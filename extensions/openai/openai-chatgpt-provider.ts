@@ -56,6 +56,7 @@ const OPENAI_CODEX_GPT_54_MODEL_ID = "gpt-5.4";
 const OPENAI_CODEX_GPT_54_LEGACY_MODEL_ID = "gpt-5.4-codex";
 const OPENAI_CODEX_GPT_54_MINI_MODEL_ID = "gpt-5.4-mini";
 const OPENAI_CODEX_GPT_54_PRO_MODEL_ID = "gpt-5.4-pro";
+const OPENAI_CODEX_GPT_53_SPARK_MODEL_ID = "gpt-5.3-codex-spark";
 const OPENAI_CODEX_GPT_55_CODEX_CONTEXT_TOKENS = 400_000;
 const OPENAI_CODEX_GPT_55_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_55_PRO_NATIVE_CONTEXT_TOKENS = 1_000_000;
@@ -63,6 +64,7 @@ const OPENAI_CODEX_GPT_55_PRO_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_NATIVE_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_CODEX_GPT_54_DEFAULT_CONTEXT_TOKENS = 272_000;
 const OPENAI_CODEX_GPT_54_MINI_NATIVE_CONTEXT_TOKENS = 400_000;
+const OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CODEX_GPT_55_PRO_COST = {
   input: 30,
@@ -100,6 +102,14 @@ const OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
 ] as const;
 const OPENAI_CODEX_MODERN_MODEL_IDS = [
+  OPENAI_CODEX_GPT_55_MODEL_ID,
+  OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MODEL_ID,
+  OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
+  OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+  OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
+] as const;
+const OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS = [
   OPENAI_CODEX_GPT_55_MODEL_ID,
   OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_CODEX_GPT_54_MODEL_ID,
@@ -150,13 +160,13 @@ function hasImageInput(input: unknown): boolean {
 function matchesOpenAICodexImageCapableModel(modelId: string, modelName?: string): boolean {
   return [modelId, modelName]
     .filter((value): value is string => typeof value === "string")
-    .some((candidate) => matchesExactOrPrefix(candidate, OPENAI_CODEX_MODERN_MODEL_IDS));
+    .some((candidate) => matchesExactOrPrefix(candidate, OPENAI_CODEX_IMAGE_CAPABLE_MODEL_IDS));
 }
 
 /**
  * Restore native `["text", "image"]` input capability on resolved Codex rows
- * for the known modern model IDs (gpt-5.4, gpt-5.4-mini, gpt-5.4-pro, gpt-5.5,
- * gpt-5.5-pro). Persisted/configured model rows can omit the `input` field
+ * for known image-capable modern model IDs (gpt-5.4, gpt-5.4-mini,
+ * gpt-5.4-pro, gpt-5.5, gpt-5.5-pro). Persisted/configured model rows can omit the `input` field
  * entirely when they were written by older OpenClaw versions. When that row wins
  * the catalog merge, `modelSupportsInput(entry, "image")` returns false and the
  * gateway's `chat.send` handler offloads inbound images as `media://inbound/<id>`
@@ -279,6 +289,15 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_MINI_COST,
     };
+  } else if (lower === OPENAI_CODEX_GPT_53_SPARK_MODEL_ID) {
+    templateIds = OPENAI_CODEX_GPT_54_CATALOG_SYNTH_TEMPLATE_MODEL_IDS;
+    patch = {
+      input: ["text"],
+      contextWindow: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+      contextTokens: OPENAI_CODEX_GPT_53_SPARK_CONTEXT_TOKENS,
+      maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
+      cost: OPENAI_CODEX_GPT_54_MINI_COST,
+    };
   } else {
     return undefined;
   }
@@ -312,7 +331,7 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       provider: PROVIDER_ID,
       baseUrl: synthBaseUrl,
       reasoning: true,
-      input: ["text", "image"],
+      input: patch?.input ?? ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: patch?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
       contextTokens: patch?.contextTokens,
@@ -583,6 +602,7 @@ export function buildOpenAICodexProviderHooks(): Pick<
         OPENAI_CODEX_GPT_54_MODEL_ID,
         OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
         OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
+        OPENAI_CODEX_GPT_53_SPARK_MODEL_ID,
       ].includes(id);
     },
     ...buildOpenAIResponsesProviderHooks(),

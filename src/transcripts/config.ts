@@ -8,7 +8,7 @@ import { normalizeOptionalString as readString } from "@openclaw/normalization-c
  * returns bounded defaults and drops malformed entries before runtime startup.
  */
 /** Raw auto-start transcript source entry from config. */
-export type TranscriptsAutoStartConfig = {
+type TranscriptsAutoStartConfig = {
   providerId: string;
   sessionId?: string;
   title?: string;
@@ -37,7 +37,7 @@ export type TranscriptsConfig = {
 };
 
 /** Resolved transcripts config with defaults applied. */
-export type ResolvedTranscriptsConfig = {
+type ResolvedTranscriptsConfig = {
   enabled: boolean;
   maxUtterances: number;
   autoStart: ResolvedTranscriptsAutoStartConfig[];

@@ -4,8 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const loadConfigMock = vi.fn(() => ({}));
+const listAgentIdsMock = vi.fn<(_cfg: unknown) => string[]>(() => ["main"]);
 const resolveDefaultAgentIdMock = vi.fn(() => "main");
-const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
+const resolveAgentWorkspaceDirMock = vi.fn<(_cfg: unknown, _agentId: string) => string>(
+  () => "/tmp/workspace",
+);
 const buildWorkspaceSkillStatusMock = vi.fn();
 const readLocalSkillCardContentSyncMock = vi.fn();
 const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
@@ -19,10 +22,11 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: vi.fn(() => ["main"]),
+  listAgentIds: (cfg: unknown) => listAgentIdsMock(cfg),
   resolveAgentConfig: vi.fn(() => undefined),
   resolveDefaultAgentId: () => resolveDefaultAgentIdMock(),
-  resolveAgentWorkspaceDir: () => resolveAgentWorkspaceDirMock(),
+  resolveAgentWorkspaceDir: (cfg: unknown, agentId: string) =>
+    resolveAgentWorkspaceDirMock(cfg, agentId),
   resolveSessionAgentId: vi.fn(() => undefined),
 }));
 
@@ -82,6 +86,7 @@ async function expectEmptySecurityVerdictsWithoutFetch(): Promise<void> {
 describe("skills gateway handlers (clawhub)", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
+    listAgentIdsMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
@@ -92,6 +97,7 @@ describe("skills gateway handlers (clawhub)", () => {
     updateSkillsFromClawHubMock.mockReset();
 
     loadConfigMock.mockReturnValue({});
+    listAgentIdsMock.mockReturnValue(["main"]);
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     buildWorkspaceSkillStatusMock.mockReturnValue(emptySkillStatusReport());
@@ -99,6 +105,26 @@ describe("skills gateway handlers (clawhub)", () => {
 
   it("returns an empty verdict batch without calling ClawHub when no skills are linked", async () => {
     await expectEmptySecurityVerdictsWithoutFetch();
+  });
+
+  it("builds status with the selected agent filter", async () => {
+    listAgentIdsMock.mockReturnValue(["main", "research"]);
+    resolveAgentWorkspaceDirMock.mockImplementation((_cfg, agentId) =>
+      agentId === "research" ? "/tmp/research-workspace" : "/tmp/workspace",
+    );
+
+    const { ok, error } = await callSkillsHandler("skills.status", { agentId: "research" });
+
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/research-workspace",
+      expect.objectContaining({
+        agentId: "research",
+        config: {},
+        eligibility: expect.any(Object),
+      }),
+    );
   });
 
   it("fetches one bulk ClawHub verdict batch for linked installed skills", async () => {
@@ -135,7 +161,8 @@ describe("skills gateway handlers (clawhub)", () => {
           slug: "agentreceipt",
           requestedVersion: "1.2.3",
           version: "1.2.3",
-          securityAuditUrl: "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
+          securityAuditUrl:
+            "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
           security: { status: "clean", passed: true },
           scannerPayload: { ignored: true },
         },
@@ -260,6 +287,37 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.message).toBe("Installed calendar@1.2.3");
     expect(result?.slug).toBe("calendar");
     expect(result?.version).toBe("1.2.3");
+  });
+
+  it("routes explicit agent ClawHub installs through that agent workspace", async () => {
+    listAgentIdsMock.mockReturnValue(["main", "research"]);
+    resolveAgentWorkspaceDirMock.mockImplementation((_cfg, agentId) =>
+      agentId === "research" ? "/tmp/research-workspace" : "/tmp/workspace",
+    );
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/research-workspace/skills/calendar",
+    });
+
+    const { ok, error } = await callSkillsHandler("skills.install", {
+      agentId: "research",
+      source: "clawhub",
+      slug: "calendar",
+      version: "1.2.3",
+    });
+
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({}, "research");
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/research-workspace",
+      slug: "calendar",
+      version: "1.2.3",
+      force: false,
+      config: {},
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
   });
 
   it("accepts deprecated unsafe override without forwarding it to skill installs", async () => {

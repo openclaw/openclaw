@@ -68,6 +68,9 @@ const STREAM_STRIPPED_BLOCK_TAG_NAMES = [
   "antml:think",
   "antml:thinking",
   "antml:thought",
+  "mm:think",
+  "mm:thinking",
+  "mm:thought",
 ] as const;
 const embeddedLog = createSubsystemLogger("agent/embedded");
 
@@ -232,6 +235,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
+    hasToolMediaBlockReply: false,
     visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
@@ -303,6 +307,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const clearDeferredAssistantEvents = () => {
     state.deferredAssistantEvents.length = 0;
   };
+  const deferredToolMediaReplies = new WeakSet<BlockReplyPayload>();
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedAgentSessionParams["onBlockReply"]>>[0],
     options?: { assistantMessageIndex?: number },
@@ -339,6 +344,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => {
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
+    const consumesPendingToolMedia =
+      options?.consumePendingToolMedia !== false && readPendingToolMediaReply(state) !== null;
     const withToolMedia =
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
@@ -350,12 +357,18 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
               assistantMessageIndex: options.assistantMessageIndex,
             })
           : withToolMedia;
+      if (consumesPendingToolMedia) {
+        deferredToolMediaReplies.add(deferredPayload);
+      }
       state.deferredBlockReplies.push(deferredPayload);
       return;
     }
     const emitted = emitBlockReplySafely(withToolMedia, options);
     if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
       state.visibleBlockReplyCount += 1;
+      if (consumesPendingToolMedia) {
+        state.hasToolMediaBlockReply = true;
+      }
     }
   };
   const flushDeferredBlockReplies = () => {
@@ -367,6 +380,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       const emitted = emitBlockReplySafely(payload);
       if (emitted && !payload.isReasoning && hasAssistantVisibleReply(payload)) {
         state.visibleBlockReplyCount += 1;
+        if (deferredToolMediaReplies.has(payload)) {
+          state.hasToolMediaBlockReply = true;
+        }
       }
     }
   };
@@ -1323,6 +1339,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       toolName: string;
       toolCallId: string;
       args: unknown;
+      replaySafe?: boolean;
       execute: () => Promise<T>;
     }): Promise<T> => {
       await handleToolExecutionStart(ctx, {
@@ -1330,6 +1347,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
         toolName: toolParams.toolName,
         toolCallId: toolParams.toolCallId,
         args: toolParams.args,
+        replaySafe: toolParams.replaySafe,
       } as never);
       try {
         const result = await toolParams.execute();
@@ -1338,6 +1356,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: false,
+          executionStarted: true,
           result,
         } as never);
         return result;
@@ -1347,6 +1366,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: true,
+          executionStarted: true,
           result: buildToolLifecycleErrorResult(error),
         } as never);
         throw error;
@@ -1393,6 +1413,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
+    hasToolMediaBlockReply: () => state.hasToolMediaBlockReply,
     getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
     getSuccessfulCronAdds: () => state.successfulCronAdds,
     getReplayState: () => ({ ...state.replayState }),

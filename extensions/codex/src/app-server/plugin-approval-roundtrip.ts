@@ -12,7 +12,7 @@ const DEFAULT_CODEX_APPROVAL_TIMEOUT_MS = 120_000;
 const MAX_PLUGIN_APPROVAL_TITLE_LENGTH = 80;
 const MAX_PLUGIN_APPROVAL_DESCRIPTION_LENGTH = 256;
 
-type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 /** Normalized Codex app-server approval outcome after a gateway decision. */
 export type AppServerApprovalOutcome =
@@ -40,6 +40,7 @@ export async function requestPluginApproval(params: {
   severity: "info" | "warning";
   toolName: string;
   toolCallId?: string;
+  allowedDecisions?: ExecApprovalDecision[];
 }): Promise<ApprovalRequestResult | undefined> {
   const timeoutMs = DEFAULT_CODEX_APPROVAL_TIMEOUT_MS;
   return callGatewayTool(
@@ -60,6 +61,7 @@ export async function requestPluginApproval(params: {
       turnSourceThreadId: params.paramsForRun.currentThreadTs,
       timeoutMs,
       twoPhase: true,
+      ...(params.allowedDecisions ? { allowedDecisions: params.allowedDecisions } : {}),
     },
     { expectFinal: false },
   ) as Promise<ApprovalRequestResult | undefined>;

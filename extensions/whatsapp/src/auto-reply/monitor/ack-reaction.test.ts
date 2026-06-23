@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -13,16 +13,25 @@ vi.mock("../../send.js", () => ({
   sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
 }));
 
-function createMessage(overrides: Partial<WebInboundMessage> = {}): WebInboundMessage {
+type TestMsgOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
+
+function createMessage(overrides: TestMsgOverrides = {}): AdmittedWebInboundMessage {
   return createTestWebInboundMessage({
     event: { id: "msg-1" },
     platform: {
       chatJid: "15551234567@s.whatsapp.net",
       recipientJid: "15559876543",
     },
-    from: "15551234567",
-    conversationId: "15551234567",
-    accountId: "default",
+    admission: {
+      accountId: "default",
+      conversation: {
+        kind: "direct",
+        id: "15551234567",
+      },
+      sender: {
+        id: "15551234567",
+      },
+    },
     ...overrides,
   });
 }
@@ -54,9 +63,7 @@ const runAckReaction = (overrides: Partial<AckReactionParams> = {}) =>
     msg: createMessage(),
     agentId: "agent",
     sessionKey: "whatsapp:default:15551234567",
-    conversationId: "15551234567",
     verbose: false,
-    accountId: "default",
     info: vi.fn(),
     warn: vi.fn(),
     ...overrides,
@@ -115,10 +122,11 @@ describe("maybeSendAckReaction", () => {
     const ackReaction = await runAckReaction({
       cfg,
       msg: createMessage({
-        accountId: "work",
+        admission: {
+          accountId: "work",
+        },
       }),
       sessionKey: "whatsapp:work:15551234567",
-      accountId: "work",
     });
 
     expect(ackReaction?.ackReactionValue).toBe("👀");

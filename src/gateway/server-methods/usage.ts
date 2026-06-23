@@ -16,6 +16,10 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
+import {
+  addCostUsageTotals,
+  createEmptyCostUsageTotals,
+} from "../../infra/session-cost-usage-totals.js";
 import type {
   CostUsageSummary,
   CostUsageTotals,
@@ -28,6 +32,7 @@ import {
   loadCostUsageSummaryFromCache,
   loadSessionLogs,
   loadSessionCostSummaryFromCache,
+  loadSessionCostSummariesFromCache,
   loadSessionUsageTimeSeries,
   discoverAllSessions,
   resolveExistingUsageSessionFile,
@@ -75,36 +80,6 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
-
-function createEmptyCostUsageTotals(): CostUsageTotals {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
-
-function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTotals): void {
-  target.input += source.input;
-  target.output += source.output;
-  target.cacheRead += source.cacheRead;
-  target.cacheWrite += source.cacheWrite;
-  target.totalTokens += source.totalTokens;
-  target.totalCost += source.totalCost;
-  target.inputCost += source.inputCost;
-  target.outputCost += source.outputCost;
-  target.cacheReadCost += source.cacheReadCost;
-  target.cacheWriteCost += source.cacheWriteCost;
-  target.missingCostEntries += source.missingCostEntries;
-}
 
 function findCostUsageCacheEvictionKey(): string | undefined {
   for (const [key, entry] of costUsageCache) {
@@ -179,7 +154,39 @@ const parseDateParts = (
   if (!Number.isFinite(year) || !Number.isFinite(monthIndex) || !Number.isFinite(day)) {
     return undefined;
   }
+  // The regex only checks shape; Date.* silently rolls impossible calendar dates over
+  // (e.g. 2026-02-30 -> 2026-03-02), so a typo'd day would return usage for the wrong day.
+  // Reject parts that don't round-trip through a UTC probe (also catches the JS 2-digit-year remap).
+  const probe = new Date(Date.UTC(year, monthIndex, day));
+  if (
+    probe.getUTCFullYear() !== year ||
+    probe.getUTCMonth() !== monthIndex ||
+    probe.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
   return { year, monthIndex, day };
+};
+
+// usage.cost / sessions.usage accept optional startDate/endDate. parseDateParts returns
+// undefined for both absent and invalid input, so an explicitly supplied but unparseable
+// date (bad format or impossible calendar date like 2026-02-30) would otherwise silently
+// fall through to the default range and return a successful response for an unrelated range.
+// Return the offending field so handlers can reject it instead of querying the wrong window.
+const findInvalidExplicitDate = (params: {
+  startDate?: unknown;
+  endDate?: unknown;
+}): "startDate" | "endDate" | undefined => {
+  for (const field of ["startDate", "endDate"] as const) {
+    const raw = params[field];
+    if (raw === undefined || raw === null || (typeof raw === "string" && raw.trim() === "")) {
+      continue;
+    }
+    if (parseDateParts(raw) === undefined) {
+      return field;
+    }
+  }
+  return undefined;
 };
 
 /**
@@ -489,32 +496,12 @@ function maybeMergeFamilyEntry(params: {
 
 function createEmptySessionCostSummary(): SessionCostSummary {
   return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
+    ...createEmptyCostUsageTotals(),
   };
 }
 
 function mergeSessionUsageInto(target: SessionCostSummary, source: SessionCostSummary): void {
-  target.input += source.input;
-  target.output += source.output;
-  target.cacheRead += source.cacheRead;
-  target.cacheWrite += source.cacheWrite;
-  target.totalTokens += source.totalTokens;
-  target.totalCost += source.totalCost;
-  target.inputCost += source.inputCost;
-  target.outputCost += source.outputCost;
-  target.cacheReadCost += source.cacheReadCost;
-  target.cacheWriteCost += source.cacheWriteCost;
-  target.missingCostEntries += source.missingCostEntries;
+  addCostUsageTotals(target, source);
   target.firstActivity =
     target.firstActivity === undefined
       ? source.firstActivity
@@ -654,19 +641,6 @@ function mergeModelUsage(
   right: SessionCostSummary["modelUsage"],
 ): SessionCostSummary["modelUsage"] {
   const map = new Map<string, SessionModelUsage>();
-  const mergeTotals = (target: CostUsageSummary["totals"], source: CostUsageSummary["totals"]) => {
-    target.input += source.input;
-    target.output += source.output;
-    target.cacheRead += source.cacheRead;
-    target.cacheWrite += source.cacheWrite;
-    target.totalTokens += source.totalTokens;
-    target.totalCost += source.totalCost;
-    target.inputCost += source.inputCost;
-    target.outputCost += source.outputCost;
-    target.cacheReadCost += source.cacheReadCost;
-    target.cacheWriteCost += source.cacheWriteCost;
-    target.missingCostEntries += source.missingCostEntries;
-  };
   for (const entry of [...(left ?? []), ...(right ?? [])]) {
     const key = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
     const existing =
@@ -678,7 +652,7 @@ function mergeModelUsage(
         totals: createEmptySessionCostSummary(),
       } as SessionModelUsage);
     existing.count += entry.count;
-    mergeTotals(existing.totals, entry.totals);
+    addCostUsageTotals(existing.totals, entry.totals);
     map.set(key, existing);
   }
   return map.size > 0 ? Array.from(map.values()) : undefined;
@@ -901,6 +875,7 @@ function mergeUsageCacheStatus(
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
 export const testApi = {
   parseDateParts,
+  findInvalidExplicitDate,
   parseUtcOffsetToMinutes,
   resolveDateInterpretation,
   parseDateToMs,
@@ -921,6 +896,21 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
   "usage.cost": async ({ respond, params, context }) => {
+    const invalidDate = findInvalidExplicitDate({
+      startDate: params?.startDate,
+      endDate: params?.endDate,
+    });
+    if (invalidDate) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
+        ),
+      );
+      return;
+    }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = parseDateRange({
       startDate: params?.startDate,
@@ -955,6 +945,18 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
 
     const p = params;
+    const invalidDate = findInvalidExplicitDate({ startDate: p.startDate, endDate: p.endDate });
+    if (invalidDate) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid ${invalidDate}: expected a valid YYYY-MM-DD calendar date`,
+        ),
+      );
+      return;
+    }
     const config = context.getRuntimeConfig();
     const { startMs, endMs } = parseDateRange({
       startDate: p.startDate,
@@ -1145,24 +1147,11 @@ export const usageHandlers: GatewayRequestHandlers = {
     // Sort by most recent first
     mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-    // Apply limit
     const limitedEntries = mergedEntries.slice(0, limit);
 
     // Load usage for each session
     const sessions: SessionUsageEntry[] = [];
-    const aggregateTotals = {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    };
+    const aggregateTotals = createEmptyCostUsageTotals();
     const aggregateMessages: SessionMessageCounts = {
       total: 0,
       user: 0,
@@ -1201,38 +1190,8 @@ export const usageHandlers: GatewayRequestHandlers = {
     const modelDailyMap = new Map<string, SessionDailyModelUsage>();
     let cacheStatus: UsageCacheStatus | undefined;
 
-    const emptyTotals = (): CostUsageSummary["totals"] => ({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      totalCost: 0,
-      inputCost: 0,
-      outputCost: 0,
-      cacheReadCost: 0,
-      cacheWriteCost: 0,
-      missingCostEntries: 0,
-    });
-    const mergeTotals = (
-      target: CostUsageSummary["totals"],
-      source: CostUsageSummary["totals"],
-    ) => {
-      target.input += source.input;
-      target.output += source.output;
-      target.cacheRead += source.cacheRead;
-      target.cacheWrite += source.cacheWrite;
-      target.totalTokens += source.totalTokens;
-      target.totalCost += source.totalCost;
-      target.inputCost += source.inputCost;
-      target.outputCost += source.outputCost;
-      target.cacheReadCost += source.cacheReadCost;
-      target.cacheWriteCost += source.cacheWriteCost;
-      target.missingCostEntries += source.missingCostEntries;
-    };
-
     const usageByEntryIndex: Array<SessionCostSummary | null> = Array.from(
-      { length: limitedEntries.length },
+      { length: mergedEntries.length },
       () => null,
     );
     const usageLoadTasks: Array<
@@ -1289,7 +1248,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       if (!loaded.summary) {
         continue;
       }
-      const merged = limitedEntries[loaded.entryIndex];
+      const merged = mergedEntries[loaded.entryIndex];
       const usage = usageByEntryIndex[loaded.entryIndex] ?? createEmptySessionCostSummary();
       usage.sessionId = merged.sessionId;
       usage.sessionFile = merged.sessionFile;
@@ -1297,22 +1256,59 @@ export const usageHandlers: GatewayRequestHandlers = {
       usageByEntryIndex[loaded.entryIndex] = usage;
     }
 
-    for (const [entryIndex, merged] of limitedEntries.entries()) {
+    const hiddenSessionsByAgent = new Map<
+      string | undefined,
+      Array<{ entryIndex: number; sessionId: string; sessionFile: string }>
+    >();
+    for (const [entryIndex, merged] of mergedEntries.entries()) {
+      if (entryIndex < limitedEntries.length) {
+        continue;
+      }
+      const hiddenSessions = hiddenSessionsByAgent.get(merged.agentId) ?? [];
+      for (const includedSessionId of merged.includedSessionIds ?? [merged.sessionId]) {
+        const sessionFile =
+          includedSessionId === merged.sessionId
+            ? merged.sessionFile
+            : resolveExistingUsageSessionFile({
+                sessionId: includedSessionId,
+                agentId: merged.agentId,
+              });
+        if (sessionFile) {
+          hiddenSessions.push({ entryIndex, sessionId: includedSessionId, sessionFile });
+        }
+      }
+      hiddenSessionsByAgent.set(merged.agentId, hiddenSessions);
+    }
+    for (const [agentId, hiddenSessions] of hiddenSessionsByAgent) {
+      const hiddenUsage = await loadSessionCostSummariesFromCache({
+        sessions: hiddenSessions,
+        config,
+        agentId,
+        startMs,
+        endMs,
+      });
+      cacheStatus = mergeUsageCacheStatus(cacheStatus, hiddenUsage.cacheStatus);
+      for (const [hiddenIndex, summary] of hiddenUsage.summaries.entries()) {
+        if (!summary) {
+          continue;
+        }
+        const hiddenSession = hiddenSessions[hiddenIndex];
+        const merged = mergedEntries[hiddenSession.entryIndex];
+        const usage =
+          usageByEntryIndex[hiddenSession.entryIndex] ?? createEmptySessionCostSummary();
+        usage.sessionId = merged.sessionId;
+        usage.sessionFile = merged.sessionFile;
+        mergeSessionUsageInto(usage, summary);
+        usageByEntryIndex[hiddenSession.entryIndex] = usage;
+      }
+    }
+
+    for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
       const usage = usageByEntryIndex[entryIndex];
 
       if (usage) {
-        aggregateTotals.input += usage.input;
-        aggregateTotals.output += usage.output;
-        aggregateTotals.cacheRead += usage.cacheRead;
-        aggregateTotals.cacheWrite += usage.cacheWrite;
-        aggregateTotals.totalTokens += usage.totalTokens;
-        aggregateTotals.totalCost += usage.totalCost;
-        aggregateTotals.inputCost += usage.inputCost;
-        aggregateTotals.outputCost += usage.outputCost;
-        aggregateTotals.cacheReadCost += usage.cacheReadCost;
-        aggregateTotals.cacheWriteCost += usage.cacheWriteCost;
-        aggregateTotals.missingCostEntries += usage.missingCostEntries;
+        addCostUsageTotals(aggregateTotals, usage);
       }
 
       const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
@@ -1343,10 +1339,10 @@ export const usageHandlers: GatewayRequestHandlers = {
                 provider: entry.provider,
                 model: entry.model,
                 count: 0,
-                totals: emptyTotals(),
+                totals: createEmptyCostUsageTotals(),
               } as SessionModelUsage);
             modelExisting.count += entry.count;
-            mergeTotals(modelExisting.totals, entry.totals);
+            addCostUsageTotals(modelExisting.totals, entry.totals);
             byModelMap.set(modelKey, modelExisting);
 
             const providerKey = entry.provider ?? "unknown";
@@ -1356,10 +1352,10 @@ export const usageHandlers: GatewayRequestHandlers = {
                 provider: entry.provider,
                 model: undefined,
                 count: 0,
-                totals: emptyTotals(),
+                totals: createEmptyCostUsageTotals(),
               } as SessionModelUsage);
             providerExisting.count += entry.count;
-            mergeTotals(providerExisting.totals, entry.totals);
+            addCostUsageTotals(providerExisting.totals, entry.totals);
             byProviderMap.set(providerKey, providerExisting);
           }
         }
@@ -1388,14 +1384,14 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
 
         if (agentId) {
-          const agentTotals = byAgentMap.get(agentId) ?? emptyTotals();
-          mergeTotals(agentTotals, usage);
+          const agentTotals = byAgentMap.get(agentId) ?? createEmptyCostUsageTotals();
+          addCostUsageTotals(agentTotals, usage);
           byAgentMap.set(agentId, agentTotals);
         }
 
         if (channel) {
-          const channelTotals = byChannelMap.get(channel) ?? emptyTotals();
-          mergeTotals(channelTotals, usage);
+          const channelTotals = byChannelMap.get(channel) ?? createEmptyCostUsageTotals();
+          addCostUsageTotals(channelTotals, usage);
           byChannelMap.set(channel, channelTotals);
         }
 
@@ -1433,29 +1429,31 @@ export const usageHandlers: GatewayRequestHandlers = {
         }
       }
 
-      sessions.push({
-        key: merged.key,
-        label: merged.label,
-        sessionId: merged.sessionId,
-        scope: merged.scope ?? "instance",
-        sessionFamilyKey: merged.sessionFamilyKey,
-        currentSessionId: merged.currentSessionId,
-        includedSessionIds: merged.includedSessionIds,
-        historicalInstanceCount: merged.includedSessionIds?.length,
-        updatedAt: merged.updatedAt,
-        agentId,
-        channel,
-        chatType,
-        origin: merged.storeEntry?.origin,
-        modelOverride: merged.storeEntry?.modelOverride,
-        providerOverride: merged.storeEntry?.providerOverride,
-        modelProvider: merged.storeEntry?.modelProvider,
-        model: merged.storeEntry?.model,
-        usage,
-        contextWeight: includeContextWeight
-          ? (merged.storeEntry?.systemPromptReport ?? null)
-          : undefined,
-      });
+      if (entryIndex < limit) {
+        sessions.push({
+          key: merged.key,
+          label: merged.label,
+          sessionId: merged.sessionId,
+          scope: merged.scope ?? "instance",
+          sessionFamilyKey: merged.sessionFamilyKey,
+          currentSessionId: merged.currentSessionId,
+          includedSessionIds: merged.includedSessionIds,
+          historicalInstanceCount: merged.includedSessionIds?.length,
+          updatedAt: merged.updatedAt,
+          agentId,
+          channel,
+          chatType,
+          origin: merged.storeEntry?.origin,
+          modelOverride: merged.storeEntry?.modelOverride,
+          providerOverride: merged.storeEntry?.providerOverride,
+          modelProvider: merged.storeEntry?.modelProvider,
+          model: merged.storeEntry?.model,
+          usage,
+          contextWeight: includeContextWeight
+            ? (merged.storeEntry?.systemPromptReport ?? null)
+            : undefined,
+        });
+      }
     }
 
     // Format dates back to YYYY-MM-DD strings

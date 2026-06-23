@@ -57,7 +57,6 @@ import {
   resolveSpawnedWorkspaceInheritance,
 } from "./spawned-context.js";
 import {
-  decodeStrictBase64,
   materializeSubagentAttachments,
   type SubagentAttachmentReceiptFile,
 } from "./subagent-attachments.js";
@@ -126,8 +125,6 @@ export type {
   SpawnSubagentMode,
   SpawnSubagentSandboxMode,
 } from "./subagent-spawn.types.js";
-
-export { decodeStrictBase64 };
 
 function resolveConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   return listAgentIds(cfg);
@@ -1670,6 +1667,8 @@ export async function spawnSubagentDirect(
       requesterDisplayKey: ownership.completionRequesterDisplayKey,
       task,
       taskName,
+      agentId: targetAgentId,
+      requesterAgentId,
       cleanup,
       label: label || undefined,
       model: resolvedModel,

@@ -85,7 +85,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
-  if (typeof entry?.fastMode === "boolean") {
+  if (entry?.fastMode === "auto") {
+    flags.push("fast:auto");
+  } else if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
   const reasoning = entry?.reasoningLevel;
@@ -134,6 +136,38 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
     return false;
   }
   return !hasSessionAutoModelFallbackProvenance(entry);
+}
+
+function normalizeStatusModelPart(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function resolveTrustedSessionContextTokens(params: {
+  entry: SessionEntry | undefined;
+  provider: string | undefined;
+  model: string | null;
+}): number | undefined {
+  const contextTokens =
+    typeof params.entry?.contextTokens === "number" && params.entry.contextTokens > 0
+      ? params.entry.contextTokens
+      : undefined;
+  if (contextTokens === undefined) {
+    return undefined;
+  }
+  if (hasSessionAutoModelFallbackProvenance(params.entry)) {
+    return contextTokens;
+  }
+  const entryProvider = normalizeStatusModelPart(params.entry?.modelProvider);
+  const entryModel = normalizeStatusModelPart(params.entry?.model);
+  const resolvedProvider = normalizeStatusModelPart(params.provider);
+  const resolvedModel = normalizeStatusModelPart(params.model);
+  if (!entryModel || !resolvedModel || entryModel !== resolvedModel) {
+    return undefined;
+  }
+  if (entryProvider && resolvedProvider && entryProvider !== resolvedProvider) {
+    return undefined;
+  }
+  return contextTokens;
 }
 
 type SessionCandidate = {
@@ -281,8 +315,9 @@ export async function getStatusSummary(
   taskMaintenanceModule.configureTaskRegistryMaintenance({
     cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
   });
-  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
-  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings();
+  const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
+  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
+  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
   const now = Date.now();
   const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
   const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });
@@ -361,7 +396,11 @@ export async function getStatusSummary(
             provider: resolvedModel.provider,
             model,
             ...modelContext,
-            contextTokensOverride: entry?.contextTokens,
+            contextTokensOverride: resolveTrustedSessionContextTokens({
+              entry,
+              provider: resolvedModel.provider,
+              model,
+            }),
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
           }) ?? null;

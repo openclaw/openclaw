@@ -26,8 +26,8 @@ import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
 import {
+  readExternalCliBootstrapCredential,
   readExternalCliFallbackCredential,
-  readManagedExternalCliCredential,
 } from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
@@ -132,6 +132,7 @@ type ResolveApiKeyForProfileResult = {
   email?: string;
   profileId: string;
   profileType: AuthProfileCredential["type"];
+  credential?: AuthProfileCredential;
 };
 
 function buildApiKeyProfileResult(params: {
@@ -140,6 +141,7 @@ function buildApiKeyProfileResult(params: {
   email?: string;
   profileId: string;
   profileType: AuthProfileCredential["type"];
+  credential?: AuthProfileCredential;
 }): ResolveApiKeyForProfileResult {
   const result = {
     apiKey: params.apiKey,
@@ -153,6 +155,10 @@ function buildApiKeyProfileResult(params: {
     },
     profileType: {
       value: params.profileType,
+      enumerable: false,
+    },
+    credential: {
+      value: params.credential,
       enumerable: false,
     },
   });
@@ -226,7 +232,7 @@ const oauthManager = createOAuthManager({
   buildApiKey: buildOAuthApiKey,
   refreshCredential: refreshOAuthCredential,
   readBootstrapCredential: ({ profileId, credential }) =>
-    readManagedExternalCliCredential({
+    readExternalCliBootstrapCredential({
       profileId,
       credential,
     }),
@@ -282,6 +288,7 @@ async function tryResolveOAuthProfile(
     email: resolved.credential.email ?? cred.email,
     profileId,
     profileType: cred.type,
+    credential: resolved.credential,
   });
 }
 
@@ -437,6 +444,7 @@ export async function resolveApiKeyForProfile(
       email: resolved.credential.email ?? cred.email,
       profileId,
       profileType: cred.type,
+      credential: resolved.credential,
     });
   } catch (error) {
     let refreshedStore =

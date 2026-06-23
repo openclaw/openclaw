@@ -85,6 +85,21 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionKey).toBe("agent:main:main");
   });
 
+  it("uses an agent-scoped --to value as the requested session key", () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    mocks.resolveStorePath.mockReturnValue(MAIN_STORE_PATH);
+    mocks.loadSessionStore.mockReturnValue({
+      [sessionKey]: { sessionId: "wechat-session", updatedAt: 0 },
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: baseCfg,
+      to: sessionKey,
+    });
+
+    expect(result.sessionKey).toBe(sessionKey);
+  });
+
   it("uses the configured default agent store for new --to sessions", () => {
     setupMainAndMybotStorePaths();
     mockStoresByPath({

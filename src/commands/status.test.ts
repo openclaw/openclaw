@@ -211,6 +211,7 @@ async function createStatusServiceSummary(
     loadedText: service.loadedText,
     runtime,
     runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+    wrapperPath: command?.environment?.OPENCLAW_WRAPPER?.trim() || undefined,
   };
 }
 
@@ -393,8 +394,20 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
 }
 
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+  return await withOptionalEnvVar(key, value, run);
+}
+
+async function withOptionalEnvVar<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
   const prevValue = process.env[key];
-  process.env[key] = value;
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
   try {
     return await run();
   } finally {
@@ -407,7 +420,6 @@ async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>):
 }
 
 const mocks = vi.hoisted(() => ({
-  hasPotentialConfiguredChannels: vi.fn(() => true),
   loadConfig: vi.fn().mockReturnValue({ session: {} }),
   loadSessionStore: vi.fn().mockReturnValue({
     "+1000": createDefaultSessionStoreEntry(),
@@ -501,7 +513,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
   hasMeaningfulChannelConfig: (entry: unknown) =>
     Boolean(
       entry && typeof entry === "object" && Object.keys(entry as Record<string, unknown>).length,
@@ -852,7 +863,6 @@ vi.mock("../channels/chat-meta.js", () => {
   return {
     CHAT_CHANNEL_ALIASES: {},
     listChatChannels: () => entries,
-    listChatChannelAliases: () => [],
     getChatChannelMeta: (id: (typeof mockChatChannels)[number]) => byId[id],
     normalizeChatChannelId: (raw?: string | null) => {
       const value = raw?.trim().toLowerCase();
@@ -897,8 +907,6 @@ vi.mock("./status.daemon.js", () => ({
 
 describe("statusCommand", () => {
   afterEach(() => {
-    mocks.hasPotentialConfiguredChannels.mockReset();
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
     mocks.loadSessionStore.mockReset();
@@ -1003,7 +1011,6 @@ describe("statusCommand", () => {
   });
 
   it("prints JSON and includes security audit only when all is requested", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
@@ -1325,6 +1332,47 @@ describe("statusCommand", () => {
       ).toBe(true);
     }
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("notes when secret diagnostics may come from a CLI process outside the service wrapper context", async () => {
+    const wrapperPath = "/usr/local/bin/openclaw-doppler";
+    const service = mocks.resolveGatewayService();
+    mocks.resolveGatewayService.mockReturnValue({
+      ...service,
+      readCommand: async () => ({
+        programArguments: [wrapperPath, "node", "dist/entry.js", "gateway"],
+        environment: { OPENCLAW_WRAPPER: wrapperPath },
+        sourcePath: "/tmp/Library/LaunchAgents/ai.openclaw.gateway.plist",
+      }),
+    });
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+
+    await withOptionalEnvVar("OPENCLAW_WRAPPER", undefined, async () => {
+      const logs = await runStatusAndGetLogs();
+      expectLogsInclude(logs, "Secret diagnostics:");
+      expectLogsInclude(logs, "installed gateway service uses OPENCLAW_WRAPPER");
+      expectLogsInclude(logs, "not running with that same wrapper");
+      expectLogsInclude(logs, "current CLI process rather than the installed gateway service");
+    });
+
+    await withEnvVar("OPENCLAW_WRAPPER", wrapperPath, async () => {
+      const logs = await runStatusAndGetLogs();
+      expectLogsInclude(logs, "Secret diagnostics:");
+      expectLogsExclude(logs, "not running with that same wrapper");
+    });
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {

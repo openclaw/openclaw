@@ -6,6 +6,11 @@ import { MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION } from "./app-server/version.j
 type CodexPackageManifest = {
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
+  openclaw?: {
+    install?: {
+      requiredPlatformPackages?: string[];
+    };
+  };
 };
 
 describe("codex package manifest", () => {
@@ -18,5 +23,13 @@ describe("codex package manifest", () => {
     expect(packageJson.dependencies?.["@openai/codex"]).toBe(
       MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION,
     );
+    expect(packageJson.openclaw?.install?.requiredPlatformPackages).toEqual([
+      "@openai/codex-linux-x64",
+      "@openai/codex-linux-arm64",
+      "@openai/codex-darwin-x64",
+      "@openai/codex-darwin-arm64",
+      "@openai/codex-win32-x64",
+      "@openai/codex-win32-arm64",
+    ]);
   });
 });

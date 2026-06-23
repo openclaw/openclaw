@@ -50,7 +50,10 @@ import {
   runMessageAction,
   type MessageActionRunResult,
 } from "../../infra/outbound/message-action-runner.js";
-import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
+import {
+  resolveAllowedMessageActions,
+  shouldApplyCrossContextMarker,
+} from "../../infra/outbound/outbound-policy.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
@@ -83,18 +86,8 @@ import {
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
   ' Use action="read" with threadId to fetch prior messages in a thread when you need conversation context you do not have yet.';
-const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
-  "send",
-  "sendWithEffect",
-  "sendAttachment",
-  "upload-file",
-  "reply",
-  "thread-reply",
-  "broadcast",
-]);
-
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
-  return EXPLICIT_TARGET_ACTIONS.has(action);
+  return action === "broadcast" || shouldApplyCrossContextMarker(action);
 }
 
 function normalizeMessageToolIdempotencyKeyPart(value: unknown): string | undefined {
@@ -1413,6 +1406,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           action,
           params: actionParams,
           defaultAccountId: accountId ?? undefined,
+          requesterAccountId: agentAccountId,
           requesterSenderId: options?.requesterSenderId,
           senderIsOwner: options?.senderIsOwner,
           gateway,

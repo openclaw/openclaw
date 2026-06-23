@@ -526,7 +526,20 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
       preserveCrossModelToolCallThoughtSignature: requiresToolCallThoughtSignature(model.id),
     },
   );
+  // Parallel calls need one immediate function-response turn. Gemini < 3 images cannot
+  // live inside functionResponse, so hold them until the consecutive result run ends.
+  const pendingToolResultImageTurns: Array<Record<string, unknown>> = [];
+  let activeToolResultParts: Array<Record<string, unknown>> | undefined;
+  const flushToolResultRun = (): void => {
+    contents.push(...pendingToolResultImageTurns);
+    pendingToolResultImageTurns.length = 0;
+    activeToolResultParts = undefined;
+  };
+
   for (const msg of transformedMessages) {
+    if (msg.role !== "toolResult") {
+      flushToolResultRun();
+    }
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
         contents.push({
@@ -658,31 +671,32 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           data: imageBlock.data,
         },
       }));
+      const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
       const functionResponse = {
         functionResponse: {
           name: msg.toolName,
           response: msg.isError ? { error: responseValue } : { output: responseValue },
-          ...(supportsMultimodalFunctionResponse(model.id) && imageParts.length > 0
+          ...(modelSupportsMultimodalFunctionResponse && imageParts.length > 0
             ? { parts: imageParts }
             : {}),
           ...(requiresToolCallId(model.id) ? { id: msg.toolCallId } : {}),
         },
       };
-      const last = contents[contents.length - 1];
-      if (
-        last?.role === "user" &&
-        Array.isArray(last.parts) &&
-        last.parts.some((part) => "functionResponse" in part)
-      ) {
-        (last.parts as Array<Record<string, unknown>>).push(functionResponse);
+      if (activeToolResultParts) {
+        activeToolResultParts.push(functionResponse);
       } else {
-        contents.push({ role: "user", parts: [functionResponse] });
+        activeToolResultParts = [functionResponse];
+        contents.push({ role: "user", parts: activeToolResultParts });
       }
-      if (imageParts.length > 0 && !supportsMultimodalFunctionResponse(model.id)) {
-        contents.push({ role: "user", parts: [{ text: "Tool result image:" }, ...imageParts] });
+      if (imageParts.length > 0 && !modelSupportsMultimodalFunctionResponse) {
+        pendingToolResultImageTurns.push({
+          role: "user",
+          parts: [{ text: "Tool result image:" }, ...imageParts],
+        });
       }
     }
   }
+  flushToolResultRun();
   if (contents.length === 0) {
     contents.push({ role: "user", parts: [{ text: " " }] });
   }
@@ -1252,6 +1266,10 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
         });
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
+        const toolCallBlocksById = new Map<
+          string,
+          Extract<GoogleTransportContentBlock, { type: "toolCall" }>
+        >();
         const chunks =
           sse.firstChunk === undefined
             ? sse.chunks
@@ -1342,18 +1360,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   currentBlockIndex = -1;
                 }
                 const providedId = part.functionCall.id;
-                const isDuplicate = output.content.some(
-                  (block) => block.type === "toolCall" && block.id === providedId,
-                );
                 const existingToolCall =
-                  typeof providedId === "string"
-                    ? output.content.find(
-                        (
-                          block,
-                        ): block is Extract<GoogleTransportContentBlock, { type: "toolCall" }> =>
-                          block.type === "toolCall" && block.id === providedId,
-                      )
-                    : undefined;
+                  typeof providedId === "string" ? toolCallBlocksById.get(providedId) : undefined;
+                const isDuplicate = existingToolCall !== undefined;
                 const toolCallId =
                   providedId && !isDuplicate
                     ? providedId
@@ -1369,6 +1378,9 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
                   ),
                 };
                 output.content.push(toolCall);
+                if (!toolCallBlocksById.has(toolCall.id)) {
+                  toolCallBlocksById.set(toolCall.id, toolCall);
+                }
                 const blockIndex = output.content.length - 1;
                 stream.push({
                   type: "toolcall_start",
