@@ -3,27 +3,22 @@ name: Maturity scorecard
 on:
   workflow_dispatch:
     inputs:
-      source_run_id:
-        description: Optional workflow run id containing qa-evidence.json artifacts
+      qa_evidence_run_id:
+        description: Optional workflow run id containing qa-evidence.json
         required: false
         type: string
-      artifact_pattern:
-        description: Artifact name pattern to download from source_run_id
-        required: false
-        default: "*qa*"
+      ref:
+        description: OpenClaw branch, tag, or SHA containing the maturity score source
+        required: true
+        default: main
         type: string
-      strict_inputs:
-        description: Fail when score or QA evidence inputs have non-fatal drift
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   actions: read
   contents: read
 
 concurrency:
-  group: ${{ format('{0}-{1}', github.workflow, github.ref) }}
+  group: ${{ format('{0}-{1}-{2}', github.workflow, inputs.ref, inputs.qa_evidence_run_id || github.run_id) }}
   cancel-in-progress: true
 
 env:
@@ -31,16 +26,88 @@ env:
   NODE_VERSION: "24.x"
 
 jobs:
-  validate:
-    name: Validate maturity score sources
-    # Disabled until the initial generated docs and refreshed score snapshot land together.
-    if: ${{ false }}
+  validate_selected_ref:
+    name: Validate selected ref
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    outputs:
+      selected_revision: ${{ steps.validate.outputs.selected_revision }}
+      trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
-      - name: Checkout
+      - name: Checkout selected ref
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Validate selected ref
+        id: validate
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          selected_revision="$(git rev-parse HEAD)"
+          trusted_reason=""
+
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+
+          if git merge-base --is-ancestor "$selected_revision" refs/remotes/origin/main; then
+            trusted_reason="main-ancestor"
+          elif git tag --points-at "$selected_revision" | grep -Eq '^v'; then
+            trusted_reason="release-tag"
+          elif [[ "$INPUT_REF" =~ ^release/[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+            git fetch --no-tags origin "+refs/heads/${INPUT_REF}:refs/remotes/origin/${INPUT_REF}"
+            release_branch_sha="$(git rev-parse "refs/remotes/origin/${INPUT_REF}")"
+            if [[ "$selected_revision" == "$release_branch_sha" ]]; then
+              trusted_reason="release-branch-head"
+            fi
+          fi
+
+          if [[ -z "$trusted_reason" ]]; then
+            echo "Ref '${INPUT_REF}' resolved to $selected_revision, which is not trusted for this secret-bearing maturity scorecard run." >&2
+            echo "Allowed refs must be on main, point to a release tag, or match a release branch head." >&2
+            exit 1
+          fi
+
+          echo "selected_revision=$selected_revision" >> "$GITHUB_OUTPUT"
+          echo "trusted_reason=$trusted_reason" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Target"
+            echo
+            echo "- Requested ref: \`${INPUT_REF}\`"
+            echo "- Resolved SHA: \`$selected_revision\`"
+            echo "- Trust reason: \`$trusted_reason\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  generate_qa_evidence:
+    name: Generate release QA evidence
+    needs: validate_selected_ref
+    if: ${{ inputs.qa_evidence_run_id == '' }}
+    uses: ./.github/workflows/qa-profile-evidence.yml
+    with:
+      ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
+      qa_profile: release
+      fail_on_qa_failure: false
+    secrets: inherit
+
+  publish:
+    name: Publish maturity docs PR
+    needs:
+      - validate_selected_ref
+      - generate_qa_evidence
+    if: ${{ always() && needs.validate_selected_ref.result == 'success' && (inputs.qa_evidence_run_id != '' || needs.generate_qa_evidence.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
@@ -51,6 +118,121 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
+
+      - name: Download provided QA evidence artifact
+        if: ${{ inputs.qa_evidence_run_id != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QA_EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id }}
+        run: |
+          set -euo pipefail
+          mkdir -p .artifacts/maturity-evidence
+          gh run download "$QA_EVIDENCE_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir .artifacts/maturity-evidence
+
+      - name: Download generated QA evidence artifact
+        if: ${{ inputs.qa_evidence_run_id == '' }}
+        env:
+          GENERATED_ARTIFACT_NAME: ${{ needs.generate_qa_evidence.outputs.artifact_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GENERATED_ARTIFACT_NAME:-}" ]]; then
+            echo "Generated QA evidence workflow did not expose an artifact name." >&2
+            exit 1
+          fi
+          mkdir -p .artifacts/maturity-evidence
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$GENERATED_ARTIFACT_NAME" \
+            --dir .artifacts/maturity-evidence
+
+      - name: Require one QA evidence file
+        id: evidence
+        env:
+          QA_EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id }}
+        run: |
+          set -euo pipefail
+          mapfile -t evidence_paths < <(find .artifacts/maturity-evidence -type f -name qa-evidence.json | sort)
+          if [[ "${#evidence_paths[@]}" -eq 0 ]]; then
+            echo "Expected a qa-evidence.json file in the downloaded QA evidence artifact." >&2
+            exit 1
+          fi
+          if [[ "${#evidence_paths[@]}" -gt 1 ]]; then
+            echo "Expected exactly one qa-evidence.json file, found ${#evidence_paths[@]}:" >&2
+            printf '%s\n' "${evidence_paths[@]}" >&2
+            exit 1
+          fi
+          echo "qa_evidence_path=${evidence_paths[0]}" >> "$GITHUB_OUTPUT"
+          {
+            echo "### QA evidence"
+            echo
+            echo "- Evidence path: \`${evidence_paths[0]}\`"
+            echo "- Evidence source run: \`${QA_EVIDENCE_RUN_ID:-$GITHUB_RUN_ID}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Ensure maturity scorecard agent key exists
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
+            echo "Missing OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Run Codex maturity scorecard agent
+        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        env:
+          MATURITY_EVIDENCE_DIR: .artifacts/maturity-evidence
+          MATURITY_SCORES_PATH: qa/maturity-scores.yaml
+          MATURITY_TAXONOMY_PATH: taxonomy.yaml
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/maturity-scorecard-agent.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: high
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--full-auto"]'
+
+      - name: Enforce focused maturity score patch
+        run: |
+          set -euo pipefail
+          git restore --staged :/
+
+          allowed='^(qa/maturity-scores\.yaml|docs/maturity-scores\.yaml)$'
+          bad_tracked="$(
+            git diff --name-only HEAD -- | while IFS= read -r path; do
+              if [[ ! "$path" =~ $allowed ]]; then
+                printf '%s\n' "$path"
+              fi
+            done
+          )"
+          if [[ -n "$bad_tracked" ]]; then
+            echo "Maturity scorecard agent touched forbidden tracked paths:"
+            printf '%s\n' "$bad_tracked"
+            exit 1
+          fi
+
+          bad_untracked="$(
+            git ls-files --others --exclude-standard | while IFS= read -r path; do
+              if [[ "$path" != "qa/maturity-scores.yaml" ]]; then
+                printf '%s\n' "$path"
+              fi
+            done
+          )"
+          if [[ -n "$bad_untracked" ]]; then
+            echo "Maturity scorecard agent created forbidden untracked paths:"
+            printf '%s\n' "$bad_untracked"
+            exit 1
+          fi
+
+          if [[ ! -f qa/maturity-scores.yaml ]]; then
+            echo "Maturity scorecard agent must produce qa/maturity-scores.yaml." >&2
+            exit 1
+          fi
 
       - name: Validate maturity score sources
         run: |
@@ -66,92 +248,32 @@ jobs:
           }
           NODE
 
-  publish:
-    name: Publish maturity docs PR
-    # Disabled until the initial generated docs and refreshed score snapshot land together.
-    if: ${{ false }}
-    needs: validate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          fetch-depth: 1
-          fetch-tags: false
-          persist-credentials: false
-          submodules: false
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "false"
-
-      - name: Download QA evidence artifacts
-        if: ${{ inputs.source_run_id != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          ARTIFACT_PATTERN: ${{ inputs.artifact_pattern }}
-        run: |
-          set -euo pipefail
-          mkdir -p .artifacts/maturity-evidence
-          gh run download "$SOURCE_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --pattern "$ARTIFACT_PATTERN" \
-            --dir .artifacts/maturity-evidence
-          find .artifacts/maturity-evidence -name qa-evidence.json -print
-
-      - name: Check QA evidence artifacts
-        id: evidence
-        run: |
-          set -euo pipefail
-          if find .artifacts/maturity-evidence -name qa-evidence.json -print -quit 2>/dev/null | grep -q .; then
-            echo "has_evidence=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_evidence=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Require QA evidence for manual scorecard render
-        if: ${{ github.event_name == 'workflow_dispatch' && steps.evidence.outputs.has_evidence != 'true' }}
-        run: |
-          echo "Maturity scorecard rendering requires release QA evidence artifacts." >&2
-          exit 1
-
       - name: Render artifact docs
-        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
-        env:
-          STRICT_INPUTS: ${{ github.event_name == 'workflow_dispatch' && inputs.strict_inputs }}
         run: |
           set -euo pipefail
-          args=(--output-dir .artifacts/maturity-docs --static-assets-dir .artifacts/maturity-docs/assets/maturity --evidence-dir .artifacts/maturity-evidence)
-          if [[ "$STRICT_INPUTS" == "true" ]]; then
-            args+=(--strict-inputs)
-          fi
-          pnpm maturity:render -- "${args[@]}"
+          pnpm maturity:render -- \
+            --output-dir .artifacts/maturity-docs \
+            --static-assets-dir .artifacts/maturity-docs/assets/maturity \
+            --evidence-dir .artifacts/maturity-evidence \
+            --strict-inputs
           {
             echo "### Maturity scorecard docs"
             echo
             echo "- Source validation: passed"
             echo "- Artifact docs: \`.artifacts/maturity-docs\`"
-            echo "- Strict inputs: \`${STRICT_INPUTS:-false}\`"
+            echo "- Strict inputs: \`true\`"
             echo "- QA evidence: included"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Render committed docs preview
-        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
         run: |
           set -euo pipefail
           pnpm maturity:render -- \
             --output-dir docs \
-            --evidence-dir .artifacts/maturity-evidence
+            --evidence-dir .artifacts/maturity-evidence \
+            --strict-inputs
 
       - name: Create generated docs PR app token
-        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
         id: app-token
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
@@ -162,7 +284,7 @@ jobs:
           permission-pull-requests: write
 
       - name: Create generated docs PR fallback app token
-        if: ${{ steps.evidence.outputs.has_evidence == 'true' && steps.app-token.outcome == 'failure' }}
+        if: ${{ steps.app-token.outcome == 'failure' }}
         id: app-token-fallback
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -172,10 +294,10 @@ jobs:
           permission-pull-requests: write
 
       - name: Open generated docs PR
-        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          QA_EVIDENCE_RUN_ID: ${{ inputs.qa_evidence_run_id }}
+          REF_INPUT: ${{ inputs.ref }}
         run: |
           set -euo pipefail
           if [[ -z "${GH_TOKEN:-}" ]]; then
@@ -183,22 +305,29 @@ jobs:
             exit 1
           fi
 
-          if [[ -z "$(git status --porcelain -- docs/maturity/scorecard.md docs/maturity/taxonomy.md)" ]]; then
+          if [[ -z "$(git status --porcelain -- qa/maturity-scores.yaml docs/maturity-scores.yaml docs/maturity/scorecard.md docs/maturity/taxonomy.md)" ]]; then
             {
               echo
-              echo "- Pull request: skipped; generated docs match current branch"
+              echo "- Pull request: skipped; generated scorecard matches selected ref"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          branch="automation/maturity-scorecard-${SOURCE_RUN_ID:-$GITHUB_RUN_ID}"
-          base_branch="${GITHUB_REF_NAME:-main}"
+          evidence_run_id="${QA_EVIDENCE_RUN_ID:-$GITHUB_RUN_ID}"
+          branch="automation/maturity-scorecard-${evidence_run_id}"
+          base_branch="${REF_INPUT:-main}"
+          if ! git ls-remote --exit-code --heads origin "$base_branch" >/dev/null 2>&1; then
+            base_branch="main"
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           gh auth setup-git
           git fetch --no-tags --depth=1 origin "refs/heads/${branch}:refs/remotes/origin/${branch}" || true
           git switch -C "$branch"
-          git add docs/maturity/scorecard.md docs/maturity/taxonomy.md
+          git add qa/maturity-scores.yaml docs/maturity/scorecard.md docs/maturity/taxonomy.md
+          if git ls-files --error-unmatch docs/maturity-scores.yaml >/dev/null 2>&1 || [[ -e docs/maturity-scores.yaml ]]; then
+            git add docs/maturity-scores.yaml
+          fi
           git commit -m "docs: update maturity scorecard"
           git push --force-with-lease origin "$branch"
 
@@ -207,12 +336,16 @@ jobs:
           cat > "$body_file" <<BODY
           ## Summary
 
+          - refresh \`qa/maturity-scores.yaml\` with the maturity scorecard agent
           - refresh generated maturity scorecard docs from release QA evidence
-          - source workflow run: ${SOURCE_RUN_ID}
+          - maturity source ref: ${REF_INPUT}
+          - QA evidence run: ${evidence_run_id}
 
           ## Verification
 
-          - Maturity scorecard workflow rendered docs from release profile qa-evidence.json artifacts
+          - Codex maturity scorecard agent ran with the \`\$claw-score\` workflow
+          - QA Lab maturity score validation passed
+          - Maturity scorecard workflow rendered docs from release profile qa-evidence.json artifacts with strict inputs
           BODY
 
           pr_url="$(gh pr list --head "$branch" --state open --json url --jq '.[0].url // ""')"
@@ -233,7 +366,6 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload maturity docs artifact
-        if: ${{ steps.evidence.outputs.has_evidence == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: maturity-scorecard-docs-${{ github.run_id }}-${{ github.run_attempt }}
