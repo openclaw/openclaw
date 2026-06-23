@@ -96,7 +96,9 @@ function resolveDefaultProbeDir(): string {
     process.cwd(),
   ];
   for (const dir of candidates) {
-    if (!dir) continue;
+    if (!dir) {
+      continue;
+    }
     try {
       const probeDir = path.join(dir, ".openclaw", ".health");
       fs.mkdirSync(probeDir, { recursive: true });
