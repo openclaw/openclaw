@@ -143,8 +143,13 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
   if (!readiness.ready) {
     rejectGatewayReady(new Error("gateway event loop readiness timeout"));
   }
-  await gatewayReady.catch((err: unknown) => {
-    shutdown();
+  await gatewayReady.catch(async (err: unknown) => {
+    if (!stopped) {
+      stopped = true;
+      resolveGatewayReady();
+      await gateway.stopAndWait().catch(() => undefined);
+      onClosed();
+    }
     throw err;
   });
   if (stopped) {
