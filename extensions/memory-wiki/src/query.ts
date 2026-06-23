@@ -251,7 +251,7 @@ async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
             (entry) => entry.isFile() && entry.name.endsWith(".md") && entry.name !== "index.md",
           )
           .map((entry) => {
-            const absPath = path.join(entry.parentPath ?? entry.path ?? dirPath, entry.name);
+            const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
             return path.relative(rootDir, absPath).split(path.sep).join("/");
           });
       }),

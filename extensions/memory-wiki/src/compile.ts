@@ -368,7 +368,7 @@ async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promi
   return entries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
     .map((entry) => {
-      const absPath = path.join(entry.parentPath ?? entry.path ?? dirPath, entry.name);
+      const absPath = path.join(entry.parentPath ?? dirPath, entry.name);
       return path.relative(rootDir, absPath).split(path.sep).join("/");
     })
     .filter((relativePath) => path.basename(relativePath) !== "index.md")
