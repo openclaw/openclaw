@@ -505,7 +505,7 @@ describe("abort detection", () => {
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(activeSessionId);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expectSessionLaneCleared(sessionKey);
-    expect(getAbortMemory(sessionKey)).toBe(true);
+    expect(getAbortMemory(sessionKey)).toBeUndefined();
   });
 
   it("fast-abort uses resolved target identity when abort metadata save fails", async () => {
@@ -557,7 +557,37 @@ describe("abort detection", () => {
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
     expect(getFollowupQueueDepth(canonicalKey)).toBe(0);
     expectSessionLaneCleared(canonicalKey);
-    expect(getAbortMemory(canonicalKey)).toBe(true);
+    expect(getAbortMemory(canonicalKey)).toBeUndefined();
+  });
+
+  it("fast-abort uses abort memory when no persisted target entry exists", async () => {
+    const sessionKey = "telegram:missing-persistence-target";
+    const { cfg } = await createAbortConfig();
+    abortTesting.setDepsForTests({
+      getAcpSessionManager: (() =>
+        ({
+          resolveSession: acpManagerMocks.resolveSession,
+          cancelSession: acpManagerMocks.cancelSession,
+        }) as never) as never,
+      abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
+      resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
+      markSessionAbortTarget: vi.fn(async () => null),
+      resolveSessionAbortTarget: vi.fn(() => null),
+      getLatestSubagentRunByChildSessionKey:
+        subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
+      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+      markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+    });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:123",
+      to: "telegram:123",
+    });
+
+    expect(result.handled).toBe(true);
+    expect(getAbortMemory(sessionKey)).toBe(true);
   });
 
   it("fast-abort does not wait for abort metadata persistence before stopping runs", async () => {

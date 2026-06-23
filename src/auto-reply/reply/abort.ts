@@ -449,7 +449,8 @@ export async function tryFastAbortFromMessage(params: {
     }
     const abortMemoryKey =
       persistedAbortTarget?.sessionKey ?? resolvedAbortTarget?.sessionKey ?? abortKey;
-    if (persistedAbortTarget?.persisted !== true && abortMemoryKey) {
+    const hasAbortTargetEntry = Boolean(persistedAbortTarget?.entry ?? resolvedAbortTarget?.entry);
+    if (persistedAbortTarget?.persisted !== true && abortMemoryKey && !hasAbortTargetEntry) {
       setAbortMemory(abortMemoryKey, true);
     }
     return { handled: true, aborted, stoppedSubagents: stopped };
