@@ -16,7 +16,7 @@ on:
         default: ""
         type: string
       qa_profile:
-        description: Taxonomy QA profile id to run
+        description: Taxonomy QA profile id to run (for example release or all)
         required: true
         default: release
         type: string
@@ -47,7 +47,7 @@ on:
         type: boolean
     secrets:
       OPENAI_API_KEY:
-        description: OpenAI API key used by release QA profile scenarios
+        description: OpenAI API key used by live QA profile scenarios
         required: true
     outputs:
       artifact_name:
