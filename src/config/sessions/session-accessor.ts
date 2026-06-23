@@ -726,9 +726,13 @@ export async function markSessionAbortTarget(params: {
       },
     );
   } catch (error) {
-    if (resolvedTarget) {
+    const fallbackTarget = resolvedTarget as unknown as SessionAbortTargetResult | null;
+    if (fallbackTarget) {
       return {
-        ...resolvedTarget,
+        entry: fallbackTarget.entry,
+        persisted: fallbackTarget.persisted,
+        sessionId: fallbackTarget.sessionId,
+        sessionKey: fallbackTarget.sessionKey,
         persistenceError: formatErrorMessage(error),
       };
     }
