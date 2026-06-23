@@ -2153,9 +2153,9 @@
       "license": "MIT"
     },
     "node_modules/tsx": {
-      "version": "4.22.3",
-      "resolved": "https://registry.npmjs.org/tsx/-/tsx-4.22.3.tgz",
-      "integrity": "sha512-mdoNxBC/cSQObGGVQ5Bpn5i+yv7j68gk3Nfm3wFjcJg3Z0Mix9jzAFfP12prmm5eVGmDKtp0yyArrs0Q+8gZHg==",
+      "version": "4.22.4",
+      "resolved": "https://registry.npmjs.org/tsx/-/tsx-4.22.4.tgz",
+      "integrity": "sha512-X8EX+XV4QR5xCsrgxaED954zTDfY8KqlDtskKEL0cHhyS/P8b4IFOvGDQpsC9Q1XnLq915wEfwwY/zzskCtmhg==",
       "license": "MIT",
       "dependencies": {
         "esbuild": "~0.28.0"
