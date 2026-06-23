@@ -66,11 +66,14 @@ function toError(err: unknown): Error {
   return new Error(typeof err === "string" ? err : JSON.stringify(err));
 }
 
+let nickCollisionFallbackSeq = 0;
+
 function buildFallbackNick(nick: string): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
-  const suffix = "_";
+  const seq = ++nickCollisionFallbackSeq;
+  const suffix = seq === 1 ? "_" : `_${seq}`;
   const maxNickLen = 30;
   if (base.length >= maxNickLen) {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
