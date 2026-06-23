@@ -602,34 +602,6 @@ function isSuccessfulRecoveryRetryResult(message: AssistantMessage | undefined):
   return message.stopReason !== "error" && message.stopReason !== "aborted";
 }
 
-function wrapRetryStreamWithRecoveryNotification(
-  retryStream: ReturnType<StreamFn>,
-  notify: () => Promise<void>,
-): ReturnType<StreamFn> {
-  if (retryStream instanceof Promise) {
-    return retryStream.then((resolved) =>
-      wrapRetryStreamWithRecoveryNotification(resolved as ReturnType<StreamFn>, notify),
-    ) as ReturnType<StreamFn>;
-  }
-  const streamWithResult = retryStream as unknown as {
-    result?: () => Promise<AssistantMessage>;
-  };
-  if (typeof streamWithResult.result !== "function") {
-    return retryStream;
-  }
-  const result = streamWithResult.result.bind(streamWithResult);
-  let notified = false;
-  streamWithResult.result = async () => {
-    const message = await result();
-    if (!notified && isSuccessfulRecoveryRetryResult(message)) {
-      notified = true;
-      await notify();
-    }
-    return message;
-  };
-  return retryStream;
-}
-
 async function retryStreamWithoutThinking(
   outer: ReturnType<typeof createAssistantMessageEventStream>,
   retry: () => ReturnType<StreamFn>,
