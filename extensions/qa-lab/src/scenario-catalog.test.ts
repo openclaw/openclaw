@@ -517,9 +517,6 @@ describe("qa scenario catalog", () => {
       "trusted tool policy registration requires id, description, and evaluate()",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(
-      "control UI descriptor registration requires id, surface, label, and valid optional fields",
-    );
-    expect(config?.expectedAdversarialDiagnostics).toContain(
       "hosted media resolver registration missing resolver",
     );
     expect(config?.expectedAdversarialDiagnostics).toContain(

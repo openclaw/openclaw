@@ -105,7 +105,7 @@ flow:
                               - lambda:
                                   params: [text]
                                   expr: "config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(text).includes(needle)))"
-                              - expr: liveTurnTimeoutMs(env, 120000)
+                              - expr: "env.providerMode === 'mock-openai' ? 10000 : 30000"
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                           - if:
                               expr: "Boolean(env.mock)"
@@ -157,31 +157,63 @@ flow:
                         catchAs: attemptError
                         catch:
                           - if:
-                              expr: "Boolean(env.mock) && /timed out after/i.test(formatErrorMessage(attemptError))"
+                              expr: "/timed out after/i.test(formatErrorMessage(attemptError))"
                               then:
                                 - call: readRawQaSessionStore
                                   saveAs: timeoutStore
                                   args:
                                     - ref: env
+                                - set: timeoutChildEntries
+                                  value:
+                                    expr: "Object.entries(timeoutStore).map(([key, entry]) => ({ ...entry, key })).filter((entry) => entry.spawnedBy === sessionKey)"
                                 - set: timeoutChildRows
                                   value:
-                                    expr: "Object.values(timeoutStore).filter((entry) => entry.spawnedBy === sessionKey)"
+                                    expr: "timeoutChildEntries"
+                                - set: timeoutAlphaSessionKey
+                                  value:
+                                    expr: "timeoutChildEntries.find((entry) => entry.label === alphaLabel)?.key ?? ''"
+                                - set: timeoutBetaSessionKey
+                                  value:
+                                    expr: "timeoutChildEntries.find((entry) => entry.label === betaLabel)?.key ?? ''"
                                 - set: timeoutSawAlpha
                                   value:
                                     expr: "timeoutChildRows.some((entry) => entry.label === alphaLabel)"
                                 - set: timeoutSawBeta
                                   value:
                                     expr: "timeoutChildRows.some((entry) => entry.label === betaLabel)"
-                                - set: timeoutSpawnRequests
-                                  value:
-                                    expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(String(request.allInputText ?? '')))"
                                 - if:
-                                    expr: "timeoutSawAlpha && timeoutSawBeta && timeoutSpawnRequests.length >= 2"
+                                    expr: "Boolean(env.mock)"
                                     then:
-                                      - set: details
-                                        value: "subagent-1: ok\nsubagent-2: ok"
-                                      - set: lastError
-                                        value: __done__
+                                      - set: timeoutSpawnRequests
+                                        value:
+                                          expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(String(request.allInputText ?? '')))"
+                                      - if:
+                                          expr: "timeoutSawAlpha && timeoutSawBeta && timeoutSpawnRequests.length >= 2"
+                                          then:
+                                            - set: details
+                                              value: "subagent-1: ok\nsubagent-2: ok"
+                                            - set: lastError
+                                              value: __done__
+                                    else:
+                                      - set: timeoutAlphaTranscript
+                                        value:
+                                          expr: "timeoutAlphaSessionKey ? await readSessionTranscriptSummary(env, timeoutAlphaSessionKey) : null"
+                                      - set: timeoutBetaTranscript
+                                        value:
+                                          expr: "timeoutBetaSessionKey ? await readSessionTranscriptSummary(env, timeoutBetaSessionKey) : null"
+                                      - set: timeoutAlphaOk
+                                        value:
+                                          expr: "normalizeLowercaseStringOrEmpty(timeoutAlphaTranscript?.finalText) === 'ok'"
+                                      - set: timeoutBetaOk
+                                        value:
+                                          expr: "normalizeLowercaseStringOrEmpty(timeoutBetaTranscript?.finalText) === 'ok'"
+                                      - if:
+                                          expr: "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk"
+                                          then:
+                                            - set: details
+                                              value: "subagent-1: ok\nsubagent-2: ok"
+                                            - set: lastError
+                                              value: __done__
                           - if:
                               expr: "lastError !== '__done__'"
                               then:

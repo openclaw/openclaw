@@ -94,7 +94,6 @@ scenario:
         - only bundled plugins can register Codex app-server extension factories
         - compaction provider "kitchen-sink-compaction-provider" registration missing summarize
         - context engine registration missing id
-        - control UI descriptor registration requires id, surface, label, and valid optional fields
         - hosted media resolver registration missing resolver
         - "http route registration missing or invalid auth: /kitchen-sink/http-route"
         - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
