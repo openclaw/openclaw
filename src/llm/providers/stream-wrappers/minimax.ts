@@ -78,11 +78,30 @@ export function createMinimaxFastModeWrapper(
     }
 
     const fastModelId = resolveMinimaxFastModelId(model.id);
-    if (!fastModelId) {
-      return underlying(model, context, options);
+    if (fastModelId) {
+      // M2.x: route to the dedicated highspeed model variant.
+      return underlying({ ...model, id: fastModelId }, context, options);
     }
 
-    return underlying({ ...model, id: fastModelId }, context, options);
+    // M3.x has no highspeed model variant; opt its requests into MiniMax's paid
+    // priority lane via `service_tier`. Other MiniMax models get no fast-mode
+    // change. Preserve a service_tier an earlier wrapper/caller already set.
+    if (!isMinimaxModelRequiringThinking(model)) {
+      return underlying(model, context, options);
+    }
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (payloadObj.service_tier === undefined) {
+            payloadObj.service_tier = "priority";
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
   };
 }
 
@@ -104,7 +123,6 @@ export function createMinimaxFastModeWrapper(
 export function createMinimaxThinkingDisabledWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
-  serviceTierPriority?: boolean,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -119,9 +137,6 @@ export function createMinimaxThinkingDisabledWrapper(
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
-          if (requiresThinking && serviceTierPriority && payloadObj.service_tier === undefined) {
-            payloadObj.service_tier = "priority";
-          }
           if (requiresThinking) {
             if (thinkingLevel === undefined && isDisabledThinkingPayload(payloadObj.thinking)) {
               delete payloadObj.thinking;
