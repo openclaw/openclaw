@@ -1,0 +1,64 @@
+{
+  "id": "imessage-spectrum",
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": ["channels.imessage-spectrum"]
+  },
+  "channels": ["imessage-spectrum"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "imessage-spectrum": {
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "projectId": { "type": "string", "minLength": 1 },
+          "projectSecret": { "type": "string", "minLength": 1 },
+          "webhookSecret": { "type": "string", "minLength": 1 },
+          "webhookBaseUrl": { "type": "string", "minLength": 1 },
+          "deliveryRetryCount": { "type": "number", "minimum": 1, "maximum": 10 },
+          "deliveryRetryDelayMs": { "type": "number", "minimum": 250, "maximum": 60000 },
+          "deliveryQueueSize": { "type": "number", "minimum": 0, "maximum": 500 },
+          "enableSessionContext": { "type": "boolean" },
+          "sessionContext": { "type": "string" },
+          "healthMonitor": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" }
+            }
+          },
+          "catchup": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean" },
+              "lookbackCount": { "type": "number", "minimum": 1, "maximum": 100 },
+              "intervalMs": { "type": "number", "minimum": 5000, "maximum": 300000 }
+            }
+          },
+          "tunnelPort": { "type": "number" },
+          "allowFrom": { "type": "array", "items": { "type": "string" } },
+          "dmPolicy": { "type": "string", "enum": ["pairing", "allowlist", "open", "disabled"] }
+        }
+      },
+      "uiHints": {
+        "projectId": { "label": "Spectrum Project ID" },
+        "projectSecret": { "label": "Spectrum Project Secret", "sensitive": true },
+        "webhookSecret": { "label": "Spectrum Webhook Signing Secret", "sensitive": true },
+        "webhookBaseUrl": { "label": "Public webhook base URL" },
+        "deliveryRetryCount": { "label": "Delivery retry count" },
+        "deliveryRetryDelayMs": { "label": "Delivery retry delay (ms)" },
+        "deliveryQueueSize": { "label": "Queued failed outbound messages" },
+        "enableSessionContext": { "label": "Inject first-message session context" },
+        "sessionContext": { "label": "First-message session context" },
+        "tunnelPort": { "label": "Gateway HTTP port for tunnel" }
+      }
+    }
+  }
+}

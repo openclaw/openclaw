@@ -1,0 +1,49 @@
+{
+  "name": "@openclaw/imessage-spectrum",
+  "version": "2026.6.8",
+  "private": true,
+  "description": "Cross-platform OpenClaw iMessage channel using Spectrum by Photon",
+  "type": "module",
+  "dependencies": {
+    "spectrum-ts": "^5.0.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "imessage-spectrum",
+      "label": "iMessage (Spectrum)",
+      "selectionLabel": "iMessage (Spectrum)",
+      "detailLabel": "iMessage (Spectrum)",
+      "blurb": "Cloud iMessage for Mac, Linux, Windows, WSL, servers, and containers through Spectrum by Photon.",
+      "systemImage": "message.fill",
+      "cliAddOptions": [
+        {
+          "flags": "--project-id <id>",
+          "description": "Spectrum project ID"
+        },
+        {
+          "flags": "--project-secret <secret>",
+          "description": "Spectrum project secret"
+        },
+        {
+          "flags": "--webhook-secret <secret>",
+          "description": "Spectrum webhook signing secret"
+        },
+        {
+          "flags": "--webhook-base-url <url>",
+          "description": "Public HTTPS base URL for this gateway"
+        }
+      ]
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.8"
+    },
+    "build": {
+      "openclawVersion": "2026.6.8"
+    }
+  }
+}
