@@ -22,6 +22,18 @@ function textModel(id: string, name: string): ModelDefinitionConfig {
 }
 
 const providerDiscoveryMocks = vi.hoisted(() => ({
+  providerMatchesFilter: vi.fn(
+    ({
+      provider,
+      providerFilter,
+    }: {
+      provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
+      providerFilter: string;
+    }) =>
+      [provider.id, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
+        (providerId) => providerId.trim().toLowerCase() === providerFilter,
+      ),
+  ),
   resolveRuntimePluginDiscoveryProviders: vi.fn<() => Promise<ProviderPlugin[]>>(),
   runProviderCatalog: vi.fn(
     async ({ provider, ...ctx }: { provider: ProviderPlugin } & Record<string, unknown>) =>

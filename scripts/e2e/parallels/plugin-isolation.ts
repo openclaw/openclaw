@@ -109,14 +109,17 @@ export function windowsProviderOnlyPluginIsolationScript(options: PluginIsolatio
   return `$env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION = @'
 ${payloadJson}
 '@
-$isolationScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) 'openclaw-parallels-plugin-isolation.cjs'
+$isolationScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ('openclaw-parallels-plugin-isolation-' + [guid]::NewGuid().ToString('N') + '.cjs')
+try {
 @'
 ${providerOnlyPluginIsolationNodeSource()}
 '@ | Set-Content -Path $isolationScriptPath -Encoding UTF8
 node.exe $isolationScriptPath
 if ($LASTEXITCODE -ne 0) { throw "plugin isolation failed with exit code $LASTEXITCODE" }
-Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue
-Remove-Item Env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION -Force -ErrorAction SilentlyContinue`;
+} finally {
+  Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue
+  Remove-Item Env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION -Force -ErrorAction SilentlyContinue
+}`;
 }
 
 function providerOnlyPluginIsolationNodeScript(options: PluginIsolationOptions): string {

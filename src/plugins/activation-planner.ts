@@ -4,7 +4,11 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizePluginsConfig } from "./config-state.js";
-import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import {
+  hasExplicitManifestOwnerTrust,
+  isBundledManifestOwner,
+  passesManifestOwnerBasePolicy,
+} from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginManifestActivationCapability } from "./manifest.js";
@@ -63,6 +67,7 @@ type ResolveManifestActivationPlanParams = {
   onlyPluginIds?: readonly string[];
   manifestRecords?: readonly PluginManifestRecord[];
   allowRestrictiveAllowlistBypass?: boolean;
+  requireExplicitManifestOwnerTrust?: boolean;
 };
 
 /** Returns a deterministic activation plan without importing plugin runtime modules. */
@@ -70,7 +75,6 @@ export function resolveManifestActivationPlan(
   params: ResolveManifestActivationPlanParams,
 ): PluginActivationPlan {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
-  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const registry = params.manifestRecords
     ? { plugins: params.manifestRecords, diagnostics: [] }
     : loadPluginManifestRegistryForPluginRegistry({
@@ -79,6 +83,7 @@ export function resolveManifestActivationPlan(
         env: params.env,
         includeDisabled: true,
       });
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const entries = registry.plugins
     .flatMap((plugin) => {
       if (params.origin && plugin.origin !== params.origin) {
@@ -92,6 +97,15 @@ export function resolveManifestActivationPlan(
           plugin,
           normalizedConfig,
           allowRestrictiveAllowlistBypass: params.allowRestrictiveAllowlistBypass,
+        })
+      ) {
+        return [];
+      }
+      if (
+        params.requireExplicitManifestOwnerTrust &&
+        !hasExplicitActivationPlannerManifestOwnerTrust({
+          plugin,
+          normalizedConfig,
         })
       ) {
         return [];
@@ -123,6 +137,23 @@ export function resolveManifestActivationPluginIds(
   params: ResolveManifestActivationPlanParams,
 ): string[] {
   return [...resolveManifestActivationPlan(params).pluginIds];
+}
+
+function hasExplicitActivationPlannerManifestOwnerTrust(params: {
+  plugin: Pick<PluginManifestRecord, "id" | "origin">;
+  normalizedConfig: ReturnType<typeof normalizePluginsConfig>;
+}): boolean {
+  // plugins.load.paths is already an operator-selected trust boundary. Keep
+  // the trust local to planner callers so setup-only channel imports retain
+  // their stricter scoped-import policy.
+  return (
+    isBundledManifestOwner(params.plugin) ||
+    params.plugin.origin === "config" ||
+    hasExplicitManifestOwnerTrust({
+      plugin: params.plugin,
+      normalizedConfig: params.normalizedConfig,
+    })
+  );
 }
 
 function listManifestActivationTriggerReasons(

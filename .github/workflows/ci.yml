@@ -41,11 +41,32 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  # Keep the canonical main queue quiet long enough for a follow-up push to
+  # cancel this run before it registers the Blacksmith matrix.
+  runner-admission:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    env:
+      OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS: "90"
+    steps:
+      - name: Debounce canonical main pushes
+        if: github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          echo "Waiting ${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}s for a superseding main push before Blacksmith admission"
+          sleep "${OPENCLAW_MAIN_CI_DEBOUNCE_SECONDS}"
+      - name: Admit non-main CI runs immediately
+        if: github.event_name != 'push' || github.repository != 'openclaw/openclaw' || github.ref != 'refs/heads/main'
+        run: echo "No canonical main debounce required"
+
   # Preflight: establish routing truth and job matrices once, then let real
   # work fan out from a single source of truth.
   preflight:
     permissions:
       contents: read
+    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
@@ -272,18 +293,23 @@ jobs:
             }
           }
 
+          const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
           const nodeTestShards = runNodeFull
             ? createNodeTestShardBundles({
                 includeReleaseOnlyPluginShards: false,
+                compact: compactPullRequest,
               }).map((shard) => ({
                 check_name: shard.checkName,
                 runtime: "node",
                 task: "test-shard",
                 shard_name: shard.shardName,
+                groups: shard.groups,
                 configs: shard.configs,
+                env: shard.env,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
+                timeout_minutes: shard.timeoutMinutes,
               }))
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
@@ -361,6 +387,7 @@ jobs:
   security-fast:
     permissions:
       contents: read
+    needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
@@ -826,7 +853,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.checks_fast_core_matrix) }}
     steps:
       - name: Checkout
@@ -916,7 +943,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.plugin_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -997,7 +1024,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJson(needs.preflight.outputs.channel_contracts_matrix) }}
     steps:
       - name: Checkout
@@ -1147,10 +1174,12 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      max-parallel: 6
+      # The canonical main path waits for the admission debounce above, so
+      # modestly widen this large matrix without recreating registration bursts.
+      max-parallel: 16
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout
@@ -1209,7 +1238,9 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
+          OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
@@ -1223,28 +1254,55 @@ jobs:
           import { writeFileSync } from "node:fs";
           import { join } from "node:path";
 
-          const configs = JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]");
-          if (!Array.isArray(configs) || configs.length === 0) {
-            console.error("Missing node test shard configs");
-            process.exit(1);
-          }
-          const includePatterns = JSON.parse(process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null");
-          const childEnv = { ...process.env };
-          if (Array.isArray(includePatterns) && includePatterns.length > 0) {
-            const includeFile = join(
-              process.env.RUNNER_TEMP ?? ".",
-              `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
+          const groups = JSON.parse(process.env.OPENCLAW_NODE_TEST_GROUPS_JSON ?? "null");
+          const plans = Array.isArray(groups) && groups.length > 0
+            ? groups
+            : [{
+                configs: JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]"),
+                env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON ?? "null"),
+                includePatterns: JSON.parse(
+                  process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
+                ),
+                shard_name: process.env.OPENCLAW_VITEST_SHARD_NAME,
+              }];
+          for (const plan of plans) {
+            const configs = plan.configs;
+            if (!Array.isArray(configs) || configs.length === 0) {
+              console.error("Missing node test shard configs");
+              process.exit(1);
+            }
+            const childEnv = {
+              ...process.env,
+              ...(plan.shard_name ? { OPENCLAW_VITEST_SHARD_NAME: plan.shard_name } : {}),
+            };
+            if (plan.env && typeof plan.env === "object" && !Array.isArray(plan.env)) {
+              for (const [key, value] of Object.entries(plan.env)) {
+                if (typeof value === "string") {
+                  childEnv[key] = value;
+                }
+              }
+            }
+            if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
+              const includeFile = join(
+                process.env.RUNNER_TEMP ?? ".",
+                `node-test-include-${process.env.GITHUB_JOB ?? "local"}-${Date.now()}.json`,
+              );
+              writeFileSync(includeFile, JSON.stringify(plan.includePatterns), "utf8");
+              childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
+            } else {
+              delete childEnv.OPENCLAW_VITEST_INCLUDE_FILE;
+            }
+            const result = spawnSync(
+              "pnpm",
+              ["exec", "node", "scripts/test-projects.mjs", ...configs],
+              {
+                env: childEnv,
+                stdio: "inherit",
+              },
             );
-            writeFileSync(includeFile, JSON.stringify(includePatterns), "utf8");
-            childEnv.OPENCLAW_VITEST_INCLUDE_FILE = includeFile;
-          }
-
-          const result = spawnSync("pnpm", ["exec", "node", "scripts/test-projects.mjs", ...configs], {
-            env: childEnv,
-            stdio: "inherit",
-          });
-          if ((result.status ?? 1) !== 0) {
-            process.exit(result.status ?? 1);
+            if ((result.status ?? 1) !== 0) {
+              process.exit(result.status ?? 1);
+            }
           }
           EOF
 
@@ -1259,7 +1317,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         include:
           - check_name: check-guards
@@ -1401,7 +1459,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         include:
           - check_name: check-additional-boundaries-a
@@ -2177,7 +2235,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
+          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-36-build-tools-36.0.0
           restore-keys: |
             ${{ runner.os }}-android-sdk-v1-
 
@@ -2207,7 +2265,7 @@ jobs:
           yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
           sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
             "platform-tools" \
-            "platforms;android-37.0" \
+            "platforms;android-36" \
             "build-tools;36.0.0"
 
       - name: Run Android ${{ matrix.task }}

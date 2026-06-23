@@ -181,6 +181,11 @@ describe("session transcript runtime SDK", () => {
       messageId: "message-from-direct-publish",
       sessionFile: scope.sessionFile,
       sessionKey: "agent:main:main",
+      target: {
+        agentId: "main",
+        sessionId: "publish-session",
+        sessionKey: "agent:main:main",
+      },
     });
   });
 

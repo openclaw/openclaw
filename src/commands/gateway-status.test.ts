@@ -983,6 +983,15 @@ describe("gateway-status command", () => {
     ]);
   });
 
+  it("passes the full caller timeout through to active configured remote probes", async () => {
+    const { runtime } = createRuntimeCapture();
+    probeGateway.mockClear();
+
+    await runGatewayStatus(runtime, { timeout: "15000", json: true });
+
+    expect(requireProbeCall("wss://remote.example:18789").timeoutMs).toBe(15_000);
+  });
+
   it("uses configured handshake timeout as the default local probe budget", async () => {
     const { runtime } = createRuntimeCapture();
     probeGateway.mockClear();

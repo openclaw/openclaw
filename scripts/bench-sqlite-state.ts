@@ -134,12 +134,17 @@ function hasFlag(flag: string, argv = process.argv.slice(2)): boolean {
 }
 
 function validateArgs(argv: string[]): void {
+  const seenValueFlags = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     if (BOOLEAN_FLAGS.has(arg)) {
       continue;
     }
     if (VALUE_FLAGS.has(arg)) {
+      if (seenValueFlags.has(arg)) {
+        throw new CliUsageError(`${arg} was provided more than once`);
+      }
+      seenValueFlags.add(arg);
       const value = argv[index + 1];
       if (!value || value.startsWith("-")) {
         throw new CliUsageError(`${arg} requires a value`);

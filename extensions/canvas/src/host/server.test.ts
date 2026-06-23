@@ -108,9 +108,13 @@ async function captureHandlerResponse(
   return await captureHttpResponse(handler.handleHttpRequest, url, method);
 }
 
-async function captureA2uiResponse(url: string, method = "GET"): Promise<CapturedResponse> {
-  const { handleA2uiHttpRequest } = await import("./a2ui.js");
-  return await captureHttpResponse(handleA2uiHttpRequest, url, method);
+async function captureA2uiFixtureResponse(
+  rootDir: string,
+  url: string,
+  method = "GET",
+): Promise<CapturedResponse> {
+  const { createA2uiHttpRequestHandler } = await import("./a2ui.js");
+  return await captureHttpResponse(createA2uiHttpRequestHandler({ rootDir }), url, method);
 }
 
 describe("canvas host", () => {
@@ -439,46 +443,56 @@ describe("canvas host", () => {
   });
 
   it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
-    const a2uiRoot = path.resolve(process.cwd(), "extensions/canvas/src/host/a2ui");
-    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
+    const a2uiRoot = await createCaseDir();
+    const nestedAssetDir = path.join(a2uiRoot, "assets", "demo");
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
-    let createdBundle = false;
 
-    try {
-      await fs.stat(bundlePath);
-    } catch {
-      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
-      createdBundle = true;
-    }
-
+    await fs.mkdir(nestedAssetDir, { recursive: true });
+    await fs.writeFile(
+      path.join(a2uiRoot, "index.html"),
+      `<openclaw-a2ui-host></openclaw-a2ui-host>
+<script>openclawCanvasA2UIAction</script>`,
+      "utf8",
+    );
+    await fs.writeFile(path.join(a2uiRoot, "a2ui.bundle.js"), "window.openclawA2UI = {};", "utf8");
+    await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
     await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
 
     try {
-      const res = await captureA2uiResponse(`${A2UI_PATH}/`);
+      const res = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`);
       const html = res.body;
       expect(res.status).toBe(200);
       expect(html).toContain("openclaw-a2ui-host");
       expect(html).toContain("openclawCanvasA2UIAction");
 
-      const bundleRes = await captureA2uiResponse(`${A2UI_PATH}/a2ui.bundle.js`);
+      const bundleRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/a2ui.bundle.js`);
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
-      const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
+
+      const assetRes = await captureA2uiFixtureResponse(
+        a2uiRoot,
+        `${A2UI_PATH}/assets/demo/sample.txt`,
+      );
+      expect(assetRes.status).toBe(200);
+      expect(assetRes.headers["content-type"]).toBe("text/plain");
+      expect(assetRes.body).toBe("nested asset");
+
+      const traversalRes = await captureA2uiFixtureResponse(
+        a2uiRoot,
+        `${A2UI_PATH}/%2e%2e%2fpackage.json`,
+      );
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");
-      const malformedRes = await captureA2uiResponse(`${A2UI_PATH}/%E0%A4%A`);
+      const malformedRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/%E0%A4%A`);
       expect(malformedRes.status).toBe(404);
       expect(malformedRes.body).toBe("not found");
-      const symlinkRes = await captureA2uiResponse(`${A2UI_PATH}/${linkName}`);
+      const symlinkRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
       await fs.rm(linkPath, { force: true });
-      if (createdBundle) {
-        await fs.rm(bundlePath, { force: true });
-      }
     }
   });
 });
