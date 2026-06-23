@@ -163,7 +163,10 @@ async function createCanonicalMemoryIndex(agentPath: string, text: string): Prom
   }
 }
 
-async function createUnrelatedCanonicalMemoryIndex(agentPath: string): Promise<void> {
+async function createUnrelatedCanonicalMemoryIndex(
+  agentPath: string,
+  options: { vectorDims?: number } = {},
+): Promise<void> {
   await fs.mkdir(path.dirname(agentPath), { recursive: true });
   const db = new DatabaseSync(agentPath);
   try {
@@ -174,7 +177,7 @@ async function createUnrelatedCanonicalMemoryIndex(agentPath: string): Promise<v
     });
     db.prepare("INSERT INTO memory_index_meta (key, value) VALUES (?, ?)").run(
       "memory_index_meta_v1",
-      '{"vectorDims":4}',
+      JSON.stringify({ vectorDims: options.vectorDims ?? 3 }),
     );
     db.prepare(
       "INSERT INTO memory_index_sources (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)",
@@ -848,6 +851,28 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
   });
 
+  it("leaves the legacy memory sidecar in place when metadata conflicts", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createUnrelatedCanonicalMemoryIndex(agentPath, { vectorDims: 4 });
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory meta rows conflict with canonical memory index rows",
+      ),
+    ]);
+    expect(result.changes).toEqual([]);
+    expect(readMemoryRows(agentPath).chunks).toEqual([
+      { id: "canonical-other-chunk", text: "canonical unrelated memory" },
+    ]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+  });
+
   it("merges legacy sidecar rows into a non-empty canonical index when rows do not conflict", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
@@ -921,13 +946,13 @@ describe("memory-core doctor dreaming migration", () => {
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
     const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     await writeLegacyMemorySidecar(legacyPath, { vector: true });
-    await createUnrelatedCanonicalMemoryIndex(agentPath);
+    await createUnrelatedCanonicalMemoryIndex(agentPath, { vectorDims: 4 });
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([
       expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec dimensions 3 do not match canonical memory chunks_vec dimensions 4",
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory meta rows conflict with canonical memory index rows",
       ),
     ]);
     expect(result.changes).toEqual([]);

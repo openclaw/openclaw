@@ -393,6 +393,16 @@ function copyLegacyMemoryIndexRows(
   assertLegacyRowsCopied(
     db,
     `SELECT COUNT(*) AS missing
+     FROM ${schema}.meta AS legacy
+     WHERE NOT EXISTS (
+       SELECT 1 FROM main.${MEMORY_INDEX_META_TABLE} AS canonical
+       WHERE canonical.key = legacy.key AND canonical.value IS legacy.value
+     )`,
+    "meta",
+  );
+  assertLegacyRowsCopied(
+    db,
+    `SELECT COUNT(*) AS missing
      FROM ${schema}.files AS legacy
      WHERE NOT EXISTS (
        SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
