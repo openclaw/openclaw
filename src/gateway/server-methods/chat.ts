@@ -5011,7 +5011,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             errorMessage,
           });
         })
-        .finally(async () => {
+        .finally(() => {
           activeRunAbort.cleanup();
           clearAgentRunContext(clientRunId, lifecycleGeneration);
           clearActiveChatSendDedupeRun(context.dedupe, activeChatSendDedupeKey, clientRunId);
@@ -5019,46 +5019,50 @@ export const chatHandlers: GatewayRequestHandlers = {
           if (!pendingDispatchLifecycleError) {
             return;
           }
-          const hasActiveRun = hasTrackedActiveSessionRun({
-            context,
-            requestedKey: rawSessionKey,
-            canonicalKey: sessionKey,
-            ...(sessionKey === "global" && agentId ? { agentId } : {}),
-            defaultAgentId: resolveDefaultAgentId(cfg),
-          });
-          if (hasActiveRun) {
-            return;
-          }
-          const persisted = await persistGatewaySessionLifecycleEvent({
-            sessionKey,
-            ...(sessionKey === "global" && agentId ? { agentId } : {}),
-            event: {
-              runId: clientRunId,
-              sessionId: pendingDispatchLifecycleError.sessionId,
-              lifecycleGeneration,
-              ts: pendingDispatchLifecycleError.endedAt,
-              data: {
-                phase: "error",
-                startedAt: pendingDispatchLifecycleError.startedAt,
-                endedAt: pendingDispatchLifecycleError.endedAt,
-                error: pendingDispatchLifecycleError.error,
-              },
-            },
-          })
-            .then(() => true)
-            .catch((persistErr) => {
+          const persistDispatchLifecycleError = async () => {
+            const dispatchError = pendingDispatchLifecycleError;
+            if (!dispatchError) {
+              return;
+            }
+            const hasActiveRun = hasTrackedActiveSessionRun({
+              context,
+              requestedKey: rawSessionKey,
+              canonicalKey: sessionKey,
+              ...(sessionKey === "global" && agentId ? { agentId } : {}),
+              defaultAgentId: resolveDefaultAgentId(cfg),
+            });
+            if (hasActiveRun) {
+              return;
+            }
+            try {
+              await persistGatewaySessionLifecycleEvent({
+                sessionKey,
+                ...(sessionKey === "global" && agentId ? { agentId } : {}),
+                event: {
+                  runId: clientRunId,
+                  sessionId: dispatchError.sessionId,
+                  lifecycleGeneration,
+                  ts: dispatchError.endedAt,
+                  data: {
+                    phase: "error",
+                    startedAt: dispatchError.startedAt,
+                    endedAt: dispatchError.endedAt,
+                    error: dispatchError.error,
+                  },
+                },
+              });
+              emitSessionsChanged(context, {
+                sessionKey,
+                ...(agentId ? { agentId } : {}),
+                reason: "chat.dispatch-error",
+              });
+            } catch (persistErr: unknown) {
               context.logGateway.warn(
                 `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
               );
-              return false;
-            });
-          if (persisted) {
-            emitSessionsChanged(context, {
-              sessionKey,
-              ...(agentId ? { agentId } : {}),
-              reason: "chat.dispatch-error",
-            });
-          }
+            }
+          };
+          void persistDispatchLifecycleError();
         });
     } catch (err) {
       activeRunAbort.cleanup({ force: true });
