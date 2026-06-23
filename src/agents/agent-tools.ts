@@ -76,7 +76,7 @@ import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
-import { createCodingTools, createReadTool } from "./sessions/index.js";
+import { createCodingTools, createReadTool, type ToolsOptions } from "./sessions/index.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -746,7 +746,18 @@ export function createOpenClawCodingTools(options?: {
 
   const base: AnyAgentTool[] = [];
   if (includeBaseCodingTools) {
-    for (const tool of createCodingTools(codingRoot) as unknown as AnyAgentTool[]) {
+    // Inject OPENCLAW_SESSION_ID into bash tool spawn env for external observability.
+    const codingToolsOptions: ToolsOptions | undefined = options?.sessionId
+      ? {
+          bash: {
+            spawnHook: (ctx) => {
+              ctx.env.OPENCLAW_SESSION_ID = options.sessionId!;
+              return ctx;
+            },
+          },
+        }
+      : undefined;
+    for (const tool of createCodingTools(codingRoot, codingToolsOptions) as unknown as AnyAgentTool[]) {
       if (tool.name === "read") {
         if (sandboxRoot) {
           const sandboxed = createSandboxedReadTool({
