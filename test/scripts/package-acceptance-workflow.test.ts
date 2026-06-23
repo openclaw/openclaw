@@ -1419,6 +1419,26 @@ describe("package artifact reuse", () => {
     }
   });
 
+  it("requires QA live evidence artifacts when lanes run", () => {
+    const cases = [
+      ["run_mock_parity", "Upload parity artifacts"],
+      ["run_live_runtime_token_efficiency", "Upload live runtime token-efficiency artifacts"],
+      ["run_live_matrix", "Upload Matrix QA artifacts"],
+      ["run_live_matrix_sharded", "Upload Matrix QA shard artifacts"],
+      ["run_live_telegram", "Upload Telegram QA artifacts"],
+      ["run_live_discord", "Upload Discord QA artifacts"],
+      ["run_live_whatsapp", "Upload WhatsApp QA artifacts"],
+      ["run_live_slack", "Upload Slack QA artifacts"],
+    ];
+
+    for (const [jobName, stepName] of cases) {
+      const uploadStep = workflowStep(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName), stepName);
+
+      expect(uploadStep.if, jobName).toBe("always()");
+      expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
+    }
+  });
+
   it("fails Docker E2E release lanes when summary artifacts are missing", () => {
     const cases = [
       {
