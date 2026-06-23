@@ -77,7 +77,7 @@
             "input": ["text"],
             "reasoning": true,
             "contextWindow": 1048576,
-            "maxTokens": 32000,
+            "maxTokens": 131072,
             "cost": {
               "input": 1,
               "output": 3,
@@ -95,7 +95,7 @@
             "input": ["text", "image"],
             "reasoning": true,
             "contextWindow": 1048576,
-            "maxTokens": 32000,
+            "maxTokens": 131072,
             "cost": {
               "input": 0.4,
               "output": 2,
