@@ -31,9 +31,9 @@ jobs:
     uses: ./.github/workflows/qa-profile-evidence.yml
     with:
       # qa-profile-evidence validates refs before entering its environment-backed
-      # QA job. PR runs therefore use the trusted base SHA, while manual runs can
-      # target main, release tags, or release branch heads.
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.ref }}
+      # QA job. PR runs use trusted base refs: main can use its SHA directly,
+      # while release branches must keep the branch-name trust path.
+      ref: ${{ github.event_name == 'pull_request' && (startsWith(github.event.pull_request.base.ref, 'release/') && github.event.pull_request.base.ref || github.event.pull_request.base.sha) || inputs.ref }}
       expected_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.expected_sha }}
       qa_profile: smoke-ci
       fail_on_qa_failure: true
