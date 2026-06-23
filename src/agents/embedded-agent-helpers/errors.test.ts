@@ -98,6 +98,8 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
   });
 });
 
+import { classifyFailoverSignal } from "./errors.js";
+
 describe("isLikelyContextOverflowError", () => {
   it("detects Codex promptError wording for a full context window", () => {
     expect(
@@ -105,5 +107,30 @@ describe("isLikelyContextOverflowError", () => {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying.",
       ),
     ).toBe(true);
+  });
+});
+
+describe("classifyFailoverSignal upstream_error", () => {
+  it("classifies upstream_error errorType as server_error for model fallback (regression for #95519)", () => {
+    const classification = classifyFailoverSignal({
+      message: '{"error":{"type":"upstream_error","message":"Upstream request failed"}}',
+      errorType: "upstream_error",
+      code: null as unknown as undefined,
+      provider: "openai",
+    });
+    expect(classification).toEqual({
+      kind: "reason",
+      reason: "server_error",
+    });
+  });
+
+  it("does not classify unhandled error messages as server_error", () => {
+    const classification = classifyFailoverSignal({
+      message: "Some other error",
+      provider: "openai",
+    });
+    // Without errorType, upstream_error, or other recognized patterns,
+    // classification falls through and returns null.
+    expect(classification).toBeNull();
   });
 });

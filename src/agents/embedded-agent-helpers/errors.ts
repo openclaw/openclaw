@@ -1176,6 +1176,17 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
           errorType: signal.errorType,
         })
       : null;
+  // upstream_error is a provider-side transient failure (e.g. OpenAI
+  // responses API returns {"error":{"type":"upstream_error"}}).  Classify
+  // it as server_error so model fallback triggers instead of ending the
+  // turn with "LLM request failed." (issue #95519).
+  if (
+    !providerPluginReason &&
+    signal.errorType != null &&
+    normalizeLowercaseStringOrEmpty(signal.errorType) === "upstream_error"
+  ) {
+    return toReasonClassification("server_error");
+  }
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
     : mergeMessageAndDetailClassification(messageClassification, detailClassification);
