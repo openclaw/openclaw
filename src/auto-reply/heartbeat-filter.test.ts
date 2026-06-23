@@ -135,6 +135,51 @@ describe("isHeartbeatOkResponse", () => {
       ),
     ).toBe(false);
   });
+
+  it("matches heartbeat acks that include reasoning blocks", () => {
+    // Model-internal reasoning blocks should not prevent heartbeat filtering.
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Checking for new tasks..." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "reasoning", reasoning: "Nothing to do" },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "redacted..." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match heartbeat when reasoning is mixed with non-text content", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Checking..." },
+          { type: "tool_use", id: "tool-1", name: "search", input: {} },
+        ],
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("filterHeartbeatTranscriptArtifacts", () => {
@@ -187,6 +232,30 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         },
       ]);
     }
+  });
+
+  it("removes heartbeat pairs where the assistant response includes reasoning blocks", () => {
+    const messages = [
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there!" },
+      { role: "user", content: HEARTBEAT_PROMPT },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Checking for due tasks..." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      },
+      { role: "user", content: "What time is it?" },
+      { role: "assistant", content: "It is 3pm." },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+      { role: "user", content: "Hello" },
+      { role: "assistant", content: "Hi there!" },
+      { role: "user", content: "What time is it?" },
+      { role: "assistant", content: "It is 3pm." },
+    ]);
   });
 
   it("removes prompt-only interrupted heartbeat spans", () => {

@@ -269,6 +269,18 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
       continue;
     }
     if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {
+      // Model-internal reasoning/thinking blocks are invisible to the user and should
+      // not prevent heartbeat filtering. They are ephemeral model artifacts, not
+      // content that the user sees or responds to. Skipping them here lets
+      // isHeartbeatOkResponse correctly classify short HEARTBEAT_OK acks even when
+      // the model emits reasoning alongside the text response.
+      if (
+        block.type === "reasoning" ||
+        block.type === "thinking" ||
+        block.type === "redacted_thinking"
+      ) {
+        continue;
+      }
       hasNonTextContent = true;
       continue;
     }
