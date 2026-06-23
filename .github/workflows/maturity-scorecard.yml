@@ -37,6 +37,9 @@ on:
       OPENAI_API_KEY:
         description: OpenAI API key used by live QA profile scenarios
         required: true
+      OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY:
+        description: Optional OpenAI API key used by maturity scorecard agent steps
+        required: false
       GH_APP_PRIVATE_KEY:
         description: Optional GitHub App private key for generated docs PR creation
         required: false
