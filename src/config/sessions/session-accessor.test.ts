@@ -12,8 +12,10 @@ import {
   applySessionEntryLifecycleMutation,
   applySessionPatchProjection,
   cleanupSessionLifecycleArtifacts,
+  commitReplySessionInitialization,
   createSessionEntryWithTranscript,
   listSessionEntries,
+  loadReplySessionInitializationSnapshot,
   loadSessionEntry,
   markSessionAbortTarget,
   patchSessionEntry,
@@ -256,6 +258,94 @@ describe("session accessor file-backed seam", () => {
     });
     expect(loadSessionEntry(scope)).toBeUndefined();
     expect(loadSessionStore(storePath, { skipCache: true })[scope.sessionKey]).toBeUndefined();
+  });
+
+  it("commits reply session initialization with a guarded snapshot", async () => {
+    const sessionKey = "agent:main:main";
+    const previousTranscript = path.join(tempDir, "previous.jsonl");
+    fs.writeFileSync(
+      previousTranscript,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "previous-session",
+        timestamp: new Date().toISOString(),
+      })}\n`,
+      "utf8",
+    );
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionFile: previousTranscript,
+        sessionId: "previous-session",
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      sessionEntry: {
+        sessionId: "next-session",
+        updatedAt: 20,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(path.basename(committed.sessionEntry.sessionFile ?? "")).toBe("next-session.jsonl");
+    expect(committed.sessionStoreView[sessionKey]).toMatchObject({
+      sessionId: "next-session",
+      sessionFile: committed.sessionEntry.sessionFile,
+    });
+    expect(committed.previousSessionTranscript.transcriptArchived).toBe(true);
+    expect(fs.existsSync(previousTranscript)).toBe(false);
+  });
+
+  it("rejects stale reply session initialization snapshots without writing", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "first-session",
+        updatedAt: 10,
+      },
+    );
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "second-session",
+        updatedAt: 20,
+      },
+    );
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      sessionEntry: {
+        sessionId: "stale-session",
+        updatedAt: 30,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed).toMatchObject({
+      ok: false,
+      reason: "stale-snapshot",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "second-session",
+    });
   });
 
   it("can borrow cached entry objects for read-only hot paths", async () => {
