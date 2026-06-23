@@ -446,6 +446,46 @@ describe("abort detection", () => {
     expectSessionLaneCleared(sessionKey);
   });
 
+  it("fast-abort still stops active runs when abort metadata persistence fails", async () => {
+    const sessionKey = "telegram:persistence-failure";
+    const sessionId = "session-persistence-failure";
+    const activeSessionId = "active-persistence-failure";
+    const { root, cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: sessionId },
+    });
+    runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(activeSessionId);
+    abortTesting.setDepsForTests({
+      getAcpSessionManager: (() =>
+        ({
+          resolveSession: acpManagerMocks.resolveSession,
+          cancelSession: acpManagerMocks.cancelSession,
+        }) as never) as never,
+      abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
+      resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
+      markSessionAbortTarget: vi.fn(async () => {
+        throw new Error("simulated persistence failure");
+      }),
+      getLatestSubagentRunByChildSessionKey:
+        subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
+      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+      markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+    });
+    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey,
+      from: "telegram:123",
+      to: "telegram:123",
+    });
+
+    expect(result.handled).toBe(true);
+    expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(activeSessionId);
+    expect(getFollowupQueueDepth(sessionKey)).toBe(0);
+    expectSessionLaneCleared(sessionKey);
+    expect(getAbortMemory(sessionKey)).toBe(true);
+  });
+
   it("plain-language stop on ACP-bound session triggers ACP cancel", async () => {
     const sessionKey = "agent:codex:acp:test-1";
     const sessionId = "session-123";

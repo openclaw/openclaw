@@ -24,6 +24,7 @@ import {
   loadSessionEntry,
   markSessionAbortTarget,
   type SessionAbortTargetContext,
+  type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -64,6 +65,7 @@ const defaultAbortDeps = {
   getAcpSessionManager,
   abortEmbeddedAgentRun,
   resolveActiveEmbeddedRunSessionId,
+  markSessionAbortTarget,
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
   markSubagentRunTerminated,
@@ -81,6 +83,8 @@ export const testing = {
       deps?.abortEmbeddedAgentRun ?? defaultAbortDeps.abortEmbeddedAgentRun;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       deps?.resolveActiveEmbeddedRunSessionId ?? defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
+    abortDeps.markSessionAbortTarget =
+      deps?.markSessionAbortTarget ?? defaultAbortDeps.markSessionAbortTarget;
     abortDeps.getLatestSubagentRunByChildSessionKey =
       deps?.getLatestSubagentRunByChildSessionKey ??
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
@@ -94,6 +98,7 @@ export const testing = {
     abortDeps.abortEmbeddedAgentRun = defaultAbortDeps.abortEmbeddedAgentRun;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
+    abortDeps.markSessionAbortTarget = defaultAbortDeps.markSessionAbortTarget;
     abortDeps.getLatestSubagentRunByChildSessionKey =
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
     abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
@@ -327,14 +332,21 @@ export async function tryFastAbortFromMessage(params: {
       })
         ? resolveAbortCutoffFromContext(ctx)
         : undefined;
-    const persistedAbortTarget = await markSessionAbortTarget({
-      scope: {
-        agentId,
-        sessionKey: targetKey,
-        storePath,
-      },
-      resolveAbortCutoff: abortCutoffForTarget,
-    });
+    let persistedAbortTarget: SessionAbortTargetResult | null = null;
+    try {
+      persistedAbortTarget = await abortDeps.markSessionAbortTarget({
+        scope: {
+          agentId,
+          sessionKey: targetKey,
+          storePath,
+        },
+        resolveAbortCutoff: abortCutoffForTarget,
+      });
+    } catch (error) {
+      logVerbose(
+        `abort: failed to persist abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
+      );
+    }
     const resolvedTargetKey = persistedAbortTarget?.sessionKey ?? targetKey;
     const conversationBoundAcpTargetKey = commandSessionKey
       ? resolveBoundAcpAbortTargetSessionKey({
