@@ -36,6 +36,8 @@ export type EnvHttpProxyAgentProxyOptions = {
   httpProxy?: string;
   /** Proxy URL used for HTTPS requests. */
   httpsProxy?: string;
+  /** Overrides the value of the NO_PROXY environment variable. */
+  noProxy?: string;
 };
 
 /**
@@ -88,9 +90,12 @@ export function resolveEnvHttpProxyAgentOptions(
   const allProxy = resolveEnvAllProxyUrl(env);
   const httpProxy = resolveEnvHttpProxyUrl("http", env) ?? allProxy;
   const httpsProxy = resolveEnvHttpProxyUrl("https", env) ?? httpProxy;
+  const noProxy =
+    normalizeProxyEnvValue(env.no_proxy) ?? normalizeProxyEnvValue(env.NO_PROXY) ?? undefined;
   const options: EnvHttpProxyAgentProxyOptions = {
     ...(httpProxy ? { httpProxy } : {}),
     ...(httpsProxy ? { httpsProxy } : {}),
+    ...(noProxy ? { noProxy } : {}),
   };
   return options.httpProxy || options.httpsProxy ? options : undefined;
 }
