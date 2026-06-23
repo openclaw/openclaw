@@ -369,7 +369,7 @@ describe("qa suite runtime launcher", () => {
     const runPromise = runQaSuite({
       repoRoot,
       outputDir: ".artifacts/qa-e2e/weighted",
-      concurrency: 2,
+      concurrency: 3,
       scenarioIds: [
         "channel-chat-baseline",
         "group-visible-reply-tool",
@@ -379,14 +379,70 @@ describe("qa suite runtime launcher", () => {
     await sharedStarted;
     await Promise.resolve();
 
-    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
-    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+    });
 
     releaseShared();
     await runPromise;
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for already-started partitions before rejecting a unified suite", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-reject-settle-");
+    let releaseTestFile!: () => void;
+    let markTestFileStarted!: () => void;
+    const testFileStarted = new Promise<void>((resolve) => {
+      markTestFileStarted = resolve;
+    });
+    const testFileBlocked = new Promise<void>((resolve) => {
+      releaseTestFile = resolve;
+    });
+    runQaFlowSuite.mockRejectedValueOnce(new Error("flow partition failed"));
+    runQaTestFileScenarios.mockImplementationOnce(
+      async (params: {
+        outputDir: string;
+        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
+      }) => {
+        markTestFileStarted();
+        await testFileBlocked;
+        const evidencePath = path.join(params.outputDir, "qa-evidence.json");
+        await writeEvidence(evidencePath);
+        return {
+          outputDir: params.outputDir,
+          executionKind: params.scenarios[0]?.execution.kind ?? "playwright",
+          evidencePath,
+          results: params.scenarios.map((scenarioItem) => ({
+            durationMs: 1,
+            logPath: path.join(params.outputDir, `${scenarioItem.id}.log`),
+            scenario: scenarioItem,
+            status: "pass",
+          })),
+        };
+      },
+    );
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/reject-settle",
+      concurrency: 2,
+      scenarioIds: ["channel-chat-baseline", "control-ui-chat-flow-playwright"],
+    });
+    let rejected = false;
+    void runPromise.catch(() => {
+      rejected = true;
+    });
+    await testFileStarted;
+    await Promise.resolve();
+
+    expect(rejected).toBe(false);
+
+    releaseTestFile();
+    await expect(runPromise).rejects.toThrow("flow partition failed");
+    expect(rejected).toBe(true);
   });
 
   it("shares ordinary flow scenarios and isolates flow scenarios with config patches", async () => {
@@ -417,7 +473,7 @@ describe("qa suite runtime launcher", () => {
       2,
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "isolated"),
-        concurrency: 3,
+        concurrency: 1,
         workerStartStaggerMs: 500,
         scenarioIds: ["group-visible-reply-tool"],
       }),
@@ -505,7 +561,7 @@ describe("qa suite runtime launcher", () => {
       2,
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "isolated"),
-        concurrency: 5,
+        concurrency: 3,
         workerStartStaggerMs: 500,
         scenarioIds: [
           "runtime-tool-image-generate",

@@ -223,10 +223,27 @@ async function runWeightedUnifiedPartitionTasks(
   const limit = Math.max(1, Math.floor(maxWeight));
   const results: QaUnifiedPartitionResult[] = [];
   let activeWeight = 0;
-  let completed = 0;
+  let settled = 0;
   let nextIndex = 0;
   return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
+    let firstError: Error | undefined;
+    let finished = false;
+    const finishIfSettled = () => {
+      if (finished || activeWeight > 0) {
+        return;
+      }
+      finished = true;
+      if (firstError) {
+        reject(firstError);
+        return;
+      }
+      resolve(results);
+    };
     const launch = () => {
+      if (firstError) {
+        finishIfSettled();
+        return;
+      }
       while (nextIndex < tasks.length) {
         const task = tasks[nextIndex];
         if (!task) {
@@ -243,17 +260,23 @@ async function runWeightedUnifiedPartitionTasks(
           (result) => {
             results[index] = result;
             activeWeight -= taskWeight;
-            completed += 1;
-            if (completed === tasks.length) {
-              resolve(results);
+            settled += 1;
+            if (settled === tasks.length) {
+              finishIfSettled();
               return;
             }
             launch();
           },
           (error: unknown) => {
-            reject(error instanceof Error ? error : new Error(String(error)));
+            firstError = error instanceof Error ? error : new Error(String(error));
+            activeWeight -= taskWeight;
+            settled += 1;
+            finishIfSettled();
           },
         );
+      }
+      if (settled === tasks.length) {
+        finishIfSettled();
       }
     };
     launch();
@@ -425,7 +448,11 @@ async function runUnifiedQaSuite(params: {
       {
         kind: "isolated",
         scenarios: isolatedFlowScenarios,
-        concurrency: Math.min(concurrency, MAX_ISOLATED_FLOW_CONCURRENCY),
+        concurrency: Math.min(
+          concurrency,
+          MAX_ISOLATED_FLOW_CONCURRENCY,
+          isolatedFlowScenarios.length,
+        ),
       },
     ].filter((partition) => partition.scenarios.length > 0);
     const runFlowSuite = await loadQaFlowSuiteRuntime();
