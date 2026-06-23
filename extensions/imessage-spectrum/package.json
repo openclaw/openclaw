@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/imessage-spectrum",
-  "version": "2026.6.8",
+  "version": "2026.6.10-beta.2",
   "private": true,
   "description": "Cross-platform OpenClaw iMessage channel using Spectrum by Photon",
   "type": "module",
@@ -18,6 +18,8 @@
       "label": "iMessage (Spectrum)",
       "selectionLabel": "iMessage (Spectrum)",
       "detailLabel": "iMessage (Spectrum)",
+      "docsPath": "/channels/imessage-spectrum",
+      "docsLabel": "imessage-spectrum",
       "blurb": "Cloud iMessage for Mac, Linux, Windows, WSL, servers, and containers through Spectrum by Photon.",
       "systemImage": "message.fill",
       "cliAddOptions": [
@@ -40,10 +42,10 @@
       ]
     },
     "compat": {
-      "pluginApi": ">=2026.6.8"
+      "pluginApi": ">=2026.6.10-beta.2"
     },
     "build": {
-      "openclawVersion": "2026.6.8"
+      "openclawVersion": "2026.6.10-beta.2"
     }
   }
 }

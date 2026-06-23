@@ -68,6 +68,11 @@
       - any-glob-to-any-file:
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
+"channel: imessage-spectrum":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/imessage-spectrum/**"
+          - "docs/channels/imessage-spectrum.md"
 "channel: line":
   - changed-files:
       - any-glob-to-any-file:

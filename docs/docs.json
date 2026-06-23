@@ -1116,6 +1116,7 @@
                   "channels/msteams",
                   "channels/googlechat",
                   "channels/imessage",
+                  "channels/imessage-spectrum",
                   "channels/imessage-from-bluebubbles",
                   "channels/matrix",
                   "channels/matrix-migration",

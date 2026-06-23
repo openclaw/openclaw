@@ -444,6 +444,7 @@ export function collectDeprecatedInternalConfigApiViolations({
 const CHANNEL_EXTENSION_IDS = new Set([
   "discord",
   "imessage",
+  "imessage-spectrum",
   "irc",
   "line",
   "matrix",
