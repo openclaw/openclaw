@@ -12,6 +12,8 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readSessionMessagesAsync } from "../gateway/session-transcript-readers.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -29,6 +31,13 @@ export type SubagentSessionCompletion = {
   outcome: SubagentRunOutcome;
   reason: SubagentLifecycleEndedReason;
 };
+
+/** Completion proven by the current run's private transcript terminal turn. */
+export type SubagentTranscriptCompletion = SubagentSessionCompletion & {
+  resultText?: string;
+};
+
+const SUCCESSFUL_TERMINAL_STOP_REASONS = new Set(["stop", "end_turn"]);
 
 function finiteTimestamp(value: number | undefined): number | undefined {
   return asFiniteNumber(value);
@@ -72,6 +81,115 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
     }
   }
   return undefined;
+}
+
+function coerceTimestamp(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function isAssistantMessage(message: unknown): message is Record<string, unknown> {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    !Array.isArray(message) &&
+    (message as { role?: unknown }).role === "assistant"
+  );
+}
+
+function readAssistantText(message: Record<string, unknown>): string | undefined {
+  const text = extractTextFromChatContent(message.content, {
+    joinWith: "\n",
+    normalizeText: (value) => value.trim(),
+  })?.trim();
+  return text || undefined;
+}
+
+function isFreshAssistantTurn(params: {
+  message: Record<string, unknown>;
+  notBeforeMs?: number;
+}): boolean {
+  if (params.notBeforeMs === undefined) {
+    return true;
+  }
+  const timestamp = coerceTimestamp(params.message.timestamp);
+  return timestamp !== undefined && timestamp >= params.notBeforeMs;
+}
+
+function latestCurrentRunAssistantTurn(
+  messages: unknown[],
+  notBeforeMs: number | undefined,
+): Record<string, unknown> | undefined {
+  let latest: Record<string, unknown> | undefined;
+  for (const message of messages) {
+    if (!isAssistantMessage(message)) {
+      continue;
+    }
+    if (!isFreshAssistantTurn({ message, notBeforeMs })) {
+      continue;
+    }
+    latest = message;
+  }
+  return latest;
+}
+
+/**
+ * Resolve a completed child run from the private transcript owned by the
+ * current registry row. This intentionally ignores chat.history/display output:
+ * recovery is accepted only when the current run's latest assistant turn has an
+ * explicit successful terminal stop reason.
+ */
+export async function resolveCompletionFromCurrentRunTranscript(params: {
+  childSessionKey: string;
+  transcriptFile?: string;
+  fallbackEndedAt: number;
+  notBeforeMs?: number;
+  startedAt?: number;
+}): Promise<SubagentTranscriptCompletion | null> {
+  const transcriptFile = params.transcriptFile?.trim();
+  if (!transcriptFile) {
+    return null;
+  }
+  try {
+    const messages = await readSessionMessagesAsync(
+      {
+        sessionFile: transcriptFile,
+        sessionId: params.childSessionKey,
+      },
+      {
+        mode: "recent",
+        maxMessages: 100,
+        maxBytes: 1024 * 1024,
+      },
+    );
+    const latest = latestCurrentRunAssistantTurn(messages, params.notBeforeMs);
+    if (!latest) {
+      return null;
+    }
+    const stopReason = typeof latest.stopReason === "string" ? latest.stopReason.trim() : undefined;
+    if (!stopReason || !SUCCESSFUL_TERMINAL_STOP_REASONS.has(stopReason)) {
+      return null;
+    }
+    const endedAt = coerceTimestamp(latest.timestamp) ?? params.fallbackEndedAt;
+    const resultText = readAssistantText(latest);
+    return {
+      ...(typeof params.startedAt === "number" && Number.isFinite(params.startedAt)
+        ? { startedAt: params.startedAt }
+        : {}),
+      endedAt,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      ...(resultText ? { resultText } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Load a child session entry using the agent-specific session store path. */

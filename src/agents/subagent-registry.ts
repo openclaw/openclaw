@@ -47,6 +47,7 @@ import {
 import {
   ANNOUNCE_EXPIRY_MS,
   MAX_ANNOUNCE_RETRY_COUNT,
+  capFrozenResultText,
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
@@ -85,6 +86,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
+  resolveCompletionFromCurrentRunTranscript,
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
   type SubagentSessionStoreCache,
@@ -956,6 +958,38 @@ async function sweepSubagentRuns() {
 
           if (sessionEntry?.abortedLastRun === true) {
             scheduleSubagentOrphanRecovery({ delayMs: 1_000 });
+            continue;
+          }
+
+          const transcriptCompletion = await resolveCompletionFromCurrentRunTranscript({
+            childSessionKey: entry.childSessionKey,
+            transcriptFile: entry.execution?.transcriptFile,
+            fallbackEndedAt: now,
+            notBeforeMs: entry.startedAt ?? entry.createdAt,
+            startedAt: entry.startedAt,
+          });
+          if (transcriptCompletion) {
+            const completionState = ensureCompletionState(entry);
+            if (
+              transcriptCompletion.resultText !== undefined &&
+              completionState.resultText === undefined
+            ) {
+              completionState.resultText = capFrozenResultText(transcriptCompletion.resultText);
+              completionState.capturedAt = now;
+            }
+            await completeSubagentRunWithRecovery(
+              {
+                runId,
+                startedAt: transcriptCompletion.startedAt,
+                endedAt: transcriptCompletion.endedAt,
+                outcome: transcriptCompletion.outcome,
+                reason: transcriptCompletion.reason,
+                sendFarewell: true,
+                accountId: entry.requesterOrigin?.accountId,
+                triggerCleanup: true,
+              },
+              "sweeper-current-run-transcript-completion",
+            );
             continue;
           }
 

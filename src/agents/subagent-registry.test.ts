@@ -2399,6 +2399,108 @@ describe("subagent registry seam flow", () => {
     expect(run?.cleanupCompletedAt).toBeTypeOf("number");
   });
 
+  it("reconciles stale active runs from the current private terminal transcript", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    const startedAt = Date.parse("2026-03-24T11:58:00Z");
+    const endedAt = startedAt + 222;
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: startedAt,
+        status: "running",
+      },
+    });
+
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-private-transcript-"));
+    try {
+      const transcriptFile = path.join(tmpDir, "child-run.jsonl");
+      await fs.writeFile(
+        transcriptFile,
+        [
+          JSON.stringify({ type: "session", version: 1, id: "sess-child" }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: "stale copied result",
+              stopReason: "stop",
+              timestamp: startedAt - 1,
+            },
+          }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "private transcript result" }],
+              stopReason: "stop",
+              timestamp: endedAt,
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      mod.addSubagentRunForTests({
+        runId: "run-private-terminal",
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "settle from private transcript state",
+        cleanup: "keep",
+        expectsCompletionMessage: true,
+        createdAt: startedAt,
+        startedAt,
+        execution: {
+          status: "running",
+          startedAt,
+          transcriptFile,
+        },
+        completion: {
+          required: true,
+        },
+      });
+
+      vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
+      await mod.testing.sweepOnceForTests();
+
+      await waitForFast(() => {
+        const announceParams = findRecordCallArg(
+          mocks.runSubagentAnnounceFlow,
+          0,
+          "private transcript announce",
+          (record) => record.childRunId === "run-private-terminal",
+        );
+        expectRecordFields(
+          announceParams.outcome,
+          { status: "ok", endedAt },
+          "private transcript announce outcome",
+        );
+      });
+
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-private-terminal");
+      expect(run?.endedAt).toBe(endedAt);
+      expectRecordFields(
+        run?.outcome,
+        {
+          status: "ok",
+          startedAt,
+          endedAt,
+          elapsedMs: 222,
+        },
+        "private transcript run outcome",
+      );
+      expect(run?.completion?.resultText).toBe("private transcript result");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses session-store start time when sweeping stale explicit-timeout runs", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
