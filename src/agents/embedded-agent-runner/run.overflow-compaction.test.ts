@@ -847,7 +847,7 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       apiKey: "anthropic-token",
       profileId: "anthropic:default",
       source: "profile:anthropic:default",
-      mode: "oauth",
+      mode: "api-key",
     });
 
     try {
