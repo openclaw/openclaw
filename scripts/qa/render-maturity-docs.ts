@@ -394,6 +394,9 @@ function averageScores(
 
 function checkSetTitle(profile: string): string {
   const normalized = profile.trim();
+  if (normalized === "all") {
+    return "Full taxonomy validation";
+  }
   if (!normalized || normalized === "release") {
     return "Release validation";
   }
@@ -444,11 +447,19 @@ function readEvidenceSummaries(evidenceDir?: string): EvidenceSummary[] {
   });
 }
 
-function latestReleaseScorecard(evidenceSummaries: EvidenceSummary[]): EvidenceSummary | undefined {
-  return evidenceSummaries
-    .filter((item) => item.profile === "release" && item.scorecard)
-    .toSorted((left, right) => left.generatedAt.localeCompare(right.generatedAt))
-    .at(-1);
+function latestCoverageScorecard(
+  evidenceSummaries: EvidenceSummary[],
+): EvidenceSummary | undefined {
+  for (const profile of ["all", "release"]) {
+    const latest = evidenceSummaries
+      .filter((item) => item.profile === profile && item.scorecard)
+      .toSorted((left, right) => left.generatedAt.localeCompare(right.generatedAt))
+      .at(-1);
+    if (latest) {
+      return latest;
+    }
+  }
+  return undefined;
 }
 
 function deriveCoverageScores(
@@ -456,23 +467,23 @@ function deriveCoverageScores(
   evidenceSummaries: EvidenceSummary[],
 ): DerivedCoverageScores {
   const warnings: string[] = [];
-  const releaseSummary = latestReleaseScorecard(evidenceSummaries);
-  const releaseScorecardSummaries = evidenceSummaries.filter(
-    (item) => item.profile === "release" && item.scorecard,
-  );
-  if (!releaseSummary) {
+  const coverageSummary = latestCoverageScorecard(evidenceSummaries);
+  if (!coverageSummary) {
     throw new Error(
-      "maturity scorecard rendering requires release profile qa-evidence.json with a scorecard field; pass --evidence-dir with release QA evidence artifacts",
+      "maturity scorecard rendering requires all or release profile qa-evidence.json with a scorecard field; pass --evidence-dir with QA evidence artifacts",
     );
   }
-  if (releaseScorecardSummaries.length > 1) {
+  const selectedProfileScorecardSummaries = evidenceSummaries.filter(
+    (item) => item.profile === coverageSummary.profile && item.scorecard,
+  );
+  if (selectedProfileScorecardSummaries.length > 1) {
     warnings.push(
-      `multiple release profile evidence scorecards found; using latest from ${releaseSummary.path}`,
+      `multiple ${coverageSummary.profile} profile evidence scorecards found; using latest from ${coverageSummary.path}`,
     );
   }
 
   const categories = new Map<string, QaMaturityScoreObject>();
-  for (const report of releaseSummary.scorecard?.categoryReports ?? []) {
+  for (const report of coverageSummary.scorecard?.categoryReports ?? []) {
     categories.set(
       qaMaturityCoverageCategoryKey(report.surfaceId, report.name),
       qaMaturityScoreObjectForScore(Math.round(report.features.fulfillmentPercent)),
@@ -500,6 +511,11 @@ function deriveCoverageScores(
     (count, surface) => count + surface.categories.length,
     0,
   );
+  if (coverageSummary.profile === "all" && categories.size !== expectedCategoryCount) {
+    warnings.push(
+      `${coverageSummary.path}: all profile evidence covers ${categories.size} of ${expectedCategoryCount} active taxonomy categories`,
+    );
+  }
   const categoryScores = Array.from(categories.values());
   const surfaceScores = Array.from(surfaces.values());
   return {
@@ -521,10 +537,10 @@ function evidenceScorecardWarnings(
 ): string[] {
   return [
     ...evidenceSummaries
-      .filter((item) => item.profile === "release" && !item.scorecard)
+      .filter((item) => (item.profile === "all" || item.profile === "release") && !item.scorecard)
       .map(
         (item) =>
-          `${item.path}: release profile qa-evidence.json does not include a scorecard field; run pnpm openclaw qa run --qa-profile release to produce deterministic scorecard rows`,
+          `${item.path}: ${item.profile} profile qa-evidence.json does not include a scorecard field; run pnpm openclaw qa run --qa-profile ${item.profile} to produce deterministic scorecard rows`,
       ),
     ...coverage.warnings,
   ];
@@ -591,9 +607,9 @@ function renderEvidenceSection(
     return [];
   }
   const lines = [
-    "## Release check summary",
+    "## QA evidence summary",
     "",
-    "The checks below show which scorecard areas were exercised during release validation.",
+    "The checks below show which scorecard areas were exercised by QA profile evidence.",
     "",
   ];
 
@@ -676,7 +692,7 @@ function renderMaturityScorecard({
       ],
     ]),
     "",
-    "- Coverage is derived from release validation results.",
+    "- Coverage is derived from QA profile evidence.",
     "- Quality measures reliability and operational confidence.",
     "- Completeness measures how much of the expected user workflow is available.",
     "",

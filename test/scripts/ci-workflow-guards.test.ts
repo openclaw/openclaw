@@ -601,7 +601,7 @@ describe("ci workflow guards", () => {
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({
       ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      qa_profile: "release",
+      qa_profile: "all",
       fail_on_qa_failure: false,
     });
 
