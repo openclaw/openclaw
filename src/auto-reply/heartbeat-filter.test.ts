@@ -124,6 +124,43 @@ describe("isHeartbeatOkResponse", () => {
     expect(isHeartbeatOkResponse(toolCallOnlyMessage)).toBe(false);
   });
 
+  it("matches HEARTBEAT_OK when message contains reasoning/thinking blocks", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Checking heartbeat status..." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "thinking", text: "No tasks to report." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects long responses with reasoning blocks that exceed ackMaxChars", () => {
+    expect(
+      isHeartbeatOkResponse(
+        {
+          role: "assistant",
+          content: [
+            { type: "reasoning", text: "Checking tasks..." },
+            { type: "text", text: "You have 200 unread emails. HEARTBEAT_OK. Additionally there are calendar alerts pending." },
+          ],
+        },
+        300,
+      ),
+    ).toBe(false);
+  });
+
   it("respects ackMaxChars overrides", () => {
     expect(
       isHeartbeatOkResponse(
