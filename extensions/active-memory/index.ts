@@ -153,12 +153,16 @@ const TIMEOUT_BOILERPLATE_PATTERNS = [
 const CHITCHAT_PATTERNS = [
   /^(?:hi|hello|hey|您好|你好)[!!.\s].*(?:help|帮助|assist)/i,
   /(?:message|消息).*(?:cut off|didn'?t come through|truncated|没有|不完整|未发送)/i,
-  /(?:please|请).*(?:provide|tell|clarify|elaborate|说明|提供|告诉)/i,
+  /(?:please|请).*(?:provide|tell|clarify|elaborate|说明|提供|告诉|联系|contact)/i,
   /(?:what can i|有什么可以|我能.*什么).*(?:help|assist|帮)/i,
   /(?:current|当前).*(?:date|time|日期|时间)/i,
   /(?:looks? like|看起来|似乎|好像).*(?:didn'?t|没有|没说|may not)/i,
   /(?:how can i|需要什么|需要我)/i,
   /(?:当前模型|current model).*(?:如果|if).*(?:帮助|help|assist|告诉|tell)/i,
+  /(?:didn'?t|没有).*(?:finish|完成|说完).*(?:message|消息|话)/i,
+  /(?:如果|if).*(?:需要|need).*(?:帮助|assist|help|告诉|tell)/i,
+  /(?:请|please).*(?:随时|feel free).*(?:告诉|tell|联系|contact)/i,
+  /(?:could you|can you).*(?:repeat|重[新再说])/i,
 ];
 
 const RECALLED_CONTEXT_LINE_PATTERNS = [
