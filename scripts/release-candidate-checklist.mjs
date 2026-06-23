@@ -222,11 +222,14 @@ function githubApiTimeoutMs() {
   if (!raw) {
     return DEFAULT_GITHUB_API_TIMEOUT_MS;
   }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error("OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive number");
+  if (!/^[1-9]\d*$/u.test(raw)) {
+    throw new Error("OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive integer");
   }
-  return Math.trunc(value);
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value)) {
+    throw new Error("OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive integer");
+  }
+  return value;
 }
 
 function githubApiTimedOut(error) {

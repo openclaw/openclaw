@@ -1,3 +1,4 @@
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import {
   clearLiveCatalogCacheForTests,
@@ -44,6 +45,15 @@ export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams
   cacheKeyParts?: readonly unknown[];
   shouldCacheRows?: (rows: readonly unknown[]) => boolean;
 };
+
+// Live model catalogs are fetched at runtime from provider-controlled endpoints,
+// so the success body is untrusted just like the error body. A faulty or hostile
+// provider can stream an unbounded JSON document; reading it without a ceiling
+// lets a single discovery call exhaust process memory. The cap is sized well
+// above the largest known catalog (OpenRouter's live catalog is already >100KB
+// and grows) while still bounding memory, matching the existing bounded reads
+// for provider error bodies.
+const LIVE_MODEL_CATALOG_BODY_MAX_BYTES = 4 * 1024 * 1024;
 
 export class LiveModelCatalogHttpError extends Error {
   readonly status: number;
@@ -133,17 +143,29 @@ async function cancelUnreadResponseBody(response: Response): Promise<void> {
   }
 }
 
+async function readLiveModelCatalogJson(response: Response, timeoutMs: number): Promise<unknown> {
+  const buffer = await readResponseWithLimit(response, LIVE_MODEL_CATALOG_BODY_MAX_BYTES, {
+    chunkTimeoutMs: timeoutMs,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`Live model catalog response exceeded ${maxBytes} bytes (${size} bytes received)`),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Live model catalog response stalled: no data received for ${chunkTimeoutMs}ms`),
+  });
+  return JSON.parse(new TextDecoder().decode(buffer));
+}
+
 export async function fetchLiveProviderModelRows(
   params: FetchLiveProviderModelRowsParams,
 ): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
+  const timeoutMs = params.timeoutMs ?? 5_000;
   const { response, release } = await fetchGuard({
     url: params.endpoint,
     init: {
       headers: buildHeaders(params),
     },
     signal: params.signal,
-    timeoutMs: params.timeoutMs ?? 5_000,
+    timeoutMs,
     policy: params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
     ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
     ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
@@ -154,7 +176,9 @@ export async function fetchLiveProviderModelRows(
       await cancelUnreadResponseBody(response);
       throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
-    return (params.readRows ?? readDefaultLiveModelCatalogRows)(await response.json());
+    return (params.readRows ?? readDefaultLiveModelCatalogRows)(
+      await readLiveModelCatalogJson(response, timeoutMs),
+    );
   } finally {
     await release();
   }

@@ -1,5 +1,6 @@
 {
   "id": "ollama",
+  "icon": "https://cdn.simpleicons.org/ollama/111111",
   "activation": {
     "onStartup": false
   },

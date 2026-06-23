@@ -1,5 +1,6 @@
 {
   "id": "qwen",
+  "icon": "https://cdn.simpleicons.org/qwen/111111",
   "activation": {
     "onStartup": false
   },

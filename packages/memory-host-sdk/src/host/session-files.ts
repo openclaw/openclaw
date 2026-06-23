@@ -218,15 +218,20 @@ function resolveSessionStoreTranscriptPath(
   sessionsDir: string,
   entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
 ): string | null {
+  const resolved = resolveSessionStoreTranscriptResolvedPath(sessionsDir, entry);
+  return resolved ? normalizeComparablePath(resolved) : null;
+}
+
+function resolveSessionStoreTranscriptResolvedPath(
+  sessionsDir: string,
+  entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
+): string | null {
   if (typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0) {
     const sessionFile = entry.sessionFile.trim();
-    const resolved = path.isAbsolute(sessionFile)
-      ? sessionFile
-      : path.resolve(sessionsDir, sessionFile);
-    return normalizeComparablePath(resolved);
+    return path.isAbsolute(sessionFile) ? sessionFile : path.resolve(sessionsDir, sessionFile);
   }
   if (typeof entry?.sessionId === "string" && entry.sessionId.trim().length > 0) {
-    return normalizeComparablePath(path.join(sessionsDir, `${entry.sessionId.trim()}.jsonl`));
+    return path.join(sessionsDir, `${entry.sessionId.trim()}.jsonl`);
   }
   return null;
 }
@@ -431,7 +436,7 @@ export function resolveSessionFileForSyncTarget(
   let store: Record<string, SessionTranscriptStoreEntry> | null = null;
   if (sessionKey) {
     store = readSessionTranscriptClassificationStore(path.join(sessionsDir, "sessions.json"));
-    const persistedPath = resolveSessionStoreTranscriptPath(sessionsDir, store[sessionKey]);
+    const persistedPath = resolveSessionStoreTranscriptResolvedPath(sessionsDir, store[sessionKey]);
     const canonicalPath = resolveCanonicalSessionSyncFilePath(agentId, persistedPath);
     if (canonicalPath) {
       return {
@@ -442,7 +447,7 @@ export function resolveSessionFileForSyncTarget(
     }
   }
   store ??= readSessionTranscriptClassificationStore(path.join(sessionsDir, "sessions.json"));
-  const persistedPath = resolveSessionStoreTranscriptPath(
+  const persistedPath = resolveSessionStoreTranscriptResolvedPath(
     sessionsDir,
     findSessionTranscriptStoreEntryBySessionId(store, sessionId),
   );

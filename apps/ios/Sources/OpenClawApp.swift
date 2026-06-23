@@ -123,8 +123,28 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         let notificationCenter = UNUserNotificationCenter.current()
         notificationCenter.delegate = self
         ExecApprovalNotificationBridge.registerCategory(center: notificationCenter)
-        application.registerForRemoteNotifications()
+        Task { @MainActor in
+            await self.registerForRemoteNotificationsIfEnrollmentReady(application)
+        }
         return true
+    }
+
+    private func registerForRemoteNotificationsIfEnrollmentReady(_ application: UIApplication) async {
+        guard PushEnrollmentConsent.disclosureAccepted else { return }
+        guard await Self.isNotificationAuthorizationAllowed() else { return }
+        application.registerForRemoteNotifications()
+    }
+
+    private static func isNotificationAuthorizationAllowed() async -> Bool {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        switch settings.authorizationStatus {
+        case .authorized, .provisional, .ephemeral:
+            return true
+        case .denied, .notDetermined:
+            return false
+        @unknown default:
+            return false
+        }
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
@@ -632,6 +652,7 @@ struct OpenClawApp: App {
     var body: some Scene {
         WindowGroup {
             RootTabs()
+                .tint(OpenClawBrand.accent)
                 .preferredColorScheme(self.appearancePreference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
@@ -686,6 +707,7 @@ struct OpenClawApp: App {
             .flatMap(\.windows)
             .forEach { window in
                 window.overrideUserInterfaceStyle = style
+                window.tintColor = OpenClawBrand.uiAccent
             }
     }
 }

@@ -305,6 +305,7 @@ jobs:
                 shard_name: shard.shardName,
                 groups: shard.groups,
                 configs: shard.configs,
+                env: shard.env,
                 includePatterns: shard.includePatterns,
                 requires_dist: shard.requiresDist,
                 runner: shard.runner,
@@ -1176,7 +1177,9 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      max-parallel: 12
+      # The canonical main path waits for the admission debounce above, so
+      # modestly widen this large matrix without recreating registration bursts.
+      max-parallel: 16
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout
@@ -1237,6 +1240,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_NODE_TEST_GROUPS_JSON: ${{ toJson(matrix.groups || null) }}
           OPENCLAW_NODE_TEST_CONFIGS_JSON: ${{ toJson(matrix.configs) }}
+          OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
           OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
@@ -1255,6 +1259,7 @@ jobs:
             ? groups
             : [{
                 configs: JSON.parse(process.env.OPENCLAW_NODE_TEST_CONFIGS_JSON ?? "[]"),
+                env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON ?? "null"),
                 includePatterns: JSON.parse(
                   process.env.OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON ?? "null",
                 ),
@@ -1270,6 +1275,13 @@ jobs:
               ...process.env,
               ...(plan.shard_name ? { OPENCLAW_VITEST_SHARD_NAME: plan.shard_name } : {}),
             };
+            if (plan.env && typeof plan.env === "object" && !Array.isArray(plan.env)) {
+              for (const [key, value] of Object.entries(plan.env)) {
+                if (typeof value === "string") {
+                  childEnv[key] = value;
+                }
+              }
+            }
             if (Array.isArray(plan.includePatterns) && plan.includePatterns.length > 0) {
               const includeFile = join(
                 process.env.RUNNER_TEMP ?? ".",
@@ -2223,7 +2235,7 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: ~/.android-sdk
-          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-37.0-build-tools-36.0.0
+          key: ${{ runner.os }}-android-sdk-v1-cmdline-14742923-platform-36-build-tools-36.0.0
           restore-keys: |
             ${{ runner.os }}-android-sdk-v1-
 
@@ -2253,7 +2265,7 @@ jobs:
           yes | sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
           sdkmanager --sdk_root="${ANDROID_SDK_ROOT}" --install \
             "platform-tools" \
-            "platforms;android-37.0" \
+            "platforms;android-36" \
             "build-tools;36.0.0"
 
       - name: Run Android ${{ matrix.task }}

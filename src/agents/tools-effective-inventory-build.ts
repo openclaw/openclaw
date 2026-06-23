@@ -15,7 +15,6 @@ import {
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "./tool-schema-projection.js";
-import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
 import {
   disambiguateEffectiveToolLabels,
   resolveEffectiveToolLabel,
@@ -215,5 +214,3 @@ export function buildRuntimeCompatibleToolInventory(params: {
     }),
   };
 }
-
-export { buildEffectiveToolInventoryGroups };
