@@ -69,6 +69,23 @@ async function writeSessionStore(
   await fs.writeFile(storePath, JSON.stringify(store, null, 2));
 }
 
+function readMainSessionEntry(raw: string): SessionEntry {
+  const parsed = JSON.parse(raw) as Record<string, SessionEntry>;
+  const entry = parsed["agent:main"];
+  if (!entry) {
+    throw new Error("expected agent:main session entry");
+  }
+  return entry;
+}
+
+function readMainSkillsSnapshot(raw: string): NonNullable<SessionEntry["skillsSnapshot"]> {
+  const snapshot = readMainSessionEntry(raw).skillsSnapshot;
+  if (!snapshot) {
+    throw new Error("expected agent:main skills snapshot");
+  }
+  return snapshot;
+}
+
 describe("doctor session snapshot stale runtime metadata", () => {
   let root = "";
   let bundledSkillsDir = "";
@@ -175,7 +192,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
     });
     expect(sessionSnapshotIssueToHealthFinding(issue)).toMatchObject({
       checkId: "core/doctor/session-snapshots",
-      severity: "warning",
+      severity: "info",
       path: storePath,
       target: stalePath,
       requirement: expect.stringContaining(bundledSkillsDir),
@@ -510,8 +527,9 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     });
 
     const raw = await fs.readFile(storePath, "utf-8");
-    expect(raw).not.toContain(stalePath);
-    expect(raw).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
+    const snapshot = readMainSkillsSnapshot(raw);
+    expect(snapshot.prompt).not.toContain(stalePath);
+    expect(snapshot.prompt).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] as [string, string];
     expect(message).toContain("Repaired");
@@ -589,9 +607,13 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
 
     const raw = await fs.readFile(storePath, "utf-8");
     const expectedBaseDir = path.dirname(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
-    expect(raw).toContain(path.join(bundledSkillsDir, "doctor", "SKILL.md"));
-    expect(raw).toContain(expectedBaseDir);
-    expect(raw).not.toContain(path.join(root, "old-runtime"));
+    const expectedPath = path.join(bundledSkillsDir, "doctor", "SKILL.md");
+    const snapshot = readMainSkillsSnapshot(raw);
+    const skill = snapshot.resolvedSkills?.[0];
+    expect(skill?.filePath).toBe(expectedPath);
+    expect(skill?.baseDir).toBe(expectedBaseDir);
+    expect(skill?.sourceInfo.path).toBe(expectedPath);
+    expect(skill?.sourceInfo.baseDir).toBe(expectedBaseDir);
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] as [string, string];
     expect(message).toContain("Repaired");
@@ -630,9 +652,12 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     });
 
     const raw = await fs.readFile(storePath, "utf-8");
-    expect(raw).toContain(currentPath);
-    expect(raw).toContain(path.dirname(currentPath));
-    expect(raw).not.toContain(path.join(root, "old-runtime"));
+    const snapshot = readMainSkillsSnapshot(raw);
+    const repairedSkill = snapshot.resolvedSkills?.[0];
+    expect(repairedSkill?.filePath).toBe(currentPath);
+    expect(repairedSkill?.baseDir).toBe(path.dirname(currentPath));
+    expect(repairedSkill?.sourceInfo.path).toBe(currentPath);
+    expect(repairedSkill?.sourceInfo.baseDir).toBe(path.dirname(currentPath));
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] as [string, string];
     expect(message).toContain("Repaired");
@@ -797,7 +822,8 @@ describe("doctor session snapshot repair (shouldRepair)", () => {
     expect(backupFiles.length).toBe(1);
 
     const backupContent = await fs.readFile(path.join(dir, backupFiles[0]), "utf-8");
-    expect(backupContent).toContain(stalePath);
+    const backupSnapshot = readMainSkillsSnapshot(backupContent);
+    expect(backupSnapshot.prompt).toContain(stalePath);
   });
 
   it("is idempotent — second repair finds nothing", async () => {

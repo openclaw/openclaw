@@ -338,13 +338,13 @@ export function sessionSnapshotIssueToHealthFinding(
 ): HealthFinding {
   return {
     checkId: SESSION_SNAPSHOTS_CHECK_ID,
-    severity: "warning",
-    message: `${issue.sessionKey} cached session metadata references an inactive runtime root.`,
+    severity: "info",
+    message: `${issue.sessionKey} cached session metadata references an inactive runtime root that can be cleaned up.`,
     path: issue.storePath,
     target: issue.cachedPath,
     requirement: `Current bundled skill path: ${issue.expectedPath}`,
     fixHint:
-      "Run `openclaw doctor --fix` to rewrite stale cached session metadata paths, or start a fresh session after confirming history can be retired.",
+      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite stale cached session metadata paths, or start a fresh session after confirming history can be retired.",
   };
 }
 

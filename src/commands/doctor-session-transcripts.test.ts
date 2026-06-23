@@ -178,7 +178,7 @@ describe("doctor session transcript repair", () => {
     expect(issue?.filePath).toBe(filePath);
     expect(sessionTranscriptIssueToHealthFinding(issue)).toMatchObject({
       checkId: "core/doctor/session-transcripts",
-      severity: "warning",
+      severity: "info",
       path: filePath,
       fixHint: expect.stringContaining("openclaw doctor --fix"),
     });

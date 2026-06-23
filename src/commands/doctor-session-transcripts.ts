@@ -411,10 +411,11 @@ export function sessionTranscriptIssueToHealthFinding(
       : "";
   return {
     checkId: SESSION_TRANSCRIPTS_CHECK_ID,
-    severity: "warning",
-    message: `Session transcript contains legacy branch or provider metadata state.${metadata}`,
+    severity: "info",
+    message: `Session transcript has legacy branch or provider metadata that can be cleaned up.${metadata}`,
     path: issue.filePath,
-    fixHint: "Run `openclaw doctor --fix` to rewrite affected transcripts to their active branch.",
+    fixHint:
+      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite affected transcripts to their active branch.",
   };
 }
 
