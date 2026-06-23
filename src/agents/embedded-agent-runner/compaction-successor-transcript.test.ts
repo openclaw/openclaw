@@ -186,6 +186,49 @@ describe("rotateTranscriptAfterCompaction", () => {
     ]);
   });
 
+  it("keeps the paired tool result without replaying summarized custom context", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+    manager.appendMessage({ role: "user", content: "read the file", timestamp: 1 });
+    manager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        timestamp: 2,
+      }),
+    );
+    manager.appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text: "file contents" }],
+      isError: false,
+      timestamp: 3,
+    });
+    manager.appendCustomMessageEntry("test", "summarized custom context", false);
+    const firstKeptId = manager.appendMessage({
+      role: "user",
+      content: "continue",
+      timestamp: 4,
+    });
+    manager.appendMessage(makeAssistant("done", 5));
+    manager.appendCompaction("Summary of the read.", firstKeptId, 5000);
+    manager.appendMessage({ role: "user", content: "next", timestamp: 6 });
+
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile: requireString(manager.getSessionFile(), "session file"),
+    });
+    const successor = SessionManager.open(requireString(result.sessionFile, "successor file"));
+    const messages = successor.buildSessionContext().messages;
+    const assistant = messages.find((message) => message.role === "assistant");
+    const toolResult = messages.find((message) => message.role === "toolResult");
+
+    expect(assistant?.role).toBe("assistant");
+    expect(toolResult?.role).toBe("toolResult");
+    expect(JSON.stringify(messages)).toContain("file contents");
+    expect(JSON.stringify(messages)).not.toContain("summarized custom context");
+  });
+
   it("creates a compacted successor transcript and leaves the archive untouched", async () => {
     const dir = await createTmpDir();
     const { manager, sessionFile, firstKeptId, oldUserId } = createCompactedSession(dir);
