@@ -744,7 +744,7 @@ describe("discordOutbound", () => {
       discordOutbound.chunker?.("line one\nline two\nline three", 2000, {
         formatting: { maxLinesPerMessage: 1 },
       }),
-    ).toEqual(["line one", "line two", "line three"]);
+    ).toEqual(["line one", "\nline two", "\nline three"]);
   });
 
   it("renders channelData Discord components on payload sends", async () => {

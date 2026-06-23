@@ -97,8 +97,8 @@ describe("durable Discord delivery", () => {
     expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(3);
     expect(hoisted.sendMessageDiscordMock.mock.calls.map((call) => call[1])).toEqual([
       "first chunk",
-      "second chunk",
-      "second chunk",
+      "\nsecond chunk",
+      "\nsecond chunk",
     ]);
   });
 });

@@ -201,7 +201,36 @@ describe("chunkDiscordText", () => {
     expect(chunks.length).toBeGreaterThan(1);
 
     const second = chunks[1];
-    expect(second.startsWith("_")).toBe(true);
+    // The chunk may start with a preserved boundary newline before the reopened
+    // italic marker; the marker must still precede the indented content.
+    expect(second.trimStart().startsWith("_")).toBe(true);
     expect(second).toContain("  11. indented line");
+  });
+
+  it("preserves content after an inline error line across chunk boundaries", () => {
+    const text = [
+      "Here is a summary of findings:",
+      "• Item A is healthy",
+      "• Item B is healthy",
+      "• Item C is healthy",
+      "• Item D is healthy",
+      "• Item E is healthy",
+      "• Item F is healthy",
+      "• Item G is healthy",
+      "• Item H is healthy",
+      "",
+      "⚠️ # Error: connection timed out. fetch failed: SocketError: other side closed",
+      "",
+      "Recommendation: try restarting the service and verify the config.",
+      "Next steps:",
+      "1. Check logs",
+      "2. Retry",
+    ].join("\n");
+
+    const chunks = chunkDiscordText(text, { maxChars: 2000, maxLines: 5 });
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.some((chunk) => chunk.includes("⚠️ # Error:"))).toBe(true);
+    expect(chunks.some((chunk) => chunk.includes("Recommendation:"))).toBe(true);
   });
 });

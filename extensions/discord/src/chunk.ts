@@ -175,6 +175,14 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
   let current = "";
   let currentLines = 0;
   let openFence: OpenFence | null = null;
+  // When we flush at a line boundary, the newline that separates the flushed chunk
+  // from the next line is lost because `current` is reset. Track it so the next line
+  // starts with its leading newline when chunks are joined with "".
+  let needsLeadingNewline = false;
+  // A chunk that starts with a leading separator newline (no reopened fence) carries
+  // an extra blank line in the string. Reduce its per-chunk limits by one so the
+  // message still stays within the configured bounds.
+  let chunkLeadingBlankLine = false;
 
   const flush = () => {
     if (!current) {
@@ -186,6 +194,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     }
     current = "";
     currentLines = 0;
+    chunkLeadingBlankLine = false;
     if (openFence) {
       current = openFence.openLine;
       currentLines = 1;
@@ -226,16 +235,38 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     for (let segIndex = 0; segIndex < segments.length; segIndex++) {
       const segment = segments[segIndex];
       const isLineContinuation = segIndex > 0;
-      const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
+      const leadingNewline = !isLineContinuation && needsLeadingNewline;
+      if (needsLeadingNewline) {
+        needsLeadingNewline = false;
+      }
+
+      const delimiter = isLineContinuation
+        ? ""
+        : leadingNewline
+          ? "\n"
+          : current.length > 0
+            ? "\n"
+            : "";
       const addition = `${delimiter}${segment}`;
       const nextLen = current.length + addition.length;
       const nextLines = currentLines + (isLineContinuation ? 0 : 1);
 
-      const wouldExceedChars = nextLen > charLimit;
-      const wouldExceedLines = nextLines > lineLimit;
+      // A leading blank line at the start of a new chunk consumes one line/char budget.
+      const effectiveCharLimit = chunkLeadingBlankLine ? Math.max(1, charLimit - 1) : charLimit;
+      const effectiveLineLimit = chunkLeadingBlankLine ? Math.max(1, lineLimit - 1) : lineLimit;
+
+      const wouldExceedChars = nextLen > effectiveCharLimit;
+      const wouldExceedLines = nextLines > effectiveLineLimit;
 
       if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
         flush();
+        // The flushed chunk ended a line; the separator newline belongs to the next line.
+        if (!isLineContinuation) {
+          needsLeadingNewline = true;
+          // Only a plain chunk start (no reopened fence) turns that separator into a
+          // visible blank line that should count against the next chunk's limits.
+          chunkLeadingBlankLine = !openFence;
+        }
       }
 
       if (current.length > 0) {
@@ -244,7 +275,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
           currentLines += 1;
         }
       } else {
-        current = segment;
+        current = addition;
         currentLines = 1;
       }
     }
