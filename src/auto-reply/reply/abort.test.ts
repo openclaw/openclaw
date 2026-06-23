@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionAbortTargetResult } from "../../config/sessions/session-accessor.js";
 import {
   testing as abortTesting,
   getAbortMemory,
@@ -613,7 +614,7 @@ describe("abort detection", () => {
         resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
         markSessionAbortTarget: vi.fn(
           () =>
-            new Promise((resolvePersistence) => {
+            new Promise<SessionAbortTargetResult | null>((resolvePersistence) => {
               resolveStarted();
               finishPersistence = () => {
                 resolvePersistence({
