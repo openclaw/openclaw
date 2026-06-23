@@ -61,6 +61,8 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
 ]);
 const MACOS_APP_CI_PATH_RE =
   /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/plistbuddy\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
+const K8S_MANIFEST_DRIFT_GUARD_PATH_RE =
+  /^scripts\/k8s\/(?:generate-manifest\.mjs|manifest\.yaml|manifests\/)/u;
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
 
@@ -213,6 +215,12 @@ export function shouldRunTestTempCreationReport(paths) {
   return paths.some((changedPath) => isChangedLaneTestPath(changedPath));
 }
 
+function shouldRunK8sManifestDriftGuard(paths) {
+  return paths.some((changedPath) =>
+    K8S_MANIFEST_DRIFT_GUARD_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
 export function createShrinkwrapGuardCommand(paths) {
   if (!shouldRunShrinkwrapGuard(paths)) {
     return null;
@@ -329,6 +337,9 @@ export function createChangedCheckPlan(result, options = {}) {
     );
   }
   add("package patch guard", ["deps:patches:check"]);
+  if (shouldRunK8sManifestDriftGuard(result.paths)) {
+    add("Kubernetes manifest drift", ["k8s:manifest:check"]);
+  }
 
   if (result.docsOnly) {
     return {

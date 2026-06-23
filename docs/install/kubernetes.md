@@ -1,5 +1,5 @@
 ---
-summary: "Deploy OpenClaw Gateway to a Kubernetes cluster with Kustomize"
+summary: "Deploy OpenClaw Gateway to a Kubernetes cluster with kubectl"
 read_when:
   - You want to run OpenClaw on a Kubernetes cluster
   - You want to test OpenClaw in a Kubernetes environment
@@ -8,14 +8,15 @@ title: "Kubernetes"
 
 A minimal starting point for running OpenClaw on Kubernetes — not a production-ready deployment. It covers the core resources and is meant to be adapted to your environment.
 
-## Why not Helm?
+## Kubernetes manifests
 
-OpenClaw is a single container with some config files. The interesting customization is in agent content (markdown files, skills, config overrides), not infrastructure templating. Kustomize handles overlays without the overhead of a Helm chart. If your deployment grows more complex, a Helm chart can be layered on top of these manifests.
+The manifests in this guide are the maintained starting point for running OpenClaw on Kubernetes. The deploy script applies the manifests under `scripts/k8s/manifests/`, and `scripts/k8s/manifest.yaml` is generated from that directory for direct single-file `kubectl apply` workflows.
 
 ## What you need
 
 - A running Kubernetes cluster (AKS, EKS, GKE, k3s, kind, OpenShift, etc.)
 - `kubectl` connected to your cluster
+- `openssl` to generate the gateway token
 - An API key for at least one model provider
 
 ## Quick start
@@ -73,6 +74,31 @@ export <PROVIDER>_API_KEY="..."
 
 Use `--show-token` with either command if you want the token printed to stdout for local testing.
 
+**Option C** — create the Secret yourself and apply the single-file manifest from GitHub:
+
+```bash
+# This example uses Anthropic. Replace ANTHROPIC_API_KEY
+# with another supported provider key if needed.
+export ANTHROPIC_API_KEY="..."
+export OPENCLAW_GATEWAY_TOKEN="$(openssl rand -hex 32)"
+SECRET_DIR="$(mktemp -d)"
+trap 'rm -rf "$SECRET_DIR"' EXIT
+
+printf '%s' "$OPENCLAW_GATEWAY_TOKEN" > "$SECRET_DIR/OPENCLAW_GATEWAY_TOKEN"
+printf '%s' "$ANTHROPIC_API_KEY" > "$SECRET_DIR/ANTHROPIC_API_KEY"
+chmod 600 "$SECRET_DIR/OPENCLAW_GATEWAY_TOKEN" "$SECRET_DIR/ANTHROPIC_API_KEY"
+
+kubectl create namespace openclaw --dry-run=client -o yaml | kubectl apply -f -
+kubectl create secret generic openclaw-secrets \
+  -n openclaw \
+  --from-file=OPENCLAW_GATEWAY_TOKEN="$SECRET_DIR/OPENCLAW_GATEWAY_TOKEN" \
+  --from-file=ANTHROPIC_API_KEY="$SECRET_DIR/ANTHROPIC_API_KEY" \
+  --dry-run=client \
+  -o yaml | kubectl apply --server-side --field-manager=openclaw -f -
+kubectl apply -n openclaw \
+  -f https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/k8s/manifest.yaml
+```
+
 ### 2) Access the gateway
 
 ```bash
@@ -82,16 +108,20 @@ open http://localhost:18789
 
 ## What gets deployed
 
-```
-Namespace: openclaw (configurable via OPENCLAW_NAMESPACE)
-├── Deployment/openclaw        # Single pod, init container + gateway
-├── Service/openclaw           # ClusterIP on port 18789
-├── PersistentVolumeClaim      # 10Gi for agent state and config
-├── ConfigMap/openclaw-config  # openclaw.json + AGENTS.md
-└── Secret/openclaw-secrets    # Gateway token + API keys
-```
+The deploy script creates the namespace and Secret before applying the checked-in manifests. The single-file manifest path expects you to create the namespace and Secret first; `scripts/k8s/manifest.yaml` then applies the PVC, ConfigMap, Deployment, and Service.
+
+| Resource                                  | Purpose                                                                                                                                                         |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Namespace/openclaw`                      | Default namespace, configurable with `OPENCLAW_NAMESPACE` when using `deploy.sh`.                                                                               |
+| `PersistentVolumeClaim/openclaw-home-pvc` | Requests 10Gi and is mounted at `/home/node/.openclaw`.                                                                                                         |
+| `ConfigMap/openclaw-config`               | Provides the default `openclaw.json` and `AGENTS.md`.                                                                                                           |
+| `Deployment/openclaw`                     | Runs the gateway pod. The init container copies ConfigMap files into `/home/node/.openclaw`, and the main container runs `node /app/dist/index.js gateway run`. |
+| `Service/openclaw`                        | Creates a ClusterIP Service on port `18789` for `kubectl port-forward`.                                                                                         |
+| `Secret/openclaw-secrets`                 | Stores the gateway token and provider API keys. It is created by `deploy.sh` or by the Option C secret command, not by `scripts/k8s/manifest.yaml`.             |
 
 ## Customization
+
+Edit the source manifests under `scripts/k8s/manifests/`. If you also use or review the single-file manifest, run `pnpm k8s:manifest:gen` after editing; `pnpm k8s:manifest:check` verifies that `scripts/k8s/manifest.yaml` is current.
 
 ### Agent instructions
 
@@ -179,14 +209,15 @@ This deletes the namespace and all resources in it, including the PVC.
 
 ```
 scripts/k8s/
-├── deploy.sh                   # Creates namespace + secret, deploys via kustomize
+├── deploy.sh                   # Creates namespace + secret, deploys the checked-in manifests
 ├── create-kind.sh              # Local Kind cluster (auto-detects docker/podman)
+├── manifest.yaml               # Generated single-file PVC, ConfigMap, Deployment, and Service
 └── manifests/
-    ├── kustomization.yaml      # Kustomize base
-    ├── configmap.yaml          # openclaw.json + AGENTS.md
-    ├── deployment.yaml         # Pod spec with security hardening
-    ├── pvc.yaml                # 10Gi persistent storage
-    └── service.yaml            # ClusterIP on 18789
+    ├── kustomization.yaml      # Local manifest set used by deploy.sh
+    ├── configmap.yaml          # Default openclaw.json + AGENTS.md
+    ├── deployment.yaml         # Gateway pod, init config copy, and health probes
+    ├── pvc.yaml                # 10Gi PVC mounted at /home/node/.openclaw
+    └── service.yaml            # ClusterIP Service on 18789
 ```
 
 ## Related
