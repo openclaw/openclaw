@@ -53,12 +53,12 @@ restore the full listing.
 
 Flags:
 
-| Flag                    | Purpose                                    |
-| ----------------------- | ------------------------------------------ |
-| `--board <id>`          | Limit results to one board namespace       |
-| `--status <status>`     | Limit results to one Workboard status      |
-| `--include-archived`    | Include archived cards in text output      |
-| `--json`                | Print the full card list as machine JSON   |
+| Flag                 | Purpose                                  |
+| -------------------- | ---------------------------------------- |
+| `--board <id>`       | Limit results to one board namespace     |
+| `--status <status>`  | Limit results to one Workboard status    |
+| `--include-archived` | Include archived cards in text output    |
+| `--json`             | Print the full card list as machine JSON |
 
 `--json` output always returns all cards regardless of archive state, preserving
 backward compatibility for scripts and automation that consume the machine JSON
