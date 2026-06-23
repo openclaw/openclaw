@@ -249,6 +249,35 @@ describe("parseAt", () => {
     expect(parseAt("30m")).toBe("2026-05-25T00:30:00.000Z");
   });
 
+  it("accepts bare HH:MM and HH:MM:SS time-only values as UTC today", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T23:30:00.000Z"));
+
+    expect(parseAt("09:00")).toBe("2026-05-25T09:00:00.000Z");
+    expect(parseAt("09:00:30")).toBe("2026-05-25T09:00:30.000Z");
+  });
+
+  it("uses --tz to resolve time-only values against today's date in that timezone", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-24T16:30:00.000Z"));
+
+    expect(parseAt("09:00", "Asia/Shanghai")).toBe("2026-05-25T01:00:00.000Z");
+  });
+
+  it("returns null for invalid time-only timezones", () => {
+    expect(parseAt("09:00", "Mars/Base")).toBeNull();
+  });
+
+  it("returns null for invalid offset-less ISO timezones", () => {
+    expect(parseAt("2026-05-25T09:00:00", "Mars/Base")).toBeNull();
+  });
+
+  it("rejects out-of-range time-only values", () => {
+    expect(parseAt("24:00")).toBeNull();
+    expect(parseAt("12:60")).toBeNull();
+    expect(parseAt("12:30:60")).toBeNull();
+  });
+
   it("rejects out-of-range epoch milliseconds", () => {
     expect(parseAt(String(Number.MAX_SAFE_INTEGER))).toBeNull();
   });
