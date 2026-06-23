@@ -164,6 +164,7 @@ export const migratedSessionAccessorWriteFiles = new Set([
   "src/commands/tasks.ts",
   "src/config/sessions/cleanup-service.ts",
   "src/gateway/server-node-events.ts",
+  "src/gateway/session-compaction-checkpoints.ts",
   "src/plugins/host-hook-cleanup.ts",
   "src/plugins/host-hook-state.ts",
   "src/tui/embedded-backend.ts",

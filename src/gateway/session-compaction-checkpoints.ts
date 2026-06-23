@@ -8,7 +8,6 @@ import {
   SessionManager,
   type FileEntry as SessionFileEntry,
 } from "../agents/sessions/session-manager.js";
-import { updateSessionStore } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,
   SessionCompactionCheckpointReason,
@@ -16,6 +15,12 @@ import type {
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
+import {
+  branchSessionFromCompactionCheckpoint,
+  restoreSessionFromCompactionCheckpoint,
+  type SessionCompactionCheckpointMutationResult,
+  updateSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -66,17 +71,7 @@ export type CompactionCheckpointTranscriptForkResult =
   | { status: "missing-boundary" }
   | { status: "failed" };
 
-export type CompactionCheckpointSessionMutationResult =
-  | {
-      status: "created";
-      key: string;
-      checkpoint: SessionCompactionCheckpoint;
-      entry: SessionEntry;
-    }
-  | { status: "missing-session" }
-  | { status: "missing-checkpoint" }
-  | { status: "missing-boundary" }
-  | { status: "failed" };
+export type CompactionCheckpointSessionMutationResult = SessionCompactionCheckpointMutationResult;
 
 export type BranchCheckpointSessionParams = {
   storePath: string;
@@ -583,30 +578,19 @@ function cloneCheckpointSessionEntry(params: {
 async function branchCheckpointSessionFromStoredBoundary(
   params: BranchCheckpointSessionParams,
 ): Promise<CompactionCheckpointSessionMutationResult> {
-  return await updateSessionStore(
-    params.storePath,
-    async (store) => {
-      const currentEntry = store[params.sourceStoreKey ?? params.sourceKey];
-      if (!currentEntry?.sessionId) {
-        return { status: "missing-session" };
-      }
-      const checkpoint = getSessionCompactionCheckpoint({
-        entry: currentEntry,
-        checkpointId: params.checkpointId,
-      });
-      if (!checkpoint) {
-        return { status: "missing-checkpoint" };
-      }
-      const forkedSession = await forkCheckpointTranscriptFromStoredBoundary({ checkpoint });
-      if (forkedSession.status !== "created") {
-        return forkedSession;
-      }
-
-      const forkedTranscript = forkedSession.transcript;
+  return await branchSessionFromCompactionCheckpoint({
+    storePath: params.storePath,
+    sourceKey: params.sourceKey,
+    nextKey: params.nextKey,
+    checkpointId: params.checkpointId,
+    ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
+    forkTranscriptFromCheckpoint: async (checkpoint) =>
+      await forkCheckpointTranscriptFromStoredBoundary({ checkpoint }),
+    buildEntry: ({ currentEntry, forkedTranscript }) => {
       const label = currentEntry.label?.trim()
         ? `${currentEntry.label.trim()} (checkpoint)`
         : "Checkpoint branch";
-      const nextEntry = cloneCheckpointSessionEntry({
+      return cloneCheckpointSessionEntry({
         currentEntry,
         nextSessionId: forkedTranscript.sessionId,
         nextSessionFile: forkedTranscript.sessionFile,
@@ -614,58 +598,29 @@ async function branchCheckpointSessionFromStoredBoundary(
         parentSessionKey: params.sourceKey,
         totalTokens: forkedTranscript.totalTokens,
       });
-      store[params.nextKey] = nextEntry;
-      return {
-        status: "created",
-        key: params.nextKey,
-        checkpoint,
-        entry: nextEntry,
-      };
     },
-    { skipSaveWhenResult: (result) => result.status !== "created" },
-  );
+  });
 }
 
 async function restoreCheckpointSessionFromStoredBoundary(
   params: RestoreCheckpointSessionParams,
 ): Promise<CompactionCheckpointSessionMutationResult> {
-  return await updateSessionStore(
-    params.storePath,
-    async (store) => {
-      const currentEntry = store[params.sessionStoreKey ?? params.sessionKey];
-      if (!currentEntry?.sessionId) {
-        return { status: "missing-session" };
-      }
-      const checkpoint = getSessionCompactionCheckpoint({
-        entry: currentEntry,
-        checkpointId: params.checkpointId,
-      });
-      if (!checkpoint) {
-        return { status: "missing-checkpoint" };
-      }
-      const restoredSession = await forkCheckpointTranscriptFromStoredBoundary({ checkpoint });
-      if (restoredSession.status !== "created") {
-        return restoredSession;
-      }
-
-      const restoredTranscript = restoredSession.transcript;
-      const nextEntry = cloneCheckpointSessionEntry({
+  return await restoreSessionFromCompactionCheckpoint({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    checkpointId: params.checkpointId,
+    ...(params.sessionStoreKey ? { sessionStoreKey: params.sessionStoreKey } : {}),
+    forkTranscriptFromCheckpoint: async (checkpoint) =>
+      await forkCheckpointTranscriptFromStoredBoundary({ checkpoint }),
+    buildEntry: ({ currentEntry, forkedTranscript }) =>
+      cloneCheckpointSessionEntry({
         currentEntry,
-        nextSessionId: restoredTranscript.sessionId,
-        nextSessionFile: restoredTranscript.sessionFile,
-        totalTokens: restoredTranscript.totalTokens,
+        nextSessionId: forkedTranscript.sessionId,
+        nextSessionFile: forkedTranscript.sessionFile,
+        totalTokens: forkedTranscript.totalTokens,
         preserveCompactionCheckpoints: true,
-      });
-      store[params.sessionKey] = nextEntry;
-      return {
-        status: "created",
-        key: params.sessionKey,
-        checkpoint,
-        entry: nextEntry,
-      };
-    },
-    { skipSaveWhenResult: (result) => result.status !== "created" },
-  );
+      }),
+  });
 }
 
 /**
@@ -818,31 +773,30 @@ export async function persistSessionCompactionCheckpoint(
     },
   };
 
-  let stored = false;
   let trimmedCheckpoints:
     | {
         kept: SessionCompactionCheckpoint[] | undefined;
         removed: SessionCompactionCheckpoint[];
       }
     | undefined;
-  await updateSessionStore(target.storePath, async (store) => {
-    const existing = store[target.canonicalKey];
-    if (!existing?.sessionId) {
-      return;
-    }
-    const checkpoints = sessionStoreCheckpoints(existing);
-    checkpoints.push(checkpoint);
-    const snapshotBytesByPath = await statCheckpointSnapshotBytes(checkpoints);
-    trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath);
-    store[target.canonicalKey] = {
-      ...existing,
-      updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
-      compactionCheckpoints: trimmedCheckpoints.kept,
-    };
-    stored = true;
-  });
+  const updatedEntry = await updateSessionEntry(
+    {
+      storePath: target.storePath,
+      sessionKey: target.canonicalKey,
+    },
+    async (existing) => {
+      const checkpoints = sessionStoreCheckpoints(existing);
+      checkpoints.push(checkpoint);
+      const snapshotBytesByPath = await statCheckpointSnapshotBytes(checkpoints);
+      trimmedCheckpoints = trimSessionCheckpoints(checkpoints, snapshotBytesByPath);
+      return {
+        updatedAt: Math.max(existing.updatedAt ?? 0, createdAt),
+        compactionCheckpoints: trimmedCheckpoints.kept,
+      };
+    },
+  );
 
-  if (!stored) {
+  if (!updatedEntry) {
     log.warn("skipping compaction checkpoint persist: session not found", {
       sessionKey: params.sessionKey,
     });
