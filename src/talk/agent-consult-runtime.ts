@@ -28,9 +28,59 @@ import {
 export type RealtimeVoiceAgentConsultRuntime = PluginRuntimeCore["agent"];
 
 /**
- * Speakable text returned to the realtime voice bridge after an agent consult.
+ * Speakable text returned to the realtime voice bridge after an agent consult, plus any media the run
+ * produced — a screenshot or a generated image the caller asked to see, as a local file path OR a URL.
+ * The voice bridge shows it on the outbound video tile (CVI Phase 8): local files are read directly,
+ * remote URLs go through the SSRF guard, and only image MIME types are displayed.
  */
-export type RealtimeVoiceAgentConsultResult = { text: string };
+export type RealtimeVoiceAgentConsultResult = { text: string; mediaPaths?: string[] };
+
+/** A media reference is "remote" (and SSRF-guarded downstream) when it is an http(s) URL. */
+function isRemoteMediaUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+/**
+ * Collect produced media (file paths or URLs) from non-error, non-reasoning run payloads, preserving
+ * the local-media trust boundary:
+ *
+ * - **Remote http(s) URLs** are always collected; the bridge SSRF-guards them before fetching.
+ * - **Local paths** are collected only when trusted — either the producing tool marked the payload
+ *   `trustedLocalMedia`, or the caller opts in via `trustLocalMedia` (a controlled image-production
+ *   run such as `show_to_caller`). An untrusted local path a tool happened to surface is dropped, so
+ *   an arbitrary local file can never be read and displayed back to the caller.
+ */
+export function collectRealtimeVoiceAgentConsultMediaPaths(
+  payloads: Array<{
+    mediaUrl?: string;
+    mediaUrls?: string[];
+    isError?: boolean;
+    isReasoning?: boolean;
+    trustedLocalMedia?: boolean;
+  }>,
+  trustLocalMedia = false,
+): string[] {
+  const paths: string[] = [];
+  for (const payload of payloads) {
+    if (payload.isError || payload.isReasoning) {
+      continue;
+    }
+    const localTrusted = trustLocalMedia || payload.trustedLocalMedia === true;
+    const candidates: string[] = [];
+    if (payload.mediaUrl) {
+      candidates.push(payload.mediaUrl);
+    }
+    if (Array.isArray(payload.mediaUrls)) {
+      candidates.push(...payload.mediaUrls);
+    }
+    for (const candidate of candidates) {
+      if (isRemoteMediaUrl(candidate) || localTrusted) {
+        paths.push(candidate);
+      }
+    }
+  }
+  return paths;
+}
 
 /**
  * Controls whether voice consults run in a fresh session or fork context from the requester.
@@ -224,6 +274,8 @@ export async function consultRealtimeVoiceAgent(params: {
   lane: string;
   runIdPrefix: string;
   args: unknown;
+  /** Optional images (e.g. a sampled call video frame) for a vision-capable agent run. */
+  images?: RunEmbeddedAgentParams["images"];
   transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
   surface: string;
   userLabel: string;
@@ -240,6 +292,14 @@ export async function consultRealtimeVoiceAgent(params: {
   toolsAllow?: string[];
   extraSystemPrompt?: string;
   fallbackText?: string;
+  /** Trust local file paths this run produces (e.g. show_to_caller — a controlled, single-image
+   *  production run). Default false: only remote (SSRF-guarded) URLs or tool-flagged trusted local
+   *  media are surfaced for display. */
+  trustLocalMedia?: boolean;
+  /** Explicit delivery target override. When set, it takes precedence over the session-resolved
+   *  delivery context — so a caller-scoped run (e.g. a meeting recap) routes/falls back to that exact
+   *  target and can never silently default to the operator's own chat. */
+  deliveryContext?: DeliveryContext;
 }): Promise<RealtimeVoiceAgentConsultResult> {
   const agentId = params.agentId ?? "main";
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
@@ -251,12 +311,16 @@ export async function consultRealtimeVoiceAgent(params: {
   const storePath = params.agentRuntime.session.resolveStorePath(params.cfg.session?.store, {
     agentId,
   });
-  const resolvedDeliveryContext = resolveRealtimeVoiceAgentDeliveryContext({
-    agentRuntime: params.agentRuntime,
-    storePath,
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-  });
+  // An explicit override (e.g. a meeting recap locked to the caller) wins over the session-resolved
+  // context, so delivery + any fallback target is the caller — never the operator's default chat.
+  const resolvedDeliveryContext =
+    params.deliveryContext ??
+    resolveRealtimeVoiceAgentDeliveryContext({
+      agentRuntime: params.agentRuntime,
+      storePath,
+      sessionKey: params.sessionKey,
+      spawnedBy: params.spawnedBy,
+    });
   const sessionEntry = await resolveRealtimeVoiceAgentConsultSessionEntry({
     agentId,
     sessionKey: params.sessionKey,
@@ -302,6 +366,7 @@ export async function consultRealtimeVoiceAgent(params: {
       assistantLabel: params.assistantLabel,
       questionSourceLabel: params.questionSourceLabel,
     }),
+    images: params.images,
     provider: params.provider,
     model: params.model,
     thinkLevel: params.thinkLevel ?? "high",
@@ -320,10 +385,17 @@ export async function consultRealtimeVoiceAgent(params: {
   });
 
   const text = collectRealtimeVoiceAgentConsultVisibleText(result.payloads ?? []);
-  if (!text) {
+  const mediaPaths = collectRealtimeVoiceAgentConsultMediaPaths(
+    result.payloads ?? [],
+    params.trustLocalMedia ?? false,
+  );
+  if (!text && mediaPaths.length === 0) {
     const reason = result.meta?.aborted ? "agent run aborted" : "agent returned no speakable text";
     params.logger.warn(`[talk] agent consult produced no answer: ${reason}`);
     return { text: params.fallbackText ?? "I need a moment to verify that before answering." };
   }
-  return { text };
+  return {
+    text: text ?? "",
+    ...(mediaPaths.length > 0 ? { mediaPaths } : {}),
+  };
 }

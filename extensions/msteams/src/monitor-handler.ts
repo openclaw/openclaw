@@ -4,7 +4,9 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { redactOutboundMSTeamsCard, redactOutboundMSTeamsText } from "./dlp.js";
 import { formatUnknownError } from "./errors.js";
+import { buildMessageActionPrompt, type MSTeamsMessageActionValue } from "./message-action.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
@@ -34,7 +36,11 @@ function extractAdaptiveCardSubmittedData(value: unknown): unknown {
     return value;
   }
   const action = isRecord(value.action) ? value.action : undefined;
-  if (action && normalizeOptionalLowercaseString(action.type) === "action.submit" && "data" in action) {
+  if (
+    action &&
+    normalizeOptionalLowercaseString(action.type) === "action.submit" &&
+    "data" in action
+  ) {
     return action.data;
   }
   return value;
@@ -49,6 +55,30 @@ function readMSTeamsImBackValue(value: unknown): string | null {
     return null;
   }
   return normalizeOptionalString(msteams.value) ?? null;
+}
+
+/**
+ * Synthetic message activity for an invoke-driven dispatch (card action / message action). The user
+ * explicitly invoked the bot, so stamp a bot-mention entity: without it `wasMSTeamsBotMentioned` is
+ * false and group-chat mention-gating silently drops the dispatch right after the "On it" ack —
+ * the reply never comes, and the quoted prompt only pollutes the group history.
+ */
+function buildInvokeDispatchActivity(
+  activity: MSTeamsTurnContext["activity"],
+  text: string,
+): MSTeamsTurnContext["activity"] {
+  const botId = activity.recipient?.id;
+  return {
+    ...activity,
+    type: "message",
+    text,
+    entities: [
+      ...(activity.entities ?? []),
+      ...(botId
+        ? [{ type: "mention", mentioned: { id: botId, name: activity.recipient?.name ?? "" } }]
+        : []),
+    ],
+  };
 }
 
 function serializeAdaptiveCardActionValue(value: unknown): string | null {
@@ -195,11 +225,24 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         if (text) {
           await handleTeamsMessage({
             ...ctx,
-            activity: {
-              ...ctx.activity,
-              type: "message",
-              text,
-            },
+            activity: buildInvokeDispatchActivity(ctx.activity, text),
+          });
+        }
+        return;
+      }
+
+      // Message action ("Ask OpenClaw about this", #10): the selected message arrives on a
+      // composeExtension/submitAction invoke. Quote it into a prompt and dispatch as a normal
+      // message so the reply lands in the conversation (same path as adaptiveCard/action above).
+      if (
+        ctx.activity?.type === "invoke" &&
+        ctx.activity?.name === "composeExtension/submitAction"
+      ) {
+        const prompt = buildMessageActionPrompt(ctx.activity?.value as MSTeamsMessageActionValue);
+        if (prompt) {
+          await handleTeamsMessage({
+            ...ctx,
+            activity: buildInvokeDispatchActivity(ctx.activity, prompt),
           });
         }
         return;
@@ -234,10 +277,15 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
 
         if (isPersonal && msteamsCfg?.welcomeCard !== false) {
           const botName = ctx.activity?.recipient?.name ?? undefined;
-          const card = buildWelcomeCard({
-            botName,
-            promptStarters: msteamsCfg?.promptStarters,
-          });
+          // DLP (#16): the welcome card carries config-authored prompt-starters, which can embed
+          // secrets — deep-redact it like every other outbound card path so this isn't a bypass.
+          const card = redactOutboundMSTeamsCard(
+            buildWelcomeCard({
+              botName,
+              promptStarters: msteamsCfg?.promptStarters,
+            }),
+            deps.cfg,
+          );
           try {
             await ctx.sendActivity({
               type: "message",
@@ -255,7 +303,10 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         } else if (!isPersonal && msteamsCfg?.groupWelcomeCard === true) {
           const botName = ctx.activity?.recipient?.name ?? undefined;
           try {
-            await ctx.sendActivity(buildGroupWelcomeText(botName));
+            // DLP (#16): redact the group welcome text on the same outbound boundary as the card.
+            await ctx.sendActivity(
+              redactOutboundMSTeamsText(buildGroupWelcomeText(botName), deps.cfg),
+            );
             deps.log.info("sent group welcome message");
           } catch (err) {
             deps.log.debug?.("failed to send group welcome", { error: formatUnknownError(err) });

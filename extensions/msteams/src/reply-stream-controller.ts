@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
+import { redactText } from "./dlp.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
@@ -73,7 +74,16 @@ export function createTeamsReplyStreamController(params: {
   random?: () => number;
 }) {
   const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
-  const streamMode = resolveChannelPreviewStreamMode(params.msteamsConfig, "partial");
+  const dlpConfig = params.msteamsConfig?.dlp;
+  const dlpEnabled = Boolean(dlpConfig?.enabled);
+  const configuredStreamMode = resolveChannelPreviewStreamMode(params.msteamsConfig, "partial");
+  // DLP (review S1): per-token streaming cannot be redacted retroactively — a secret that only
+  // completes across chunk boundaries is already on the caller's screen by the time it matches,
+  // and the SDK stream is append-only (no retraction). With DLP enabled, "partial" downgrades to
+  // "progress": the live card still shows working status, and the FULL final text is redacted
+  // once below and lands on the card in place.
+  const streamMode =
+    dlpEnabled && configuredStreamMode === "partial" ? "progress" : configuredStreamMode;
   const shouldUseNativeStream =
     isPersonal && (streamMode === "partial" || streamMode === "progress");
   const shouldStreamPreviewToolProgress =
@@ -289,7 +299,11 @@ export function createTeamsReplyStreamController(params: {
       // flushes it as the closing activity.
       if (streamMode === "progress" && payload.text) {
         try {
-          stream.emit(payload.text);
+          // The one place agent text reaches the native stream — redact it here so the streamed
+          // card honors DLP like every other outbound path.
+          stream.emit(
+            dlpEnabled && dlpConfig ? redactText(payload.text, dlpConfig).text : payload.text,
+          );
           pendingFinalPayload = fallbackPayloadForSuppressedFinal(payload);
           streamFinalizationPending = true;
           const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);

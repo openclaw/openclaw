@@ -2,12 +2,49 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import {
+  collectRealtimeVoiceAgentConsultMediaPaths,
   setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
+
+describe("collectRealtimeVoiceAgentConsultMediaPaths (local-media trust boundary)", () => {
+  it("drops untrusted local paths but keeps remote (SSRF-guarded) URLs", () => {
+    const paths = collectRealtimeVoiceAgentConsultMediaPaths([
+      { mediaUrl: "/tmp/secret.png" }, // untrusted local — must be dropped
+      { mediaUrl: "https://example.com/ok.png" }, // remote — kept, SSRF-guarded downstream
+    ]);
+    expect(paths).toEqual(["https://example.com/ok.png"]);
+  });
+
+  it("keeps a local path when the payload itself is flagged trustedLocalMedia", () => {
+    const paths = collectRealtimeVoiceAgentConsultMediaPaths([
+      { mediaUrl: "/tmp/shot.png", trustedLocalMedia: true },
+    ]);
+    expect(paths).toEqual(["/tmp/shot.png"]);
+  });
+
+  it("keeps local paths when the run opts in via trustLocalMedia (e.g. show_to_caller)", () => {
+    const paths = collectRealtimeVoiceAgentConsultMediaPaths(
+      [{ mediaUrls: ["/tmp/a.png", "https://x.example/b.png"] }],
+      true,
+    );
+    expect(paths).toEqual(["/tmp/a.png", "https://x.example/b.png"]);
+  });
+
+  it("skips error and reasoning payloads even when trusted", () => {
+    const paths = collectRealtimeVoiceAgentConsultMediaPaths(
+      [
+        { mediaUrl: "/tmp/err.png", isError: true },
+        { mediaUrl: "/tmp/reason.png", isReasoning: true },
+      ],
+      true,
+    );
+    expect(paths).toEqual([]);
+  });
+});
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   const sessionStore: Record<

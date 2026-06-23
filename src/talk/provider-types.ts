@@ -182,12 +182,28 @@ export type RealtimeVoiceBrowserSession =
   | RealtimeVoiceBrowserGatewayRelaySession
   | RealtimeVoiceBrowserManagedRoomSession;
 
+/**
+ * An image pushed into a realtime session as ambient visual context (CVI Phase 4). The provider adds
+ * it as a conversation item WITHOUT requesting a response — the model uses it on its next natural turn
+ * rather than being forced to comment on every frame.
+ */
+export type RealtimeVoiceImageInput = {
+  /** Base64-encoded image bytes (no `data:` prefix). */
+  dataBase64: string;
+  /** MIME type, e.g. "image/jpeg". */
+  mime: string;
+  /** Optional short label sent alongside the image (e.g. "the caller's shared screen"). */
+  text?: string;
+};
+
 export type RealtimeVoiceBridge = {
   supportsToolResultContinuation?: boolean;
   connect(): Promise<void>;
   sendAudio(audio: Buffer): void;
   setMediaTimestamp(ts: number): void;
   sendUserMessage?(text: string): void;
+  /** Push an image into the session as ambient context (no forced response). Optional per provider. */
+  sendImage?(image: RealtimeVoiceImageInput): void;
   triggerGreeting?(instructions?: string): void;
   handleBargeIn?(options?: RealtimeVoiceBargeInOptions): void;
   submitToolResult(callId: string, result: unknown, options?: RealtimeVoiceToolResultOptions): void;

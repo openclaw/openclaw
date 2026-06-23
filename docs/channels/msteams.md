@@ -762,6 +762,50 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.useManagedIdentity`: enable managed identity auth (federated mode).
 - `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
+- `channels.msteams.transcribeVoiceMessages`: when true, inbound Teams voice/audio messages are transcribed (media-understanding STT) and folded into the agent's turn (default off; adds STT cost).
+- `channels.msteams.auditChannel`: a Teams conversation id; when set, every outbound agent reply is mirrored there for compliance review (default unset/off).
+- `channels.msteams.dlp.enabled`: redact configured sensitive data from **every** outbound surface — block messages, streamed replies, edits, adaptive cards, and poll cards (default off).
+- `channels.msteams.dlp.categories`: which built-in detectors to apply (e.g. `email`, `phone`, `creditCard`, `ssn`, `awsKey`, `secret`); defaults to the built-in set.
+- `channels.msteams.dlp.customPatterns`: extra `{ name, pattern }` regex rules to redact.
+- `channels.msteams.dlp.placeholder`: replacement text for redactions (default `[REDACTED:<category>]`).
+
+## Governance: DLP, audit log & voice-message transcription
+
+Opt-in compliance features for the Teams channel (all default off):
+
+- **DLP-aware outbound redaction** (`dlp.enabled`) — built-in category detectors plus `customPatterns` are redacted from every agent-reachable outbound surface: block messages, native streamed replies, message edits, adaptive cards, and poll cards. Because per-token streaming cannot be retracted once on screen, enabling DLP also downgrades `streaming.mode: "partial"` to `"progress"`, so a secret that completes across chunk boundaries is never shown.
+- **Audit-log channel** (`auditChannel`) — every outbound agent reply is mirrored to the configured Teams conversation as a `🧾 Reply for <recipient> …` line, captured at the delivery choke point (so streamed replies are in the trail too). The bot's own replies inside the audit channel are not re-mirrored.
+- **Voice-message transcription** (`transcribeVoiceMessages`) — inbound Teams voice/audio clips are transcribed and folded into the agent's message as a quoted block; a clip that fails transcription keeps its attachment placeholder.
+
+```json5
+{
+  channels: {
+    msteams: {
+      transcribeVoiceMessages: true,
+      auditChannel: "conversation:19:abc...@thread.v2",
+      dlp: {
+        enabled: true,
+        categories: ["email", "phone", "secret"],
+        customPatterns: [{ name: "employeeId", pattern: "EMP-\\d{6}" }],
+      },
+    },
+  },
+}
+```
+
+### "Ask OpenClaw about this" message action
+
+Teams users can run the **Ask OpenClaw about this** message action on any chat message to route the selected message to the agent as a quoted prompt; the reply lands back in the conversation. In group chats the action honors the channel's mention/tool policy.
+
+## Voice, video & CVI calls
+
+The Microsoft Teams integration also supports **inbound and outbound voice/video calls** with a realtime conversational agent, driven by the `voice-call` plugin together with a companion media worker. Capabilities include:
+
+- Realtime voice with **deterministic verbal interrupts** (English and Arabic), **greet-by-name** from the Teams roster, **bilingual Arabic/English**, and **DTMF / IVR** ("press 1 to…").
+- **CVI** — screen/camera vision via `look_at_screen` (with scene-change awareness and retroactive keyframe history), `show_to_caller` rendering images as a picture-in-picture overlay with captions over an avatar tile, and a "thinking" expression while tools run.
+- **Meeting minutes/recap** posted to the Teams chat or meeting thread, and **outbound "call me back"** notifications that speak the result on answer and hang up cleanly.
+
+The DLP redaction and audit-log mirroring described above also apply to spoken-reply text. These call features and their settings (realtime echo guard, `toolPolicy`, `bilingual`, `meetingRecap`, outbound modes, TTS/STT) are configured under the `voice-call` plugin with Microsoft Teams selected as the provider — see [voice-call plugin](/plugins/voice-call) for the full configuration.
 
 ## Routing and sessions
 

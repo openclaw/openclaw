@@ -100,6 +100,8 @@ export type TtsTelephonyRequestParams = {
   cfg: OpenClawConfig;
   prefsPath?: string;
   overrides?: TtsDirectiveOverrides;
+  /** Opt in to provider character alignment (e.g. ElevenLabs with-timestamps) for viseme/lip-sync. */
+  withTimestamps?: boolean;
 };
 
 /** Inputs for listing voices from a speech provider with optional resolved config. */
@@ -218,6 +220,8 @@ export type TtsTelephonyResult = {
   attempts?: TtsProviderAttempt[];
   outputFormat?: string;
   sampleRate?: number;
+  /** Per-character timing when the provider returned alignment (e.g. ElevenLabs with-timestamps). */
+  alignment?: { characters: string[]; startTimesSeconds: number[] };
 };
 
 /** High-level function contract for file-backed text-to-speech synthesis. */

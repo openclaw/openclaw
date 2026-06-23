@@ -86,6 +86,21 @@ export type SpeechTelephonySynthesisRequest = {
   providerConfig: SpeechProviderConfig;
   providerOverrides?: SpeechProviderOverrides;
   timeoutMs: number;
+  /**
+   * Opt in to per-character alignment (e.g. ElevenLabs `/with-timestamps`) for callers that drive
+   * viseme/lip-sync. Off by default so plain telephony stays a single synthesis call.
+   */
+  withTimestamps?: boolean;
+};
+
+/**
+ * Per-character speech timing from providers whose synthesis API can return character alignment
+ * (e.g. ElevenLabs `/with-timestamps`): `characters[i]` starts being voiced at `startTimesSeconds[i]`.
+ * Sample-rate independent (wall-clock seconds), so it survives PCM resampling unchanged.
+ */
+export type SpeechSynthesisAlignment = {
+  characters: string[];
+  startTimesSeconds: number[];
 };
 
 /** Telephony synthesis result with sample-rate metadata for call transports. */
@@ -93,6 +108,8 @@ export type SpeechTelephonySynthesisResult = {
   audioBuffer: Buffer;
   outputFormat: string;
   sampleRate: number;
+  /** Optional character alignment for transports that drive viseme/lip-sync timelines. */
+  alignment?: SpeechSynthesisAlignment;
 };
 
 /** Provider hook input for applying persona/config before synthesis. */

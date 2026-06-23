@@ -7,6 +7,7 @@ import {
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";
+import { redactOutboundMSTeamsCard, redactOutboundMSTeamsText } from "./dlp.js";
 import {
   classifyMSTeamsSendError,
   formatMSTeamsSendErrorHint,
@@ -154,7 +155,8 @@ export async function sendMessageMSTeams(
     cfg,
     channel: "msteams",
   });
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  // DLP (#16): scrub sensitive values out of any text we send to Teams.
+  const messageText = redactOutboundMSTeamsText(convertMarkdownTables(text ?? "", tableMode), cfg);
   const ctx = await resolveMSTeamsSendContext({ cfg, to });
   const {
     app,
@@ -496,9 +498,13 @@ export async function sendPollMSTeams(
     to,
   });
 
+  // DLP (#16): the poll's question and option labels are an agent-reachable card surface too — redact
+  // them before they reach the Adaptive Card so "put the secret in a poll" isn't a loophole around
+  // the text/card-path redaction. Only the visible strings are redacted (not the internal option
+  // indices or the pollId), so vote matching is unaffected.
   const pollCard = buildMSTeamsPollCard({
-    question,
-    options,
+    question: redactOutboundMSTeamsText(question, cfg),
+    options: options.map((option) => redactOutboundMSTeamsText(option, cfg)),
     maxSelections,
   });
 
@@ -542,7 +548,10 @@ export async function sendPollMSTeams(
 export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
 ): Promise<SendMSTeamsCardResult> {
-  const { cfg, to, card } = params;
+  const { cfg, to } = params;
+  // DLP (#16): cards are an agent-reachable outbound surface too — deep-redact every string value
+  // so "put the secret in a card" isn't a loophole around the text-path redaction.
+  const card = redactOutboundMSTeamsCard(params.card, cfg);
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
@@ -624,7 +633,15 @@ export async function editMessageMSTeams(
     to,
   });
 
-  log.debug?.("editing proactive message", { conversationId, activityId, textLength: text.length });
+  // DLP (#16): edits are an outbound text path like sends — without this, "send something
+  // innocuous, then EDIT the secret in" bypassed redaction entirely.
+  const messageText = redactOutboundMSTeamsText(text, cfg, log);
+
+  log.debug?.("editing proactive message", {
+    conversationId,
+    activityId,
+    textLength: messageText.length,
+  });
 
   try {
     const baseRef = buildConversationReference(ref);
@@ -635,7 +652,7 @@ export async function editMessageMSTeams(
       {
         type: "message",
         id: activityId,
-        text,
+        text: messageText,
       } as Record<string, unknown>,
       { serviceUrlBoundary: sdkCloudOptions },
     );

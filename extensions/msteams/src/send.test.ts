@@ -1,7 +1,12 @@
 // Msteams tests cover send plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { deleteMessageMSTeams, editMessageMSTeams, sendMessageMSTeams } from "./send.js";
+import {
+  deleteMessageMSTeams,
+  editMessageMSTeams,
+  sendMessageMSTeams,
+  sendPollMSTeams,
+} from "./send.js";
 
 const mockState = vi.hoisted(() => ({
   loadOutboundMediaFromUrl: vi.fn(),
@@ -609,5 +614,65 @@ describe("deleteMessageMSTeams", () => {
       "activity-789",
       { serviceUrlBoundary: { cloud: "Public" } },
     );
+  });
+});
+
+describe("sendPollMSTeams DLP redaction (#16 / poll-card follow-up)", () => {
+  const dlpOnCfg = {
+    channels: { msteams: { dlp: { enabled: true } } },
+  } as unknown as OpenClawConfig;
+
+  beforeEach(() => {
+    mockState.resolveMSTeamsSendContext.mockReset();
+    mockState.sendMSTeamsActivityWithReference.mockReset();
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      app: createMockApp(),
+      appId: "app-id",
+      conversationId: "19:conversation@thread.tacv2",
+      ref: { conversation: { id: "19:conversation@thread.tacv2" } },
+      log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      conversationType: "personal",
+      sdkCloudOptions: { cloud: "Public" },
+      tokenProvider: {},
+    });
+    mockState.sendMSTeamsActivityWithReference.mockResolvedValue({ id: "poll-message-1" });
+  });
+
+  /** Pull the Adaptive Card payload out of the captured proactive-send activity. */
+  function sentPollCard(): {
+    body: Array<{ type: string; text?: string; choices?: Array<{ title: string; value: string }> }>;
+  } {
+    const call = mockState.sendMSTeamsActivityWithReference.mock.calls[0] as unknown as unknown[];
+    const activity = call?.[2] as { attachments: Array<{ content: unknown }> };
+    return activity.attachments[0].content as ReturnType<typeof sentPollCard>;
+  }
+
+  it("redacts secrets in the poll question and option labels before sending the card", async () => {
+    await sendPollMSTeams({
+      cfg: dlpOnCfg,
+      to: "conversation:19:conversation@thread.tacv2",
+      question: "Email the lead at a.b@example.com?",
+      options: ["Yes — ping a.b@example.com", "No"],
+    });
+
+    const card = sentPollCard();
+    const question = card.body.find((b) => b.type === "TextBlock")?.text;
+    expect(question).toBe("Email the lead at [REDACTED:email]?");
+    const choices = card.body.find((b) => b.type === "Input.ChoiceSet")?.choices ?? [];
+    expect(choices.map((c) => c.title)).toEqual(["Yes — ping [REDACTED:email]", "No"]);
+    // Internal option indices are preserved so vote matching is unaffected.
+    expect(choices.map((c) => c.value)).toEqual(["0", "1"]);
+  });
+
+  it("leaves the poll text untouched when DLP is disabled", async () => {
+    await sendPollMSTeams({
+      cfg: { channels: { msteams: {} } } as unknown as OpenClawConfig,
+      to: "conversation:19:conversation@thread.tacv2",
+      question: "Contact a.b@example.com?",
+      options: ["Sure", "Nope"],
+    });
+
+    const card = sentPollCard();
+    expect(card.body.find((b) => b.type === "TextBlock")?.text).toBe("Contact a.b@example.com?");
   });
 });

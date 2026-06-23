@@ -1221,6 +1221,38 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("passes provider character alignment through telephony synthesis results", async () => {
+    const alignment = {
+      characters: ["h", "i"],
+      startTimesSeconds: [0, 0.42],
+    };
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        synthesizeTelephony: async () => ({
+          audioBuffer: Buffer.from("voice"),
+          outputFormat: "pcm",
+          sampleRate: 22_050,
+          alignment,
+        }),
+      }),
+    ]);
+
+    const result = await textToSpeechTelephony({
+      text: "Align this.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.alignment).toEqual(alignment);
+  });
+
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {
     await synthesizeSpeech({
       text: "Use neutral provider defaults.",

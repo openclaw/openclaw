@@ -2,6 +2,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -28,7 +29,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
 import { isValidElevenLabsVoiceId, normalizeElevenLabsBaseUrl } from "./shared.js";
-import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
+import { elevenLabsTTS, elevenLabsTTSStream, elevenLabsTTSWithTimestamps } from "./tts.js";
 const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
 const DEFAULT_ELEVENLABS_MODEL_ID = "eleven_multilingual_v2";
 const DEFAULT_ELEVENLABS_VOICE_SETTINGS = {
@@ -583,8 +584,27 @@ export function buildElevenLabsSpeechProvider(): SpeechProviderPlugin {
     synthesizeTelephony: async (req) => {
       const outputFormat = "pcm_22050";
       const sampleRate = 22_050;
-      const audioBuffer = await elevenLabsTTS(resolveElevenLabsTtsRequest(req, { outputFormat }));
-      return { audioBuffer, outputFormat, sampleRate };
+      const requestParams = resolveElevenLabsTtsRequest(req, { outputFormat });
+      // Plain telephony (default): one synthesis call.
+      if (!req.withTimestamps) {
+        const audioBuffer = await elevenLabsTTS(requestParams);
+        return { audioBuffer, outputFormat, sampleRate };
+      }
+      // Caller opted in to alignment (viseme/lip-sync): prefer the with-timestamps endpoint so call
+      // transports can drive lip-sync from real per-character timing. If that endpoint is unavailable
+      // (plan/proxy restrictions), fall back to plain synthesis rather than failing the call's audio.
+      try {
+        const { audioBuffer, alignment } = await elevenLabsTTSWithTimestamps(requestParams);
+        return { audioBuffer, outputFormat, sampleRate, alignment };
+      } catch (err) {
+        logVerbose(
+          `elevenlabs telephony with-timestamps failed; falling back to plain synthesis: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        const audioBuffer = await elevenLabsTTS(requestParams);
+        return { audioBuffer, outputFormat, sampleRate };
+      }
     },
   };
 }

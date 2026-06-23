@@ -172,8 +172,15 @@ export async function initiateCall(
   }
 
   const callId = crypto.randomUUID();
+  // msteams places calls as the bot app instance (no caller phone number), so it
+  // uses a synthetic `from`; mock uses a fixed test number; carriers need a real one.
   const from =
-    ctx.config.fromNumber || (ctx.provider?.name === "mock" ? "+15550000000" : undefined);
+    ctx.config.fromNumber ||
+    (ctx.provider?.name === "mock"
+      ? "+15550000000"
+      : ctx.provider?.name === "msteams"
+        ? "msteams-bot"
+        : undefined);
   if (!from) {
     return { callId: "", success: false, error: "fromNumber not configured" };
   }
@@ -237,6 +244,7 @@ export async function initiateCall(
       webhookUrl: ctx.webhookUrl,
       inlineTwiml,
       preConnectTwiml,
+      ...(initialMessage ? { message: initialMessage } : {}),
       ...(streamSession
         ? { streamUrl: streamSession.streamUrl, streamAuthToken: streamSession.token }
         : {}),

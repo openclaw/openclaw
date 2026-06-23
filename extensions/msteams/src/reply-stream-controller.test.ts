@@ -36,6 +36,32 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.emit).toHaveBeenCalledWith("hello");
   });
 
+  it("DLP downgrades partial streaming and redacts the final in-place emit (S1)", () => {
+    // Per-token streaming cannot be redacted retroactively (a secret completing across chunk
+    // boundaries is already on screen), so with DLP on, partial mode behaves as progress mode and
+    // the ONLY agent text that reaches the native stream is the redacted full final.
+    const stream = makeStream();
+    const secretText = `the key is sk-${"a".repeat(24)}`;
+    const ctrl = createTeamsReplyStreamController({
+      conversationType: "personal",
+      context: makeContext(stream),
+      feedbackLoopEnabled: false,
+      msteamsConfig: { dlp: { enabled: true } } as never,
+    });
+
+    // Token chunks must NOT reach the stream.
+    ctrl.onPartialReply({ text: secretText });
+    expect(stream.emit).not.toHaveBeenCalled();
+
+    // The final payload is emitted once onto the card — redacted.
+    const result = ctrl.preparePayload({ text: secretText } as never);
+    expect(result).toBeUndefined(); // stream carries the text; no block duplicate
+    expect(stream.emit).toHaveBeenCalledTimes(1);
+    const emitted = stream.emit.mock.calls[0]?.[0] as string;
+    expect(emitted).toContain("[REDACTED:secret]");
+    expect(emitted).not.toContain("sk-");
+  });
+
   it("emits only the delta when openclaw sends cumulative text on each chunk", () => {
     // openclaw's reply pipeline calls onPartialReply with the cumulative
     // text-so-far on every chunk. The SDK's HttpStream APPENDS each emit() to

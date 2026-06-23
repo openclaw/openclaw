@@ -9,6 +9,7 @@ import {
 import { z } from "zod";
 import { TtsConfigSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
+import { GROUP_CALL_GATE_DEFAULTS, resolveGroupCallGateConfig } from "./group-call-gate.js";
 import { normalizePath } from "./path-utils.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
@@ -23,6 +24,22 @@ import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js
 const E164Schema = z
   .string()
   .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
+
+/**
+ * Microsoft Teams caller id: an AAD object id (a GUID). Teams calls carry no
+ * E.164 number — the caller is identified by `aadId` — so allowlist entries
+ * accept this form too, letting the msteams provider use
+ * `inboundPolicy: "allowlist"`. Runtime matching is in `isAllowlistedCaller`.
+ */
+const AadObjectIdSchema = z
+  .string()
+  .regex(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    "Expected an AAD object id (GUID), e.g. 00000000-0000-0000-0000-000000000000",
+  );
+
+/** An inbound allowlist entry: an E.164 phone number or a Teams AAD object id. */
+const AllowFromEntrySchema = z.union([E164Schema, AadObjectIdSchema]);
 
 // -----------------------------------------------------------------------------
 // Inbound Policy
@@ -63,6 +80,102 @@ const TwilioConfigSchema = z
     authToken: SecretInputSchema.optional(),
   })
   .strict();
+
+const MsteamsConfigSchema = z
+  .object({
+    /** TCP port the Teams bridge WebSocket server listens on. */
+    port: z.number().int().min(1).max(65535).optional(),
+    /**
+     * Address the Teams bridge WebSocket server binds to. Defaults to the
+     * loopback interface (127.0.0.1) so the bridge is never exposed on all
+     * interfaces. Set to a specific trusted-network address only when the
+     * Windows worker connects from another host (e.g. a private/VPN IP).
+     */
+    bindAddress: z.string().min(1).optional(),
+    /** URL path prefix for the WebSocket upgrade (per-call path = {path}/{callId}). */
+    path: z.string().min(1).default("/voice/msteams/stream"),
+    /** Shared secret used to verify HMAC-SHA256 on the WS handshake (SecretRef-compatible). */
+    sharedSecret: SecretInputSchema.optional(),
+    /**
+     * Require the worker to report active Teams recording status before any
+     * media-derived transcript is persisted or processed (Microsoft Media
+     * Access API obligation). Default true; set false only if recording/
+     * compliance is enforced out-of-band.
+     */
+    requireRecordingStatus: z.boolean().default(true),
+    /**
+     * Outbound calling: let OpenClaw ask the worker to place a 1:1 Teams call to
+     * a user ("call me when the task is done"). The worker exposes an
+     * HMAC-authenticated `POST {workerBaseUrl}/api/calls`.
+     */
+    outbound: z
+      .object({
+        enabled: z.boolean().default(false),
+        /** Base URL of the worker HTTP API (e.g. https://virtual-employee.pcfc.ae). */
+        workerBaseUrl: z.string().url().optional(),
+        /** AAD tenant id used when placing calls (the target user's tenant). */
+        tenantId: z.string().min(1).optional(),
+        /**
+         * Safety-net timeout (ms) for a placed outbound call to connect its media WebSocket back.
+         * If it never connects, the CallRecord is finalized so it doesn't linger. Default 120000:
+         * comfortably longer than a typical Teams ring-to-answer (~30-60s before missed/voicemail),
+         * so it only fires on a genuinely dead placement, not a slow answer. Tune per environment.
+         */
+        answerTimeoutMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .default({ enabled: false }),
+    /**
+     * Group/meeting calls: when more than one human is on the call, only respond once the assistant
+     * is addressed by name — mirroring the chat channel's group @mention gate. 1:1 calls always
+     * respond. A call has no structured @mention, so "addressed" is matched from the transcript
+     * against `wakePhrases` (the bot's name). After being addressed, `followUpWindowMs` keeps the
+     * bot engaged for a natural back-and-forth without re-stating its name each turn.
+     */
+    groupCall: z
+      .object({
+        /** Require the bot to be addressed by name before responding in a group call. Default true. */
+        requireAddress: z.boolean().default(GROUP_CALL_GATE_DEFAULTS.requireAddress),
+        /**
+         * Phrases that count as addressing the bot (case-insensitive, boundary-aware), e.g. the
+         * bot's display name. With the gate on and this empty, the gate is inert (the bot would
+         * otherwise be muted forever). Set this to your bot's name. Default ["assistant"].
+         */
+        wakePhrases: z.array(z.string().min(1)).default(GROUP_CALL_GATE_DEFAULTS.wakePhrases),
+        /**
+         * After an addressed turn, keep responding to follow-ups without re-addressing for this many
+         * ms. Default 12000. 0 = the bot must be addressed on every turn.
+         */
+        followUpWindowMs: z
+          .number()
+          .int()
+          .nonnegative()
+          .default(GROUP_CALL_GATE_DEFAULTS.followUpWindowMs),
+      })
+      .strict()
+      // Same source of truth as the per-field defaults (group-call-gate.ts) — previously restated.
+      .default({ ...GROUP_CALL_GATE_DEFAULTS }),
+    /**
+     * CVI vision spend cap: max vision-model / frame consumptions per minute per call. Bounds the cost
+     * of continuous perception across all three consumers — the `look_at_screen` tool (realtime), the
+     * streaming per-turn frame attach, and the realtime ambient frame push (`sendImage`, ~every 6s on a
+     * changed frame). 0 = unlimited.
+     */
+    maxVisionPerMinute: z.number().int().nonnegative().default(30),
+    /**
+     * Post meeting minutes (key points, decisions, action items) to the caller's Teams chat when a
+     * call ends. Opt-in: the bot posting unprompted to chat must be an explicit operator decision.
+     */
+    meetingRecap: z.boolean().default(false),
+    /**
+     * Bilingual mode (#19): instruct the realtime model to detect the caller's language (Arabic or
+     * English), always reply in that same language, and translate accurately between the two on
+     * request. Off by default — the model's natural language-mirroring is unchanged.
+     */
+    bilingual: z.boolean().default(false),
+  })
+  .strict();
+export type MsteamsConfig = z.infer<typeof MsteamsConfigSchema>;
 
 const PlivoConfigSchema = z
   .object({
@@ -193,7 +306,8 @@ export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfi
 const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
-const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
+const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call", "per-thread"]);
+export type VoiceCallSessionScope = z.infer<typeof VoiceCallSessionScopeSchema>;
 
 const OutboundConfigSchema = z
   .object({
@@ -315,6 +429,17 @@ const VoiceCallRealtimeConfigSchema = z
     consultThinkingLevel: VoiceCallRealtimeConsultThinkingLevelSchema.optional(),
     /** Optional fast mode override for the regular agent behind realtime consults. */
     consultFastMode: z.boolean().optional(),
+    /**
+     * Half-duplex echo guard: while assistant audio is playing, drop caller-leg input to the realtime
+     * model UNLESS it is loud enough to be a genuine barge-in — so the bot does not answer its own
+     * voice echoing back off the caller's device, while the caller can still interrupt. Default ON;
+     * set false to disable.
+     */
+    suppressInputDuringPlayback: z.boolean().optional(),
+    /** Echo guard: playout window (ms) after our last sent frame during which caller input is gated. Default 600. */
+    echoSuppressionWindowMs: z.number().int().nonnegative().optional(),
+    /** Echo guard: normalized RMS (0..1) above which caller input during playback is a barge-in, not echo. Default 0.04. */
+    echoBargeInRms: z.number().nonnegative().optional(),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
@@ -395,8 +520,8 @@ export const VoiceCallConfigSchema = z
     /** Enable voice call functionality */
     enabled: z.boolean().default(false),
 
-    /** Active provider (telnyx, twilio, plivo, or mock) */
-    provider: z.enum(["telnyx", "twilio", "plivo", "mock"]).optional(),
+    /** Active provider (telnyx, twilio, plivo, mock, or msteams) */
+    provider: z.enum(["telnyx", "twilio", "plivo", "mock", "msteams"]).optional(),
 
     /** Telnyx-specific configuration */
     telnyx: TelnyxConfigSchema.optional(),
@@ -407,6 +532,9 @@ export const VoiceCallConfigSchema = z
     /** Plivo-specific configuration */
     plivo: PlivoConfigSchema.optional(),
 
+    /** Microsoft Teams provider — bridges Teams call audio via an external Windows worker */
+    msteams: MsteamsConfigSchema.optional(),
+
     /** Phone number to call from (E.164) */
     fromNumber: E164Schema.optional(),
 
@@ -414,10 +542,13 @@ export const VoiceCallConfigSchema = z
     toNumber: E164Schema.optional(),
 
     /** Inbound call policy */
-    inboundPolicy: InboundPolicySchema.default("disabled"),
+    // Optional (not .default) so resolve can see "operator didn't set it" and apply the
+    // provider-specific default — msteams → "allowlist" (safe inbound-first), others → "disabled".
+    // A baked-in schema default would make that resolve branch dead code.
+    inboundPolicy: InboundPolicySchema.optional(),
 
-    /** Allowlist of phone numbers for inbound calls (E.164) */
-    allowFrom: z.array(E164Schema).default([]),
+    /** Allowlist for inbound calls: E.164 phone numbers or Teams AAD object ids. */
+    allowFrom: z.array(AllowFromEntrySchema).default([]),
 
     /** Greeting message for inbound calls */
     inboundGreeting: z.string().optional(),
@@ -629,6 +760,18 @@ export function resolveTwilioAuthToken(
   });
 }
 
+const MSTEAMS_SHARED_SECRET_PATH = "plugins.entries.voice-call.config.msteams.sharedSecret";
+
+/** Resolve the msteams HMAC shared secret from its SecretRef-compatible config value. */
+export function resolveMsteamsSharedSecret(
+  config: Pick<VoiceCallConfig, "msteams">,
+): string | undefined {
+  return normalizeResolvedSecretInputString({
+    value: config.msteams?.sharedSecret,
+    path: MSTEAMS_SHARED_SECRET_PATH,
+  });
+}
+
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
   const defaults = cloneDefaultVoiceCallConfig();
   const serve = { ...defaults.serve, ...config.serve };
@@ -661,6 +804,26 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     serve,
     tailscale: { ...defaults.tailscale, ...config.tailscale },
     tunnel: { ...defaults.tunnel, ...config.tunnel },
+    // msteams.path and requireRecordingStatus carry schema defaults, so apply
+    // them explicitly here — the `...config` spread above only sees the optional
+    // input shape.
+    msteams: config.msteams
+      ? {
+          ...config.msteams,
+          path: config.msteams.path ?? "/voice/msteams/stream",
+          requireRecordingStatus: config.msteams.requireRecordingStatus ?? true,
+          meetingRecap: config.msteams.meetingRecap ?? false,
+          bilingual: config.msteams.bilingual ?? false,
+          outbound: {
+            enabled: config.msteams.outbound?.enabled ?? false,
+            workerBaseUrl: config.msteams.outbound?.workerBaseUrl,
+            tenantId: config.msteams.outbound?.tenantId,
+            answerTimeoutMs: config.msteams.outbound?.answerTimeoutMs,
+          },
+          groupCall: resolveGroupCallGateConfig(config.msteams.groupCall),
+          maxVisionPerMinute: config.msteams.maxVisionPerMinute ?? 30,
+        }
+      : config.msteams,
     webhookSecurity: {
       ...defaults.webhookSecurity,
       ...config.webhookSecurity,
@@ -699,6 +862,8 @@ export function resolveVoiceCallSessionKey(params: {
   config: Pick<VoiceCallConfig, "sessionScope">;
   callId: string;
   phone?: string;
+  /** Conversation thread id (e.g. a Teams chat thread) for sessionScope "per-thread". */
+  threadId?: string;
   explicitSessionKey?: string;
 }): string {
   const explicit = params.explicitSessionKey?.trim();
@@ -707,6 +872,12 @@ export function resolveVoiceCallSessionKey(params: {
   }
   if (params.config.sessionScope === "per-call") {
     return `voice:call:${params.callId}`;
+  }
+  // Per-thread: parallel conversations (different meetings/chats) get separate sessions even with
+  // the same caller; a recurring thread keeps its context across calls. Falls through to the
+  // per-phone key when the provider has no thread (e.g. PSTN).
+  if (params.config.sessionScope === "per-thread" && params.threadId?.trim()) {
+    return `voice:thread:${params.threadId.trim()}`;
   }
   const normalizedPhone = params.phone?.replace(/\D/g, "");
   return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
@@ -763,6 +934,17 @@ export function resolveVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallC
     resolved.webhookSecurity.trustForwardingHeaders ?? false;
   resolved.webhookSecurity.trustedProxyIPs = resolved.webhookSecurity.trustedProxyIPs ?? [];
 
+  // Microsoft Teams is inbound-first, but defaulting inbound to "open" would
+  // accept every authenticated Teams caller out of the box. Use a safe
+  // allowlist-oriented default instead: with an empty allowFrom no caller is
+  // accepted until the operator opts callers in (the allowlist accepts AAD
+  // object ids) or explicitly sets inboundPolicy: "open". No unsafe default.
+  if (resolved.provider === "msteams" && config.inboundPolicy === undefined) {
+    resolved.inboundPolicy = "allowlist";
+  }
+  // Every other provider keeps the conservative closed default when unset.
+  resolved.inboundPolicy = resolved.inboundPolicy ?? "disabled";
+
   return normalizeVoiceCallConfig(resolved);
 }
 
@@ -783,7 +965,9 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     errors.push("plugins.entries.voice-call.config.provider is required");
   }
 
-  if (!config.fromNumber && config.provider !== "mock") {
+  // msteams and mock are inbound-first providers that never place outbound PSTN
+  // calls, so a fromNumber is meaningless for them.
+  if (!config.fromNumber && config.provider !== "mock" && config.provider !== "msteams") {
     errors.push(
       config.provider === "twilio"
         ? "plugins.entries.voice-call.config.fromNumber is required (or set TWILIO_FROM_NUMBER env)"
@@ -835,6 +1019,26 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     }
   }
 
+  if (config.provider === "msteams") {
+    // The Teams bridge cannot accept calls without a listening port and an HMAC
+    // shared secret, so require them up front rather than starting a runtime that
+    // silently never binds. (path has a schema default.)
+    if (!config.msteams?.port) {
+      errors.push("plugins.entries.voice-call.config.msteams.port is required");
+    }
+    if (!hasConfiguredSecretInput(config.msteams?.sharedSecret)) {
+      errors.push("plugins.entries.voice-call.config.msteams.sharedSecret is required");
+    }
+    // msteams is driven entirely by a realtime path: either streaming
+    // transcription or realtime voice-to-voice. Refuse to bind a listener that
+    // would accept calls it can neither transcribe nor answer.
+    if (!config.streaming?.enabled && !config.realtime?.enabled) {
+      errors.push(
+        'plugins.entries.voice-call.config.streaming.enabled (or realtime.enabled) must be true for provider "msteams"',
+      );
+    }
+  }
+
   if (config.realtime.enabled && config.inboundPolicy === "disabled") {
     errors.push(
       'plugins.entries.voice-call.config.inboundPolicy must not be "disabled" when realtime.enabled is true',
@@ -851,10 +1055,11 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     config.realtime.enabled &&
     config.provider &&
     config.provider !== "twilio" &&
-    config.provider !== "telnyx"
+    config.provider !== "telnyx" &&
+    config.provider !== "msteams"
   ) {
     errors.push(
-      'plugins.entries.voice-call.config.provider must be "twilio" or "telnyx" when realtime.enabled is true',
+      'plugins.entries.voice-call.config.provider must be "twilio", "telnyx", or "msteams" when realtime.enabled is true',
     );
   }
 
