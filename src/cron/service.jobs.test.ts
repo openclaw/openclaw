@@ -633,6 +633,49 @@ describe("applyJobPatch", () => {
     applyJobPatch(job, { enabled: true });
     expect(job.enabled).toBe(true);
   });
+
+  it("allows safe recovery patches on legacy recurring deleteAfterRun jobs", () => {
+    const job = createMainSystemEventJob("legacy-invalid-delete-after-run", undefined);
+    job.deleteAfterRun = true;
+
+    applyJobPatch(job, { name: "renamed legacy job" });
+    expect(job.name).toBe("renamed legacy job");
+    expect(job.deleteAfterRun).toBe(true);
+
+    applyJobPatch(job, {
+      enabled: false,
+      deleteAfterRun: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+    });
+    expect(job.enabled).toBe(false);
+
+    applyJobPatch(job, { deleteAfterRun: false });
+    expect(job.deleteAfterRun).toBe(false);
+
+    applyJobPatch(job, { enabled: true });
+    expect(job.enabled).toBe(true);
+  });
+
+  it("rejects re-enabling legacy recurring deleteAfterRun jobs before clearing the flag", () => {
+    const job = createMainSystemEventJob("legacy-disabled-delete-after-run", undefined);
+    job.deleteAfterRun = true;
+    job.enabled = false;
+
+    expect(() => applyJobPatch(job, { enabled: true })).toThrow(
+      'cron deleteAfterRun is only supported for schedule.kind="at"',
+    );
+  });
+
+  it("rejects recurring schedule changes that keep legacy deleteAfterRun jobs invalid", () => {
+    const job = createMainSystemEventJob("legacy-schedule-delete-after-run", undefined);
+    job.deleteAfterRun = true;
+
+    expect(() =>
+      applyJobPatch(job, {
+        schedule: { kind: "cron", expr: "*/5 * * * *" },
+      }),
+    ).toThrow('cron deleteAfterRun is only supported for schedule.kind="at"');
+  });
 });
 
 function createMockState(now: number, opts?: { defaultAgentId?: string }): CronServiceState {
