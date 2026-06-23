@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
-import { listManagedPluginNpmProjectRootsSync } from "./npm-project-roots.js";
+import { listManagedPluginNpmRootsSync } from "./npm-project-roots.js";
 
 export const RETAINED_MANAGED_NPM_INSTALL_MARKER = ".openclaw-retained-npm-install.json";
 const RETAINED_MANAGED_NPM_INSTALL_MARKER_DIR = ".openclaw-retained-npm-installs";
@@ -117,6 +117,55 @@ function isPathEqualOrInside(parentPath: string, childPath: string): boolean {
   return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`));
 }
 
+function listManagedNpmPackageDirs(npmRoot: string): string[] {
+  const nodeModulesDir = path.join(npmRoot, "node_modules");
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(nodeModulesDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  return entries.flatMap((entry) => {
+    if (!entry.isDirectory()) {
+      return [];
+    }
+    if (!entry.name.startsWith("@")) {
+      return [path.join(nodeModulesDir, entry.name)];
+    }
+    return fs
+      .readdirSync(path.join(nodeModulesDir, entry.name), { withFileTypes: true })
+      .filter((scopedEntry) => scopedEntry.isDirectory())
+      .map((scopedEntry) => path.join(nodeModulesDir, entry.name, scopedEntry.name));
+  });
+}
+
+async function cleanupRetainedLegacyNpmPackages(params: {
+  npmRoot: string;
+  activeInstallPaths: string[];
+  onError?: (error: unknown, projectRoot: string) => void;
+}): Promise<number> {
+  let removed = 0;
+  for (const packageDir of listManagedNpmPackageDirs(params.npmRoot)) {
+    if (
+      !hasRetainedManagedNpmInstallMarker(packageDir) ||
+      params.activeInstallPaths.some((installPath) => isPathEqualOrInside(packageDir, installPath))
+    ) {
+      continue;
+    }
+    try {
+      await fs.promises.rm(packageDir, { recursive: true, force: true });
+      await clearRetainedManagedNpmInstallMarker(packageDir);
+      removed += 1;
+    } catch (error) {
+      params.onError?.(error, packageDir);
+    }
+  }
+  return removed;
+}
+
 export async function cleanupRetainedManagedNpmInstallGenerations(
   params: {
     activeInstallPaths?: Iterable<string>;
@@ -133,7 +182,15 @@ export async function cleanupRetainedManagedNpmInstallGenerations(
     path.resolve(installPath),
   );
   let removed = 0;
-  for (const projectRoot of listManagedPluginNpmProjectRootsSync(npmDir)) {
+  for (const projectRoot of listManagedPluginNpmRootsSync(npmDir)) {
+    if (path.resolve(projectRoot) === path.resolve(npmDir)) {
+      removed += await cleanupRetainedLegacyNpmPackages({
+        npmRoot: projectRoot,
+        activeInstallPaths,
+        onError: params.onError,
+      });
+      continue;
+    }
     const markerDir = path.join(projectRoot, RETAINED_MANAGED_NPM_INSTALL_MARKER_DIR);
     let markerEntries: fs.Dirent[];
     try {

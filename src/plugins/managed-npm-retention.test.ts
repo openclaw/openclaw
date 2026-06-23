@@ -48,4 +48,28 @@ describe("managed npm retention", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("cleans retained packages from the legacy shared npm root", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-retention-"));
+    const npmDir = path.join(stateDir, "npm");
+    const packageDir = path.join(npmDir, "node_modules", "@openclaw", "codex");
+    fs.mkdirSync(packageDir, { recursive: true });
+    await markRetainedManagedNpmInstall({
+      packageDir,
+      pluginId: "codex",
+      reason: "test-legacy-generation",
+    });
+
+    try {
+      await expect(
+        cleanupRetainedManagedNpmInstallGenerations({
+          npmDir,
+        }),
+      ).resolves.toBe(1);
+      expect(fs.existsSync(packageDir)).toBe(false);
+      expect(hasRetainedManagedNpmInstallMarker(packageDir)).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 });
