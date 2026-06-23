@@ -90,6 +90,42 @@ describe("commitments command", () => {
     ]);
   });
 
+  it("keeps fixed-width table columns aligned when values are truncated", async () => {
+    mocks.listCommitments.mockResolvedValue([
+      commitment({
+        id: "cm_abcdefghijklmnopqrstuvwxyz",
+        agentId: "agent-with-a-very-long-name",
+        channel: "telegram",
+        to: "recipient-with-a-very-long-address",
+        suggestedText:
+          "This suggested text is intentionally long enough to exceed the table cell width and be truncated.",
+      }),
+    ]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsListCommand({}, runtime);
+
+    const tableLines = logs.map(stripAnsi).slice(3);
+    const [header, row] = tableLines;
+    if (!header || !row) {
+      throw new Error("Expected commitments table header and row");
+    }
+    expect(row).toContain("…");
+    expect(row).not.toContain("...");
+    const rowValuesByHeader = new Map([
+      ["Status", "pending"],
+      ["Kind", "event_check_in"],
+      ["Due", "2026-04-30T17:00:00.000Z"],
+      ["Scope", "agent-with-a-very-long-name"],
+      ["Suggested text", "This suggested text"],
+    ]);
+    for (const [label, rowValue] of rowValuesByHeader) {
+      const expectedColumn = header.indexOf(label);
+      expect(expectedColumn).toBeGreaterThanOrEqual(0);
+      expect(row.indexOf(rowValue)).toBe(expectedColumn);
+    }
+  });
+
   it("tolerates Date-invalid commitment due timestamps in table output", async () => {
     mocks.listCommitments.mockResolvedValue([
       commitment({
