@@ -425,6 +425,25 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe("Live reply");
   });
 
+  it("ignores duplicate delta event frames for the same run sequence", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      seq: 7,
+      sessionKey: "main",
+      state: "delta",
+      deltaText: " reply",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatStream).toBe("Live reply");
+  });
+
   it("uses the cumulative snapshot when a missed delta would make append stale", () => {
     const state = createState({
       sessionKey: "main",
@@ -747,6 +766,27 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages[0]).toEqual(payload.message);
   });
 
+  it("ignores duplicate final event frames from another run without clearing active stream", () => {
+    const state = createActiveStreamingState();
+    const payload: ChatEventPayload = {
+      runId: "run-announce",
+      seq: 9,
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Sub-agent findings" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toEqual([payload.message]);
+  });
+
   it("drops NO_REPLY final payload from another run without clearing active stream", () => {
     const state = createActiveStreamingState();
     const payload = createOtherRunNoReplyFinalPayload();
@@ -963,6 +1003,31 @@ describe("handleChatEvent", () => {
       message: finalMsg,
     };
     expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([finalMsg]);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("ignores duplicate final event frames for the same run sequence", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+    });
+    const finalMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: "Complete reply" }],
+      timestamp: 101,
+    };
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      seq: 8,
+      sessionKey: "main",
+      state: "final",
+      message: finalMsg,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(handleChatEvent(state, payload)).toBe(null);
     expect(state.chatMessages).toEqual([finalMsg]);
     expect(state.chatStream).toBe(null);
   });

@@ -64,7 +64,9 @@ const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
+const CHAT_EVENT_DEDUPE_LIMIT = 200;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
+const acceptedChatEventKeys = new WeakMap<object, Map<string, number>>();
 
 function beginChatHistoryRequest(state: ChatState): number {
   const key = state as object;
@@ -426,6 +428,7 @@ export type ChatMetadataResult = CommandsListResult & {
 
 export type ChatEventPayload = {
   runId?: string;
+  seq?: number;
   sessionKey: string;
   agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
@@ -434,6 +437,50 @@ export type ChatEventPayload = {
   replace?: boolean;
   errorMessage?: string;
 };
+
+function chatEventDedupeKey(payload: ChatEventPayload): string | null {
+  if (typeof payload.runId !== "string" || !payload.runId.trim()) {
+    return null;
+  }
+  if (typeof payload.seq !== "number" || !Number.isFinite(payload.seq)) {
+    return null;
+  }
+  // Gateway chat frames are ordered per run; use frame identity so legitimate
+  // repeated assistant text from later turns is still rendered.
+  return [
+    payload.sessionKey,
+    typeof payload.agentId === "string" ? payload.agentId : "",
+    payload.runId,
+    payload.seq,
+    payload.state,
+  ].join("\0");
+}
+
+function acceptChatEventFrame(state: ChatState, payload: ChatEventPayload): boolean {
+  const key = chatEventDedupeKey(payload);
+  if (!key) {
+    return true;
+  }
+  const stateKey = state as object;
+  let accepted = acceptedChatEventKeys.get(stateKey);
+  if (!accepted) {
+    accepted = new Map();
+    acceptedChatEventKeys.set(stateKey, accepted);
+  }
+  if (accepted.has(key)) {
+    return false;
+  }
+  accepted.set(key, Date.now());
+  if (accepted.size > CHAT_EVENT_DEDUPE_LIMIT) {
+    for (const staleKey of accepted.keys()) {
+      accepted.delete(staleKey);
+      if (accepted.size <= CHAT_EVENT_DEDUPE_LIMIT) {
+        break;
+      }
+    }
+  }
+  return true;
+}
 
 function setChatError(state: ChatState, error: string | null) {
   state.lastError = error;
@@ -1293,6 +1340,9 @@ export async function abortChatRun(state: ChatState): Promise<boolean> {
 
 export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
+    return null;
+  }
+  if (!acceptChatEventFrame(state, payload)) {
     return null;
   }
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
