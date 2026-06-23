@@ -325,7 +325,7 @@ controls it can enforce at the SDK boundary: `includeCoreTools`, the
 runtime tool allowlist, and `toolConstructionPlan`.
 
 The bridge also uses the shared harness tool-surface helper from
-`openclaw/plugin-sdk/agent-harness-runtime` for PI parity. When
+`openclaw/plugin-sdk/agent-harness-tool-runtime` for PI parity. When
 tool-search is enabled, the SDK sees compact control tools plus a hidden
 catalog executor instead of every OpenClaw tool schema. When code mode is
 enabled, the helper builds the same code-mode control surface and catalog

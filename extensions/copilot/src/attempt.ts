@@ -62,7 +62,7 @@ import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.j
 
 const SUPPORTED_PROVIDERS = new Set(["github-copilot"]);
 const BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS = 5_000;
-const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["ask_user", "builtin:ask_user"] as const;
+const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["builtin:ask_user"] as const;
 
 type AttemptResultWithSdkSessionId = AgentHarnessAttemptResult & { sdkSessionId?: string };
 type PromptErrorWithCode = Error & { code?: string; cause?: unknown };
@@ -227,6 +227,7 @@ function deferBackgroundCompactionCleanup(params: {
   bridge: ReturnType<typeof attachEventBridge>;
   handle: PooledClient;
   pool: CopilotClientPool;
+  cleanupToolBridge?: () => void;
   sdkSessionId?: string;
   session: SessionLike;
   timeoutMs: number;
@@ -255,6 +256,7 @@ function deferBackgroundCompactionCleanup(params: {
       } catch {
         // The attempt has already returned its timeout result.
       }
+      params.cleanupToolBridge?.();
       if (outcome !== "completed" && params.sdkSessionId) {
         try {
           await params.handle.client.deleteSession(params.sdkSessionId);
@@ -852,7 +854,6 @@ export async function runCopilotAttempt(
     }
   } finally {
     settled = true;
-    cleanupToolBridge?.();
     userInputBridgeRef?.cancelPending();
     if (activeRunHandleRef) {
       clearActiveEmbeddedRun(
@@ -876,6 +877,7 @@ export async function runCopilotAttempt(
         abortSignal: cleanupAbort.signal,
         awaitSessionIdle: !bridge.hasObservedSessionIdle(),
         bridge,
+        cleanupToolBridge,
         handle,
         pool: deps.pool,
         sdkSessionId,
@@ -904,6 +906,7 @@ export async function runCopilotAttempt(
       // defines as no background agents in flight. Timeouts retain the bridge
       // until that event so compaction that starts after the timer still completes.
       await bridge?.awaitCompactionChain();
+      cleanupToolBridge?.();
       bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);
 

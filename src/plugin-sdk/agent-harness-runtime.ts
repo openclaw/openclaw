@@ -51,7 +51,6 @@ export type {
   AgentHarnessUserInputPromptOptions,
   AgentHarnessUserInputQuestion,
 } from "../agents/harness/user-input-bridge.js";
-export type { AgentHarnessToolSurfaceRuntime } from "../agents/harness/tool-surface-bridge.js";
 export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -165,7 +164,6 @@ export {
   formatAgentHarnessUserInputPrompt,
   normalizeAgentHarnessUserInputAnswer,
 } from "../agents/harness/user-input-bridge.js";
-export { createAgentHarnessToolSurfaceRuntime } from "../agents/harness/tool-surface-bridge.js";
 export {
   buildSkillWorkshopPromptSection,
   SKILL_WORKSHOP_TOOL_NAME,

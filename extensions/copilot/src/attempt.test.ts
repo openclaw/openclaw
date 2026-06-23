@@ -1910,6 +1910,7 @@ describe("runCopilotAttempt", () => {
   it("retains a timed-out session until later compaction reaches session.idle", async () => {
     const afterCompaction = vi.fn();
     const onDeferredCompaction = vi.fn();
+    const cleanupToolBridge = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_compaction", handler: afterCompaction }]),
     );
@@ -1922,8 +1923,14 @@ describe("runCopilotAttempt", () => {
         );
       },
     });
+    const createToolBridge = vi.fn(async () => ({
+      cleanup: cleanupToolBridge,
+      sdkTools: [],
+      sourceTools: [],
+    }));
 
     const result = await runCopilotAttempt(makeParams(), {
+      createToolBridge,
       onDeferredCompaction,
       pool: makeFakePool(sdk),
     });
@@ -1933,6 +1940,7 @@ describe("runCopilotAttempt", () => {
     expect(onDeferredCompaction).toHaveBeenCalledWith(
       expect.objectContaining({ sdkSessionId: "sess-1" }),
     );
+    expect(cleanupToolBridge).not.toHaveBeenCalled();
     expect(activeSession?.disconnect).not.toHaveBeenCalled();
 
     activeSession?.emit("session.compaction_start", {});
@@ -1946,6 +1954,7 @@ describe("runCopilotAttempt", () => {
     await vi.waitFor(() => {
       expect(activeSession?.disconnect).toHaveBeenCalledTimes(1);
     });
+    expect(cleanupToolBridge).toHaveBeenCalledTimes(1);
   });
 
   it("does not mark a timeout after SDK compaction has completed as active compaction", async () => {
@@ -3150,7 +3159,6 @@ describe("runCopilotAttempt", () => {
       expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual([
         "read",
         "edit",
-        "ask_user",
         "builtin:ask_user",
       ]);
     });
@@ -3168,10 +3176,7 @@ describe("runCopilotAttempt", () => {
 
       await runCopilotAttempt(makeParams(), { createToolBridge, pool });
 
-      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual([
-        "ask_user",
-        "builtin:ask_user",
-      ]);
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["builtin:ask_user"]);
     });
 
     it("forwards the full bridged set when the run is unrestricted (no toolsAllow)", async () => {
@@ -3197,7 +3202,6 @@ describe("runCopilotAttempt", () => {
         "edit",
         "exec",
         "message",
-        "ask_user",
         "builtin:ask_user",
       ]);
     });
@@ -3224,7 +3228,7 @@ describe("runCopilotAttempt", () => {
 
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
-      expect(resumeCfg?.availableTools).toEqual(["read", "ask_user", "builtin:ask_user"]);
+      expect(resumeCfg?.availableTools).toEqual(["read", "builtin:ask_user"]);
     });
 
     it("forwards `[]` to resumeSession when the bridge returns no tools", async () => {
@@ -3243,7 +3247,7 @@ describe("runCopilotAttempt", () => {
 
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
-      expect(resumeCfg?.availableTools).toEqual(["ask_user", "builtin:ask_user"]);
+      expect(resumeCfg?.availableTools).toEqual(["builtin:ask_user"]);
     });
   });
 

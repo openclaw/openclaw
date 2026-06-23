@@ -206,7 +206,8 @@ helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
 
 Native harnesses that need PI-like compact tool routing should use
-`createAgentHarnessToolSurfaceRuntime(...)` from the same SDK subpath. It owns
+`createAgentHarnessToolSurfaceRuntime(...)` from
+`openclaw/plugin-sdk/agent-harness-tool-runtime`. It owns
 tool-search/code-mode control selection, local-model lean defaults,
 runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
