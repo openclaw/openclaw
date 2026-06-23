@@ -11,6 +11,11 @@ import {
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
 
+type CatalogScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
+type FlowCatalogScenario = CatalogScenario & {
+  execution: Extract<CatalogScenario["execution"], { kind: "flow" }>;
+};
+
 function listScenarioMarkdownPaths(dir = "qa/scenarios"): string[] {
   return fs
     .readdirSync(dir, { withFileTypes: true })
@@ -22,6 +27,18 @@ function listScenarioMarkdownPaths(dir = "qa/scenarios"): string[] {
       return entry.isFile() && entry.name.endsWith(".md") ? [entryPath] : [];
     })
     .toSorted();
+}
+
+function isFlowScenario(scenario: CatalogScenario): scenario is FlowCatalogScenario {
+  return scenario.execution.kind === "flow";
+}
+
+function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
+  expect(scenario.execution.kind).toBe("flow");
+  if (!isFlowScenario(scenario)) {
+    throw new Error(`expected ${scenario.id} to be a flow scenario`);
+  }
+  return scenario;
 }
 
 function flowContainsCall(value: unknown, callName: string): boolean {
@@ -159,8 +176,8 @@ describe("qa scenario catalog", () => {
   });
 
   it("loads explicit suite isolation metadata from per-scenario YAML", () => {
-    const staleLinks = readQaScenarioById("subagent-stale-child-links");
-    const kitchenSink = readQaScenarioById("kitchen-sink-live-openai");
+    const staleLinks = requireFlowScenario(readQaScenarioById("subagent-stale-child-links"));
+    const kitchenSink = requireFlowScenario(readQaScenarioById("kitchen-sink-live-openai"));
 
     expect(staleLinks.execution.suiteIsolation).toBe("isolated");
     expect(staleLinks.execution.isolationReason).toContain("gateway session");
@@ -169,11 +186,11 @@ describe("qa scenario catalog", () => {
   });
 
   it("requires explicit suite isolation for gateway state restart scenarios", () => {
-    const scenarios = readQaScenarioPack().scenarios.filter(
-      (scenario) =>
-        scenario.execution.kind === "flow" &&
+    const scenarios = readQaScenarioPack()
+      .scenarios.filter(isFlowScenario)
+      .filter((scenario) =>
         flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation"),
-    );
+      );
 
     expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
       "kitchen-sink-live-openai",

@@ -216,6 +216,9 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
 }
 
 function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
+  if (scenario.execution.kind !== "flow") {
+    return false;
+  }
   return (
     scenario.execution.suiteIsolation === "isolated" ||
     isQaMergePatchObject(scenario.gatewayConfigPatch) ||
