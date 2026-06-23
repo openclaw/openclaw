@@ -23,7 +23,8 @@ import {
   configureMemoryCoreDreamingState,
   resetMemoryCoreDreamingStateForTests,
 } from "./src/dreaming-state.js";
-import { searchVector } from "./src/memory/manager-search.js";
+import { bm25RankToScore, buildFtsQuery } from "./src/memory/hybrid.js";
+import { searchKeyword, searchVector } from "./src/memory/manager-search.js";
 import { testing as shortTermTesting } from "./src/short-term-promotion.js";
 
 function createDoctorContext(env: NodeJS.ProcessEnv): PluginDoctorStateMigrationContext {
@@ -141,6 +142,9 @@ async function createCanonicalMemoryIndex(agentPath: string, text: string): Prom
       "[0,1,0]",
       31,
     );
+    db.prepare(
+      "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(text, "canonical-chunk", "MEMORY.md", "memory", "embed-model", 1, 1);
   } finally {
     db.close();
   }
@@ -171,6 +175,17 @@ async function createUnrelatedCanonicalMemoryIndex(agentPath: string): Promise<v
       "canonical unrelated memory",
       "[0,1,0]",
       31,
+    );
+    db.prepare(
+      "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      "canonical unrelated memory",
+      "canonical-other-chunk",
+      "OTHER.md",
+      "memory",
+      "embed-model",
+      1,
+      1,
     );
   } finally {
     db.close();
@@ -231,6 +246,25 @@ async function searchMigratedVectorRows(agentPath: string) {
       ensureVectorReady: async () => true,
       sourceFilterVec: { sql: "", params: [] },
       sourceFilterChunks: { sql: "", params: [] },
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function searchMigratedKeywordRows(agentPath: string, query: string) {
+  const db = new DatabaseSync(agentPath);
+  try {
+    return await searchKeyword({
+      db,
+      ftsTable: "memory_index_chunks_fts",
+      query,
+      ftsTokenizer: "unicode61",
+      limit: 10,
+      snippetMaxChars: 200,
+      sourceFilter: { sql: "", params: [] },
+      buildFtsQuery,
+      bm25RankToScore,
     });
   } finally {
     db.close();
@@ -559,6 +593,8 @@ describe("memory-core doctor dreaming migration", () => {
       ],
       cache: [{ provider: "openai", hash: "chunk-hash" }],
     });
+    const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
+    expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 

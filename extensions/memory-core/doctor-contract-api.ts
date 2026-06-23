@@ -8,6 +8,7 @@ import {
   loadSqliteVecExtension,
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_CHUNKS_TABLE,
+  MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
@@ -299,6 +300,36 @@ function copyLegacyMemoryVectorRows(db: DatabaseSync, schema: string): void {
   );
 }
 
+function copyLegacyMemoryFtsRows(db: DatabaseSync, schema: string): void {
+  if (!tableExists(db, "main", MEMORY_INDEX_FTS_TABLE)) {
+    return;
+  }
+  db.exec(`
+    INSERT INTO main.${MEMORY_INDEX_FTS_TABLE} (
+      text, id, path, source, model, start_line, end_line
+    )
+    SELECT legacy.text, legacy.id, legacy.path, legacy.source, legacy.model,
+           legacy.start_line, legacy.end_line
+    FROM ${schema}.chunks AS legacy
+    JOIN main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk ON chunk.id = legacy.id
+    WHERE NOT EXISTS (
+      SELECT 1 FROM main.${MEMORY_INDEX_FTS_TABLE} AS canonical
+      WHERE canonical.id = legacy.id
+    );
+  `);
+  assertLegacyRowsCopied(
+    db,
+    `SELECT COUNT(*) AS missing
+     FROM ${schema}.chunks AS legacy
+     JOIN main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk ON chunk.id = legacy.id
+     WHERE NOT EXISTS (
+       SELECT 1 FROM main.${MEMORY_INDEX_FTS_TABLE} AS canonical
+       WHERE canonical.id = legacy.id
+     )`,
+    "fts",
+  );
+}
+
 function copyLegacyMemoryIndexRows(db: DatabaseSync, schema: string): void {
   db.exec(`
     INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
@@ -356,6 +387,7 @@ function copyLegacyMemoryIndexRows(db: DatabaseSync, schema: string): void {
      )`,
     "chunks",
   );
+  copyLegacyMemoryFtsRows(db, schema);
   copyLegacyMemoryVectorRows(db, schema);
   if (hasLegacyEmbeddingCacheTable(db, schema)) {
     db.exec(`
