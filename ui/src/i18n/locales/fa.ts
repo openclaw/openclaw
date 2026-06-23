@@ -63,7 +63,6 @@ export const fa: TranslationMap = {
     docs: "مستندات",
     theme: "پوسته",
     colorMode: "حالت رنگ",
-    colorModeOption: "حالت رنگ: {mode}",
     resources: "منابع",
     search: "جستجو",
     save: "ذخیره",

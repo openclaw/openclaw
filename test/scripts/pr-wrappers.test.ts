@@ -12,6 +12,9 @@ describe("scripts/pr wrappers", () => {
 
     expect(script).toContain("export NO_COLOR=1");
     expect(script).toContain("unset COLORTERM");
+    expect(script).toContain('source "$script_parent_dir/lib/plain-gh.sh"');
+    expect(script).toContain("OPENCLAW_GH_BIN=");
+    expect(script).toContain("gh_plain");
     expect(script).toContain("scripts/pr review-init <PR>");
     expect(script).toContain("scripts/pr prepare-run <PR>");
     expect(script).toContain("scripts/pr merge-run <PR>");

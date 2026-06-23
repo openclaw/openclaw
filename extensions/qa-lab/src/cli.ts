@@ -40,6 +40,7 @@ type QaRunCliOptions = QaLabSelfCheckCommandOptions &
     qaProfile?: QaProfileCommandOptions["profile"];
     surface?: QaProfileCommandOptions["surface"];
     category?: QaProfileCommandOptions["category"];
+    scenario?: QaProfileCommandOptions["scenarioIds"];
     evidenceMode?: QaProfileCommandOptions["evidenceMode"];
     excludeTestExecutionEvidence?: boolean;
   };
@@ -48,6 +49,7 @@ const QA_RUN_PROFILE_ONLY_OPTIONS = [
   { optionName: "outputDir", flag: "--output-dir" },
   { optionName: "surface", flag: "--surface" },
   { optionName: "category", flag: "--category" },
+  { optionName: "scenario", flag: "--scenario" },
   { optionName: "evidenceMode", flag: "--evidence-mode" },
   { optionName: "excludeTestExecutionEvidence", flag: "--exclude-test-execution-evidence" },
   { optionName: "transport", flag: "--transport" },
@@ -62,6 +64,8 @@ const QA_RUN_PROFILE_ONLY_OPTIONS = [
 const QA_RUN_SELF_CHECK_ONLY_OPTIONS = [{ optionName: "output", flag: "--output" }] as const;
 
 type QaSuiteCliOptions = QaScenarioRunCliOptions & {
+  channelDriver?: QaSuiteCommandOptions["channelDriver"];
+  channel?: QaSuiteCommandOptions["channel"];
   runner?: QaSuiteCommandOptions["runner"];
   thinking?: QaSuiteCommandOptions["thinking"];
   cliAuthMode?: QaSuiteCommandOptions["cliAuthMode"];
@@ -397,6 +401,12 @@ export function registerQaLabCli(program: Command) {
     .option("--surface <id>", "Limit --qa-profile to a taxonomy surface id")
     .option("--category <id>", "Limit --qa-profile to a taxonomy category id")
     .option(
+      "--scenario <id>",
+      "Limit --qa-profile to a scenario id (repeatable)",
+      collectString,
+      [],
+    )
+    .option(
       "--evidence-mode <mode>",
       "Set profile qa-evidence.json mode: full or slim",
       parseQaEvidenceModeOption,
@@ -430,6 +440,7 @@ export function registerQaLabCli(program: Command) {
         profile: opts.qaProfile,
         surface: opts.surface,
         category: opts.category,
+        scenarioIds: opts.scenario,
         evidenceMode: resolveQaEvidenceModeOptions(opts),
         transportId: opts.transport,
         providerMode: opts.providerMode,
@@ -453,6 +464,11 @@ export function registerQaLabCli(program: Command) {
     .option("--output-dir <path>", "Suite artifact directory")
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
+    .option("--channel-driver <id>", "QA channel driver: qa-channel, crabline, or live")
+    .option(
+      "--channel <id>",
+      "Internal host QA channel override for --channel-driver; defaults to scenario/default",
+    )
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
@@ -504,6 +520,8 @@ export function registerQaLabCli(program: Command) {
         repoRoot: opts.repoRoot,
         outputDir: opts.outputDir,
         transportId: opts.transport,
+        channelDriver: opts.channelDriver,
+        channel: opts.channel,
         runner: opts.runner,
         providerMode: opts.providerMode,
         primaryModel: opts.model,

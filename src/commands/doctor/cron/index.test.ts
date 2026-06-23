@@ -600,6 +600,144 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("1 job still uses legacy", "Cron");
   });
 
+  it("advises on isolated shell-prompt jobs without a non-actionable --fix repair note (#94655)", async () => {
+    const storePath = await makeTempStorePath();
+    const shellPromptJobs: Array<Record<string, unknown>> = [
+      createCurrentCronJob({
+        id: "shell-prompt-job-1",
+        name: "Shell prompt job 1",
+        schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message:
+            "Run python3 scripts/check_mail.py and send a compact summary if anything changed.",
+          toolsAllow: ["*"],
+        },
+        delivery: { mode: "announce" },
+      }),
+      createCurrentCronJob({
+        id: "shell-prompt-job-2",
+        name: "Shell prompt job 2",
+        schedule: { kind: "cron", expr: "15 * * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "Run node scripts/check_mail.js and summarize any new messages.",
+          toolsAllow: ["bash"],
+        },
+        delivery: { mode: "announce" },
+      }),
+      createCurrentCronJob({
+        id: "shell-prompt-job-3",
+        name: "Shell prompt job 3",
+        schedule: { kind: "cron", expr: "45 * * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "Execute ./scripts/check_mail.sh and report changed mailbox counts.",
+          toolsAllow: ["shell"],
+        },
+        delivery: { mode: "announce" },
+      }),
+    ];
+    const shellPromptJob = requirePersistedJob(shellPromptJobs, 0);
+    await writeCurrentCronStore(storePath, shellPromptJobs);
+
+    const prompter = makePrompter(true);
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    // The advisory is informational only: doctor --fix cannot rewrite a working
+    // isolated agentTurn job, so the misleading repair note must stay absent.
+    expectNoNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining(
+      "3 isolated cron jobs drive shell/process tools from the agent prompt and keep running as-is: `Shell prompt job 1`, `Shell prompt job 2`, `Shell prompt job 3`.",
+      "Cron",
+    );
+    expectNoteContaining("informational only", "Cron");
+    expectNoteContaining("Shell prompt job 1", "Cron");
+    expectNoteContaining("Shell prompt job 2", "Cron");
+    expectNoteContaining("Shell prompt job 3", "Cron");
+    expectNoNoteContaining("openclaw doctor --fix", "Cron");
+    expectNoNoteContaining("jobs.json", "Cron");
+    expect(prompter.confirm).not.toHaveBeenCalled();
+
+    // No churn: the advisory does not rewrite the still-working jobs.
+    const persistedJobs = await readPersistedJobs(storePath);
+    expect(persistedJobs).toEqual(shellPromptJobs);
+    const job = requirePersistedJob(persistedJobs, 0);
+    expect(job).toEqual(shellPromptJob);
+    const reloaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    expect(reloaded.configJobIndexes).toEqual([0, 1, 2]);
+    expect(reloaded.invalidConfigRows).toEqual([]);
+    const configJob = requirePersistedJob(reloaded.configJobs, 0);
+    expect(configJob).toEqual(
+      Object.fromEntries(Object.entries(shellPromptJob).filter(([key]) => key !== "updatedAtMs")),
+    );
+    expect(reloaded.configJobRuntimeEntries[0]).toEqual({
+      updatedAtMs: shellPromptJob.updatedAtMs,
+      state: {},
+      scheduleIdentity: JSON.stringify({
+        version: 1,
+        enabled: shellPromptJob.enabled,
+        schedule: shellPromptJob.schedule,
+      }),
+    });
+    const payload = requireRecord(job.payload, "cron payload");
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toContain("python3 scripts/check_mail.py");
+  });
+
+  it("keeps restricted command prompts actionable without a --fix repair note", async () => {
+    const storePath = await makeTempStorePath();
+    const commandPromptJob = createCurrentCronJob({
+      id: "restricted-command-prompt",
+      name: "Restricted command prompt",
+      schedule: { kind: "cron", expr: "*/30 * * * *", tz: "UTC" },
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: [
+          "Command to run:",
+          "- command: python3 scripts/check_mail.py",
+          "- workdir: /home/openclaw/.razor/clawd",
+        ].join("\n"),
+        toolsAllow: ["read", "message"],
+      },
+      delivery: { mode: "announce" },
+    });
+    await writeCurrentCronStore(storePath, [commandPromptJob]);
+
+    const prompter = makePrompter(true);
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    expectNoNoteContaining("Cron store issues detected", "Cron");
+    expectNoteContaining(
+      "1 isolated cron job describes a shell command in the agent prompt but lacks shell/process tool access: `Restricted command prompt`.",
+      "Cron",
+    );
+    expectNoteContaining("not the supported shell-tool prompt shape", "Cron");
+    expectNoteContaining("Recreate the job as a command cron job", "Cron");
+    expectNoNoteContaining("informational only", "Cron");
+    expectNoNoteContaining("keep running as-is", "Cron");
+    expectNoNoteContaining("openclaw doctor --fix", "Cron");
+    expect(prompter.confirm).not.toHaveBeenCalled();
+
+    const job = requirePersistedJob(await readPersistedJobs(storePath), 0);
+    const payload = requireRecord(job.payload, "cron payload");
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toContain("python3 scripts/check_mail.py");
+    expect(payload.toolsAllow).toEqual(["read", "message"]);
+  });
+
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [

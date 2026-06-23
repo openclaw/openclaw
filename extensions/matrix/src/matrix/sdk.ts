@@ -485,11 +485,28 @@ export class MatrixClient {
       getUserId: () => this.getUserId(),
       getPassword: () => this.password,
       canUnlockSecretStorage: async () => {
-        const defaultKeyId = await this.client.secretStorage.getDefaultKeyId();
+        const secretStorage = (
+          this.client as {
+            secretStorage?: Partial<
+              Pick<MatrixJsClient["secretStorage"], "checkKey" | "getDefaultKeyId" | "getKey">
+            >;
+          }
+        ).secretStorage;
+        // Partial test/runtime facades can omit secretStorage; forced reset must fail closed
+        // without turning missing recovery access into a noisy caught TypeError.
+        if (
+          !secretStorage ||
+          typeof secretStorage.getDefaultKeyId !== "function" ||
+          typeof secretStorage.getKey !== "function" ||
+          typeof secretStorage.checkKey !== "function"
+        ) {
+          return false;
+        }
+        const defaultKeyId = await secretStorage.getDefaultKeyId();
         if (!defaultKeyId) {
           return false;
         }
-        const keyTuple = await this.client.secretStorage.getKey(defaultKeyId);
+        const keyTuple = await secretStorage.getKey(defaultKeyId);
         const key = this.recoveryKeyStore.getSecretStorageKeyCandidate(defaultKeyId);
         if (!keyTuple || !key) {
           return false;
@@ -498,7 +515,7 @@ export class MatrixClient {
         if (!keyInfo.iv?.trim() || !keyInfo.mac?.trim()) {
           return false;
         }
-        return await this.client.secretStorage.checkKey(key, keyInfo);
+        return await secretStorage.checkKey(key, keyInfo);
       },
       getDeviceId: () => this.client.getDeviceId(),
       verificationManager: this.verificationManager,

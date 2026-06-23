@@ -1111,6 +1111,29 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBe("thread-2");
   });
 
+  it("can resolve the same explicit recipient without inheriting its session threadId", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-3",
+      lastChannel: "forum",
+      lastTo: "room:default",
+      lastThreadId: "thread-2",
+    });
+
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "forum",
+        to: "room:default",
+      },
+      { inheritSessionThread: false },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("room:default");
+    expect(result.threadId).toBeUndefined();
+  });
+
   it("does not carry a Telegram topic threadId to a bare explicit group target", async () => {
     setLastSessionEntry({
       sessionId: "sess-telegram-topic",

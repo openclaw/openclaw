@@ -357,6 +357,9 @@ function dispatchCronFailureDestinationNotifications(params: {
           to: failureDest.to,
           accountId: failureDest.accountId,
           sessionKey: deliverySessionKey,
+          // A configured failure route is already explicit; keep the cron run
+          // session only for context, not for reattaching the primary topic.
+          inheritSessionThread: false,
         },
         `⚠️ ${failureMessage}`,
       );

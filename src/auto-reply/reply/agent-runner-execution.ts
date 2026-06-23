@@ -2410,12 +2410,14 @@ export async function runAgentTurnWithFallback(params: {
                       params.followupRun.originatingTo ??
                       params.sessionCtx.OriginatingTo ??
                       params.sessionCtx.To,
+                    senderId: params.followupRun.run.senderId,
+                    chatId: params.followupRun.originatingChatId,
+                    channelContext: params.followupRun.run.channelContext,
                     currentThreadTs:
                       cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
                     currentMessageId: cliCurrentMessageId,
                     currentInboundAudio: hasInboundAudio(params.sessionCtx),
                     agentAccountId: params.followupRun.run.agentAccountId,
-                    senderId: params.followupRun.run.senderId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
                     approvalReviewerDeviceId: params.followupRun.run.approvalReviewerDeviceId,
                     toolsAllow: params.opts?.toolsAllow,

@@ -147,6 +147,25 @@ describe("ollama embedding provider", () => {
     expect(vector[1]).toBeCloseTo(0.8, 5);
   });
 
+  it("applies outputDimensionality before normalizing vectors", async () => {
+    mockEmbeddingFetch([3, 4, 12]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "unknown-embedder",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+      outputDimensionality: 2,
+    });
+
+    const vector = await provider.embedQuery("hi");
+
+    expect(vector).toHaveLength(2);
+    expect(vector[0]).toBeCloseTo(0.6, 5);
+    expect(vector[1]).toBeCloseTo(0.8, 5);
+  });
+
   it("marks the configured Ollama origin for managed-proxy direct routing", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
 
@@ -662,6 +681,23 @@ describe("ollama embedding provider", () => {
     const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
+  });
+
+  it("includes outputDimensionality in the memory embedding cache identity", async () => {
+    const result = await ollamaMemoryEmbeddingProviderAdapter.create({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+      outputDimensionality: 2,
+    });
+
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      provider: "ollama",
+      model: "nomic-embed-text",
+      outputDimensionality: 2,
+    });
   });
 
   it("marks inline memory batches as local-server timeout work", async () => {

@@ -6,6 +6,8 @@ import { parse } from "yaml";
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
+const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -15,8 +17,28 @@ function readWorkflowSanityWorkflow() {
   return parse(readFileSync(".github/workflows/workflow-sanity.yml", "utf8"));
 }
 
+function readRealBehaviorProofWorkflow() {
+  return parse(readFileSync(".github/workflows/real-behavior-proof.yml", "utf8"));
+}
+
+function readMaturityScorecardWorkflow() {
+  return parse(readFileSync(".github/workflows/maturity-scorecard.yml", "utf8"));
+}
+
+function readQaProfileEvidenceWorkflow() {
+  return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
+}
+
 function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
+}
+
+function readAndroidCompileSdk(path: string): number {
+  const match = readFileSync(path, "utf8").match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
+  if (!match) {
+    throw new Error(`Missing compileSdk in ${path}`);
+  }
+  return Number(match[1]);
 }
 
 function findYamlFiles(directory: string): string[] {
@@ -84,6 +106,46 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
+  it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
+    const cases = [
+      {
+        workflowPath: OPENGREP_PR_DIFF_WORKFLOW,
+        artifactName: "opengrep-pr-diff-sarif",
+      },
+      {
+        workflowPath: OPENGREP_FULL_WORKFLOW,
+        artifactName: "opengrep-full-sarif",
+      },
+    ];
+
+    for (const item of cases) {
+      const workflow = parse(readFileSync(item.workflowPath, "utf8"));
+      const uploadStep = workflow.jobs.scan.steps.find(
+        (step) => step.name === "Upload SARIF as workflow artifact",
+      );
+
+      expect(uploadStep.if, item.workflowPath).toBe("always()");
+      expect(uploadStep.uses, item.workflowPath).toBe(UPLOAD_ARTIFACT_V7);
+      expect(uploadStep.with, item.workflowPath).toMatchObject({
+        name: item.artifactName,
+        path: ".opengrep-out/precise.sarif",
+        "if-no-files-found": "error",
+      });
+    }
+  });
+
+  it("runs real behavior proof from the trusted workflow revision", () => {
+    const workflow = readRealBehaviorProofWorkflow();
+    const source = readFileSync(".github/workflows/real-behavior-proof.yml", "utf8");
+    const checkout = workflow.jobs["real-behavior-proof"].steps.find(
+      (step) => step.uses === CHECKOUT_V6,
+    );
+
+    expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkout.with.ref).not.toBe("${{ github.event.pull_request.base.sha }}");
+    expect(source).toContain("Old PR events can carry a stale base SHA");
+  });
+
   it("keeps docs-change detection fail-safe and fixture-aware", () => {
     const action = readFileSync(".github/actions/detect-docs-changes/action.yml", "utf8");
 
@@ -109,13 +171,29 @@ describe("ci workflow guards", () => {
       "github.event_name == 'pull_request'",
     );
     expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(16);
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(8);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(8);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(8);
     expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(8);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
+  });
+
+  it("installs the Android SDK platform used by Gradle", () => {
+    const workflow = readCiWorkflow();
+    const appCompileSdk = readAndroidCompileSdk("apps/android/app/build.gradle.kts");
+    const benchmarkCompileSdk = readAndroidCompileSdk("apps/android/benchmark/build.gradle.kts");
+    const cacheStep = workflow.jobs.android.steps.find((step) => step.name === "Cache Android SDK");
+    const installStep = workflow.jobs.android.steps.find(
+      (step) => step.name === "Install Android SDK packages",
+    );
+    const packageId = `platforms;android-${appCompileSdk}`;
+
+    expect(appCompileSdk).toBe(benchmarkCompileSdk);
+    expect(cacheStep.with.key).toContain(`platform-${appCompileSdk}-`);
+    expect(installStep.run).toContain(`"${packageId}"`);
+    expect(installStep.run).not.toContain(`${packageId}.0`);
   });
 
   it("debounces canonical main pushes before Blacksmith admission", () => {
@@ -465,6 +543,10 @@ describe("ci workflow guards", () => {
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("300000");
     expect(runStep.env.OPENCLAW_VITEST_NO_OUTPUT_RETRY).toBe("1");
     expect(runStep.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("2");
+    expect(runStep.env.OPENCLAW_NODE_TEST_ENV_JSON).toBe("${{ toJson(matrix.env) }}");
+    expect(runStep.run).toContain("env: JSON.parse(process.env.OPENCLAW_NODE_TEST_ENV_JSON");
+    expect(runStep.run).toContain('if (plan.env && typeof plan.env === "object"');
+    expect(runStep.run).toContain("childEnv[key] = value");
   });
 
   it("uploads a CI timing summary after the run lanes finish", () => {
@@ -517,6 +599,74 @@ describe("ci workflow guards", () => {
       path: "ci-timings-summary.txt",
       "retention-days": 14,
     });
+  });
+
+  it("keeps maturity scorecard generated QA evidence handoff strict", () => {
+    const maturityWorkflow = readMaturityScorecardWorkflow();
+    const qaEvidenceWorkflow = readQaProfileEvidenceWorkflow();
+    const generateJob = maturityWorkflow.jobs.generate_qa_evidence;
+    const publishJob = maturityWorkflow.jobs.publish;
+    const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
+
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
+    expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
+    expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
+    const validateProfileStep = qaRunJob.steps.find(
+      (step) => step.name === "Validate QA profile input",
+    );
+    expect(validateProfileStep.run).toContain(
+      "taxonomy.profiles.find((entry) => entry.id === requested)",
+    );
+    expect(validateProfileStep.run).toContain("profile=${profile.id}");
+    expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
+    expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
+    expect(generateJob.with).toMatchObject({
+      ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      qa_profile: "all",
+    });
+    expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
+
+    const generatedDownloadStep = publishJob.steps.find(
+      (step) => step.name === "Download generated QA evidence artifact",
+    );
+    expect(generatedDownloadStep.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
+    expect(generatedDownloadStep.env.GENERATED_ARTIFACT_NAME).toBe(
+      "${{ needs.generate_qa_evidence.outputs.artifact_name }}",
+    );
+    expect(generatedDownloadStep.run).toContain('gh run download "$GITHUB_RUN_ID"');
+    expect(generatedDownloadStep.run).toContain('--name "$GENERATED_ARTIFACT_NAME"');
+    expect(generatedDownloadStep.run).not.toContain("--pattern");
+
+    const requireEvidenceStep = publishJob.steps.find(
+      (step) => step.name === "Require one QA evidence file",
+    );
+    expect(requireEvidenceStep.run).toContain("Expected exactly one qa-evidence.json file");
+
+    const validateManifestStep = publishJob.steps.find(
+      (step) => step.name === "Validate QA evidence manifest",
+    );
+    expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
+
+    expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
+    const qaEvidenceStep = qaRunJob.steps.find(
+      (step) => step.name === "Validate QA profile evidence",
+    );
+    expect(qaEvidenceStep.env.ARTIFACT_NAME).toBe(
+      "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+    );
+    expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
+
+    const qaUploadStep = qaRunJob.steps.find((step) => step.name === "Upload QA profile evidence");
+    expect(qaUploadStep.with).toMatchObject({
+      name: "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: "${{ steps.run_profile.outputs.output_dir }}",
+      "if-no-files-found": "error",
+    });
+
+    const qaFailStep = qaRunJob.steps.find((step) => step.name === "Fail if QA profile failed");
+    expect(qaFailStep.if).toBe("always()");
   });
 
   it("keeps workflow guards in fast CI-routing checks", () => {

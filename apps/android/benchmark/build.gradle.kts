@@ -5,7 +5,7 @@ plugins {
 
 android {
   namespace = "ai.openclaw.app.benchmark"
-  compileSdk = 37
+  compileSdk = 36
 
   defaultConfig {
     minSdk = 31

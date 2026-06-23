@@ -929,7 +929,7 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/llama-cpp:
-    dependencies:
+    optionalDependencies:
       node-llama-cpp:
         specifier: 3.18.1
         version: 3.18.1(typescript@6.0.3)
@@ -1357,6 +1357,9 @@ importers:
       '@openclaw/whatsapp':
         specifier: workspace:*
         version: link:../whatsapp
+      crabline:
+        specifier: github:openclaw/crabline#b3513f66053788c6a7bd2bc76fbfc7201f647d29
+        version: https://codeload.github.com/openclaw/crabline/tar.gz/b3513f66053788c6a7bd2bc76fbfc7201f647d29
       openclaw:
         specifier: 2026.5.28
         version: 2026.5.28
@@ -4988,6 +4991,12 @@ packages:
   cors@2.8.6:
     resolution: {integrity: sha512-tJtZBBHA6vjIAaF6EnIaq6laBBP9aq/Y3ouVJjEfoHbRBcHBAHYcMh/w8LDrk2PvIMMq8gmopa5D4V8RmbrxGw==}
     engines: {node: '>= 0.10'}
+
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/b3513f66053788c6a7bd2bc76fbfc7201f647d29:
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/openclaw/crabline/tar.gz/b3513f66053788c6a7bd2bc76fbfc7201f647d29}
+    version: 0.1.0
+    engines: {node: '>=22'}
+    hasBin: true
 
   croner@10.0.1:
     resolution: {integrity: sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g==}
@@ -10978,6 +10987,13 @@ snapshots:
     dependencies:
       object-assign: 4.1.1
       vary: 1.1.2
+
+  crabline@https://codeload.github.com/openclaw/crabline/tar.gz/b3513f66053788c6a7bd2bc76fbfc7201f647d29:
+    dependencies:
+      commander: 14.0.3
+      picocolors: 1.1.1
+      yaml: 2.9.0
+      zod: 4.4.3
 
   croner@10.0.1: {}
 

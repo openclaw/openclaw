@@ -7,10 +7,17 @@ import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
+const QA_IMPLICIT_ISOLATION_FLOW_CALLS = new Set([
+  "ensureImageGenerationConfigured",
+  "forceMemoryIndex",
+  "patchConfig",
+  "writeWorkspaceSkill",
+]);
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
@@ -22,6 +29,7 @@ function scenarioMatchesQaProviderLane(params: {
   scenario: QaSeedScenario;
   primaryModel: string;
   providerMode: QaProviderMode;
+  channelDriver?: QaScorecardChannelDriver | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const provider = getQaProvider(params.providerMode);
@@ -31,6 +39,11 @@ function scenarioMatchesQaProviderLane(params: {
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
+    return false;
+  }
+  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
+  const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
+  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
     return false;
   }
   if (provider.kind !== "live") {
@@ -57,6 +70,7 @@ function selectQaFlowSuiteScenarios(params: {
   scenarioIds?: string[];
   providerMode: QaProviderMode;
   primaryModel: string;
+  channelDriver?: QaScorecardChannelDriver | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const requestedScenarioIds =
@@ -92,8 +106,48 @@ function selectQaFlowSuiteScenarios(params: {
         scenario,
         providerMode: params.providerMode,
         primaryModel: params.primaryModel,
+        channelDriver: params.channelDriver,
         claudeCliAuthMode: params.claudeCliAuthMode,
       }),
+  );
+}
+
+function listQaSuiteScenarioChannels(
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+) {
+  return [
+    ...new Set(
+      scenarios
+        .map((scenario) => scenario.execution.channel?.trim().toLowerCase())
+        .filter((channel): channel is string => Boolean(channel)),
+    ),
+  ];
+}
+
+function resolveQaSuiteScenarioChannel(params: {
+  defaultChannel: string;
+  explicitChannel?: string | null;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  const scenarioChannels = listQaSuiteScenarioChannels(params.scenarios);
+  const explicitChannel = params.explicitChannel?.trim().toLowerCase();
+  if (explicitChannel) {
+    const conflictingChannels = scenarioChannels.filter((channel) => channel !== explicitChannel);
+    if (conflictingChannels.length > 0) {
+      throw new Error(
+        `--channel ${explicitChannel} conflicts with selected scenario execution.channel ${conflictingChannels.join(", ")}.`,
+      );
+    }
+    return explicitChannel;
+  }
+  if (scenarioChannels.length === 0) {
+    return params.defaultChannel;
+  }
+  if (scenarioChannels.length === 1) {
+    return scenarioChannels[0];
+  }
+  throw new Error(
+    `Selected QA scenarios require multiple channels (${scenarioChannels.join(", ")}); split the run by channel.`,
   );
 }
 
@@ -161,6 +215,35 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
   );
 }
 
+function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
+  if (scenario.execution.kind !== "flow") {
+    return false;
+  }
+  return (
+    scenario.execution.suiteIsolation === "isolated" ||
+    isQaMergePatchObject(scenario.gatewayConfigPatch) ||
+    scenario.gatewayRuntime !== undefined ||
+    (Array.isArray(scenario.plugins) && scenario.plugins.length > 0) ||
+    normalizeLowercaseStringOrEmpty(scenario.surface) === "memory" ||
+    scenario.execution.config?.ensureImageGeneration === true ||
+    flowContainsImplicitIsolationCall(scenario.execution.flow)
+  );
+}
+
+function flowContainsImplicitIsolationCall(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(flowContainsImplicitIsolationCall);
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.call === "string" && QA_IMPLICIT_ISOLATION_FLOW_CALLS.has(record.call)) {
+    return true;
+  }
+  return Object.values(record).some(flowContainsImplicitIsolationCall);
+}
+
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {
   return normalizeLowercaseStringOrEmpty(scenario.surface) === "control-ui";
 }
@@ -183,17 +266,18 @@ function normalizeQaSuiteConcurrency(
 function resolveQaSuiteWorkerStartStaggerMs(
   concurrency: number,
   env: NodeJS.ProcessEnv = process.env,
+  defaultStaggerMs = DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS,
 ) {
   if (concurrency <= 1) {
     return 0;
   }
   const raw = env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS;
   if (raw === undefined) {
-    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+    return defaultStaggerMs;
   }
   const parsed = parseStrictNonNegativeInteger(raw);
   if (parsed === undefined) {
-    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+    return defaultStaggerMs;
   }
   return parsed;
 }
@@ -277,9 +361,11 @@ export {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
+  scenarioRequiresIsolatedQaSuiteWorker,
   scenarioMatchesQaProviderLane,
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,

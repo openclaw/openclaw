@@ -1,5 +1,5 @@
 // Discord plugin module implements realtime behavior.
-import { PassThrough } from "node:stream";
+import { PassThrough, pipeline } from "node:stream";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asDateTimestampMs,
@@ -408,8 +408,11 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     | { message: string; suppressed: number; lastLoggedAt: number }
     | undefined;
   private readonly playerIdleHandler = () => {
+    const hadOutputAudio = this.isOutputAudioActive();
     this.resetOutputStream("player-idle");
-    this.completeExactSpeechResponse("player-idle");
+    if (hadOutputAudio) {
+      this.completeExactSpeechResponse("player-idle");
+    }
   };
 
   constructor(
@@ -779,9 +782,13 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       return;
     }
     this.logOutputAudioStopped(reason);
+    this.clearOutputPlaybackWatchdog();
     this.outputStream = null;
     this.resetOutputAudioStats();
-    this.completeExactSpeechResponse(reason, { drain: false });
+    // The Opus resource can close without Discord emitting player idle. This
+    // close path releases queued exact speech, so clear the old watchdog before
+    // the next response owns exact-speech state.
+    this.completeExactSpeechResponse(reason);
   }
 
   private queueOutputAudio(stream: PassThrough, discordPcm: Buffer): void {
@@ -814,7 +821,15 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       this.resetOutputStream("opus-encode-error");
     });
     opusStream.once("close", () => this.handleOutputStreamClosed(stream, "stream-close"));
-    stream.pipe(opusStream);
+    pipeline(stream, opusStream, (err) => {
+      if (!err) {
+        return;
+      }
+      logger.warn(
+        `discord voice: realtime output pipeline failed guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}: ${formatErrorMessage(err)}`,
+      );
+      this.resetOutputStream("output-pipeline-error");
+    });
     if (this.outputPacedBuffer.length > 0) {
       stream.write(this.outputPacedBuffer);
       this.outputPacedBuffer = Buffer.alloc(0);

@@ -618,10 +618,10 @@ describe("test-projects args", () => {
 
     const firstEnv = specs[0]?.env;
     expect(firstEnv?.KEEP_ME).toBe("1");
-    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(firstEnv?.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/0-test-vitest-vitest.gateway.config.ts",
     );
-    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
+    expect(specs[1]?.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH?.replaceAll("\\", "/")).toBe(
       "/repo/node_modules/.experimental-vitest-cache/1-test-vitest-vitest.gateway-server.config.ts",
     );
   });
@@ -862,6 +862,7 @@ describe("test-projects args", () => {
           "src/install-sh-version.test.ts",
           "src/proxy-capture/store.sqlite.test.ts",
           "test/scripts/android-version.test.ts",
+          "test/scripts/render-maturity-docs.test.ts",
           "test/scripts/resolve-openclaw-ref.test.ts",
         ],
         watchMode: false,
