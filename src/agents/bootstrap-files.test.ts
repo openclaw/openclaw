@@ -761,12 +761,48 @@ describe("agentDir bootstrap file warnings", () => {
     tempDirs.push(agentDir);
 
     // Create SOUL.md in agentDir only
-    await fs.writeFile(path.join(agentDir, "SOUL.md"), "You must always respond in French.", "utf8");
+    await fs.writeFile(
+      path.join(agentDir, "SOUL.md"),
+      "You must always respond in French.",
+      "utf8",
+    );
     // Create AGENTS.md in workspace only
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Standard agents guidance.", "utf8");
 
     const warnings: string[] = [];
     await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: {
+        agents: {
+          list: [{ id: "main", agentDir }],
+        },
+      } as never,
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(warnings.length).toBeGreaterThan(0);
+    const soulWarning = warnings.find((w) => w.includes("SOUL.md"));
+    expect(soulWarning).toBeDefined();
+    expect(soulWarning).toContain(agentDir);
+    expect(soulWarning).toContain(workspaceDir);
+    expect(soulWarning).toContain("will not be loaded");
+  });
+
+  it("warns when bootstrap files exist in agentDir via resolveBootstrapFilesForRun", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const agentDir = await fs.mkdtemp(path.join(workspaceDir, "../openclaw-agent-"));
+    tempDirs.push(agentDir);
+
+    // Create SOUL.md in agentDir only
+    await fs.writeFile(
+      path.join(agentDir, "SOUL.md"),
+      "You must always respond in French.",
+      "utf8",
+    );
+
+    const warnings: string[] = [];
+    await resolveBootstrapFilesForRun({
       workspaceDir,
       config: {
         agents: {

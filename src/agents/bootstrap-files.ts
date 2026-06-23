@@ -329,6 +329,20 @@ export async function resolveBootstrapFilesForRun(params: {
     workspaceSetupCompleted,
     params.workspaceDir,
   );
+
+  // Check for bootstrap files in agentDir and warn if they won't be loaded
+  if (params.config && params.agentId && params.warn) {
+    const { resolveAgentDir } = await import("./agent-scope.js");
+    const agentDir = resolveAgentDir(params.config, params.agentId);
+    if (agentDir) {
+      await checkAgentDirBootstrapFiles({
+        agentDir,
+        workspaceDir: params.workspaceDir,
+        warn: params.warn,
+      });
+    }
+  }
+
   return sanitizeBootstrapFiles(
     filterHeartbeatBootstrapFile(filteredUpdated, excludeHeartbeatBootstrapFile),
     params.workspaceDir,
@@ -415,17 +429,6 @@ export async function resolveBootstrapContextForRun(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 }> {
-  // Check for bootstrap files in agentDir and warn if they won't be loaded
-  if (params.config && params.agentId && params.warn) {
-    const { resolveAgentDir } = await import("./agent-scope.js");
-    const agentDir = resolveAgentDir(params.config, params.agentId);
-    await checkAgentDirBootstrapFiles({
-      agentDir,
-      workspaceDir: params.workspaceDir,
-      warn: params.warn,
-    });
-  }
-
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
   return { bootstrapFiles, contextFiles };
