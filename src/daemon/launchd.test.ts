@@ -65,6 +65,9 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
 const inspectPortUsage = vi.hoisted(() =>
   vi.fn(async () => ({ port: 18789, status: "free", listeners: [], hints: [] })),
 );
+const probePortUsage = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/ports-probe.js").probePortUsage>(async () => "free"),
+);
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
@@ -262,6 +265,10 @@ vi.mock("../infra/ports.js", () => ({
   formatPortDiagnostics,
 }));
 
+vi.mock("../infra/ports-probe.js", () => ({
+  probePortUsage,
+}));
+
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   const wrapped = {
@@ -354,6 +361,8 @@ beforeEach(() => {
   cleanStaleGatewayProcessesSync.mockReturnValue([]);
   inspectPortUsage.mockReset();
   inspectPortUsage.mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
+  probePortUsage.mockReset();
+  probePortUsage.mockResolvedValue("free");
   formatPortDiagnostics.mockReset();
   formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
@@ -1117,25 +1126,35 @@ describe("launchd install", () => {
       ...createDefaultLaunchdEnv(),
       OPENCLAW_GATEWAY_PORT: "19009",
     };
-    inspectPortUsage
-      .mockResolvedValueOnce({
-        port: 19009,
-        status: "busy",
-        listeners: [],
-        hints: [],
-      })
-      .mockResolvedValueOnce({
-        port: 19009,
-        status: "free",
-        listeners: [],
-        hints: [],
-      });
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19009,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
 
     await runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() });
 
-    expect(inspectPortUsage).toHaveBeenCalledTimes(2);
-    expect(inspectPortUsage).toHaveBeenNthCalledWith(1, 19009);
-    expect(inspectPortUsage).toHaveBeenNthCalledWith(2, 19009);
+    expect(inspectPortUsage).toHaveBeenCalledTimes(1);
+    expect(probePortUsage).toHaveBeenCalledWith(19009);
+  });
+
+  it("keeps waiting until a bind probe explicitly confirms port release", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "19010",
+    };
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19010,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+    probePortUsage.mockResolvedValueOnce("busy").mockResolvedValueOnce("unknown");
+
+    await runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() });
+
+    expect(probePortUsage).toHaveBeenCalledTimes(3);
   });
 
   it("resolves the stop postcondition port from the stored LaunchAgent environment", async () => {
@@ -1170,6 +1189,7 @@ describe("launchd install", () => {
       listeners: [],
       hints: [],
     });
+    probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19004 is held by pid 4242."]);
 
     await expect(runStopLaunchAgentWithFakeTimers({ env, stdout })).rejects.toThrow(
@@ -1315,6 +1335,7 @@ describe("launchd install", () => {
       listeners: [],
       hints: [],
     });
+    probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19008 is held by pid 4242."]);
 
     await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true })).rejects.toThrow(
