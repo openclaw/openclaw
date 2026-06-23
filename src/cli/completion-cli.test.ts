@@ -46,6 +46,19 @@ describe("completion-cli", () => {
     expect(script).toContain("\\$OPENCLAW_STATE_DIR");
   });
 
+  it("escapes zsh option descriptions for double-quoted arguments specs", () => {
+    const program = new Command()
+      .name("openclaw")
+      .option("--literal", "Use $OPENCLAW_STATE_DIR with `model/list` and John's profile");
+
+    const script = getCompletionScript("zsh", program);
+
+    expect(script).toContain(
+      "--literal[Use \\$OPENCLAW_STATE_DIR with \\`model/list\\` and John's profile]",
+    );
+    expect(script).not.toContain("John'\\''s");
+  });
+
   it("defers zsh registration until compinit is available", async () => {
     if (process.platform === "win32") {
       return;
