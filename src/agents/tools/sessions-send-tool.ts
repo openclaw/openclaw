@@ -636,13 +636,14 @@ export function createSessionsSendTool(opts?: {
           targetSessionKey: resolvedKey,
         });
       const skipA2AFlow = skipAcpA2AFlow || skipNativeParentA2AFlow;
-      // When the A2A flow is skipped, no follow-up announcement will fire and
-      // the reply (when present) is returned inline via the `reply` field.
-      // Reflect that in the metadata so the parent LLM does not wait for a
-      // second result that will never arrive.
-      const delivery = skipA2AFlow
-        ? ({ status: "skipped", mode: "announce" } as const)
-        : ({ status: "pending", mode: "announce" } as const);
+      // Build delivery metadata for the response.
+      // The status is updated after startAgentRun succeeds to reflect actual
+      // message state rather than always reporting "pending". When the A2A flow
+      // is skipped, no follow-up announcement will fire and the reply (when
+      // present) is returned inline via the `reply` field. Reflect that so the
+      // parent LLM does not wait for a second result that will never arrive.
+      const buildDelivery = (status: "sent" | "delivered" | "pending" | "accepted" | "skipped") =>
+        ({ status, mode: "announce" } as const);
 
       const startA2AFlow = (
         roundOneReply?: string,
@@ -687,7 +688,7 @@ export function createSessionsSendTool(opts?: {
           runId,
           status: "accepted",
           sessionKey: displayKey,
-          delivery,
+          delivery: buildDelivery(skipA2AFlow ? "skipped" : "sent"),
         });
       }
 
@@ -720,7 +721,7 @@ export function createSessionsSendTool(opts?: {
             error: result.error,
             sentBeforeError: true,
             sessionKey: displayKey,
-            delivery,
+            delivery: buildDelivery(skipA2AFlow ? "skipped" : "pending"),
           });
         }
         if (!isTerminalAgentWaitTimeout(result)) {
@@ -729,7 +730,7 @@ export function createSessionsSendTool(opts?: {
             runId,
             status: "accepted",
             sessionKey: displayKey,
-            delivery,
+            delivery: buildDelivery(skipA2AFlow ? "skipped" : "accepted"),
           });
         }
         return jsonResult({
@@ -757,7 +758,7 @@ export function createSessionsSendTool(opts?: {
         status: "ok",
         reply,
         sessionKey: displayKey,
-        delivery,
+        delivery: buildDelivery(skipA2AFlow ? "skipped" : "delivered"),
       });
     },
   };
