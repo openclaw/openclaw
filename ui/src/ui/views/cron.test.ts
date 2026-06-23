@@ -309,6 +309,26 @@ describe("cron view", () => {
     expect(summaries[1]).toBe("older run");
   });
 
+  it("shows cron job ids and running state in job rows", () => {
+    const container = document.createElement("div");
+    const runningJob: CronJob = {
+      ...createJob("job-running"),
+      name: "Running ping",
+      state: { runningAtMs: 1_700_000_000_000 },
+    };
+    const idleJob = createJob("job-idle");
+
+    render(renderCron(createProps({ jobs: [runningJob, idleJob] })), container);
+
+    const rows = Array.from(container.querySelectorAll(".cron-job")).map((row) =>
+      row.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(rows[0]).toContain("ID: job-running");
+    expect(rows[0]).toContain("Running");
+    expect(rows[1]).toContain("ID: job-idle");
+    expect(rows[1]).toContain("Not running");
+  });
+
   it("renders supported delivery options and normalizes stale announce selection", () => {
     const container = document.createElement("div");
     render(

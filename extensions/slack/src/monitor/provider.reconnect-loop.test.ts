@@ -15,7 +15,7 @@ describe("slack socket reconnect loop", () => {
     vi.useRealTimers();
   });
 
-  it.each([
+  it.each<[string, () => Error]>([
     ["network error", () => new Error("ECONNRESET")],
     [
       "Slack Web API request error",

@@ -9,9 +9,11 @@ import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import {
   formatCronPayload,
+  formatCronRunningState,
   formatCronSchedule,
   formatCronState,
   formatNextRun,
+  isCronJobRunning,
 } from "../presenter.ts";
 import type {
   AgentsFilesListResult,
@@ -391,6 +393,10 @@ export function renderAgentCron(params: {
                         ? html`<div class="list-sub">${job.description}</div>`
                         : nothing}
                       <div class="chip-row" style="margin-top: 6px;">
+                        <span class="chip">${t("agents.cronPanel.jobId")}: ${job.id}</span>
+                        <span class=${`chip ${isCronJobRunning(job) ? "chip-ok" : ""}`}>
+                          ${formatCronRunningState(job)}
+                        </span>
                         <span class="chip">${formatCronSchedule(job)}</span>
                         <span class="chip ${job.enabled ? "chip-ok" : "chip-warn"}">
                           ${job.enabled ? t("common.enabled") : t("common.disabled")}

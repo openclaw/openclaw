@@ -177,6 +177,9 @@ describe("provider attribution", () => {
     const policy = resolveProviderAttributionPolicy("nvidia", {
       OPENCLAW_VERSION: "2026.3.22",
     });
+    if (!policy) {
+      throw new Error("expected NVIDIA attribution policy");
+    }
 
     expect(policy).toEqual({
       provider: "nvidia",

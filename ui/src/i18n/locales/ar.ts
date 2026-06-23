@@ -297,6 +297,7 @@ export const ar: TranslationMap = {
       agentJobsSubtitle: "المهام المجدولة التي تستهدف هذا الوكيل.",
       noJobs: "لا توجد مهام معينة.",
       runNow: "تشغيل الآن",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "مسودة فارغة",
@@ -1668,6 +1669,7 @@ export const ar: TranslationMap = {
       run: "تشغيل",
       history: "السجل",
       remove: "إزالة",
+      id: "ID",
     },
     jobDetail: {
       system: "النظام",
@@ -1679,6 +1681,8 @@ export const ar: TranslationMap = {
     },
     jobState: {
       status: "الحالة",
+      running: "Running",
+      notRunning: "Not running",
       next: "التالي",
       last: "الأخير",
     },

@@ -299,6 +299,7 @@ export const fa: TranslationMap = {
       agentJobsSubtitle: "کارهای زمان‌بندی‌شده‌ای که این عامل را هدف قرار می‌دهند.",
       noJobs: "هیچ کاری اختصاص داده نشده است.",
       runNow: "اکنون اجرا کن",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "پیش‌نویس خالی",
@@ -1688,6 +1689,7 @@ export const fa: TranslationMap = {
       run: "اجرا",
       history: "تاریخچه",
       remove: "حذف",
+      id: "ID",
     },
     jobDetail: {
       system: "سیستم",
@@ -1699,6 +1701,8 @@ export const fa: TranslationMap = {
     },
     jobState: {
       status: "وضعیت",
+      running: "Running",
+      notRunning: "Not running",
       next: "بعدی",
       last: "آخرین",
     },
