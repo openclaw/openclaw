@@ -163,6 +163,36 @@ function runRestartArgParser(...args: string[]) {
   return spawnSync("bash", [harnessPath, ...args], { encoding: "utf8" });
 }
 
+function runRestartLockHarness(lockDir: string) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
+  tempRoots.push(root);
+
+  const script = readFileSync(restartScriptPath, "utf8");
+  const lockBlock = script.slice(
+    script.indexOf("cleanup()"),
+    script.indexOf("check_signing_keys()"),
+  );
+  const harnessPath = join(root, "lock-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `LOCK_DIR=${shellQuote(lockDir)}`,
+      'LOCK_PID_FILE="${LOCK_DIR}/pid"',
+      "LOCK_HELD=0",
+      "WAIT_FOR_LOCK=0",
+      'log() { printf "%s\\n" "$*"; }',
+      lockBlock,
+      "trap cleanup EXIT",
+      "acquire_lock",
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+
+  return spawnSync("bash", [harnessPath], { encoding: "utf8" });
+}
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) {
     rmSync(root, { force: true, recursive: true });
@@ -225,6 +255,37 @@ describe("scripts/restart-mac.sh", () => {
       'LOG_PATH="${OPENCLAW_RESTART_LOG:-${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}.log}"',
     );
     expect(script).not.toContain('LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"');
+  });
+
+  it("does not remove a live restart lock it did not acquire", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
+    tempRoots.push(root);
+    const lockDir = join(root, "openclaw-restart-lock");
+    mkdirSync(lockDir);
+    writeFileSync(join(lockDir, "pid"), String(process.pid), "utf8");
+
+    const result = runRestartLockHarness(lockDir);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      `Another restart is running (pid ${process.pid}); re-run with --wait.`,
+    );
+    expect(result.stderr).toBe("");
+    expect(existsSync(lockDir)).toBe(true);
+    expect(readFileSync(join(lockDir, "pid"), "utf8")).toBe(String(process.pid));
+  });
+
+  it("removes the restart lock it acquired", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-test-"));
+    tempRoots.push(root);
+    const lockDir = join(root, "openclaw-restart-lock");
+
+    const result = runRestartLockHarness(lockDir);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+    expect(existsSync(lockDir)).toBe(false);
   });
 
   it("prefers the freshly packaged app unless an explicit app bundle is set", () => {

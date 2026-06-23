@@ -668,6 +668,45 @@ describe("handleAssistantFailover", () => {
   });
 
   describe("fallback_model branch", () => {
+    it("throws timeout FailoverError for opencode-go provider-owned stalled streams", async () => {
+      const logDecision = vi.fn();
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "fallback_model", reason: "timeout" },
+          fallbackConfigured: true,
+          failoverReason: "timeout",
+          billingFailure: false,
+          lastAssistant: {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "opencode-go",
+            model: "deepseek-v4-flash",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "error",
+            errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
+            content: [],
+            timestamp: 0,
+          },
+          activeErrorContext: { provider: "opencode-go", model: "deepseek-v4-flash" },
+          provider: "opencode-go",
+          modelId: "deepseek-v4-flash",
+          logAssistantFailoverDecision: logDecision,
+        }),
+      );
+
+      const err = expectThrownFailoverError(outcome);
+      expect(err.reason).toBe("timeout");
+      expect(err.status).toBe(408);
+      expect(logDecision).toHaveBeenCalledWith("fallback_model", { status: 408 });
+    });
+
     it("still throws a FailoverError after the surface_error refactor", async () => {
       const logDecision = vi.fn();
       const outcome = await handleAssistantFailover(

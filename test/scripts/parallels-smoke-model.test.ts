@@ -58,6 +58,7 @@ import { testing as packageArtifactTesting } from "../../scripts/e2e/parallels/p
 import { PhaseRunner } from "../../scripts/e2e/parallels/phase-runner.ts";
 import {
   posixCodexPlatformPackageRepairFunction,
+  windowsProviderOnlyPluginIsolationScript,
   windowsCodexPlatformPackageRepairFunction,
 } from "../../scripts/e2e/parallels/plugin-isolation.ts";
 import { parseArgs as parseWindowsSmokeArgs } from "../../scripts/e2e/parallels/windows-smoke.ts";
@@ -230,6 +231,7 @@ describe("Parallels smoke model selection", () => {
   let invalidLinuxAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsAgentTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
   let invalidWindowsUpdateTimeoutResult: ReturnType<typeof spawnNodeEvalSync>;
+  let duplicateNpmUpdatePlatformResult: ReturnType<typeof spawnNodeEvalSync>;
 
   it("parses macOS dscl user homes with spaces on mounted volumes", () => {
     expect(parseMacosDsclUserHomeLine("clawuser /Volumes/Macintosh HD/Users/clawuser")).toEqual({
@@ -304,6 +306,10 @@ describe("Parallels smoke model selection", () => {
     );
     invalidWindowsUpdateTimeoutResult = spawnNodeEvalSync(
       `process.env.OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S = "12.5"; process.argv = ["node", "${TS_PATHS.windows}"]; await import("./${TS_PATHS.windows}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    duplicateNpmUpdatePlatformResult = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.npmUpdate}", "--platform", "macos,macos"]; await import("./${TS_PATHS.npmUpdate}");`,
       { env: process.env, imports: ["tsx"] },
     );
   });
@@ -405,6 +411,23 @@ describe("Parallels smoke model selection", () => {
     }
     expect(posixRepair).toContain("repair_missing_codex_platform_package");
     expect(windowsRepair).toContain("Repair-MissingCodexPlatformPackage");
+  });
+
+  it("keeps Windows provider-only plugin isolation temp scripts per run", () => {
+    const script = windowsProviderOnlyPluginIsolationScript({
+      fallbackPluginId: "openai",
+      modelId: "openai/gpt-5.5",
+    });
+
+    expect(script).toContain("[guid]::NewGuid().ToString('N')");
+    expect(script).toContain("openclaw-parallels-plugin-isolation-");
+    expect(script).not.toContain("'openclaw-parallels-plugin-isolation.cjs'");
+    expect(script).toContain("try {");
+    expect(script).toContain("} finally {");
+    expect(script).toContain(
+      "Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue",
+    );
+    expect(script).toContain("Remove-Item Env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION");
   });
 
   it("writes full model ids as config map keys in provider batches", () => {
@@ -2073,6 +2096,9 @@ setInterval(() => {}, 1000);
     expect(invalidWindowsUpdateTimeoutResult.stderr).toContain(
       "invalid OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S: 12.5",
     );
+
+    expect(duplicateNpmUpdatePlatformResult.status).toBe(1);
+    expect(duplicateNpmUpdatePlatformResult.stderr).toContain("duplicate --platform entry: macos");
 
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
       'this.updateDevTimeoutSeconds = readPositiveIntEnv(\n      "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S"',

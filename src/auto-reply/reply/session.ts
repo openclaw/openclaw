@@ -73,7 +73,7 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
+import { forkSessionEntryFromParent } from "./session-fork.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
@@ -231,6 +231,8 @@ export async function initSessionState(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
+  requestedSessionId?: string;
+  resumeRequestedSession?: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
   // Heartbeat, cron-event, and exec-event runs should NEVER trigger session
@@ -248,6 +250,7 @@ export async function initSessionState(params: {
   // Native slash/menu commands can arrive on a transport-specific "slash session"
   // while explicitly targeting an existing chat session. Honor that explicit target
   // before any binding lookup so command-side mutations land on the intended session.
+  // Priority: commandTargetSessionKey > boundConversation > route.
   const targetSessionKey =
     commandTargetSessionKey ??
     resolveBoundConversationSessionKey({
@@ -265,6 +268,7 @@ export async function initSessionState(params: {
   const agentId = resolveSessionAgentId({
     sessionKey: sessionCtxForState.SessionKey,
     config: cfg,
+    fallbackAgentId: sessionCtxForState.AgentId,
   });
   const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const resetTriggers = sessionCfg?.resetTriggers?.length
@@ -432,6 +436,14 @@ export async function initSessionState(params: {
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
+  const requestedSessionId = params.requestedSessionId?.trim() || undefined;
+  const requestedCurrentSession = Boolean(
+    requestedSessionId && entry?.sessionId && entry.sessionId === requestedSessionId,
+  );
+  // Control UI sends sessionId on ordinary sends too, so only the one-shot reconnect
+  // resume signal is allowed to suppress configured idle/daily rollover.
+  const reconnectResumeRequested =
+    params.resumeRequestedSession === true && requestedCurrentSession;
   const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
@@ -476,7 +488,9 @@ export async function initSessionState(params: {
     }));
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
-    (((entryFreshness?.fresh ?? false) || (softResetAllowed && canReuseExistingEntry)) &&
+    (((reconnectResumeRequested && canReuseExistingEntry) ||
+      (entryFreshness?.fresh ?? false) ||
+      (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
@@ -739,47 +753,39 @@ export async function initSessionState(params: {
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
   let inheritedParentContext = false;
-  if (
-    parentSessionKey &&
-    parentSessionKey !== sessionKey &&
-    sessionStore[parentSessionKey] &&
-    !alreadyForked
-  ) {
-    const parentEntry = sessionStore[parentSessionKey];
-    const forkDecision = await resolveParentForkDecision({
-      parentEntry,
+  if (parentSessionKey && parentSessionKey !== sessionKey && !alreadyForked) {
+    const forked = await forkSessionEntryFromParent({
+      parentSessionKey,
+      sessionKey,
       storePath,
+      fallbackEntry: sessionEntry,
+      agentId,
+      sessionsDir: path.dirname(storePath),
+      decisionSkipPatch: () => ({ ...sessionEntry, forkedFromParent: true }),
+      patch: () => ({
+        ...sessionEntry,
+        totalTokens: undefined,
+        totalTokensFresh: false,
+      }),
     });
-    if (forkDecision.status === "skip") {
+    if (forked.status === "skipped" && forked.decision?.status === "skip") {
       // The parent branch is too large to inherit usefully. Start fresh and
       // mark as handled so the thread does not retry this decision every turn.
       log.warn(
         `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${forkDecision.parentTokens} maxTokens=${forkDecision.maxTokens}`,
+          `parentTokens=${forked.decision.parentTokens} maxTokens=${forked.decision.maxTokens}`,
       );
-      sessionEntry.forkedFromParent = true;
-    } else {
+      sessionEntry = forked.sessionEntry;
+    } else if (forked.status === "forked") {
       log.warn(
         `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${forkDecision.parentTokens ?? "unknown"}`,
+          `parentTokens=${forked.decision.parentTokens ?? "unknown"}`,
       );
-      const forked = await forkSessionFromParent({
-        parentEntry,
-        agentId,
-        sessionsDir: path.dirname(storePath),
-      });
-      if (forked) {
-        sessionId = forked.sessionId;
-        sessionEntry.sessionId = forked.sessionId;
-        sessionEntry.sessionFile = forked.sessionFile;
-        sessionEntry.forkedFromParent = true;
-        // The fork replaces the target transcript with inherited parent
-        // history, so any prior target-session token snapshot is stale.
-        sessionEntry.totalTokens = undefined;
-        sessionEntry.totalTokensFresh = false;
-        inheritedParentContext = true;
-        log.warn(`forked session created: file=${forked.sessionFile}`);
-      }
+      sessionId = forked.fork.sessionId;
+      sessionEntry = forked.sessionEntry;
+      sessionEntry.forkedFromParent = true;
+      inheritedParentContext = true;
+      log.warn(`forked session created: file=${forked.fork.sessionFile}`);
     }
   }
   const threadIdFromSessionKey = parseSessionThreadInfoFast(

@@ -96,6 +96,14 @@ export function parseArgs(argv) {
     trustedSourceId: "",
     trustedSourcePolicy: TRUSTED_PACKAGE_SOURCE_POLICY,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const readValue = (name, readOptions = {}) => {
@@ -110,29 +118,29 @@ export function parseArgs(argv) {
       return value;
     };
     if (arg === "--artifact-dir") {
-      options.artifactDir = readValue(arg);
+      setOnce(arg, "artifactDir", readValue(arg));
     } else if (arg === "--github-output") {
-      options.githubOutput = readValue(arg);
+      setOnce(arg, "githubOutput", readValue(arg));
     } else if (arg === "--metadata") {
-      options.metadata = readValue(arg);
+      setOnce(arg, "metadata", readValue(arg));
     } else if (arg === "--output-dir") {
-      options.outputDir = readValue(arg);
+      setOnce(arg, "outputDir", readValue(arg));
     } else if (arg === "--output-name") {
-      options.outputName = readValue(arg);
+      setOnce(arg, "outputName", readValue(arg));
     } else if (arg === "--package-sha256") {
-      options.packageSha256 = readValue(arg, { allowEmpty: true }).toLowerCase();
+      setOnce(arg, "packageSha256", readValue(arg, { allowEmpty: true }).toLowerCase());
     } else if (arg === "--package-ref") {
-      options.packageRef = readValue(arg, { allowEmpty: true });
+      setOnce(arg, "packageRef", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--package-spec") {
-      options.packageSpec = readValue(arg, { allowEmpty: true });
+      setOnce(arg, "packageSpec", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--package-url") {
-      options.packageUrl = readValue(arg, { allowEmpty: true });
+      setOnce(arg, "packageUrl", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--source") {
-      options.source = readValue(arg);
+      setOnce(arg, "source", readValue(arg));
     } else if (arg === "--trusted-source-id") {
-      options.trustedSourceId = readValue(arg, { allowEmpty: true });
+      setOnce(arg, "trustedSourceId", readValue(arg, { allowEmpty: true }));
     } else if (arg === "--trusted-source-policy") {
-      options.trustedSourcePolicy = readValue(arg);
+      setOnce(arg, "trustedSourcePolicy", readValue(arg));
     } else if (arg === "--help" || arg === "-h") {
       options.help = true;
     } else {

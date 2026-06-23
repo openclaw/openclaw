@@ -7,6 +7,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import type { ExtensionContext } from "./sessions/index.js";
 
+declare module "../plugins/hook-types.js" {
+  interface PluginHookChannelSenderContext {
+    unionId?: string;
+  }
+}
+
+const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
+
 const mocks = vi.hoisted(() => ({
   hookRunner: undefined as
     | {
@@ -129,6 +137,31 @@ describe("exec resolve_exec_env hook wiring", () => {
     mocks.spawnInputs.length = 0;
   });
 
+  it("adds only channel identity env to gateway exec subprocesses", async () => {
+    const tool = createExecTool({
+      host: "auto",
+      security: "full",
+      ask: "off",
+      channelContext: {
+        sender: { id: "ou_1", unionId: "on_1" },
+        chat: { id: "oc_1" },
+      },
+    });
+
+    await tool.execute("call-channel-env", {
+      command: "echo ok",
+      yieldMs: 120_000,
+    });
+
+    expect(JSON.parse(mocks.gatewayParams[0]?.env[CHANNEL_CONTEXT_ENV_KEY] ?? "{}")).toEqual({
+      chat: { id: "oc_1" },
+      sender: { id: "ou_1" },
+    });
+    expect(mocks.spawnInputs[0]?.env?.[CHANNEL_CONTEXT_ENV_KEY]).toBe(
+      mocks.gatewayParams[0]?.env[CHANNEL_CONTEXT_ENV_KEY],
+    );
+  });
+
   it("merges filtered plugin env into gateway execution and approval-visible requested env", async () => {
     installResolveExecEnvHook({
       EXISTING: "plugin",
@@ -146,6 +179,10 @@ describe("exec resolve_exec_env hook wiring", () => {
       sessionKey: "agent:main:telegram:chat-1",
       messageProvider: "telegram",
       currentChannelId: "chat-1",
+      channelContext: {
+        sender: { id: "ou_1", unionId: "on_1" },
+        chat: { id: "oc_1" },
+      },
     });
     await tool.execute("call-1", {
       command: "echo ok",
@@ -164,11 +201,21 @@ describe("exec resolve_exec_env hook wiring", () => {
         sessionKey: "agent:main:telegram:chat-1",
         messageProvider: "telegram",
         channelId: "chat-1",
+        channelContext: {
+          sender: { id: "ou_1", unionId: "on_1" },
+          chat: { id: "oc_1" },
+        },
       },
     );
-    expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+    expect(mocks.gatewayParams[0]?.requestedEnv).toMatchObject({
       EXISTING: "plugin",
       PLUGIN_SAFE: "yes",
+    });
+    expect(
+      JSON.parse(mocks.gatewayParams[0]?.requestedEnv?.[CHANNEL_CONTEXT_ENV_KEY] ?? "{}"),
+    ).toEqual({
+      chat: { id: "oc_1" },
+      sender: { id: "ou_1" },
     });
     expect(mocks.gatewayParams[0]?.env).toMatchObject({
       EXISTING: "plugin",
@@ -194,19 +241,33 @@ describe("exec resolve_exec_env hook wiring", () => {
       security: "full",
       ask: "off",
       sessionKey: "agent:main:main",
+      channelContext: {
+        sender: { id: "ou_node" },
+        chat: { id: "oc_node" },
+      },
     });
     await tool.execute("call-node", {
       command: "echo ok",
       env: { REQUEST_SAFE: "request" },
     });
 
-    expect(mocks.nodeHostParams[0]?.requestedEnv).toEqual({
+    expect(mocks.nodeHostParams[0]?.requestedEnv).toMatchObject({
       NODE_HOST_SAFE: "yes",
       REQUEST_SAFE: "request",
     });
     expect(mocks.nodeHostParams[0]?.env).toMatchObject({
       NODE_HOST_SAFE: "yes",
       REQUEST_SAFE: "request",
+    });
+    expect(
+      JSON.parse(mocks.nodeHostParams[0]?.requestedEnv?.[CHANNEL_CONTEXT_ENV_KEY] ?? "{}"),
+    ).toEqual({
+      chat: { id: "oc_node" },
+      sender: { id: "ou_node" },
+    });
+    expect(JSON.parse(mocks.nodeHostParams[0]?.env?.[CHANNEL_CONTEXT_ENV_KEY] ?? "{}")).toEqual({
+      chat: { id: "oc_node" },
+      sender: { id: "ou_node" },
     });
     expect(mocks.nodeHostParams[0]?.env).not.toHaveProperty("LD_PRELOAD");
   });

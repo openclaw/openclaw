@@ -34,6 +34,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
     listSessionFilesForAgent: vi.fn(async () => []),
+    listSessionTranscriptCorpusEntriesForAgent: vi.fn(async () => []),
     parseCanonicalSessionSyncTargetFromPath: (filePath: string) => ({
       agentId: "main",
       sessionId: basename(filePath).replace(/\.jsonl$/, ""),

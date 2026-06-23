@@ -19,6 +19,7 @@ import {
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
+  filterLiveShortTermRecallEntries,
   isShortTermMemoryPath,
   loadShortTermPromotionDreamingStats,
   recordGroundedShortTermCandidates,
@@ -168,6 +169,42 @@ describe("short-term promotion", () => {
       });
       const store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
       expect(Object.keys(store.entries).length).toBeGreaterThan(0);
+    });
+  });
+
+  it("deduplicates source-file checks within a recall batch", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "Deduplicated source check note.",
+      ]);
+      const relativePath = path.relative(workspaceDir, notePath).replaceAll("\\", "/");
+      const entry = {
+        key: "duplicate-source",
+        path: relativePath,
+        startLine: 1,
+        endLine: 1,
+        source: "memory" as const,
+        snippet: "Deduplicated source check note.",
+        recallCount: 1,
+        dailyCount: 1,
+        groundedCount: 0,
+        totalScore: 0.9,
+        maxScore: 0.9,
+        firstRecalledAt: "2026-04-03T00:00:00.000Z",
+        lastRecalledAt: "2026-04-03T00:00:00.000Z",
+        queryHashes: ["query"],
+        recallDays: ["2026-04-03"],
+        conceptTags: [],
+      };
+      const statSpy = vi.spyOn(fs, "stat");
+
+      const live = await filterLiveShortTermRecallEntries({
+        workspaceDir,
+        entries: [entry, { ...entry, key: "duplicate-source-2" }],
+      });
+
+      expect(live).toHaveLength(2);
+      expect(statSpy).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -20,7 +20,10 @@ import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -45,7 +48,10 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import type { ReplySessionBinding } from "./get-reply.types.js";
+import type {
+  InternalGetReplyOptions as BaseInternalGetReplyOptions,
+  ReplySessionBinding,
+} from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia, hasInboundMediaForUnderstanding } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
@@ -61,7 +67,7 @@ import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
 
-type InternalGetReplyOptions = GetReplyOptions & {
+type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
 };
 
@@ -284,7 +290,7 @@ export async function getReplyFromConfig(
         agentId: resolveSessionAgentId({
           sessionKey: resolvedAgentSessionKey,
           config: cfg,
-          agentId: finalized.AgentId,
+          fallbackAgentId: finalized.AgentId,
         }),
       };
     },
@@ -325,6 +331,7 @@ export async function getReplyFromConfig(
   );
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
+  const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(
@@ -480,6 +487,8 @@ export async function getReplyFromConfig(
           ctx: finalized,
           cfg,
           commandAuthorized,
+          requestedSessionId: internalResolvedOpts?.requestedSessionId,
+          resumeRequestedSession: internalResolvedOpts?.resumeRequestedSession,
         }),
       );
   const {
@@ -501,7 +510,7 @@ export async function getReplyFromConfig(
   } = sessionState;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
-  (resolvedOpts as InternalGetReplyOptions | undefined)?.onSessionPrepared?.({
+  internalResolvedOpts?.onSessionPrepared?.({
     sessionKey,
     sessionId,
     storePath,
@@ -953,6 +962,10 @@ export async function getReplyFromConfig(
         originatingChannel: sessionCtx.OriginatingChannel,
         provider: sessionCtx.Provider,
       });
+      const hookChatId =
+        normalizeOptionalString(sessionCtx.NativeChannelId) ??
+        normalizeOptionalString(sessionCtx.ChatId);
+      const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
       const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
         hookRunner.runBeforeAgentReply(
           { cleanedBody },
@@ -961,13 +974,19 @@ export async function getReplyFromConfig(
             sessionKey: agentSessionKey,
             sessionId,
             workspaceDir,
-            trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+            trigger: hookTrigger,
             ...buildAgentHookContextChannelFields({
               sessionKey: agentSessionKey,
               messageProvider: hookMessageProvider,
               currentChannelId: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
               messageTo: sessionCtx.OriginatingTo ?? ctx.OriginatingTo ?? ctx.To,
               senderId: sessionCtx.SenderId ?? ctx.SenderId,
+            }),
+            ...buildAgentHookContextIdentityFields({
+              trigger: hookTrigger,
+              senderId: sessionCtx.SenderId,
+              chatId: hookChatId,
+              channelContext: sessionCtx.ChannelContext ?? ctx.ChannelContext,
             }),
           },
         ),

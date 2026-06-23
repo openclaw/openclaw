@@ -80,6 +80,24 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+  it("uses the latest CI run when an older duplicate was cancelled", () => {
+    expect(
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+            conclusion: "cancelled",
+          },
+          successfulRun("CI", 2, "2026-06-17T10:48:00Z"),
+        ],
+      }),
+    ).toEqual({
+      headSha: sha,
+      workflows: [expect.objectContaining({ name: "CI", id: 2 })],
+    });
+  });
+
   it("accepts the explicit exact-SHA manual CI release gate", () => {
     expect(
       collectHostedGateEvidence({
@@ -134,6 +152,30 @@ describe("verify-pr-hosted-gates", () => {
           },
           {
             ...successfulRun(`CI release gate ${sha}`, 2, "2026-06-17T10:49:00Z"),
+            event: "workflow_dispatch",
+            display_title: `CI release gate ${sha}`,
+          },
+        ],
+      }),
+    ).toThrow("Missing successful exact-head CI workflow");
+  });
+
+  it("does not mask a failed CI run with a queued rerun and release-gate fallback", () => {
+    expect(() =>
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+            conclusion: "failure",
+          },
+          {
+            ...successfulRun("CI", 2, "2026-06-17T10:48:00Z"),
+            status: "in_progress",
+            conclusion: null,
+          },
+          {
+            ...successfulRun(`CI release gate ${sha}`, 3, "2026-06-17T10:49:00Z"),
             event: "workflow_dispatch",
             display_title: `CI release gate ${sha}`,
           },
@@ -320,6 +362,54 @@ describe("verify-pr-hosted-gates", () => {
     expect(() =>
       parseArgs(["--repo", "openclaw/openclaw", "--sha", sha, "--output", "-h"]),
     ).toThrow("Expected --output <value>.");
+  });
+
+  it("rejects duplicate hosted gate verifier CLI arguments", () => {
+    const requiredArgs = [
+      "--repo",
+      "openclaw/openclaw",
+      "--sha",
+      sha,
+      "--output",
+      ".local/gates-hosted-checks.json",
+    ];
+    const duplicateCases = [
+      [
+        "--repo",
+        [
+          "--repo",
+          "openclaw/openclaw",
+          "--repo",
+          "fork/openclaw",
+          "--sha",
+          sha,
+          "--output",
+          "out.json",
+        ],
+      ],
+      [
+        "--sha",
+        ["--repo", "openclaw/openclaw", "--sha", sha, "--sha", "other-sha", "--output", "out.json"],
+      ],
+      [
+        "--output",
+        [
+          "--repo",
+          "openclaw/openclaw",
+          "--sha",
+          sha,
+          "--output",
+          "one.json",
+          "--output",
+          "two.json",
+        ],
+      ],
+      ["--changelog-only", [...requiredArgs, "--changelog-only", "--changelog-only"]],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once.`);
+    }
   });
 
   it("accepts JSON emitted through a colorizing GitHub CLI shim", () => {

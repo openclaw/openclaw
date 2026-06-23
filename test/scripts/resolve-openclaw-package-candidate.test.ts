@@ -196,6 +196,59 @@ describe("resolve-openclaw-package-candidate", () => {
     }
   });
 
+  it("rejects duplicate package candidate CLI options", () => {
+    const requiredArgs = ["--source", "npm", "--output-dir", ".artifacts/docker-e2e-package"];
+    const duplicateCases = [
+      ["--artifact-dir", [...requiredArgs, "--artifact-dir", "one", "--artifact-dir", "two"]],
+      [
+        "--github-output",
+        [...requiredArgs, "--github-output", "one.out", "--github-output", "two.out"],
+      ],
+      ["--metadata", [...requiredArgs, "--metadata", "one.json", "--metadata", "two.json"]],
+      ["--output-dir", ["--source", "npm", "--output-dir", "one", "--output-dir", "two"]],
+      ["--output-name", [...requiredArgs, "--output-name", "one.tgz", "--output-name", "two.tgz"]],
+      ["--package-ref", [...requiredArgs, "--package-ref", "one", "--package-ref", "two"]],
+      [
+        "--package-spec",
+        [...requiredArgs, "--package-spec", "openclaw@beta", "--package-spec", "openclaw@latest"],
+      ],
+      [
+        "--package-url",
+        [...requiredArgs, "--package-url", "", "--package-url", "https://example.com/openclaw.tgz"],
+      ],
+      ["--package-sha256", [...requiredArgs, "--package-sha256", "", "--package-sha256", "abc123"]],
+      [
+        "--source",
+        [
+          "--source",
+          "npm",
+          "--source",
+          "artifact",
+          "--output-dir",
+          ".artifacts/docker-e2e-package",
+        ],
+      ],
+      [
+        "--trusted-source-id",
+        [...requiredArgs, "--trusted-source-id", "one", "--trusted-source-id", "two"],
+      ],
+      [
+        "--trusted-source-policy",
+        [
+          ...requiredArgs,
+          "--trusted-source-policy",
+          "one.json",
+          "--trusted-source-policy",
+          "two.json",
+        ],
+      ],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
+    }
+  });
+
   it("rejects package candidate output names that escape the output directory", () => {
     for (const outputName of [
       "../openclaw-current.tgz",

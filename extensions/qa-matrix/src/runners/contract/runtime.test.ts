@@ -1,4 +1,5 @@
 // Qa Matrix tests cover runtime plugin behavior.
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
@@ -77,6 +78,19 @@ function buildMatrixQaSummaryInput(
 }
 
 describe("matrix live qa runtime", () => {
+  it("uses unique default artifact directories", () => {
+    const repoRoot = "/repo";
+    const firstOutputDir = liveTesting.resolveMatrixQaOutputDir({ repoRoot });
+    const secondOutputDir = liveTesting.resolveMatrixQaOutputDir({ repoRoot });
+
+    expect(path.dirname(firstOutputDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
+    expect(path.basename(firstOutputDir)).toMatch(/^matrix-[a-z0-9]+-[a-f0-9]{8}$/u);
+    expect(secondOutputDir).not.toBe(firstOutputDir);
+    expect(liveTesting.resolveMatrixQaOutputDir({ outputDir: ".artifacts/custom", repoRoot })).toBe(
+      ".artifacts/custom",
+    );
+  });
+
   it("prints Matrix QA progress by default for non-interactive runs", () => {
     const previous = process.env.OPENCLAW_QA_MATRIX_PROGRESS;
     delete process.env.OPENCLAW_QA_MATRIX_PROGRESS;

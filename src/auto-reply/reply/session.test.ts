@@ -50,6 +50,97 @@ type ForkSessionParamsForTest = {
 };
 
 vi.mock("./session-fork.js", () => ({
+  forkSessionEntryFromParent: async (params: {
+    fallbackEntry?: SessionEntry;
+    parentSessionKey: string;
+    storePath: string;
+    patch?: (patchParams: {
+      entry: SessionEntry;
+      parentEntry: SessionEntry;
+      fork: { sessionId: string; sessionFile: string };
+      decision: { status: "fork"; maxTokens: number; parentTokens?: number };
+    }) => Partial<SessionEntry>;
+    decisionSkipPatch?: (patchParams: {
+      decision: {
+        status: "skip";
+        reason: "parent-too-large";
+        maxTokens: number;
+        parentTokens: number;
+        message: string;
+      };
+      entry: SessionEntry;
+      parentEntry: SessionEntry;
+    }) => Partial<SessionEntry>;
+    sessionsDir: string;
+  }) => {
+    const store = JSON.parse(await fs.readFile(params.storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    const parentEntry = store[params.parentSessionKey];
+    if (!parentEntry?.sessionId) {
+      return { status: "missing-parent" };
+    }
+    const maxTokens = 100_000;
+    const parentTokens = await sessionForkMocks.resolveParentForkTokenCount({
+      parentEntry,
+      storePath: params.storePath,
+    });
+    if (typeof parentTokens === "number" && parentTokens > maxTokens) {
+      const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
+      const decision = {
+        status: "skip" as const,
+        reason: "parent-too-large" as const,
+        maxTokens,
+        parentTokens,
+        message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
+      };
+      return {
+        status: "skipped",
+        reason: "decision-skip",
+        parentEntry,
+        sessionEntry: {
+          ...entry,
+          ...params.decisionSkipPatch?.({ decision, entry, parentEntry }),
+        },
+        decision,
+      };
+    }
+    const fork = await sessionForkMocks.forkSessionFromParent({
+      parentEntry,
+      sessionsDir: params.sessionsDir,
+    });
+    if (!fork) {
+      return { status: "failed" };
+    }
+    const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
+    return {
+      status: "forked",
+      fork,
+      parentEntry,
+      sessionEntry: {
+        ...entry,
+        ...params.patch?.({
+          entry,
+          parentEntry,
+          fork,
+          decision: {
+            status: "fork",
+            maxTokens,
+            ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+          },
+        }),
+        sessionId: fork.sessionId,
+        sessionFile: fork.sessionFile,
+        forkedFromParent: true,
+      },
+      decision: {
+        status: "fork",
+        maxTokens,
+        ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+      },
+    };
+  },
   forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
     sessionForkMocks.forkSessionFromParent(...args),
   resolveParentForkTokenCount: (...args: [{ parentEntry: SessionEntry; storePath: string }]) =>
@@ -1811,6 +1902,101 @@ describe("initSessionState reset policy", () => {
       ctx: { Body: "hello", SessionKey: sessionKey },
       cfg,
       commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("preserves idle rollover when an ordinary send asserts the current session id", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-requested-session-ordinary-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "webchat-ordinary-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
+      cfg,
+      commandAuthorized: true,
+      requestedSessionId: existingSessionId,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+  });
+
+  it("reuses an idle-expired session when a reconnecting client requests current session resume", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-requested-session-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "webchat-reconnect-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
+      cfg,
+      commandAuthorized: true,
+      requestedSessionId: existingSessionId,
+      resumeRequestedSession: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
+  it("does not reuse an idle-expired session for a stale asserted session id", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-idle-stale-requested-session-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const existingSessionId = "webchat-current-session-id";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 4, 45, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        reset: { mode: "daily", atHour: 4, idleMinutes: 30 },
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey, Provider: "internal", Surface: "internal" },
+      cfg,
+      commandAuthorized: true,
+      requestedSessionId: "webchat-stale-session-id",
+      resumeRequestedSession: true,
     });
 
     expect(result.isNewSession).toBe(true);

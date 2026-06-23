@@ -15,6 +15,10 @@ import {
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
+import {
+  ensurePlaywrightChromium,
+  resolveSystemChromiumExecutablePath,
+} from "../ensure-playwright-chromium.mjs";
 
 const execFileAsync = promisify(execFile);
 const SCENARIO_ID = "ux-matrix-evidence-dashboard";
@@ -31,6 +35,9 @@ type MatrixCell = {
   title: string;
   wallMs: number;
 };
+
+type ChromiumLauncher = Awaited<typeof import("playwright")>["chromium"];
+type ChromiumBrowser = Awaited<ReturnType<ChromiumLauncher["launch"]>>;
 
 export type ProducerOptions = {
   artifactBase: string;
@@ -77,19 +84,31 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   let artifactBase = "";
   let repoRoot = process.cwd();
   let skipVisualProof = false;
+  const seen = new Set<string>();
+  const recordOnce = (flag: string) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--artifact-base") {
-      artifactBase = readOptionValue(argv, index, arg);
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      artifactBase = value;
       index += 1;
       continue;
     }
     if (arg === "--repo-root") {
-      repoRoot = readOptionValue(argv, index, arg);
+      const value = readOptionValue(argv, index, arg);
+      recordOnce(arg);
+      repoRoot = value;
       index += 1;
       continue;
     }
     if (arg === "--skip-visual-proof") {
+      recordOnce(arg);
       skipVisualProof = true;
       continue;
     }
@@ -289,6 +308,54 @@ async function writePreflight(artifactBase: string) {
   );
 }
 
+function isMissingManagedPlaywrightBrowser(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Executable doesn't exist") &&
+    message.includes(".cache/ms-playwright") &&
+    message.includes("playwright install")
+  );
+}
+
+export async function launchUxMatrixChromium(params?: {
+  chromium?: Pick<ChromiumLauncher, "launch">;
+  systemExecutablePath?: string;
+}): Promise<{ browser: ChromiumBrowser; usedSystemExecutablePath?: string }> {
+  const chromium = params?.chromium ?? (await import("playwright")).chromium;
+  try {
+    return { browser: await chromium.launch() };
+  } catch (error) {
+    if (!isMissingManagedPlaywrightBrowser(error)) {
+      throw error;
+    }
+    const executablePath = params?.systemExecutablePath ?? resolveSystemChromiumExecutablePath();
+    if (!executablePath) {
+      throw error;
+    }
+    return {
+      browser: await chromium.launch({ executablePath }),
+      usedSystemExecutablePath: executablePath,
+    };
+  }
+}
+
+export function ensureUxMatrixVideoDependencies(params: {
+  ensureChromium?: typeof ensurePlaywrightChromium;
+  usedSystemExecutablePath?: string;
+}) {
+  if (!params.usedSystemExecutablePath) {
+    return;
+  }
+  const ensureChromium = params.ensureChromium ?? ensurePlaywrightChromium;
+  const status = ensureChromium({
+    ensureFfmpeg: true,
+    systemExecutablePath: params.usedSystemExecutablePath,
+  });
+  if (status !== 0) {
+    throw new Error(`Playwright ffmpeg install failed with status ${status}`);
+  }
+}
+
 async function captureControlUiScreenshot(params: {
   artifactBase: string;
   htmlPath: string;
@@ -298,8 +365,7 @@ async function captureControlUiScreenshot(params: {
 }) {
   const startedAt = Date.now();
   try {
-    const { chromium } = await import("playwright");
-    const browser = await chromium.launch();
+    const { browser } = await launchUxMatrixChromium();
     try {
       const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
       await page.goto(pathToFileURL(params.htmlPath).href);
@@ -436,12 +502,12 @@ async function captureProducerArtifactFixtureProof(params: {
     };
   }
   try {
-    const { chromium } = await import("playwright");
     const videoDir = path.join(path.dirname(params.videoPath), "recording");
     await fs.mkdir(videoDir, { recursive: true });
-    const browser = await chromium.launch();
+    const { browser, usedSystemExecutablePath } = await launchUxMatrixChromium();
     let recordedVideo: string | undefined;
     try {
+      ensureUxMatrixVideoDependencies({ usedSystemExecutablePath });
       const context = await browser.newContext({
         viewport: { width: 1280, height: 820 },
         recordVideo: {

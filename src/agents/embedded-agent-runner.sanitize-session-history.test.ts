@@ -113,6 +113,16 @@ vi.mock("../plugins/provider-runtime.js", async () => {
             ...context.messages,
           ];
         }
+        if (provider === "replay-poison") {
+          return context.messages.filter(
+            (message) =>
+              message.role !== "toolResult" ||
+              !(
+                (message as { isError?: unknown }).isError === true &&
+                JSON.stringify((message as { content?: unknown }).content).includes("aborted")
+              ),
+          );
+        }
         return context.messages;
       },
     ),
@@ -739,6 +749,142 @@ describe("sanitizeSessionHistory", () => {
       { type: "text", text: "aborted" },
     ]);
     expect(JSON.stringify(result)).not.toContain("missing tool result");
+  });
+
+  it("keeps OpenAI Responses real tool results paired when strict id sanitization rewrites aliases", async () => {
+    const messages = castAgentMessages([
+      makeUserMessage("generate"),
+      makeAssistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "call_mock_image_generate_1",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      {
+        role: "toolResult",
+        call_id: "call_mock_image_generate_1",
+        toolName: "image_generate",
+        content: [{ type: "text", text: "Background task started for image generation." }],
+        isError: false,
+      },
+      makeUserMessage("inspect the generated lighthouse attachment"),
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+    const toolCall = extractToolCallsFromAssistant(assistant)[0];
+    const toolResult = result[2] as Extract<AgentMessage, { role: "toolResult" }> & {
+      call_id?: string;
+    };
+
+    expect(result.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "user",
+    ]);
+    expect(toolCall?.id).toBe("callmockimagegenerate1");
+    expect(toolResult.toolCallId).toBe(toolCall?.id);
+    expect(toolResult.call_id).toBe(toolCall?.id);
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "Background task started for image generation." },
+    ]);
+  });
+
+  it("repairs OpenAI Responses async image replay before assistant follow-up text", async () => {
+    const messages = castAgentMessages([
+      makeUserMessage("Image generation check. Generate an image of a QA lighthouse."),
+      makeAssistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "callmockimagegenerate0b27d8fa84",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      {
+        role: "toolResult",
+        toolCallId: "callmockimagegenerate0b27d8fa84",
+        toolName: "image_generate",
+        content: [{ type: "text", text: "Background task started for image generation." }],
+        isError: false,
+      },
+      {
+        role: "custom",
+        content: "Image generation started; wait for completion.",
+      },
+      makeUserMessage("The image is ready for the original chat."),
+      makeAssistantMessage(
+        [
+          {
+            type: "toolCall",
+            id: "callmockimagegenerate0b27d8fa842",
+            name: "image_generate",
+            arguments: { prompt: "QA lighthouse" },
+          },
+        ],
+        { stopReason: "toolUse" },
+      ),
+      makeAssistantMessage([{ type: "text", text: "Worked: the QA lighthouse image completed." }], {
+        stopReason: "stop",
+      }),
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages);
+
+    expect(result.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "custom",
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    const repairedAssistant = result[5] as Extract<AgentMessage, { role: "assistant" }>;
+    const repairedToolCall = extractToolCallsFromAssistant(repairedAssistant)[0];
+    expect(result[6]).toMatchObject({
+      role: "toolResult",
+      toolCallId: repairedToolCall?.id,
+      toolName: "image_generate",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+  });
+
+  it("repairs OpenAI Responses replay again after provider hooks mutate history", async () => {
+    const messages = castAgentMessages([
+      makeUserMessage("generate"),
+      makeAssistantMessage(
+        [{ type: "toolCall", id: "call_1", name: "image_generate", arguments: {} }],
+        { stopReason: "toolUse" },
+      ),
+      makeAssistantMessage([{ type: "text", text: "done" }], { stopReason: "stop" }),
+    ]);
+
+    const result = await sanitizeOpenAIHistory(messages, { provider: "replay-poison" });
+
+    expect(result.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(result[2]).toMatchObject({
+      role: "toolResult",
+      toolName: "image_generate",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
   });
 
   it("repairs a message-tool delivery-mirror poisoned OpenAI Responses replay", async () => {

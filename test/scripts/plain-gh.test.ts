@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { plainGhEnv, resolvePlainGhBin } from "../../scripts/lib/plain-gh.mjs";
+import { execPlainGh, plainGhEnv, resolvePlainGhBin } from "../../scripts/lib/plain-gh.mjs";
 
 const tempDirs: string[] = [];
 
@@ -30,6 +30,21 @@ printf 'FORCE_COLOR=%s\\n' "\${FORCE_COLOR-}"
 printf 'CLICOLOR=%s\\n' "\${CLICOLOR-}"
 printf 'CLICOLOR_FORCE=%s\\n' "\${CLICOLOR_FORCE-}"
 printf 'COLORTERM_SET=%s\\n' "\${COLORTERM+x}"
+`,
+  );
+  chmodSync(ghPath, 0o755);
+  return ghPath;
+}
+
+function makeLargeFakeGh(): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "plain-gh-large-"));
+  tempDirs.push(dir);
+  const ghPath = path.join(dir, "gh");
+  writeFileSync(
+    ghPath,
+    `#!/usr/bin/env node
+const bytes = Number(process.env.PLAIN_GH_FAKE_BYTES ?? "0");
+process.stdout.write("x".repeat(bytes));
 `,
   );
   chmodSync(ghPath, 0o755);
@@ -97,6 +112,22 @@ describe("plain gh helpers", () => {
     expect(readFileSync(outputPath, "utf8")).toContain("CLICOLOR=0");
     expect(readFileSync(outputPath, "utf8")).toContain("CLICOLOR_FORCE=0");
     expect(readFileSync(outputPath, "utf8")).toContain("COLORTERM_SET=");
+  });
+
+  it("captures large gh payloads by default", () => {
+    const ghPath = makeLargeFakeGh();
+    const bytes = 2 * 1024 * 1024;
+
+    const output = execPlainGh(["api", "large"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_GH_BIN: ghPath,
+        PLAIN_GH_FAKE_BYTES: String(bytes),
+      },
+    });
+
+    expect(output).toHaveLength(bytes);
   });
 
   it("keeps the shell resolver on external gh binaries", () => {

@@ -176,7 +176,7 @@ export function parseArgs(argv) {
     const arg = args[i];
     const next = args[i + 1];
     const readValue = () => {
-      if (!next) {
+      if (!next || next.startsWith("-")) {
         throw new Error(`Missing value for ${arg}`);
       }
       i += 1;

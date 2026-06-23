@@ -614,6 +614,34 @@ describe("scripts/test-group-report arg parsing", () => {
       "--compare requires a value",
     );
   });
+
+  it("rejects duplicate single-value report controls", () => {
+    for (const [flag, values] of [
+      ["--compare", ["before-a.json", "after-a.json", "before-b.json", "after-b.json"]],
+      ["--group-by", ["area", "folder"]],
+      ["--output", ["first.json", "second.json"]],
+      ["--limit", ["5", "10"]],
+      ["--top-files", ["5", "10"]],
+      ["--max-test-ms", ["100", "200"]],
+      ["--timeout-ms", ["1000", "2000"]],
+      ["--kill-grace-ms", ["100", "200"]],
+      ["--concurrency", ["2", "3"]],
+    ]) {
+      const args =
+        flag === "--compare"
+          ? [flag, values[0], values[1], flag, values[2], values[3]]
+          : [flag, values[0], flag, values[1]];
+      expect(() => parseTestGroupReportArgs(args)).toThrow(`${flag} was provided more than once`);
+    }
+    expect(parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]).configs).toEqual([
+      "a.ts",
+      "b.ts",
+    ]);
+    expect(parseTestGroupReportArgs(["--report", "a.json", "--report", "b.json"]).reports).toEqual([
+      "a.json",
+      "b.json",
+    ]);
+  });
 });
 
 describe("scripts/test-group-report child process guard", () => {

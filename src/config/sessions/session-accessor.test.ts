@@ -369,7 +369,7 @@ describe("session accessor file-backed seam", () => {
           sessionId: "canonical-session",
           updatedAt: 10,
         },
-        "AGENT:MAIN:MAIN": {
+        main: {
           sessionId: "legacy-session",
           updatedAt: 20,
         },
@@ -381,7 +381,7 @@ describe("session accessor file-backed seam", () => {
       storePath,
       resolveTarget: () => ({
         primaryKey: "agent:main:main",
-        candidateKeys: ["agent:main:main"],
+        candidateKeys: ["agent:main:main", "main"],
       }),
       project: ({ entries, existingEntry, primaryKey }) => {
         expect(primaryKey).toBe("agent:main:main");
@@ -420,7 +420,7 @@ describe("session accessor file-backed seam", () => {
           sessionId: "canonical-session",
           updatedAt: 10,
         },
-        "AGENT:MAIN:MAIN": {
+        main: {
           sessionId: "legacy-session",
           updatedAt: 20,
         },
@@ -432,7 +432,7 @@ describe("session accessor file-backed seam", () => {
       storePath,
       resolveTarget: () => ({
         primaryKey: "agent:main:main",
-        candidateKeys: ["agent:main:main"],
+        candidateKeys: ["agent:main:main", "main"],
       }),
       project: () => ({
         ok: false as const,
@@ -1399,8 +1399,14 @@ describe("session accessor file-backed seam", () => {
         agentId: "main",
         message: appended.message,
         messageId: appended.messageId,
+        sessionId: scope.sessionId,
         sessionFile: transcriptPath,
         sessionKey: scope.sessionKey,
+        target: {
+          agentId: "main",
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        },
       },
     ]);
   });

@@ -392,7 +392,13 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
         sessionFile: resolvedSessionFile,
+        sessionId,
         sessionKey: "agent:main:test",
+        target: {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:test",
+        },
       });
 
       const rewrittenSession = SessionManager.open(sessionFile);

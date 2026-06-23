@@ -603,6 +603,32 @@ describe("Engine contract tests", () => {
     });
   });
 
+  it("delegateCompactionToRuntime forwards the caller abortSignal to the runtime (#89868)", async () => {
+    installCompactRuntimeSpy();
+    const controller = new AbortController();
+    await delegateCompactionToRuntime({
+      sessionId: "s-abort",
+      sessionFile: "/tmp/session-abort.json",
+      tokenBudget: 4096,
+      abortSignal: controller.signal,
+    });
+
+    const compactRuntimeParams = requireCompactRuntimeParams(0);
+    expect(compactRuntimeParams.abortSignal).toBe(controller.signal);
+  });
+
+  it("delegateCompactionToRuntime passes undefined abortSignal when none supplied", async () => {
+    installCompactRuntimeSpy();
+    await delegateCompactionToRuntime({
+      sessionId: "s-no-abort",
+      sessionFile: "/tmp/session-no-abort.json",
+      tokenBudget: 4096,
+    });
+
+    const compactRuntimeParams = requireCompactRuntimeParams(0);
+    expect(compactRuntimeParams.abortSignal).toBeUndefined();
+  });
+
   it("builds a normalized memory system prompt addition from the active memory prompt path", () => {
     registerMemoryPromptSection(({ citationsMode }) => [
       "## Memory Recall",
