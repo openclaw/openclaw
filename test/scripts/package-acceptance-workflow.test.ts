@@ -1254,17 +1254,30 @@ describe("package artifact reuse", () => {
     ).toHaveLength(2);
   });
 
-  it("fails Testbox changed-check delegation when the remote command fails", () => {
+  it("finalizes Testbox delegation even when setup or the remote command fails", () => {
     const workflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
-    const runTestboxStep = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check").steps?.find(
-      (step) => step.name === "Run Testbox",
+    const checkTestboxJob = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check");
+    const runTestboxStep = workflowStep(checkTestboxJob, "Run Testbox");
+    const runArmTestboxStep = workflowStep(
+      workflowJob(CI_CHECK_ARM_TESTBOX_WORKFLOW, "check-arm"),
+      "Run Testbox",
+    );
+    const runBuildArtifactsTestboxStep = workflowStep(
+      workflowJob(CI_BUILD_ARTIFACTS_TESTBOX_WORKFLOW, "build-artifacts"),
+      "Run Testbox",
     );
 
     expect(workflow).toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
-    expect(runTestboxStep?.uses).toContain("useblacksmith/run-testbox@");
-    expect(runTestboxStep?.["continue-on-error"]).toBeUndefined();
+    expect(checkTestboxJob["timeout-minutes"]).toBe(
+      "${{ fromJSON(inputs.timeout_minutes || '120') }}",
+    );
+    expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
+    expect(runTestboxStep.if).toBe("always()");
+    expect(runArmTestboxStep.if).toBe("always()");
+    expect(runBuildArtifactsTestboxStep.if).toBe("always()");
+    expect(runTestboxStep["continue-on-error"]).toBeUndefined();
   });
 
   it("allows the Telegram lane to run from reusable package acceptance artifacts", () => {
