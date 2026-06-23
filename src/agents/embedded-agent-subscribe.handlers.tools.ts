@@ -1294,6 +1294,13 @@ export async function handleToolExecutionEnd(
         ctx.state.pendingToolMediaUrls = ctx.state.pendingToolMediaUrls.filter(
           (u) => !sentBasenames.has(u.slice(u.lastIndexOf("/") + 1)),
         );
+        // Audio/trusted flags are global, not per-URL: once the queue is empty
+        // they would otherwise make readPendingToolMediaReply emit a phantom
+        // metadata-only fallback reply after the message tool already delivered.
+        if (ctx.state.pendingToolMediaUrls.length === 0) {
+          ctx.state.pendingToolAudioAsVoice = false;
+          ctx.state.pendingToolTrustedLocalMedia = false;
+        }
       }
     }
     if (
