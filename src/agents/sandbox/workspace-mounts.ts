@@ -4,6 +4,7 @@
  * Creates Docker bind specs for writable workspaces and read-only skill source mounts.
  */
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "../../infra/path-guards.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
@@ -17,6 +18,10 @@ const MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS = [".openclaw", "sandbox-skill
 export type ReadOnlyWorkspaceSkillMount = {
   hostPath: string;
   containerPath: string;
+};
+
+type ReadOnlyWorkspaceSkillMountCandidate = ReadOnlyWorkspaceSkillMount & {
+  rootDir: string;
 };
 
 function formatManagedWorkspaceBind(params: {
@@ -41,6 +46,15 @@ export function resolveMaterializedSandboxSkillsWorkspaceDir(rootDir: string): s
   return path.join(rootDir, ...MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS);
 }
 
+function isCanonicalWorkspaceSkillMountSource(params: {
+  rootDir: string;
+  hostPath: string;
+}): boolean {
+  const agentRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(params.rootDir));
+  const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(params.hostPath));
+  return isPathInside(agentRoot, canonicalSource);
+}
+
 /** Returns true when a skill mount source exists inside the canonical mount root. */
 export function isExistingWorkspaceSkillMountSource(params: {
   rootDir: string;
@@ -54,19 +68,16 @@ export function isExistingWorkspaceSkillMountSource(params: {
     return false;
   }
 
-  const agentRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(params.rootDir));
-  const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(params.hostPath));
-  return isPathInside(agentRoot, canonicalSource);
+  return isCanonicalWorkspaceSkillMountSource(params);
 }
 
-/** Finds agent-workspace skill directories that should be mounted read-only in rw workspaces. */
-export function resolveReadOnlyWorkspaceSkillMounts(params: {
+function resolveReadOnlyWorkspaceSkillMountCandidates(params: {
   workspaceDir: string;
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   workdir: string;
   workspaceAccess: SandboxWorkspaceAccess;
-}): ReadOnlyWorkspaceSkillMount[] {
+}): ReadOnlyWorkspaceSkillMountCandidate[] {
   if (params.workspaceAccess !== "rw") {
     return [];
   }
@@ -74,7 +85,8 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
   // RW workspaces mount the project as writable, but skill sources remain read-only so agent
   // instructions are visible without letting sandbox commands mutate them.
   const materializedSkillsWorkspaceDir =
-    params.skillsWorkspaceDir ?? resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
+    params.skillsWorkspaceDir ??
+    resolveMaterializedSandboxSkillsWorkspaceDir(params.agentWorkspaceDir);
   const mounts = [
     {
       hostPath: path.join(params.agentWorkspaceDir, "skills"),
@@ -96,8 +108,56 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
       rootDir: materializedSkillsWorkspaceDir,
     },
   ];
+  return mounts;
+}
 
-  return mounts
+/** Materializes protected skill mount roots before a first rw sandbox launch. */
+export async function ensureReadOnlyWorkspaceSkillMountSources(params: {
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
+  workdir: string;
+  workspaceAccess: SandboxWorkspaceAccess;
+}): Promise<void> {
+  for (const mount of resolveReadOnlyWorkspaceSkillMountCandidates(params)) {
+    if (
+      !isCanonicalWorkspaceSkillMountSource({ rootDir: mount.rootDir, hostPath: mount.hostPath })
+    ) {
+      continue;
+    }
+    try {
+      const stat = await fsp.lstat(mount.hostPath);
+      if (stat.isDirectory()) {
+        continue;
+      }
+      // Existing non-directory or symlink leaves stay rejected by the mount resolver.
+      continue;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
+    }
+
+    await fsp.mkdir(mount.hostPath, { recursive: true });
+    if (
+      !isExistingWorkspaceSkillMountSource({ rootDir: mount.rootDir, hostPath: mount.hostPath })
+    ) {
+      throw new Error(
+        `Created sandbox skill mount source outside workspace root: ${mount.hostPath}`,
+      );
+    }
+  }
+}
+
+/** Finds agent-workspace skill directories that should be mounted read-only in rw workspaces. */
+export function resolveReadOnlyWorkspaceSkillMounts(params: {
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
+  workdir: string;
+  workspaceAccess: SandboxWorkspaceAccess;
+}): ReadOnlyWorkspaceSkillMount[] {
+  return resolveReadOnlyWorkspaceSkillMountCandidates(params)
     .filter((mount) =>
       isExistingWorkspaceSkillMountSource({
         rootDir: mount.rootDir,

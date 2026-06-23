@@ -4,7 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { appendWorkspaceMountArgs } from "./workspace-mounts.js";
+import {
+  appendWorkspaceMountArgs,
+  ensureReadOnlyWorkspaceSkillMountSources,
+  resolveReadOnlyWorkspaceSkillMounts,
+} from "./workspace-mounts.js";
 
 const tmpDirs: string[] = [];
 
@@ -104,6 +108,46 @@ describe("appendWorkspaceMountArgs", () => {
     ]);
   });
 
+  it("materializes missing protected skill roots before first rw sandbox launch", async () => {
+    const agentWorkspaceDir = makeTempWorkspace();
+    const skillsWorkspaceDir = path.join(makeTempWorkspace(), ".openclaw", "sandbox-skills");
+
+    await ensureReadOnlyWorkspaceSkillMountSources({
+      workspaceDir: agentWorkspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+      workdir: "/workspace",
+      workspaceAccess: "rw",
+    });
+
+    expect(fs.statSync(path.join(agentWorkspaceDir, "skills")).isDirectory()).toBe(true);
+    expect(fs.statSync(path.join(agentWorkspaceDir, ".agents", "skills")).isDirectory()).toBe(true);
+    expect(fs.statSync(path.join(skillsWorkspaceDir, "skills")).isDirectory()).toBe(true);
+
+    expect(
+      resolveReadOnlyWorkspaceSkillMounts({
+        workspaceDir: agentWorkspaceDir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir,
+        workdir: "/workspace",
+        workspaceAccess: "rw",
+      }),
+    ).toEqual([
+      {
+        hostPath: path.join(agentWorkspaceDir, "skills"),
+        containerPath: "/workspace/skills",
+      },
+      {
+        hostPath: path.join(agentWorkspaceDir, ".agents", "skills"),
+        containerPath: "/workspace/.agents/skills",
+      },
+      {
+        hostPath: path.join(skillsWorkspaceDir, "skills"),
+        containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+      },
+    ]);
+  });
+
   it.runIf(process.platform !== "win32")("does not overlay symlinked workspace skill roots", () => {
     // Skill overlays must be real workspace directories; symlinks could expose
     // arbitrary host paths read-only inside the sandbox.
@@ -144,6 +188,44 @@ describe("appendWorkspaceMountArgs", () => {
 
       const mounts = args.filter((arg) => arg.startsWith(agentWorkspaceDir));
       expect(mounts).toEqual([`${agentWorkspaceDir}:/workspace:z`]);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not materialize missing skill roots through a symlinked parent",
+    async () => {
+      const agentWorkspaceDir = makeTempWorkspace();
+      const outsideDir = makeTempWorkspace();
+      const skillsWorkspaceDir = path.join(makeTempWorkspace(), ".openclaw", "sandbox-skills");
+      fs.symlinkSync(outsideDir, path.join(agentWorkspaceDir, ".agents"), "dir");
+
+      await ensureReadOnlyWorkspaceSkillMountSources({
+        workspaceDir: agentWorkspaceDir,
+        agentWorkspaceDir,
+        skillsWorkspaceDir,
+        workdir: "/workspace",
+        workspaceAccess: "rw",
+      });
+
+      expect(fs.existsSync(path.join(outsideDir, "skills"))).toBe(false);
+      expect(
+        resolveReadOnlyWorkspaceSkillMounts({
+          workspaceDir: agentWorkspaceDir,
+          agentWorkspaceDir,
+          skillsWorkspaceDir,
+          workdir: "/workspace",
+          workspaceAccess: "rw",
+        }),
+      ).toEqual([
+        {
+          hostPath: path.join(agentWorkspaceDir, "skills"),
+          containerPath: "/workspace/skills",
+        },
+        {
+          hostPath: path.join(skillsWorkspaceDir, "skills"),
+          containerPath: "/workspace/.openclaw/sandbox-skills/skills",
+        },
+      ]);
     },
   );
 
