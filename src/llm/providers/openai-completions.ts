@@ -191,7 +191,12 @@ export const streamOpenAICompletions: StreamFunction<
       // text-lane transition) and again by the end-of-stream loop; guard so its
       // *_end event is emitted exactly once.
       const finishedBlocks = new Set<StreamingBlock>();
-      const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
+      const contentIndices = new WeakMap<StreamingBlock, number>();
+      const appendBlock = (block: StreamingBlock) => {
+        contentIndices.set(block, blocks.length);
+        blocks.push(block);
+      };
+      const getContentIndex = (block: StreamingBlock) => contentIndices.get(block) ?? -1;
       const finishBlock = (block: StreamingBlock) => {
         const contentIndex = getContentIndex(block);
         if (contentIndex === -1 || finishedBlocks.has(block)) {
@@ -229,7 +234,7 @@ export const streamOpenAICompletions: StreamFunction<
       const ensureTextBlock = () => {
         if (!textBlock) {
           textBlock = { type: "text", text: "" };
-          blocks.push(textBlock);
+          appendBlock(textBlock);
           stream.push({
             type: "text_start",
             contentIndex: getContentIndex(textBlock),
@@ -245,7 +250,7 @@ export const streamOpenAICompletions: StreamFunction<
             thinking: "",
             thinkingSignature,
           };
-          blocks.push(thinkingBlock);
+          appendBlock(thinkingBlock);
           stream.push({
             type: "thinking_start",
             contentIndex: getContentIndex(thinkingBlock),
@@ -307,7 +312,7 @@ export const streamOpenAICompletions: StreamFunction<
           if (toolCall.id) {
             toolCallBlocksById.set(toolCall.id, block);
           }
-          blocks.push(block);
+          appendBlock(block);
           stream.push({
             type: "toolcall_start",
             contentIndex: getContentIndex(block),
