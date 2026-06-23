@@ -71,7 +71,9 @@ function killProcessTree(parentPid: number): void {
     );
     return;
   }
-  process.kill(-parentPid, "SIGKILL");
+  // The production abort path already force-kills the group. Cleanup after a
+  // failed assertion starts gracefully so it cannot kill a reused group id.
+  process.kill(-parentPid, "SIGTERM");
 }
 
 describe("runCliCommand real process lifecycle", () => {
