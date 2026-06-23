@@ -66,16 +66,18 @@ function toError(err: unknown): Error {
   return new Error(typeof err === "string" ? err : JSON.stringify(err));
 }
 
-function buildFallbackNick(nick: string): string {
+function buildFallbackNick(nick: string, attempt: number = 0): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
-  const suffix = "_";
+  // Use numeric suffix for uniqueness when attempt > 0, otherwise just "_"
+  const suffix = attempt > 0 ? `${attempt}` : "_";
   const maxNickLen = 30;
-  if (base.length >= maxNickLen) {
-    return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
+  const result = base + suffix;
+  if (result.length > maxNickLen) {
+    return base.slice(0, maxNickLen - suffix.length) + suffix;
   }
-  return `${base}${suffix}`;
+  return result;
 }
 
 function normalizeIrcNick(value: string): string {
@@ -119,7 +121,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let ready = false;
   let closed = false;
   let nickServRecoverAttempted = false;
-  let fallbackNickAttempted = false;
+  let fallbackNickAttemptCount = 0;
   let removeAbortListener: (() => void) | null = null;
 
   const socket = options.tls
@@ -179,9 +181,9 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       }
     }
 
-    if (!fallbackNickAttempted) {
-      fallbackNickAttempted = true;
-      const fallbackNick = buildFallbackNick(desiredNick);
+    if (fallbackNickAttemptCount < 10) {
+      fallbackNickAttemptCount++;
+      const fallbackNick = buildFallbackNick(desiredNick, fallbackNickAttemptCount);
       if (normalizeIrcNick(fallbackNick) !== normalizeIrcNick(currentNick)) {
         try {
           sendRaw(`NICK ${fallbackNick}`);
