@@ -15,6 +15,7 @@ const getSessionGoalMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
 const ensureRuntimePluginsLoadedMock = vi.fn();
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
+const runSessionStartupMigrationMock = vi.fn<() => Promise<void>>(async () => undefined);
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
@@ -148,8 +149,9 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => getRuntimeConfigMock(),
 }));
 
-vi.mock("../infra/state-migrations.js", () => ({
-  migrateOrphanedSessionKeys: vi.fn(async () => ({ changes: [], warnings: [] })),
+vi.mock("../config/sessions/startup-migration.js", () => ({
+  runSessionStartupMigration: (...args: Parameters<typeof runSessionStartupMigrationMock>) =>
+    runSessionStartupMigrationMock(...args),
 }));
 
 vi.mock("../gateway/cli-session-history.js", () => ({
@@ -272,6 +274,8 @@ describe("EmbeddedTuiBackend", () => {
     ensureRuntimePluginsLoadedMock.mockReset();
     ensureContextWindowCacheLoadedMock.mockReset();
     ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
+    runSessionStartupMigrationMock.mockReset();
+    runSessionStartupMigrationMock.mockResolvedValue(undefined);
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -562,14 +566,11 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("gates session reads on the startup migration so legacy keys are never observed early", async () => {
-    const { migrateOrphanedSessionKeys } = await import("../infra/state-migrations.js");
     let resolveMigration: () => void = () => {};
     const migrationDone = new Promise<void>((resolve) => {
       resolveMigration = resolve;
     });
-    vi.mocked(migrateOrphanedSessionKeys).mockReturnValueOnce(
-      migrationDone.then(() => ({ changes: [], warnings: [] })),
-    );
+    runSessionStartupMigrationMock.mockReturnValueOnce(migrationDone);
 
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const backend = new EmbeddedTuiBackend();
@@ -581,6 +582,14 @@ describe("EmbeddedTuiBackend", () => {
 
     resolveMigration();
     await listed;
+    expect(runSessionStartupMigrationMock).toHaveBeenCalledWith({
+      cfg: {},
+      env: process.env,
+      log: {
+        info: expect.any(Function),
+        warn: expect.any(Function),
+      },
+    });
     expect(listSessionsFromStoreAsyncMock).toHaveBeenCalledTimes(1);
   });
 

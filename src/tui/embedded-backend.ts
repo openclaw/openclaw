@@ -67,6 +67,7 @@ import {
 import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { logInfo, logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -111,6 +112,11 @@ const silentRuntime = {
   exit: (code: number): never => {
     throw new Error(`embedded tui runtime exit ${String(code)}`);
   },
+};
+
+const embeddedSessionStartupMigrationLog = {
+  info: (message: string) => logInfo(message, silentRuntime),
+  warn: (message: string) => logWarn(message, silentRuntime),
 };
 
 function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
@@ -320,12 +326,13 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     // Local mode never runs gateway startup; canonicalize orphaned keys once here.
     this.ready = (async () => {
-      try {
-        const { migrateOrphanedSessionKeys } = await import("../infra/state-migrations.js");
-        await migrateOrphanedSessionKeys({ cfg: getRuntimeConfig(), env: process.env });
-      } catch {
-        // Best-effort: a failed migration must not block the TUI.
-      }
+      const { runSessionStartupMigration } =
+        await import("../config/sessions/startup-migration.js");
+      await runSessionStartupMigration({
+        cfg: getRuntimeConfig(),
+        env: process.env,
+        log: embeddedSessionStartupMigrationLog,
+      });
     })();
     queueMicrotask(() => {
       this.onConnected?.();
