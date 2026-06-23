@@ -254,6 +254,62 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(mocks.stopSshTunnel).toHaveBeenCalledTimes(1);
   });
 
+  it("returns a failed gateway probe when configured SSH tunnel startup fails", async () => {
+    const cfg = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          transport: "ssh",
+          sshTarget: "user@gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
+      url: "ws://remote.example.com:18789",
+      urlSource: "config gateway.remote.url",
+      message: "Gateway target: ws://remote.example.com:18789",
+    });
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "remote",
+      gatewayMode: "remote",
+      remoteUrlMissing: false,
+    });
+    mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
+      auth: { token: "remote-token" },
+      warning: undefined,
+    });
+    mocks.startGatewayRemoteSshTunnel.mockRejectedValue(new Error("spawn ssh ENOENT"));
+
+    const result = await resolveGatewayProbeSnapshot({
+      cfg: cfg as never,
+      opts: {},
+    });
+
+    expect(mocks.startGatewayRemoteSshTunnel).toHaveBeenCalledWith({
+      config: cfg,
+      url: "ws://remote.example.com:18789",
+      urlSource: "config gateway.remote.url",
+    });
+    expect(mocks.probeGateway).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(result.gatewayReachable).toBe(false);
+    expect(result.gatewaySelf).toBeNull();
+    expect(result.gatewayProbe).toMatchObject({
+      ok: false,
+      url: "ws://remote.example.com:18789",
+      connectLatencyMs: null,
+      error: "ssh tunnel failed: spawn ssh ENOENT",
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+    expect(result.gatewayProbe?.auth.capability).toBe("unknown");
+  });
+
   it("merges auth warnings into failed probe errors by default", async () => {
     mocks.resolveGatewayProbeTarget.mockReturnValue({
       mode: "local",

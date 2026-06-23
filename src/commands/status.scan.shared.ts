@@ -21,6 +21,7 @@ import {
   applyGatewaySshTunnelConnectionDetails,
   startGatewayRemoteSshTunnel,
 } from "../gateway/ssh-transport.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   MEMORY_INDEX_CHUNKS_TABLE,
@@ -192,6 +193,22 @@ function shouldTryLocalStatusRpcFallback(params: {
   return error.includes("timeout") || params.gatewayProbe.auth?.capability === "unknown";
 }
 
+function makeGatewayProbeFailure(params: { url: string; error: string }): GatewayProbeResult {
+  return {
+    ok: false,
+    url: params.url,
+    connectLatencyMs: null,
+    error: params.error,
+    close: null,
+    auth: { role: null, scopes: [], capability: "unknown" },
+    server: { version: null, connId: null },
+    health: null,
+    status: null,
+    presence: null,
+    configSnapshot: null,
+  };
+}
+
 async function applyLocalStatusRpcFallback(params: {
   cfg: OpenClawConfig;
   gatewayMode: "local" | "remote";
@@ -308,13 +325,19 @@ export async function resolveGatewayProbeSnapshot(params: {
   );
   const timeoutMsExplicit = params.opts.timeoutMs !== undefined;
   const probeTimeoutMs = params.opts.timeoutMs ?? defaultProbeTimeoutMs;
-  const ssh = shouldProbe
-    ? await startGatewayRemoteSshTunnel({
+  let ssh: Awaited<ReturnType<typeof startGatewayRemoteSshTunnel>> = null;
+  let sshTunnelError: string | null = null;
+  if (shouldProbe) {
+    try {
+      ssh = await startGatewayRemoteSshTunnel({
         config: params.cfg,
         url: gatewayConnection.url,
         urlSource: gatewayConnection.urlSource,
-      })
-    : null;
+      });
+    } catch (error) {
+      sshTunnelError = `ssh tunnel failed: ${formatErrorMessage(error)}`;
+    }
+  }
   try {
     if (ssh) {
       gatewayConnection = applyGatewaySshTunnelConnectionDetails({
@@ -323,17 +346,19 @@ export async function resolveGatewayProbeSnapshot(params: {
       });
     }
     const initialGatewayProbe = shouldProbe
-      ? await loadProbeGatewayModule()
-          .then(({ probeGateway }) =>
-            probeGateway({
-              url: gatewayConnection.url,
-              auth: gatewayProbeAuthResolution.auth,
-              preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
-              timeoutMs: probeTimeoutMs,
-              detailLevel: params.opts.detailLevel ?? "presence",
-            }),
-          )
-          .catch(() => null)
+      ? sshTunnelError
+        ? makeGatewayProbeFailure({ url: gatewayConnection.url, error: sshTunnelError })
+        : await loadProbeGatewayModule()
+            .then(({ probeGateway }) =>
+              probeGateway({
+                url: gatewayConnection.url,
+                auth: gatewayProbeAuthResolution.auth,
+                preauthHandshakeTimeoutMs: params.cfg.gateway?.handshakeTimeoutMs,
+                timeoutMs: probeTimeoutMs,
+                detailLevel: params.opts.detailLevel ?? "presence",
+              }),
+            )
+            .catch(() => null)
       : null;
     const gatewayProbe = await applyLocalStatusRpcFallback({
       cfg: params.cfg,
