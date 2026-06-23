@@ -7,12 +7,18 @@ describe("shouldSkipHeartbeatOnlyDelivery", () => {
     expect(shouldSkipHeartbeatOnlyDelivery([], 300)).toBe(true);
   });
 
-  it("suppresses when any payload is a heartbeat ack and no media is present", () => {
+  it("does not suppress when mixed with real content and heartbeat ack", () => {
     expect(
       shouldSkipHeartbeatOnlyDelivery(
         [{ text: "Checked inbox and calendar." }, { text: "HEARTBEAT_OK" }],
         300,
       ),
+    ).toBe(false);
+  });
+
+  it("suppresses when all payloads are heartbeat acks", () => {
+    expect(
+      shouldSkipHeartbeatOnlyDelivery([{ text: "HEARTBEAT_OK" }, { text: "HEARTBEAT_OK" }], 300),
     ).toBe(true);
   });
 

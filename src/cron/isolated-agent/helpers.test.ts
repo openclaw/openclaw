@@ -168,8 +168,9 @@ describe("isHeartbeatOnlyResponse", () => {
     );
   });
 
-  it("returns true when multiple payloads include narration followed by HEARTBEAT_OK", () => {
-    // Agent narrates its work then signals nothing needs attention.
+  it("returns false when payloads include narration before HEARTBEAT_OK", () => {
+    // Real narration content must still be delivered even if a later heartbeat
+    // ack is present; only all-heartbeat payloads should suppress delivery.
     expect(
       isHeartbeatOnlyResponse(
         [
@@ -179,7 +180,7 @@ describe("isHeartbeatOnlyResponse", () => {
         ],
         ACK_MAX,
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("returns false when media is present even with HEARTBEAT_OK text", () => {

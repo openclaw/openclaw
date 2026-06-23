@@ -26,8 +26,10 @@ export function shouldSkipHeartbeatOnlyDelivery(
     return false;
   }
   // Heartbeat acks may include tiny punctuation/noise; strip the token before
-  // deciding whether there is user-visible text worth delivering.
-  return payloads.some((payload) => {
+  // deciding whether there is user-visible text worth delivering. Only suppress
+  // delivery when every payload is heartbeat-only; mixed content must still
+  // reach the user.
+  return payloads.every((payload) => {
     const result = stripHeartbeatToken(payload.text, {
       mode: "heartbeat",
       maxAckChars: ackMaxChars,
