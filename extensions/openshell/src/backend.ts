@@ -191,6 +191,29 @@ export function buildOpenShellSshExecEnv(): NodeJS.ProcessEnv {
   return sanitizeEnvVars(process.env).allowed;
 }
 
+/**
+ * Build the `sandbox upload` CLI args and `cwd` for mirror-mode uploads.
+ *
+ * OpenShell >= v0.0.37 preserves the source directory's basename as a
+ * subdirectory inside the remote target when a named path is given.
+ * Passing "." (basename-less) with an explicit `cwd` forces flat extraction,
+ * preventing the staged temp-dir basename from nesting inside the remote
+ * workspace directory.
+ */
+export function buildMirrorUploadCliParams(params: {
+  sandboxName: string;
+  cwd: string;
+  remotePath: string;
+}): {
+  args: string[];
+  cwd: string;
+} {
+  return {
+    args: ["sandbox", "upload", "--no-git-ignore", params.sandboxName, ".", params.remotePath],
+    cwd: params.cwd,
+  };
+}
+
 export type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 
 export function createOpenShellSandboxBackendFactory(
@@ -742,17 +765,14 @@ class OpenShellSandboxBackendImpl {
           sourceDir: localPath,
           targetDir: tmpDir,
         });
+        const cliParams = buildMirrorUploadCliParams({
+          sandboxName: this.params.execContext.sandboxName,
+          cwd: tmpDir,
+          remotePath,
+        });
         const result = await runOpenShellCli({
           context: this.params.execContext,
-          args: [
-            "sandbox",
-            "upload",
-            "--no-git-ignore",
-            this.params.execContext.sandboxName,
-            tmpDir,
-            remotePath,
-          ],
-          cwd: this.params.createParams.workspaceDir,
+          ...cliParams,
         });
         if (result.code !== 0) {
           throw new Error(result.stderr.trim() || "openshell sandbox upload failed");

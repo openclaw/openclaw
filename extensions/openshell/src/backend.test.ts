@@ -1,6 +1,10 @@
 // Openshell tests cover backend plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
-import { buildOpenShellSandboxName, buildOpenShellSshExecEnv } from "./backend.js";
+import {
+  buildMirrorUploadCliParams,
+  buildOpenShellSandboxName,
+  buildOpenShellSshExecEnv,
+} from "./backend.js";
 
 describe("openshell backend env", () => {
   const originalEnv = { ...process.env };
@@ -37,5 +41,35 @@ describe("openshell sandbox names", () => {
     expect(name).toContain("somalley-alice");
     expect(name).not.toContain("_");
     expect(name.length).toBeLessThanOrEqual(63);
+  });
+});
+
+describe("openshell mirror upload params", () => {
+  it("uses '.' as upload source to prevent directory nesting", () => {
+    const { args, cwd } = buildMirrorUploadCliParams({
+      sandboxName: "test-sandbox-abc123",
+      cwd: "/tmp/openclaw-openshell-upload-xyz",
+      remotePath: "/sandbox",
+    });
+
+    // OpenShell >= v0.0.37 preserves named-source basenames as
+    // subdirectories.  Passing "." with an explicit cwd avoids the
+    // staged temp-dir basename nesting inside the remote workspace.
+    expect(args[4]).toBe(".");
+    expect(cwd).toBe("/tmp/openclaw-openshell-upload-xyz");
+  });
+
+  it("places staged contents under the target remote directory", () => {
+    const { args } = buildMirrorUploadCliParams({
+      sandboxName: "test-sandbox-def456",
+      cwd: "/tmp/staging-dir",
+      remotePath: "/agent",
+    });
+
+    expect(args[0]).toBe("sandbox");
+    expect(args[1]).toBe("upload");
+    expect(args[2]).toBe("--no-git-ignore");
+    expect(args[3]).toBe("test-sandbox-def456");
+    expect(args[5]).toBe("/agent");
   });
 });
