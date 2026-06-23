@@ -11,8 +11,10 @@ export * from "./sessions/lifecycle.js";
 export * from "./sessions/paths.js";
 export * from "./sessions/reset.js";
 export {
+  canonicalizeSessionEntryAliases,
   deleteSessionEntryLifecycle,
   resetSessionEntryLifecycle,
+  type CanonicalizeSessionEntryAliasesResult,
   type DeleteSessionEntryLifecycleParams,
   type DeleteSessionEntryLifecycleResult,
   type ResetSessionEntryLifecycleParams,

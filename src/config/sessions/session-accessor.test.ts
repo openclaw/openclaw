@@ -11,6 +11,7 @@ import {
   appendTranscriptEvent,
   applySessionEntryLifecycleMutation,
   applySessionPatchProjection,
+  canonicalizeSessionEntryAliases,
   cleanupSessionLifecycleArtifacts,
   createSessionEntryWithTranscript,
   listSessionEntries,
@@ -157,6 +158,67 @@ describe("session accessor file-backed seam", () => {
 
     expect(result).toBeNull();
     expect(fs.existsSync(storePath)).toBe(false);
+  });
+
+  it("canonicalizes alias rows and patches the canonical entry in one accessor write", async () => {
+    const now = Date.now();
+    fs.writeFileSync(transcriptPath, '{"type":"session","id":"sess-fresh"}\n', "utf-8");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            label: "canonical-stale",
+            sessionFile: transcriptPath,
+            sessionId: "sess-stale",
+            updatedAt: now,
+          },
+          main: {
+            label: "legacy-fresh",
+            sessionFile: transcriptPath,
+            sessionId: "sess-fresh",
+            updatedAt: now + 1,
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+    );
+
+    const result = await canonicalizeSessionEntryAliases({
+      storePath,
+      target: {
+        canonicalKey: "agent:main:main",
+        storeKeys: ["agent:main:main", "main"],
+      },
+      update: (entry) => {
+        if (entry) {
+          entry.sessionId = "mutated-callback-copy";
+        }
+        return {
+          lastChannel: "telegram",
+          updatedAt: now + 2,
+        };
+      },
+    });
+
+    expect(result).toEqual({
+      canonicalKey: "agent:main:main",
+      entry: expect.objectContaining({
+        label: "legacy-fresh",
+        lastChannel: "telegram",
+        sessionId: "sess-fresh",
+        updatedAt: now + 2,
+      }),
+    });
+    const persisted = loadSessionStore(storePath, { skipCache: true });
+    expect(persisted["agent:main:main"]).toMatchObject({
+      label: "legacy-fresh",
+      lastChannel: "telegram",
+      sessionId: "sess-fresh",
+      updatedAt: now + 2,
+    });
+    expect(persisted.main).toBeUndefined();
   });
 
   it("purges deleted-agent entries from the current locked store", async () => {

@@ -509,6 +509,11 @@ export type DeleteSessionEntryLifecycleParams = {
   target: SessionLifecycleStoreTarget;
 };
 
+export type CanonicalizeSessionEntryAliasesResult = {
+  canonicalKey: string;
+  entry?: SessionEntry;
+};
+
 export { clearPluginOwnedSessionState };
 
 function isStorePathTemplate(store?: string): boolean {
@@ -799,6 +804,87 @@ export async function patchSessionEntryWithKey(
     takeCacheOwnership: options.takeCacheOwnership,
     update,
   });
+}
+
+/**
+ * Promotes the freshest alias row to the canonical key, prunes legacy aliases,
+ * and optionally patches the canonical entry under one accessor operation.
+ */
+export async function canonicalizeSessionEntryAliases(params: {
+  storePath: string;
+  target: SessionLifecycleStoreTarget;
+  update?: (
+    entry: SessionEntry | undefined,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+}): Promise<CanonicalizeSessionEntryAliasesResult> {
+  return await updateSessionStore(params.storePath, async (store) => {
+    const targetKeys = normalizeTargetStoreKeys(params.target);
+    const freshest = resolveFreshestTargetEntry(store, targetKeys);
+    if (freshest) {
+      const current = store[params.target.canonicalKey];
+      if (!current || (freshest.entry.updatedAt ?? 0) > (current.updatedAt ?? 0)) {
+        store[params.target.canonicalKey] = freshest.entry;
+      }
+    }
+
+    const currentEntry = store[params.target.canonicalKey];
+    const patch = params.update ? await params.update(cloneOptionalEntry(currentEntry)) : null;
+    if (patch) {
+      store[params.target.canonicalKey] = {
+        ...currentEntry,
+        ...patch,
+      } as SessionEntry;
+    }
+
+    for (const key of targetKeys) {
+      if (key !== params.target.canonicalKey) {
+        delete store[key];
+      }
+    }
+    const entry = cloneOptionalEntry(store[params.target.canonicalKey]);
+    return {
+      canonicalKey: params.target.canonicalKey,
+      ...(entry ? { entry } : {}),
+    };
+  });
+}
+
+// Normalizes caller-supplied alias sets while always preserving the canonical key.
+function normalizeTargetStoreKeys(target: SessionLifecycleStoreTarget): string[] {
+  const keys = new Set<string>();
+  const remember = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  };
+  remember(target.canonicalKey);
+  for (const key of target.storeKeys) {
+    remember(key);
+  }
+  return [...keys];
+}
+
+// Selects the row that current JSON-store alias migration would promote.
+function resolveFreshestTargetEntry(
+  store: Record<string, SessionEntry>,
+  targetKeys: readonly string[],
+): { key: string; entry: SessionEntry } | undefined {
+  let freshest: { key: string; entry: SessionEntry } | undefined;
+  for (const key of targetKeys) {
+    const entry = store[key];
+    if (!entry) {
+      continue;
+    }
+    if (!freshest || (entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = { key, entry };
+    }
+  }
+  return freshest;
+}
+
+function cloneOptionalEntry(entry: SessionEntry | undefined): SessionEntry | undefined {
+  return entry ? structuredClone(entry) : undefined;
 }
 
 /**
