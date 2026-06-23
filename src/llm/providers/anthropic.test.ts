@@ -235,6 +235,78 @@ describe("Anthropic provider", () => {
     expect(result.responseModel).toBe("claude-fable-5");
   });
 
+  it("strips thinking from completed turns while preserving active tool-turn thinking (#94228)", async () => {
+    // Multi-turn session with tool calls. The active tool turn (assistant
+    // with tool_use + pending tool_result) must keep its thinking signatures
+    // for signature continuity. The earlier completed assistant turn must
+    // have its thinking stripped to prevent stale signature 400 errors.
+    let capturedPayload: unknown;
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () =>
+            Promise.resolve(
+              createSseResponse([
+                {
+                  type: "message_start",
+                  message: { id: "msg_1", model: "claude-sonnet-4-6", usage: { input_tokens: 1, output_tokens: 0 } },
+                },
+                { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { input_tokens: 1, output_tokens: 1 } },
+                { type: "message_stop" },
+              ]),
+            ),
+        })),
+      },
+    };
+
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }),
+      {
+        messages: [
+          { role: "user", content: "task 1", timestamp: 0 },
+          {
+            role: "assistant",
+            provider: "anthropic", api: "anthropic-messages", model: "claude-sonnet-4-6",
+            stopReason: "tool_use", timestamp: 0,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            content: [
+              { type: "thinking", thinking: "old reasoning", thinkingSignature: "sig_old" },
+              { type: "text", text: "Done." },
+            ],
+          },
+          { role: "user", content: "task 2", timestamp: 0 },
+          {
+            role: "assistant",
+            provider: "anthropic", api: "anthropic-messages", model: "claude-sonnet-4-6",
+            stopReason: "tool_use", timestamp: 0,
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            content: [
+              { type: "thinking", thinking: "active reasoning", thinkingSignature: "sig_active" },
+              { type: "toolCall", id: "tool_1", name: "bash", arguments: {} },
+            ],
+          },
+          { role: "toolResult", toolCallId: "tool_1", content: "ok", isError: false },
+        ],
+      },
+      { apiKey: "sk-ant-provider", client: client as never, onPayload: (p) => { capturedPayload = p; } },
+    );
+
+    await stream.result();
+    const payload = capturedPayload as { messages: Array<{ role: string; content: unknown[] }> };
+    const assistantMessages = payload.messages.filter((m) => m.role === "assistant");
+    expect(assistantMessages).toHaveLength(2);
+
+    // Completed turn: thinking stripped → [assistant reasoning omitted]
+    const firstBlocks = assistantMessages[0].content as Array<{ type: string }>;
+    expect(firstBlocks.find((b) => b.type === "thinking")).toBeUndefined();
+
+    // Active tool turn: thinking preserved for signature continuity
+    const secondBlocks = assistantMessages[1].content as Array<{ type: string; thinking?: string; signature?: string }>;
+    const activeThinking = secondBlocks.find((b) => b.type === "thinking");
+    expect(activeThinking).toBeDefined();
+    expect(activeThinking?.signature).toBe("sig_active");
+  });
+
   it.each([
     {
       label: "omitted",
