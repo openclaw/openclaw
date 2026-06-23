@@ -37,6 +37,11 @@
 
 set -euo pipefail
 
+if [[ "$EUID" -ne 0 ]]; then
+  echo "ERROR: This script must be run as root (e.g. sudo $0)." >&2
+  exit 1
+fi
+
 ALTSERVER_REPO="${ALTSERVER_REPO:-https://github.com/SnoutFirst/AltServer-Linux-PyScript}"
 OPENCLAW_FORK="${OPENCLAW_FORK:-https://github.com/SnoutFirst/openclaw}"
 OPENCLAW_OWNER="${OPENCLAW_FORK#https://github.com/}"
@@ -56,24 +61,6 @@ die() {
   exit 1
 }
 
-has_root() {
-  [[ "$EUID" -eq 0 ]]
-}
-
-has_passwordless_sudo() {
-  command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null
-}
-
-run_as_root() {
-  if has_root; then
-    "$@"
-  elif has_passwordless_sudo; then
-    sudo "$@"
-  else
-    return 1
-  fi
-}
-
 install_deps() {
   log "Checking system dependencies..."
   if ! command -v apt-get >/dev/null 2>&1; then
@@ -88,24 +75,17 @@ install_deps() {
   done
 
   if [[ ${#missing_pkgs[@]} -gt 0 ]]; then
-    if ! run_as_root apt-get update; then
-      echo
-      echo "ERROR: Cannot install missing packages because this script cannot run apt-get as root."
-      echo "Sudo is either not installed, not configured, or requires a password."
-      echo "Please run the following command as root, then re-run this script:"
-      echo
-      echo "  apt-get update && apt-get install -y ${missing_pkgs[*]}"
-      echo
-      exit 1
+    if ! apt-get update; then
+      die "apt-get update failed."
     fi
-    if ! run_as_root apt-get install -y "${missing_pkgs[@]}"; then
+    if ! apt-get install -y "${missing_pkgs[@]}"; then
       die "apt-get install failed for packages: ${missing_pkgs[*]}"
     fi
   fi
 
   # Start services needed for USB and Wi-Fi device communication.
   for svc in usbmuxd avahi-daemon.service avahi-daemon.socket; do
-    if ! run_as_root systemctl start "$svc" 2>/dev/null; then
+    if ! systemctl start "$svc" 2>/dev/null; then
       echo "WARNING: could not start ${svc}. If device detection fails, start it manually as root."
     fi
   done
