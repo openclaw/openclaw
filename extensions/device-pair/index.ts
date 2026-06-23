@@ -204,7 +204,7 @@ function isLoopbackHost(host: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === "localhost" || normalized === "0.0.0.0" || normalized === "::") {
+  if (normalized === "localhost") {
     return true;
   }
   const octets = parseIPv4Octets(normalized);

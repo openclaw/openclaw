@@ -190,7 +190,7 @@ function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
 }
 
 function isLoopbackClientIp(clientIp: string): boolean {
-  return clientIp === "127.0.0.1" || clientIp === "::1";
+  return clientIp.startsWith("127.") || clientIp === "::1";
 }
 
 function hasProxyForwardingHints(req: IncomingMessage): boolean {
