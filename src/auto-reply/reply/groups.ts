@@ -240,7 +240,13 @@ export function buildGroupChatContext(params: {
   const botUsername = normalizeOptionalString(params.sessionCtx.BotUsername);
 
   const lines: string[] = [];
-  lines.push(`You are in a ${providerLabel} group chat.`);
+  // Neutral opener: this context is built for both `group` and `channel` ChatTypes
+  // (see get-reply-run's `isGroupChat`). Saying "group chat" collides with the
+  // authoritative `chat_type` enum, where "group" means a private channel / group DM
+  // and a public channel is "channel". Agents read the louder prose and emit the wrong
+  // chat_type for channels. Word it so it does not declare a chat_type. Delivery guidance
+  // below keeps the colloquial "group" wording, which is role/delivery advice, not a type.
+  lines.push(`You are in a shared ${providerLabel} chat (not a 1:1 DM).`);
   if (params.sessionCtx.ExplicitlyMentionedBot === true && botUsername) {
     lines.push(
       `The incoming message explicitly mentions your channel identity @${botUsername}. Treat that mention as addressed to you, even if your persona name differs.`,

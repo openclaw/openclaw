@@ -37,7 +37,7 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "discord",
         },
         expected: [
-          "You are in a Discord group chat.",
+          "You are in a shared Discord chat (not a 1:1 DM).",
           groupParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
@@ -55,7 +55,7 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "whatsapp",
         },
         expected: [
-          "You are in a WhatsApp group chat. Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same group; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+          "You are in a shared WhatsApp chat (not a 1:1 DM). Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same group; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
           groupParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
@@ -73,7 +73,7 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "telegram",
         },
         expected: [
-          "You are in a Telegram group chat.",
+          "You are in a shared Telegram chat (not a 1:1 DM).",
           telegramGroupParticipationNote,
           groupSilentNote,
           groupSilentProseGuard,
@@ -106,7 +106,7 @@ export function registerGroupIntroPromptCases(): void {
           GroupMembers: "Alice (+1), Bob (+2)",
         },
         expected: [
-          "You are in a WhatsApp group chat.",
+          "You are in a shared WhatsApp chat (not a 1:1 DM).",
           "Activation: always-on (you receive every group message).",
           'If you only react or otherwise handle the message without a text reply, your final answer must still be exactly "NO_REPLY".',
           "Never say that you are staying quiet, keeping channel noise low, making a context-only note, or sending no channel reply.",

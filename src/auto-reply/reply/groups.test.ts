@@ -29,7 +29,9 @@ describe("group runtime loading", () => {
       silentReplyPolicy: "allow",
       silentToken: "NO_REPLY",
     });
-    expect(groupChatContext).toContain("You are in a WhatsApp group chat.");
+    expect(groupChatContext).toContain("You are in a shared WhatsApp chat (not a 1:1 DM).");
+    // The opener must not declare a "group chat" type-word that collides with chat_type.
+    expect(groupChatContext).not.toContain("You are in a WhatsApp group chat.");
     expect(groupChatContext).toContain(
       "Your text replies are automatically sent to this group chat.",
     );
@@ -79,6 +81,20 @@ describe("group runtime loading", () => {
     ).toContain("Activation: trigger-only");
     expect(groupsRuntimeLoads).not.toHaveBeenCalled();
     vi.doUnmock("./groups.runtime.js");
+  });
+
+  it("opens with a chat_type-neutral line for a public channel (not 'group chat')", () => {
+    // Regression for openclaw/openclaw#95645: buildGroupChatContext is used for both
+    // `group` and `channel` ChatTypes. A "group chat" opener collides with the
+    // authoritative chat_type enum (public channel -> "channel", not "group"), so an
+    // agent on a Mattermost public channel was led to emit chat_type=group.
+    const channelContext = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+    });
+    expect(channelContext).toContain("You are in a shared Mattermost chat (not a 1:1 DM).");
+    expect(channelContext).not.toContain("You are in a Mattermost group chat.");
+    // Delivery/role guidance keeps its colloquial "group" wording; that is not a type claim.
+    expect(channelContext).toContain("Be a good group participant");
   });
 
   it("builds direct chat context without silent-token guidance", () => {
