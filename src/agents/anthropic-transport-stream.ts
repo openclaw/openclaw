@@ -1482,7 +1482,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const eventIndex = typeof event.index === "number" ? event.index : undefined;
             const index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
             const block = index === undefined ? undefined : blocks[index];
-            if (index === undefined || !block) {
+            if (eventIndex === undefined || index === undefined || !block) {
               finishReasoningContentSidecars(event.index);
               continue;
             }
