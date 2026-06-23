@@ -5890,6 +5890,149 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces post-compaction context when the retried turn times out (#67750)", async () => {
+    // Embedded run announces a successful compaction (so autoCompactionCount > 0),
+    // then the retried turn throws. The fallback layer rejects with a structured
+    // FallbackSummaryError carrying timeout + billing-skip attempts. The user
+    // message must preserve that compaction succeeded plus the cause chain,
+    // not collapse to BILLING_ERROR_USER_MESSAGE or the generic /new copy.
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      throw new Error("LLM idle timeout (120s): no response from model");
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      try {
+        await params.run("openai-codex", "gpt-5.4");
+      } catch {
+        // Swallow the per-candidate error; the fallback layer reports the
+        // aggregate summary below, mirroring the production failure shape.
+      }
+      throw Object.assign(
+        new Error(
+          "All models failed (3): openai-codex/gpt-5.4: LLM request timed out. (timeout) | " +
+            "anthropic/claude-opus-4-7: Provider anthropic has billing issue (billing) | " +
+            "anthropic/claude-sonnet-4-7: Provider anthropic has billing issue (billing)",
+        ),
+        {
+          name: "FallbackSummaryError",
+          attempts: [
+            {
+              provider: "openai-codex",
+              model: "gpt-5.4",
+              error: "LLM request timed out.",
+              reason: "timeout",
+            },
+            {
+              provider: "anthropic",
+              model: "claude-opus-4-7",
+              error: "Provider anthropic has billing issue",
+              reason: "billing",
+            },
+            {
+              provider: "anthropic",
+              model: "claude-sonnet-4-7",
+              error: "Provider anthropic has billing issue",
+              reason: "billing",
+            },
+          ],
+          soonestCooldownExpiry: null,
+        },
+      );
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      // Compaction context preserved.
+      expect(result.payload.text).toContain("Auto-compaction succeeded");
+      // Retried turn cause preserved (billing was the resolved cause-specific copy).
+      expect(result.payload.text).toContain("billing");
+      // Per-attempt summary preserved (timeout + billing skips).
+      expect(result.payload.text).toContain("openai-codex/gpt-5.4 timed out");
+      expect(result.payload.text).toContain("anthropic/claude-opus-4-7 skipped (billing)");
+      // Not the bare GENERIC_RUN_FAILURE_TEXT.
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      // Not the unwrapped BILLING_ERROR_USER_MESSAGE on its own.
+      expect(result.payload.text).not.toBe("billing");
+    }
+  });
+
+  it("surfaces post-compaction context for plain failures without a fallback summary", async () => {
+    // Plain (non-FallbackSummaryError) failure after a successful compaction.
+    // The generic fallback copy would normally erase compaction history; with
+    // the post-compaction wrap, the user still learns compaction succeeded and
+    // gets specific next-step guidance instead of just "/new".
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      throw new Error("INVALID_ARGUMENT: some opaque post-compaction failure");
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("Auto-compaction succeeded");
+      // Generic-runner-failure path → guidance, not bare /new fallback.
+      expect(result.payload.text).toContain(
+        "The context was compacted but no candidate could finish the turn",
+      );
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
+  it("does not add post-compaction context when no compaction succeeded", async () => {
+    // Regression guard: ordinary unknown error without a prior successful
+    // compaction must still produce the generic fallback copy.
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new Error("INVALID_ARGUMENT: some other failure"),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).not.toContain("Auto-compaction succeeded");
+    }
+  });
+
   it("surfaces gateway restart text when fallback exhaustion wraps a drain error", async () => {
     const { replyOperation, failMock } = createMockReplyOperation();
     state.runWithModelFallbackMock.mockRejectedValueOnce(

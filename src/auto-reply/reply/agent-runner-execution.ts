@@ -785,6 +785,95 @@ function collapseRepeatedFailureDetail(message: string): string {
   return message.trim();
 }
 
+const FAILOVER_REASON_VERB: Record<string, string> = {
+  timeout: "timed out",
+  rate_limit: "rate-limited",
+  overloaded: "overloaded",
+  billing: "skipped (billing)",
+  auth: "auth failure",
+  auth_permanent: "auth permanently revoked",
+  server_error: "server error",
+  format: "response format error",
+  model_not_found: "model not found",
+  session_expired: "session expired",
+  empty_response: "empty response",
+  no_error_details: "unspecified error",
+  unclassified: "failed",
+  unknown: "failed",
+};
+
+const POST_COMPACTION_ATTEMPT_SUMMARY_MAX_CHARS = 240;
+const POST_COMPACTION_FAILURE_PREFIX =
+  "⚠️ Auto-compaction succeeded, but the retried turn still failed";
+
+/**
+ * Summarize FallbackSummaryError attempts as a short, user-readable list:
+ * "openai/gpt-5.4 timed out; anthropic/claude skipped (billing)".
+ * Returns undefined when the error is not a structured fallback summary
+ * (e.g. raw embedded error) so callers fall back to the resolved cause text.
+ */
+function summarizeFallbackAttemptsForUser(err: unknown): string | undefined {
+  if (!isFallbackSummaryError(err)) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  for (const attempt of err.attempts) {
+    const ref = `${attempt.provider}/${attempt.model}`;
+    const verb = attempt.reason ? (FAILOVER_REASON_VERB[attempt.reason] ?? "failed") : "failed";
+    parts.push(`${ref} ${verb}`);
+  }
+  if (parts.length === 0) {
+    return undefined;
+  }
+  const summary = parts.join("; ");
+  if (summary.length <= POST_COMPACTION_ATTEMPT_SUMMARY_MAX_CHARS) {
+    return summary;
+  }
+  return `${summary.slice(0, POST_COMPACTION_ATTEMPT_SUMMARY_MAX_CHARS - 1).trimEnd()}…`;
+}
+
+/**
+ * Wrap a resolved fallback failure message with post-compaction context so the
+ * user sees that compaction succeeded before the retried turn failed — instead
+ * of the generic "Something went wrong" or bare cause-specific text that erases
+ * the compaction history. The base text is preserved so existing cause-specific
+ * guidance (billing, rate-limit, timeout) still reaches the user.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/67750
+ */
+function buildPostCompactionFailureRecoveryText(params: {
+  baseText: string;
+  err: unknown;
+  autoCompactionCount: number;
+  isGenericRunnerFailure: boolean;
+}): string {
+  if (params.autoCompactionCount <= 0) {
+    return params.baseText;
+  }
+  const countSuffix =
+    params.autoCompactionCount > 1 ? ` (${params.autoCompactionCount} compactions)` : "";
+  const attemptSummary = summarizeFallbackAttemptsForUser(params.err);
+  const baseTrimmed = params.baseText.replace(/^⚠️\s*/u, "").trim();
+  // Generic catch-all (`isGenericRunnerFailure`) carries no cause signal,
+  // so drop the base text and rely on the attempt summary or the
+  // generic-mode guidance below. Cause-specific copy (billing, rate-limit,
+  // timeout, oauth) is preserved verbatim so the user still gets the actionable
+  // hint that already covers their failure mode.
+  const causeDetail = params.isGenericRunnerFailure
+    ? attemptSummary
+      ? `: ${attemptSummary}.`
+      : "."
+    : baseTrimmed
+      ? ` — ${baseTrimmed}`
+      : ".";
+  const attemptTrailer =
+    !params.isGenericRunnerFailure && attemptSummary ? `\n\nAttempts: ${attemptSummary}.` : "";
+  const guidance = params.isGenericRunnerFailure
+    ? "\n\nThe context was compacted but no candidate could finish the turn. Try again in a moment, or use /new only if the session stays stuck."
+    : "";
+  return `${POST_COMPACTION_FAILURE_PREFIX}${countSuffix}${causeDetail}${attemptTrailer}${guidance}`;
+}
+
 const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
 const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
@@ -3249,8 +3338,23 @@ export async function runAgentTurnWithFallback(params: {
               : shouldSurfaceToControlUi
                 ? `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`
                 : (externalRunFailureReply?.text ?? genericFallbackText);
+      // When auto-compaction succeeded earlier in this turn (#67750), prepend
+      // the post-compaction context so the user does not see the cause-specific
+      // or generic text without learning that the retried turn was the one
+      // that failed. Skip for heartbeat probes (separate copy contract) and
+      // control-UI surfaces (already includes raw cause + logs link).
+      const shouldSurfacePostCompactionContext =
+        autoCompactionCount > 0 && !params.isHeartbeat && !shouldSurfaceToControlUi;
+      const fallbackTextWithPostCompactionContext = shouldSurfacePostCompactionContext
+        ? buildPostCompactionFailureRecoveryText({
+            baseText: fallbackText,
+            err,
+            autoCompactionCount,
+            isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
+          })
+        : fallbackText;
       const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
-        text: fallbackText,
+        text: fallbackTextWithPostCompactionContext,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
         cfg: params.followupRun.run.config,
