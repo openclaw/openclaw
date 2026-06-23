@@ -9,6 +9,15 @@ const LIVE_MEDIA_RUNNER_DOCKERFILE = ".github/images/live-media-runner/Dockerfil
 const LIVE_MEDIA_RUNNER_IMAGE = "ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04";
 const LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW = ".github/workflows/live-media-runner-image.yml";
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
+const MANTIS_DISCORD_SMOKE_WORKFLOW = ".github/workflows/mantis-discord-smoke.yml";
+const MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW =
+  ".github/workflows/mantis-discord-status-reactions.yml";
+const MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW =
+  ".github/workflows/mantis-discord-thread-attachment.yml";
+const MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW = ".github/workflows/mantis-slack-desktop-smoke.yml";
+const MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW =
+  ".github/workflows/mantis-telegram-desktop-proof.yml";
+const MANTIS_TELEGRAM_LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const PACKAGE_JSON = "package.json";
 const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
 const DOCKER_E2E_PLAN_ACTION = ".github/actions/docker-e2e-plan/action.yml";
@@ -1436,6 +1445,58 @@ describe("package artifact reuse", () => {
 
       expect(uploadStep.if, jobName).toBe("always()");
       expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
+    }
+  });
+
+  it("requires live proof evidence artifacts when proof jobs run", () => {
+    const cases = [
+      {
+        workflowPath: MANTIS_DISCORD_SMOKE_WORKFLOW,
+        jobName: "run_discord_smoke",
+        stepName: "Upload Mantis artifacts",
+      },
+      {
+        workflowPath: MANTIS_DISCORD_STATUS_REACTIONS_WORKFLOW,
+        jobName: "run_status_reactions",
+        stepName: "Upload Mantis status reaction artifacts",
+      },
+      {
+        workflowPath: MANTIS_DISCORD_THREAD_ATTACHMENT_WORKFLOW,
+        jobName: "run_thread_attachment",
+        stepName: "Upload Mantis thread attachment artifacts",
+      },
+      {
+        workflowPath: MANTIS_SLACK_DESKTOP_SMOKE_WORKFLOW,
+        jobName: "run_slack_desktop",
+        stepName: "Upload Mantis Slack desktop artifacts",
+      },
+      {
+        workflowPath: MANTIS_TELEGRAM_DESKTOP_PROOF_WORKFLOW,
+        jobName: "run_telegram_desktop_proof",
+        stepName: "Upload Mantis Telegram desktop artifacts",
+      },
+      {
+        workflowPath: MANTIS_TELEGRAM_LIVE_WORKFLOW,
+        jobName: "run_telegram_live",
+        stepName: "Upload Mantis Telegram artifacts",
+      },
+      {
+        workflowPath: NPM_TELEGRAM_WORKFLOW,
+        jobName: "run_package_telegram_e2e",
+        stepName: "Upload npm Telegram E2E artifacts",
+      },
+    ];
+
+    for (const item of cases) {
+      const label = `${item.workflowPath} ${item.jobName}`;
+      const uploadStep = workflowStep(
+        workflowJob(item.workflowPath, item.jobName),
+        item.stepName,
+      );
+
+      expect(uploadStep.if, label).toContain("always()");
+      expect(uploadStep.uses, label).toBe(UPLOAD_ARTIFACT_V7);
+      expect(uploadStep.with?.["if-no-files-found"], label).toBe("error");
     }
   });
 
