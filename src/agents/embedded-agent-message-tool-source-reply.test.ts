@@ -73,9 +73,7 @@ describe("isDeliveredMessagingToolResult", () => {
         result: [{ type: "text", text: JSON.stringify({ result: { messageId: "msg-1" } }) }],
       }),
     ).toBe(true);
-    expect(isDeliveredMessagingToolResult({ result: { content: [{ text: "sent" }] } })).toBe(
-      true,
-    );
+    expect(isDeliveredMessagingToolResult({ result: { content: [{ text: "sent" }] } })).toBe(true);
     expect(isDeliveredMessagingToolResult({ result: { status: "sent" } })).toBe(true);
   });
 
@@ -331,6 +329,49 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
         toolName: "message",
         args: { action: "send", target: "elsewhere", message: "reply" },
         result: { deliveryStatus: "sent" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts confirmed explicit routes when the caller verified the source route", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "reply",
+          channel: "imessage",
+          target: "+12069106512",
+          message: "reply",
+        },
+        result: { ok: true, messageId: "imessage-853" },
+        allowExplicitSourceRoute: true,
+      }),
+    ).toBe(true);
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "reply",
+          channel: "imessage",
+          target: "+12069106512",
+          message: "reply",
+        },
+        result: { ok: true, messageId: "imessage-853" },
+      }),
+    ).toBe(false);
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "react",
+          channel: "imessage",
+          target: "+12069106512",
+        },
+        result: { ok: true },
+        allowExplicitSourceRoute: true,
       }),
     ).toBe(false);
   });
