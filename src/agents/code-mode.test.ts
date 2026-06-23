@@ -1639,6 +1639,53 @@ describe("Code Mode", () => {
     expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
+  it("surfaces the QuickJS error name and message for guest syntax errors", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-syntax", { code: "const x = ;" }),
+    );
+
+    expect(details.status).toBe("failed");
+    const error = String(details.error);
+    // Regression guard: QuickJS stacks are frames only, so the error used to
+    // collapse to a bare "at openclaw-code-mode:user.js:..." location with the
+    // actual cause dropped. The model now sees the name and message.
+    expect(error).toContain("SyntaxError");
+    expect(error).toContain("unexpected token");
+    expect(error.startsWith("at ")).toBe(false);
+  });
+
+  it("surfaces the QuickJS error name and message for guest runtime errors", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-runtime", { code: "return missingFn();" }),
+    );
+
+    expect(details.status).toBe("failed");
+    const error = String(details.error);
+    expect(error).toContain("ReferenceError");
+    expect(error).toContain("missingFn is not defined");
+    expect(error.startsWith("at ")).toBe(false);
+  });
+
   it("clamps omitted code-mode catalog search limits to maxSearchLimit", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -1896,7 +1943,7 @@ describe("Code Mode", () => {
     );
 
     expect(details.status).toBe("failed");
-    expect(details.error).toBe("boom");
+    expect(String(details.error)).toContain("Error: boom");
     expect(details.output).toEqual([{ type: "text", text: "before" }]);
   });
 
@@ -2045,9 +2092,11 @@ describe("Code Mode", () => {
     );
 
     expect(result.status).toBe("failed");
-    expect(result).toMatchObject({
-      code: "internal_error",
-      error: "interrupted",
-    });
+    // A guest error whose message happens to be "interrupted" must stay
+    // internal_error and not be misclassified as a QuickJS interrupt/timeout.
+    expect(result).toMatchObject({ code: "internal_error" });
+    if (result.status === "failed") {
+      expect(result.error).toContain("interrupted");
+    }
   });
 });
