@@ -91,7 +91,7 @@ The checks below show which scorecard areas were exercised by QA profile evidenc
 
 | Check set                | Completed                | Checks run | Results                                   | Areas reviewed | Capabilities reviewed |
 | ------------------------ | ------------------------ | ---------- | ----------------------------------------- | -------------- | --------------------- |
-| Full taxonomy validation | 2026-06-23T04:16:43.175Z | 96         | 88 passed, 6 failed, 2 blocked, 0 skipped | 0 of 281 (0%)  | 20 of 1675 (1.2%)     |
+| Full taxonomy validation | 2026-06-23T07:24:36.128Z | 96         | 94 passed, 0 failed, 2 blocked, 0 skipped | 0 of 281 (0%)  | 20 of 1675 (1.2%)     |
 
 ### Readiness by area
 
