@@ -15,7 +15,10 @@ import {
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
-import { resolveSystemChromiumExecutablePath } from "../ensure-playwright-chromium.mjs";
+import {
+  ensurePlaywrightChromium,
+  resolveSystemChromiumExecutablePath,
+} from "../ensure-playwright-chromium.mjs";
 
 const execFileAsync = promisify(execFile);
 const SCENARIO_ID = "ux-matrix-evidence-dashboard";
@@ -34,6 +37,7 @@ type MatrixCell = {
 };
 
 type ChromiumLauncher = Awaited<typeof import("playwright")>["chromium"];
+type ChromiumBrowser = Awaited<ReturnType<ChromiumLauncher["launch"]>>;
 
 export type ProducerOptions = {
   artifactBase: string;
@@ -304,10 +308,10 @@ function isMissingManagedPlaywrightBrowser(error: unknown) {
 export async function launchUxMatrixChromium(params?: {
   chromium?: Pick<ChromiumLauncher, "launch">;
   systemExecutablePath?: string;
-}) {
+}): Promise<{ browser: ChromiumBrowser; usedSystemExecutablePath?: string }> {
   const chromium = params?.chromium ?? (await import("playwright")).chromium;
   try {
-    return await chromium.launch();
+    return { browser: await chromium.launch() };
   } catch (error) {
     if (!isMissingManagedPlaywrightBrowser(error)) {
       throw error;
@@ -316,7 +320,27 @@ export async function launchUxMatrixChromium(params?: {
     if (!executablePath) {
       throw error;
     }
-    return await chromium.launch({ executablePath });
+    return {
+      browser: await chromium.launch({ executablePath }),
+      usedSystemExecutablePath: executablePath,
+    };
+  }
+}
+
+export function ensureUxMatrixVideoDependencies(params: {
+  ensureChromium?: typeof ensurePlaywrightChromium;
+  usedSystemExecutablePath?: string;
+}) {
+  if (!params.usedSystemExecutablePath) {
+    return;
+  }
+  const ensureChromium = params.ensureChromium ?? ensurePlaywrightChromium;
+  const status = ensureChromium({
+    ensureFfmpeg: true,
+    systemExecutablePath: params.usedSystemExecutablePath,
+  });
+  if (status !== 0) {
+    throw new Error(`Playwright ffmpeg install failed with status ${status}`);
   }
 }
 
@@ -329,7 +353,7 @@ async function captureControlUiScreenshot(params: {
 }) {
   const startedAt = Date.now();
   try {
-    const browser = await launchUxMatrixChromium();
+    const { browser } = await launchUxMatrixChromium();
     try {
       const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
       await page.goto(pathToFileURL(params.htmlPath).href);
@@ -468,9 +492,10 @@ async function captureProducerArtifactFixtureProof(params: {
   try {
     const videoDir = path.join(path.dirname(params.videoPath), "recording");
     await fs.mkdir(videoDir, { recursive: true });
-    const browser = await launchUxMatrixChromium();
+    const { browser, usedSystemExecutablePath } = await launchUxMatrixChromium();
     let recordedVideo: string | undefined;
     try {
+      ensureUxMatrixVideoDependencies({ usedSystemExecutablePath });
       const context = await browser.newContext({
         viewport: { width: 1280, height: 820 },
         recordVideo: {

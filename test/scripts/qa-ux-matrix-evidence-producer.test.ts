@@ -4,7 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { launchUxMatrixChromium } from "../../scripts/qa/ux-matrix-evidence-producer.js";
+import {
+  ensureUxMatrixVideoDependencies,
+  launchUxMatrixChromium,
+} from "../../scripts/qa/ux-matrix-evidence-producer.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 
@@ -126,10 +129,27 @@ describe("QA UX Matrix evidence producer CLI", () => {
       systemExecutablePath: "/usr/bin/chromium-browser",
     });
 
-    expect(result).toBe(browser);
+    expect(result).toEqual({
+      browser,
+      usedSystemExecutablePath: "/usr/bin/chromium-browser",
+    });
     expect(launch).toHaveBeenNthCalledWith(1);
     expect(launch).toHaveBeenNthCalledWith(2, {
       executablePath: "/usr/bin/chromium-browser",
+    });
+  });
+
+  it("ensures Playwright ffmpeg when video proof uses system Chromium", () => {
+    const ensureChromium = vi.fn(() => 0);
+
+    ensureUxMatrixVideoDependencies({
+      ensureChromium,
+      usedSystemExecutablePath: "/usr/bin/chromium-browser",
+    });
+
+    expect(ensureChromium).toHaveBeenCalledWith({
+      ensureFfmpeg: true,
+      systemExecutablePath: "/usr/bin/chromium-browser",
     });
   });
 });
