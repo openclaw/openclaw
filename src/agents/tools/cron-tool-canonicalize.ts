@@ -128,10 +128,16 @@ function repairConcatenatedCronToolKeys(value: Record<string, unknown>): void {
 function repairWhitespacePaddedCronToolKeys(value: Record<string, unknown>): void {
   for (const key of Object.keys(value)) {
     const trimmed = key.trim();
-    if (trimmed === key || trimmed.length === 0) continue;
-    if (!CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) continue;
+    if (trimmed === key || trimmed.length === 0) {
+      continue;
+    }
+    if (!CRON_RECOVERABLE_OBJECT_KEYS.has(trimmed)) {
+      continue;
+    }
     // Preserve genuine duplicates — let strict validation reject them.
-    if (value[trimmed] !== undefined) continue;
+    if (value[trimmed] !== undefined) {
+      continue;
+    }
     value[trimmed] = value[key];
     delete value[key];
   }
