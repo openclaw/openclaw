@@ -1,5 +1,5 @@
 // Telegram helper module supports agent config behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TypingMode } from "openclaw/plugin-sdk/config-contracts";
 
 type ReasoningDefault = "on" | "stream" | "off";
 
@@ -19,4 +19,13 @@ export function resolveTelegramConfigReasoningDefault(
     (entry) => normalizeAgentId(entry?.id) === id,
   )?.reasoningDefault;
   return agentDefault ?? cfg.agents?.defaults?.reasoningDefault ?? "off";
+}
+
+/**
+ * Returns the explicitly configured typing mode (session override first, then
+ * agents.defaults), mirroring how get-reply resolves it. Returns undefined
+ * when the operator never set one, so callers can keep legacy defaults.
+ */
+export function resolveConfiguredTypingMode(cfg: OpenClawConfig): TypingMode | undefined {
+  return cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode;
 }

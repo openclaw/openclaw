@@ -57,7 +57,10 @@ import {
   logVerbose,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
-import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
+import {
+  resolveConfiguredTypingMode,
+  resolveTelegramConfigReasoningDefault,
+} from "./agent-config.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -2394,7 +2397,12 @@ export const dispatchTelegramMessage = async ({
                         },
                       }
                     : undefined,
-                  suppressTyping: isRoomEvent,
+                  // Room events default to quiet typing, but an explicitly
+                  // configured typingMode must win: typing-indicators docs
+                  // define the modes with no room-event exception, and
+                  // resolveTypingMode maps message_tool_only turns to
+                  // "instant" — unreachable if this flag is unconditional.
+                  suppressTyping: isRoomEvent && resolveConfiguredTypingMode(cfg) === undefined,
                   onPartialReply:
                     answerLane.stream || reasoningLane.stream
                       ? (payload) =>

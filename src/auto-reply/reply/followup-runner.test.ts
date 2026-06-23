@@ -609,6 +609,46 @@ function createQueuedRun(
 }
 
 describe("createFollowupRunner reply-lane admission", () => {
+  it("starts run-start typing for queued turns like fresh turns do", async () => {
+    // Regression: queued/steered turns previously never signaled run-start
+    // typing, so message-tool turns (silent streamed final) showed no typing
+    // at all. "instant" is documented as "as soon as the model loop begins"
+    // with no queued-turn exception. See #92267.
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const typing = createMockTypingController();
+    const runner = createFollowupRunner({
+      typing,
+      typingMode: "instant",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(createQueuedRun({}));
+
+    expect(typing.startTypingLoop).toHaveBeenCalled();
+  });
+
+  it("does not start run-start typing when typingMode gates on text", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const typing = createMockTypingController();
+    const runner = createFollowupRunner({
+      typing,
+      typingMode: "message",
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(createQueuedRun({}));
+
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
   it("passes prepared media user turns to embedded runtime dispatch", async () => {
     const preparedUserTurnMessage = {
       role: "user",

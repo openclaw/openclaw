@@ -497,6 +497,11 @@ export function createFollowupRunner(params: {
       typing.markDispatchIdle();
       return;
     }
+    // Queued/steered turns must start typing the same way fresh turns do in
+    // runReplyAgent: `instant` is documented as "as soon as the model loop
+    // begins" with no queued-turn exception. Without this, message-tool turns
+    // (whose streamed final is the silent token) never show typing at all.
+    await typingSignals.signalRunStart();
     const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
       .map((correlation) => correlation.begin())
       .filter((end): end is () => void => typeof end === "function");
