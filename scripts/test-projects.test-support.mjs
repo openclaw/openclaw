@@ -1311,6 +1311,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/qa-lab-up.ts", ["test/scripts/qa-lab-up.test.ts"]],
   ["scripts/qa-coverage-report.ts", ["test/scripts/qa-report-cli.test.ts"]],
   ["scripts/qa-parity-report.ts", ["test/scripts/qa-report-cli.test.ts"]],
+  ["scripts/qa/render-maturity-docs.ts", ["test/scripts/render-maturity-docs.test.ts"]],
   [
     "scripts/qa/ux-matrix-evidence-producer.ts",
     ["test/scripts/qa-ux-matrix-evidence-producer.test.ts"],

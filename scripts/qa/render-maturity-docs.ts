@@ -85,6 +85,8 @@ type DerivedCoverageScores = QaMaturityCoverageScores & {
   warnings: string[];
 };
 
+const MATURITY_DOC_OUTPUTS = ["maturity/scorecard.md", "maturity/taxonomy.md"] as const;
+
 function parseArgs(argv: string[]): Args {
   const args: Args = {
     taxonomy: DEFAULT_TAXONOMY_PATH,
@@ -848,14 +850,58 @@ function writeOrCheck(outputPath: string, content: string, check: boolean): bool
   return false;
 }
 
+function checkEvidenceIndependentInputs({
+  args,
+  scoresPath,
+  taxonomy,
+  taxonomyPath,
+}: {
+  args: Args;
+  scoresPath: string;
+  taxonomy: QaMaturityTaxonomy;
+  taxonomyPath: string;
+}): void {
+  const { warnings } = readValidatedQaMaturityScoreSources({
+    scoresPath,
+    taxonomy,
+    taxonomyPath,
+  });
+  writeInputWarnings(warnings);
+  if (args.strictInputs) {
+    enforceStrictInputs(warnings);
+  }
+
+  const missing = MATURITY_DOC_OUTPUTS.map((fileName) =>
+    path.join(args.outputDir, fileName),
+  ).filter((outputPath) => !fs.existsSync(outputPath));
+  if (missing.length > 0) {
+    throw new Error(
+      `maturity docs check cannot skip evidence-backed freshness because generated docs are missing:\n${missing.map((file) => `- ${file}`).join("\n")}`,
+    );
+  }
+}
+
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
   const taxonomyPath = path.normalize(args.taxonomy);
   const scoresPath = path.normalize(args.scores);
   const docsRoot = path.normalize(args.docsRoot);
   const outputDir = path.normalize(args.outputDir);
-  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
   const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
+  if (args.check && !args.evidenceDir?.trim()) {
+    checkEvidenceIndependentInputs({
+      args: { ...args, outputDir },
+      scoresPath,
+      taxonomy,
+      taxonomyPath,
+    });
+    process.stdout.write(
+      `maturity docs inputs are valid in ${outputDir}; evidence-backed freshness check skipped because --evidence-dir was not supplied\n`,
+    );
+    return;
+  }
+
+  const evidenceSummaries = readEvidenceSummaries(args.evidenceDir);
   const coverage = deriveCoverageScores(taxonomy, evidenceSummaries);
   const { scores, warnings: scoreWarnings } = readValidatedQaMaturityScoreSources({
     coverageScores: coverage,
