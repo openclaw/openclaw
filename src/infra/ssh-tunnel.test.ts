@@ -107,6 +107,43 @@ describe("startSshPortForward", () => {
     });
   }
 
+  function spawnFakeSshStartupError(error: Error) {
+    mocks.spawn.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        killed: boolean;
+        pid?: number;
+        stderr: EventEmitter & { setEncoding: (enc: string) => void };
+        kill: (signal?: string) => boolean;
+      };
+      child.killed = false;
+      const stderr = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void };
+      stderr.setEncoding = () => {};
+      child.stderr = stderr;
+      child.kill = (signal?: string) => {
+        child.killed = true;
+        queueMicrotask(() => child.emit("exit", null, signal ?? null));
+        return true;
+      };
+      queueMicrotask(() => child.emit("error", error));
+      return child;
+    });
+  }
+
+  it("rejects when the ssh process cannot be spawned", async () => {
+    const startupError = Object.assign(new Error("spawn ssh ENOENT"), { code: "ENOENT" });
+    mocks.ensurePortAvailable.mockResolvedValueOnce();
+    spawnFakeSshStartupError(startupError);
+
+    await expect(
+      startSshPortForward({
+        target: "me@example.com:2222",
+        localPortPreferred: 43210,
+        remotePort: 18789,
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("spawn ssh ENOENT");
+  });
+
   it("scopes the preferred-port preflight to the IPv4 loopback interface", async () => {
     const sentinel = new Error("stop before spawning ssh");
     mocks.ensurePortAvailable.mockRejectedValueOnce(sentinel);
@@ -156,7 +193,7 @@ describe("startSshPortForward", () => {
     expect(tunnel.localPort).not.toBe(preferredPort);
     expect(tunnel.localPort).toBeGreaterThan(0);
     expect(mocks.spawn).toHaveBeenCalledWith(
-      "/usr/bin/ssh",
+      "ssh",
       expect.arrayContaining(["-L", `127.0.0.1:${tunnel.localPort}:127.0.0.1:18789`]),
       expect.anything(),
     );
