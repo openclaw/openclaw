@@ -144,13 +144,15 @@ export type ResolvedSessionEntryAccessTarget = {
   agentId: string;
   /** Canonical session key returned to callers even when an alias row won. */
   canonicalKey: string;
-  /** Freshest matching entry, if any, from the selected backing store. */
+  /** Freshest matching entry, if any. */
   entry?: SessionEntry;
   /** Original caller-supplied key after trimming. */
   requestedKey: string;
   /** Persisted key for the selected row. */
   storeKey: string;
-  /** Current file-backed store path; future backends keep this detail internal. */
+};
+
+type ResolvedSessionEntryStoreTarget = ResolvedSessionEntryAccessTarget & {
   storePath: string;
 };
 
@@ -554,6 +556,19 @@ function findFreshestSessionEntryMatch(
 export function resolveSessionEntryAccessTarget(
   scope: LogicalSessionAccessScope,
 ): ResolvedSessionEntryAccessTarget {
+  const target = resolveSessionEntryStoreTarget(scope);
+  return {
+    agentId: target.agentId,
+    canonicalKey: target.canonicalKey,
+    entry: target.entry,
+    requestedKey: target.requestedKey,
+    storeKey: target.storeKey,
+  };
+}
+
+function resolveSessionEntryStoreTarget(
+  scope: LogicalSessionAccessScope,
+): ResolvedSessionEntryStoreTarget {
   const requestedKey = scope.sessionKey.trim();
   const canonicalKey = resolveSessionStoreKey({ cfg: scope.cfg, sessionKey: requestedKey });
   const agentId = resolveSessionStoreAgentId(scope.cfg, canonicalKey);
@@ -574,7 +589,7 @@ export function resolveSessionEntryAccessTarget(
   };
   let selectedStorePath = fallback.storePath;
   let selectedMatch = findFreshestSessionEntryMatch(
-    listSessionEntries({ storePath: fallback.storePath, clone: false }),
+    listSessionEntries({ storePath: fallback.storePath }),
     scanTargets,
   );
   for (let index = 1; index < candidates.length; index += 1) {
@@ -583,7 +598,7 @@ export function resolveSessionEntryAccessTarget(
       continue;
     }
     const match = findFreshestSessionEntryMatch(
-      listSessionEntries({ storePath: candidate.storePath, clone: false }),
+      listSessionEntries({ storePath: candidate.storePath }),
       scanTargets,
     );
     if (
@@ -612,7 +627,7 @@ export async function updateResolvedSessionEntry<T>(
   scope: LogicalSessionAccessScope,
   update: (entry: SessionEntry, context: ResolvedSessionEntryUpdateContext) => Promise<T> | T,
 ): Promise<ResolvedSessionEntryUpdateResult<T>> {
-  const target = resolveSessionEntryAccessTarget(scope);
+  const target = resolveSessionEntryStoreTarget(scope);
   if (!target.entry) {
     return { canonicalKey: target.canonicalKey, found: false };
   }
@@ -621,9 +636,12 @@ export async function updateResolvedSessionEntry<T>(
     if (!entry) {
       return { canonicalKey: target.canonicalKey, found: false };
     }
-    const context = {
-      ...target,
+    const context: ResolvedSessionEntryUpdateContext = {
+      agentId: target.agentId,
+      canonicalKey: target.canonicalKey,
       entry,
+      requestedKey: target.requestedKey,
+      storeKey: target.storeKey,
     };
     const result = await update(entry, context);
     return {
