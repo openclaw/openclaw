@@ -119,6 +119,7 @@ const ERROR_PATTERNS = {
     "bad gateway",
     "gateway timeout",
     "upstream error",
+    "upstream_error",
     "upstream connect error",
     "connection reset",
     // Chinese provider server error messages

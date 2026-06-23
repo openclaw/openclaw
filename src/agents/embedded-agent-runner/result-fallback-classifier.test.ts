@@ -282,7 +282,16 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry non-business transport error payloads", () => {
+  it("classifies transient provider error payloads as fallback-worthy", () => {
+    const errorText = JSON.stringify({
+      error: {
+        message: "Upstream request failed",
+        type: "upstream_error",
+        param: "",
+        code: null,
+      },
+    });
+
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "custom",
       model: "llama-3.1",
@@ -290,7 +299,32 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         payloads: [
           {
             isError: true,
-            text: "HTTP 500: internal server error",
+            text: errorText,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `custom/llama-3.1 ended with a provider error: ${errorText}`,
+      reason: "timeout",
+      code: "embedded_error_payload",
+      rawError: errorText,
+    });
+  });
+
+  it("does not retry schema-rejection error payloads", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "custom",
+      model: "llama-3.1",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: "LLM request failed: provider rejected the request schema or tool payload.",
           },
         ],
         meta: {
