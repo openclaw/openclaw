@@ -207,7 +207,9 @@ function resolveToolErrorWarningPolicy(params: {
       includeDetails,
     };
   }
-  if (isExecLikeToolName(params.lastToolError.toolName) && !includeDetails) {
+  // Exec-like tool errors should always be suppressed regardless of includeDetails;
+  // they produce noisy exit-code warnings that leak into chat surfaces (#96009).
+  if (isExecLikeToolName(params.lastToolError.toolName)) {
     return { showWarning: false, includeDetails };
   }
   return {
