@@ -607,7 +607,7 @@ Periodic heartbeat runs.
         target: "none", // default: none | options: last | whatsapp | telegram | discord | ...
         prompt: "Read HEARTBEAT.md if it exists...",
         ackMaxChars: 300,
-        transcriptArtifactMode: "strip-all", // default: strip-all | options: strip-all | keep-result | keep-all
+        transcriptMode: "strip-all", // default: strip-all | options: strip-all | keep-result | keep-all
         suppressToolErrorWarnings: false,
         timeoutSeconds: 45,
       },
@@ -618,7 +618,7 @@ Periodic heartbeat runs.
 
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
 - `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt and skips `HEARTBEAT.md` injection into bootstrap context. Default: `true`.
-- `transcriptArtifactMode`: controls how acknowledged heartbeat turns (replies with `HEARTBEAT_OK` and additional text `≤ ackMaxChars`) are filtered in the conversation history: `"strip-all"` (default) to remove them completely, `"keep-result"` to retain a single summarized assistant turn of any non-empty report/text, or `"keep-all"` to retain the full turn. Heartbeat turns that do not acknowledge or exceed `ackMaxChars` are always kept in full.
+- `transcriptMode`: controls how acknowledged heartbeat turns (replies with `HEARTBEAT_OK` and additional text `≤ ackMaxChars`) are filtered in the conversation history: `"strip-all"` (default) to remove them completely, `"keep-result"` to retain a single summarized assistant turn of any non-empty report/text, or `"keep-all"` to retain the full turn. Heartbeat turns that do not acknowledge or exceed `ackMaxChars` are always kept in full.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
 - `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.

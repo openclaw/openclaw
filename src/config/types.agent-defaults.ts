@@ -461,7 +461,7 @@ export type AgentDefaultsConfig = {
      * - "keep-result": keep a single summarized assistant turn from heartbeats with non-empty results/output.
      * - "keep-all": do not filter heartbeat history (keeps everything).
      */
-    transcriptArtifactMode?: "strip-all" | "keep-result" | "keep-all";
+    transcriptMode?: "strip-all" | "keep-result" | "keep-all";
   };
   /** Max concurrent agent runs across all conversations. Default: 4. */
   maxConcurrent?: number;

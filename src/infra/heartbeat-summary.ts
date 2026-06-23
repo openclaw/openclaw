@@ -24,7 +24,7 @@ export type HeartbeatSummary = {
   target: string;
   model?: string;
   ackMaxChars: number;
-  transcriptArtifactMode?: "strip-all" | "keep-result" | "keep-all";
+  transcriptMode?: "strip-all" | "keep-result" | "keep-all";
 };
 
 const DEFAULT_HEARTBEAT_TARGET = "none";
@@ -98,7 +98,7 @@ export function resolveHeartbeatSummaryForAgent(
       target: defaults?.target ?? DEFAULT_HEARTBEAT_TARGET,
       model: defaults?.model,
       ackMaxChars: Math.max(0, defaults?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS),
-      transcriptArtifactMode: defaults?.transcriptArtifactMode ?? "strip-all",
+      transcriptMode: defaults?.transcriptMode ?? "strip-all",
     };
   }
 
@@ -118,11 +118,8 @@ export function resolveHeartbeatSummaryForAgent(
       overrides?.ackMaxChars ??
       DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
-  const transcriptArtifactMode =
-    merged?.transcriptArtifactMode ??
-    defaults?.transcriptArtifactMode ??
-    overrides?.transcriptArtifactMode ??
-    "strip-all";
+  const transcriptMode =
+    merged?.transcriptMode ?? defaults?.transcriptMode ?? overrides?.transcriptMode ?? "strip-all";
 
   return {
     enabled: true,
@@ -132,6 +129,6 @@ export function resolveHeartbeatSummaryForAgent(
     target,
     model,
     ackMaxChars,
-    transcriptArtifactMode,
+    transcriptMode,
   };
 }

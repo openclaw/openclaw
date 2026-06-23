@@ -990,7 +990,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     );
   });
 
-  describe("transcriptArtifactMode overrides", () => {
+  describe("transcriptMode overrides", () => {
     it("preserves everything when mode is keep-all", () => {
       const messages = [
         { role: "user", content: HEARTBEAT_PROMPT },
