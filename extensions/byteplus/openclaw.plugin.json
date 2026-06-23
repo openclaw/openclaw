@@ -32,8 +32,8 @@
             "cost": {
               "input": 0.0001,
               "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
+              "cacheRead": 2.5e-05,
+              "cacheWrite": 0.0001
             }
           },
           {
@@ -47,7 +47,7 @@
               "input": 0.6,
               "output": 2.5,
               "cacheRead": 0.12,
-              "cacheWrite": 0
+              "cacheWrite": 0.6
             }
           },
           {
@@ -59,8 +59,8 @@
             "cost": {
               "input": 0.0001,
               "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
+              "cacheRead": 2.5e-05,
+              "cacheWrite": 0.0001
             }
           }
         ]
@@ -78,8 +78,8 @@
             "cost": {
               "input": 0.0001,
               "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
+              "cacheRead": 2.5e-05,
+              "cacheWrite": 0.0001
             }
           },
           {
@@ -91,8 +91,8 @@
             "cost": {
               "input": 0.0001,
               "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
+              "cacheRead": 2.5e-05,
+              "cacheWrite": 0.0001
             }
           },
           {
@@ -104,8 +104,8 @@
             "cost": {
               "input": 0.0001,
               "output": 0.0002,
-              "cacheRead": 0,
-              "cacheWrite": 0
+              "cacheRead": 2.5e-05,
+              "cacheWrite": 0.0001
             }
           },
           {
@@ -119,7 +119,7 @@
               "input": 0.6,
               "output": 2.5,
               "cacheRead": 0.12,
-              "cacheWrite": 0
+              "cacheWrite": 0.6
             }
           },
           {
@@ -133,7 +133,7 @@
               "input": 0.6,
               "output": 2.5,
               "cacheRead": 0.12,
-              "cacheWrite": 0
+              "cacheWrite": 0.6
             }
           }
         ]

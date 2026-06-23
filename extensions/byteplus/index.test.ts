@@ -55,7 +55,7 @@ describe("byteplus plugin", () => {
       expect(entry?.cost?.input).toBe(0.6);
       expect(entry?.cost?.output).toBe(2.5);
       expect(entry?.cost?.cacheRead).toBe(0.12);
-      expect(entry?.cost?.cacheWrite).toBe(0);
+      expect(entry?.cost?.cacheWrite).toBe(0.6);
     }
   });
 });
