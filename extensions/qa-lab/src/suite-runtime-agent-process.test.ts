@@ -34,6 +34,7 @@ import {
   runQaCli,
   startAgentRun,
   waitForAgentRun,
+  waitForAgentHistoryReply,
   waitForMemorySearchMatch,
 } from "./suite-runtime-agent-process.js";
 
@@ -677,6 +678,65 @@ describe("qa suite runtime agent process helpers", () => {
         message: "hello",
       }),
     ).rejects.toThrow("agent.wait returned error: boom");
+  });
+
+  it("accepts completed agent wait status as a successful terminal run", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ runId: "run-completed" })
+      .mockResolvedValueOnce({ status: "completed" });
+    const env = {
+      gateway: { call: gatewayCall },
+      transport: {
+        buildAgentDelivery: vi.fn(() => ({
+          channel: "qa-channel",
+          replyChannel: "reply-channel",
+          replyTo: "reply-target",
+        })),
+      },
+    } as never;
+
+    await expect(
+      runAgentPrompt(env, {
+        sessionKey: "session-completed",
+        message: "hello",
+      }),
+    ).resolves.toEqual({
+      started: { runId: "run-completed" },
+      waited: { status: "completed" },
+    });
+  });
+
+  it("waits for the latest assistant history reply", async () => {
+    const gatewayCall = vi
+      .fn()
+      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: "still working" }] })
+      .mockResolvedValueOnce({
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "HISTORY-REPLY-OK" }],
+          },
+        ],
+      });
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history",
+        (text) => text === "HISTORY-REPLY-OK",
+        1_000,
+        1,
+      ),
+    ).resolves.toMatchObject({
+      text: "HISTORY-REPLY-OK",
+    });
+    expect(gatewayCall).toHaveBeenLastCalledWith(
+      "chat.history",
+      { sessionKey: "session-history", limit: 12 },
+      { timeoutMs: 10_000 },
+    );
   });
 
   it("waits for a specific agent run id", async () => {

@@ -150,11 +150,14 @@ flow:
             expr: "String(memoryAfter) === config.seededMemory"
             message:
               expr: "`shadow trial modified durable memory instead of staying report-only: ${memoryAfter}`"
-        - call: waitForCondition
+        - call: waitForAgentHistoryReply
           saveAs: outbound
           args:
+            - ref: env
+            - expr: config.sessionKey
             - lambda:
-                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && candidate.text.includes(config.safeMarker) && candidate.text.includes(config.reportName)).at(-1)"
+                params: [text]
+                expr: "text.includes(config.safeMarker) && text.includes(config.reportName)"
             - expr: liveTurnTimeoutMs(env, 30000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - assert:

@@ -67,7 +67,7 @@ Release behavior:
 - App Store release uses canonical `ai.openclawfoundation.app*` bundle IDs through a temporary generated xcconfig in `apps/ios/build/AppStoreRelease.xcconfig`.
 - App Store release uses manual `Apple Distribution` signing with profile names pinned in `apps/ios/Config/AppStoreSigning.json`.
 - Fastlane owns one-time Developer Portal setup, encrypted `match` signing sync to the repo/branch pinned in `apps/ios/Config/AppStoreSigning.json`, and release handling.
-- App Store release also switches the app to `OpenClawPushTransport=relay`, `OpenClawPushDistribution=official`, `OpenClawPushAPNsEnvironment=production`, and a production `aps-environment` entitlement.
+- App Store release also switches the app to `OpenClawPushTransport=relay`, `OpenClawPushDistribution=official`, `OpenClawPushAPNsEnvironment=production`, `OpenClawPushRelayProfile=production`, `OpenClawPushProofPolicy=appleStrict`, and the App-Attest-capable entitlement file.
 - `pnpm ios:release:upload` generates App Store screenshots and uploads release notes before archiving and uploading the IPA.
 - `pnpm ios:release` remains a compatibility alias for `pnpm ios:release:upload`; prefer the explicit upload command in new release docs and automation.
 - App Review submission is manual in App Store Connect. The release lane uploads a build and metadata, but does not submit for review.
@@ -102,6 +102,7 @@ Release-owner secrets:
 - App Store Connect API auth uses Keychain for private key material plus non-secret `apps/ios/fastlane/.env` variables.
 - The encrypted signing repo password lives outside this repo in the release-owner vault and is exposed locally as `MATCH_PASSWORD`.
 - The share sheet requires the Apple Developer App Group in `apps/ios/Config/AppStoreSigning.json` to be associated with both the app and share-extension bundle IDs before App Store profiles are regenerated.
+- Relay registration requires the App Attest capability on the main app ID before App Store profiles are regenerated.
 - Apple Distribution private keys, certificates, provisioning profiles, and decrypted signing sync output stay under `apps/ios/build/` or Keychain and are gitignored.
 - Rotating release signing means refreshing Fastlane `match` assets and pushing a fresh encrypted sync state.
 
@@ -157,7 +158,7 @@ This should create `apps/ios/fastlane/.env` with non-secret App Store Connect va
    - `ai.openclawfoundation.app.activitywidget`
    - `ai.openclawfoundation.app.watchkitapp`
 
-   The main app and share extension must both be associated with the App Group pinned in `apps/ios/Config/AppStoreSigning.json`.
+   The main app and share extension must both be associated with the App Group pinned in `apps/ios/Config/AppStoreSigning.json`. The main app must also have App Attest enabled.
 
    Use `pnpm ios:release:signing:setup` for the initial portal setup, then `MATCH_PASSWORD=... pnpm ios:release:signing:sync:push` to publish encrypted Fastlane match assets to the shared private repo.
 
@@ -243,6 +244,7 @@ See `apps/ios/VERSIONING.md` for the detailed spec.
 
 - The app calls `registerForRemoteNotifications()` at launch.
 - `apps/ios/Sources/OpenClaw.entitlements` derives `aps-environment` from the active build configuration/signing override.
+- App Attest relay builds use `apps/ios/Sources/OpenClawAppAttest.entitlements`; local/direct builds do not require App Attest provisioning.
 - APNs token registration to gateway happens only after gateway connection (`push.apns.register`).
 - Local/manual builds default to `OpenClawPushTransport=direct`, `OpenClawPushDistribution=local`, and a development `aps-environment` entitlement.
 - Your selected team/profile must support Push Notifications for the app bundle ID you are signing.
@@ -259,7 +261,7 @@ See `apps/ios/VERSIONING.md` for the detailed spec.
 - The relay registration is bound to the gateway identity fetched from `gateway.identity.get`, so another gateway cannot reuse that stored registration.
 - The app persists the relay handle metadata locally so reconnects can republish the gateway registration without re-registering on every connect.
 - If the relay base URL changes in a later build, the app refreshes the relay registration instead of reusing the old relay origin.
-- Relay mode requires a reachable relay base URL and uses App Attest plus a StoreKit app transaction JWS during registration.
+- Production relay mode uses the `production` relay profile, production APNs, App Attest, and a StoreKit app transaction JWS during registration.
 - Gateway-side relay sending is configured through `gateway.push.apns.relay.baseUrl` in `openclaw.json`. `OPENCLAW_APNS_RELAY_BASE_URL` remains a temporary env override only.
 
 ## Official Build Relay Trust Model

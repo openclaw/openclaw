@@ -7,6 +7,7 @@ import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
+import ai.openclaw.app.ui.design.ClawStatusRow
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
@@ -165,34 +166,18 @@ private fun HealthStatusPanel(
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     Column {
-      HealthStatusRow(title = "Gateway", value = gateway, healthy = isConnected)
+      ClawStatusRow(title = "Gateway", value = gateway, healthy = isConnected)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      HealthStatusRow(title = "Phone Node", value = node, healthy = isNodeConnected)
+      ClawStatusRow(title = "Phone Node", value = node, healthy = isNodeConnected)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      HealthStatusRow(title = "Chat", value = chat, healthy = chatHealthOk)
+      ClawStatusRow(title = "Chat", value = chat, healthy = chatHealthOk)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      HealthStatusRow(title = "Models", value = models, healthy = modelsReady)
+      ClawStatusRow(title = "Models", value = models, healthy = modelsReady)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      HealthStatusRow(title = "Voice", value = voice, healthy = voiceReady)
+      ClawStatusRow(title = "Voice", value = voice, healthy = voiceReady)
       HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-      HealthStatusRow(title = "Runs", value = runs, healthy = true)
+      ClawStatusRow(title = "Runs", value = runs, healthy = true)
     }
-  }
-}
-
-@Composable
-private fun HealthStatusRow(
-  title: String,
-  value: String,
-  healthy: Boolean,
-) {
-  Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(9.dp),
-  ) {
-    Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-    ClawStatusPill(text = value, status = if (healthy) ClawStatus.Success else ClawStatus.Warning)
   }
 }
 

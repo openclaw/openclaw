@@ -514,6 +514,51 @@ describe("qa cli runtime", () => {
     expect(suiteArgs.channelDriverSelection).toBeUndefined();
   });
 
+  it("filters QA-channel-pinned scenarios from the Crabline smoke profile", async () => {
+    runQaSuite.mockImplementationOnce(async () => {
+      await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
+      return flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      });
+    });
+
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      profile: "smoke-ci",
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.channelDriver).toBe("crabline");
+    expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
+    expect(suiteArgs.scenarioIds).not.toEqual(
+      expect.arrayContaining([
+        "instruction-followthrough-repo-contract",
+        "subagent-forked-context",
+        "subagent-handoff",
+        "group-message-tool-unavailable-fallback",
+        "qa-channel-reconnect-dedupe",
+        "reaction-edit-delete",
+        "thread-follow-up",
+        "image-generation-roundtrip",
+        "image-understanding-attachment",
+        "native-image-generation",
+        "active-memory-preprompt-recall",
+        "memory-recall",
+        "session-memory-ranking",
+        "thread-memory-isolation",
+        "personal-channel-thread-reply",
+        "personal-memory-preference-recall",
+        "personal-reminder-roundtrip",
+        "cron-natural-fire-no-duplicate",
+        "cron-one-minute-ping",
+        "cron-single-run-no-duplicate",
+        "control-ui-qa-channel-image-roundtrip",
+        "config-apply-restart-wakeup",
+      ]),
+    );
+  });
+
   it("rejects qa profile runs that do not match taxonomy categories", async () => {
     await expect(
       runQaProfileCommand({

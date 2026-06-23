@@ -142,11 +142,14 @@ flow:
         - set: expectedReplyAll
           value:
             expr: config.expectedReplyAll.map(normalizeLowercaseStringOrEmpty)
-        - call: waitForCondition
+        - call: waitForAgentHistoryReply
           saveAs: outbound
           args:
+            - ref: env
+            - expr: config.sessionKey
             - lambda:
-                expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && expectedReplyAll.every((needle) => normalizeLowercaseStringOrEmpty(candidate.text).includes(needle))).at(-1)"
+                params: [text]
+                expr: "expectedReplyAll.every((needle) => normalizeLowercaseStringOrEmpty(text).includes(needle))"
             - expr: liveTurnTimeoutMs(env, 30000)
             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
         - set: normalizedReply

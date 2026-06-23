@@ -1591,6 +1591,8 @@
     "docs:list": "node scripts/docs-list.js",
     "docs:spellcheck": "bash scripts/docs-spellcheck.sh",
     "docs:spellcheck:fix": "bash scripts/docs-spellcheck.sh --write",
+    "maturity:check": "node --import tsx scripts/qa/render-maturity-docs.ts --check",
+    "maturity:render": "node --import tsx scripts/qa/render-maturity-docs.ts",
     "dup:check": "node scripts/check-duplicates.mjs",
     "dup:check:coverage": "node scripts/check-duplicates.mjs --coverage",
     "dup:check:json": "node scripts/check-duplicates.mjs --json",

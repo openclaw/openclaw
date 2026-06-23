@@ -96,7 +96,7 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_UPDATE_NOTIFIER = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_FUND = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_AUDIT = "false"');
-    expect(npmInstallBody).toContain('$env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"');
+    expect(npmInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
     expect(npmInstallBody).toContain('$freshnessArgs = @("--min-release-age=0")');
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_BEFORE");
     expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE");
@@ -115,6 +115,16 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain("Write-NpmInstallFailureDetails -Output $npmOutput");
     expect(source).toContain("function Get-LatestNpmDebugLogPath {");
     expect(source).toContain("Get-Content -LiteralPath $latestLog -Tail 120");
+  });
+
+  it("does not force npm or pnpm lifecycle scripts through cmd.exe", () => {
+    const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
+    const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
+    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+
+    expect(ensurePnpmBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
+    expect(npmInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
+    expect(gitInstallBody).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
   });
 
   it("runs Windows command shims from a Windows-local cwd", () => {

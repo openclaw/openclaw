@@ -1803,8 +1803,8 @@ surfaces:
       supported: false
       reason: none
       human_override: false
-- id: gateway-external-apps
-  name: Gateway integrations for external apps
+- id: openclaw-app-sdk
+  name: OpenClaw App SDK
   family: core
   level:
     id: alpha
@@ -1831,7 +1831,7 @@ surfaces:
     source_ref: openclaw@29dd7847fd
     process_version: 3
   categories:
-  - name: Gateway API
+  - name: Client API
     coverage:
       score: 86
       label: Stable

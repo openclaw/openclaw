@@ -1146,6 +1146,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     scenarioIds: params?.scenarioIds,
     providerMode,
     primaryModel,
+    channelDriver: params?.channelDriver ?? params?.channelDriverSelection?.channelDriver,
     claudeCliAuthMode: params?.claudeCliAuthMode,
   });
   const enabledPluginIds = [

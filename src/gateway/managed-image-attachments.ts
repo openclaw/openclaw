@@ -9,7 +9,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { tryReadJson, writeJson } from "../infra/json-files.js";
-import { assertLocalMediaAllowed } from "../media/local-media-access.js";
+import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import {
   createImageProcessor,
@@ -299,8 +299,14 @@ function parseImageDataUrl(
   };
 }
 
-async function getVariantStats(filePath: string) {
-  const { buffer: metadataBuffer, stat } = await readLocalFileSafely({ filePath });
+async function getVariantStats(params: { filePath: string; buffer?: Buffer; sizeBytes?: number }) {
+  const loaded = params.buffer
+    ? { buffer: params.buffer, sizeBytes: params.sizeBytes ?? params.buffer.byteLength }
+    : await (async () => {
+        const { buffer, stat } = await readLocalFileSafely({ filePath: params.filePath });
+        return { buffer, sizeBytes: stat.size };
+      })();
+  const metadataBuffer = loaded.buffer;
   const metadata = (await getImageMetadata(metadataBuffer).catch(() => null)) ?? {
     width: null,
     height: null,
@@ -308,7 +314,7 @@ async function getVariantStats(filePath: string) {
   return {
     width: metadata.width ?? null,
     height: metadata.height ?? null,
-    sizeBytes: Number.isFinite(stat.size) ? stat.size : null,
+    sizeBytes: Number.isFinite(loaded.sizeBytes) ? loaded.sizeBytes : null,
   };
 }
 
@@ -837,6 +843,7 @@ export async function createManagedOutgoingImageBlocks(params: {
   const stateDir = params.stateDir ?? resolveStateDir();
   const limits = resolveManagedImageAttachmentLimits(params.limits);
   const blocks: ManagedImageBlock[] = [];
+  let resolvedLocalRoots: readonly string[] | undefined;
   for (const [index, mediaUrl] of mediaUrls.entries()) {
     const fallbackAlt = `Generated image ${index + 1}`;
     const parsedDataUrl = parseImageDataUrl(mediaUrl, fallbackAlt, limits);
@@ -864,7 +871,17 @@ export async function createManagedOutgoingImageBlocks(params: {
           : await (async () => {
               const localMediaPath = resolveLocalMediaPath(mediaUrl);
               if (localMediaPath) {
-                await assertLocalMediaAllowed(localMediaPath, params.localRoots);
+                const localRoots = params.localRoots;
+                const localMediaOptions =
+                  localRoots === "any"
+                    ? undefined
+                    : {
+                        resolveRoots: async () => {
+                          resolvedLocalRoots ??= await resolveLocalMediaRoots(localRoots);
+                          return resolvedLocalRoots;
+                        },
+                      };
+                await assertLocalMediaAllowed(localMediaPath, localRoots, localMediaOptions);
               }
               return await saveMediaSource(
                 mediaUrl,
@@ -892,7 +909,11 @@ export async function createManagedOutgoingImageBlocks(params: {
           : (await readLocalFileSafely({ filePath: savedOriginal.path })).buffer;
       validateManagedImageBuffer(originalBuffer, alt, limits);
 
-      let originalStats = await getVariantStats(savedOriginal.path);
+      let originalStats = await getVariantStats({
+        filePath: savedOriginal.path,
+        buffer: originalBuffer,
+        sizeBytes: savedOriginal.size,
+      });
       if (originalStats.sizeBytes != null && originalStats.sizeBytes > limits.maxBytes) {
         throw createManagedImageAttachmentError(
           `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
@@ -930,7 +951,11 @@ export async function createManagedOutgoingImageBlocks(params: {
         savedOriginalContentType = replacement.contentType ?? resized.contentType;
         savedOriginalPath = savedOriginal.path;
         originalBuffer = resized.buffer;
-        originalStats = await getVariantStats(savedOriginal.path);
+        originalStats = await getVariantStats({
+          filePath: savedOriginal.path,
+          buffer: originalBuffer,
+          sizeBytes: savedOriginal.size,
+        });
         effectiveMetadata = orientManagedImageMetadata(
           originalBuffer,
           originalStats.width != null && originalStats.height != null
