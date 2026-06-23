@@ -28,6 +28,7 @@ import {
   clearCronJobActive,
   isCronJobActive,
   markCronJobActive,
+  resetCronActiveJobs,
 } from "../active-jobs.js";
 import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -40,6 +41,7 @@ import type {
 import { computeJobNextRunAtMs } from "./jobs.js";
 import { run as runManualCronJob } from "./ops.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
+import * as cronServiceStore from "./store.js";
 import {
   DEFAULT_JOB_TIMEOUT_MS,
   applyJobResult,
@@ -1698,6 +1700,251 @@ describe("cron service timer regressions", () => {
     expect(persistedJob?.state.runningAtMs).toBe(scheduledAt);
   });
 
+  it("persists the due-job start timestamp before creating the cron task run", async () => {
+    resetTaskRegistryForTests();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-05-13T12:50:00.000Z");
+      const cronJob = createDueIsolatedJob({
+        id: "due-task-run-reservation-key",
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      let now = dueAt;
+      const entered = createDeferred<void>();
+      const release = createDeferred<{ status: "ok"; summary: string }>();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => {
+          now += 7;
+          return now;
+        },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => {
+          entered.resolve();
+          return await release.promise;
+        }),
+      });
+
+      const timer = onTimer(state);
+      await entered.promise;
+
+      const persisted = await loadCronStore(store.storePath);
+      const persistedJob = persisted.jobs.find((job) => job.id === cronJob.id);
+      const runningAtMs = requireTimestamp(
+        persistedJob?.state.runningAtMs,
+        "persisted due-job start marker",
+      );
+      const task = listTaskRecords().find(
+        (entry) => entry.runtime === "cron" && entry.sourceId === cronJob.id,
+      );
+      expect(task?.startedAt).toBe(runningAtMs);
+      expect(task?.runId).toBe(`cron:${cronJob.id}:${runningAtMs}`);
+
+      release.resolve({ status: "ok", summary: "done" });
+      await timer;
+    } finally {
+      resetTaskRegistryForTests();
+    }
+  });
+
+  it("does not admit due jobs into a newer generation while persisting the start timestamp", async () => {
+    resetTaskRegistryForTests();
+    const originalPersist = cronServiceStore.persist;
+    const persistStarted = createDeferred<void>();
+    const releasePersist = createDeferred<void>();
+    let persistCalls = 0;
+    const persistSpy = vi
+      .spyOn(cronServiceStore, "persist")
+      .mockImplementation(async (state, opts) => {
+        persistCalls += 1;
+        if (persistCalls === 2) {
+          persistStarted.resolve();
+          await releasePersist.promise;
+        }
+        await originalPersist(state, opts);
+      });
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-05-13T12:55:00.000Z");
+      const cronJob = createDueIsolatedJob({
+        id: "due-start-persist-generation",
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      let now = dueAt;
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => {
+          now += 17;
+          return now;
+        },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      const timer = onTimer(state);
+      await persistStarted.promise;
+      advanceCronActiveJobGeneration();
+      releasePersist.resolve();
+      await timer;
+
+      const persisted = await loadCronStore(store.storePath);
+      const persistedJob = persisted.jobs.find((entry) => entry.id === cronJob.id);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(
+        listTaskRecords().find(
+          (entry) => entry.runtime === "cron" && entry.sourceId === cronJob.id,
+        ),
+      ).toBeUndefined();
+      expect(persistedJob?.state.lastStatus).toBeUndefined();
+      expect(persistedJob?.state.runningAtMs).toBeUndefined();
+    } finally {
+      persistSpy.mockRestore();
+      resetCronActiveJobs();
+      resetTaskRegistryForTests();
+    }
+  });
+
+  it("does not admit due jobs after stop while persisting the start timestamp", async () => {
+    resetTaskRegistryForTests();
+    const originalPersist = cronServiceStore.persist;
+    const persistStarted = createDeferred<void>();
+    const releasePersist = createDeferred<void>();
+    let persistCalls = 0;
+    const persistSpy = vi
+      .spyOn(cronServiceStore, "persist")
+      .mockImplementation(async (state, opts) => {
+        persistCalls += 1;
+        if (persistCalls === 2) {
+          persistStarted.resolve();
+          await releasePersist.promise;
+        }
+        await originalPersist(state, opts);
+      });
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-05-13T12:57:00.000Z");
+      const cronJob = createDueIsolatedJob({
+        id: "due-start-persist-stop",
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      let now = dueAt;
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => {
+          now += 19;
+          return now;
+        },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      const timer = onTimer(state);
+      await persistStarted.promise;
+      state.stopped = true;
+      releasePersist.resolve();
+      await timer;
+
+      const persisted = await loadCronStore(store.storePath);
+      const persistedJob = persisted.jobs.find((entry) => entry.id === cronJob.id);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(
+        listTaskRecords().find(
+          (entry) => entry.runtime === "cron" && entry.sourceId === cronJob.id,
+        ),
+      ).toBeUndefined();
+      expect(persistedJob?.state.lastStatus).toBeUndefined();
+      expect(persistedJob?.state.runningAtMs).toBeUndefined();
+    } finally {
+      persistSpy.mockRestore();
+      resetCronActiveJobs();
+      resetTaskRegistryForTests();
+    }
+  });
+
+  it("does not admit due jobs after restart recovery starts while persisting the start timestamp", async () => {
+    resetTaskRegistryForTests();
+    const originalPersist = cronServiceStore.persist;
+    const persistStarted = createDeferred<void>();
+    const releasePersist = createDeferred<void>();
+    let persistCalls = 0;
+    const persistSpy = vi
+      .spyOn(cronServiceStore, "persist")
+      .mockImplementation(async (state, opts) => {
+        persistCalls += 1;
+        if (persistCalls === 2) {
+          persistStarted.resolve();
+          await releasePersist.promise;
+        }
+        await originalPersist(state, opts);
+      });
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const dueAt = Date.parse("2026-05-13T12:58:00.000Z");
+      const cronJob = createDueIsolatedJob({
+        id: "due-start-persist-recovery-pending",
+        nowMs: dueAt,
+        nextRunAtMs: dueAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
+
+      let now = dueAt;
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => {
+          now += 29;
+          return now;
+        },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      const timer = onTimer(state);
+      await persistStarted.promise;
+      state.restartRecoveryPending = true;
+      releasePersist.resolve();
+      await timer;
+
+      const persisted = await loadCronStore(store.storePath);
+      const persistedJob = persisted.jobs.find((entry) => entry.id === cronJob.id);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(
+        listTaskRecords().find(
+          (entry) => entry.runtime === "cron" && entry.sourceId === cronJob.id,
+        ),
+      ).toBeUndefined();
+      expect(persistedJob?.state.lastStatus).toBeUndefined();
+      expect(persistedJob?.state.runningAtMs).toBeUndefined();
+    } finally {
+      persistSpy.mockRestore();
+      resetCronActiveJobs();
+      resetTaskRegistryForTests();
+    }
+  });
+
   it("releases due-job reservations instead of admitting workers after scheduler stop wins", async () => {
     const store = timerRegressionFixtures.makeStorePath();
     const scheduledAt = Date.parse("2026-05-13T13:00:00.000Z");
@@ -2293,6 +2540,302 @@ describe("cron service timer regressions", () => {
         ?.status,
     ).toBe("succeeded");
     resetTaskRegistryForTests();
+  });
+
+  it("persists the startup catch-up start timestamp before creating the cron task run", async () => {
+    resetTaskRegistryForTests();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const missedAt = Date.parse("2026-05-10T08:59:10.000Z");
+      const job = createDueIsolatedJob({
+        id: "startup-task-run-reservation-key",
+        nowMs: missedAt,
+        nextRunAtMs: missedAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      let now = missedAt + 60_000;
+      const entered = createDeferred<void>();
+      const release = createDeferred<{ status: "ok"; summary: string }>();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => {
+          now += 11;
+          return now;
+        },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => {
+          entered.resolve();
+          return await release.promise;
+        }),
+      });
+
+      const missedJobs = runMissedJobs(state);
+      await entered.promise;
+
+      const persisted = await loadCronStore(store.storePath);
+      const persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
+      const runningAtMs = requireTimestamp(
+        persistedJob?.state.runningAtMs,
+        "persisted startup start marker",
+      );
+      const task = listTaskRecords().find(
+        (entry) => entry.runtime === "cron" && entry.sourceId === job.id,
+      );
+      expect(task?.startedAt).toBe(runningAtMs);
+      expect(task?.runId).toBe(`cron:${job.id}:${runningAtMs}`);
+
+      release.resolve({ status: "ok", summary: "done" });
+      await missedJobs;
+    } finally {
+      resetTaskRegistryForTests();
+    }
+  });
+
+  it("uses the startup catch-up start timestamp for main-session task and enqueue keys", async () => {
+    resetTaskRegistryForTests();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const missedAt = Date.parse("2026-05-10T09:02:10.000Z");
+      const job = createDueIsolatedJob({
+        id: "startup-main-session-run-key",
+        nowMs: missedAt,
+        nextRunAtMs: missedAt,
+      });
+      job.sessionTarget = "main";
+      job.wakeMode = "next-heartbeat";
+      job.payload = { kind: "systemEvent", text: "startup catch-up" };
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      let now = missedAt + 60_000;
+      const enqueueSystemEvent = vi.fn();
+      const requestHeartbeat = vi.fn();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => {
+          now += 13;
+          return now;
+        },
+        enqueueSystemEvent,
+        requestHeartbeat,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+
+      await runMissedJobs(state);
+
+      expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
+      const task = listTaskRecords().find(
+        (entry) => entry.runtime === "cron" && entry.sourceId === job.id,
+      );
+      if (!task) {
+        throw new Error("Expected startup main-session cron task row");
+      }
+      const enqueueOptions = requireRecord(enqueueSystemEvent.mock.calls[0]?.[1]);
+      expect(task.childSessionKey).toBe(enqueueOptions.sessionKey);
+      expect(task.runId).toBe(`cron:${job.id}:${task.startedAt}`);
+      expect(enqueueOptions.sessionKey).toBe(
+        `agent:main:cron:startup-main-session-run-key:run:${task.startedAt}`,
+      );
+      expect(requestHeartbeat).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason: `cron:${job.id}`,
+          sessionKey: task.childSessionKey,
+        }),
+      );
+    } finally {
+      resetTaskRegistryForTests();
+    }
+  });
+
+  it("does not admit startup catch-up jobs into a newer generation while persisting the start timestamp", async () => {
+    resetTaskRegistryForTests();
+    const originalPersist = cronServiceStore.persist;
+    const persistStarted = createDeferred<void>();
+    const releasePersist = createDeferred<void>();
+    let persistCalls = 0;
+    const persistSpy = vi
+      .spyOn(cronServiceStore, "persist")
+      .mockImplementation(async (state, opts) => {
+        persistCalls += 1;
+        if (persistCalls === 2) {
+          persistStarted.resolve();
+          await releasePersist.promise;
+        }
+        await originalPersist(state, opts);
+      });
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const missedAt = Date.parse("2026-05-10T09:02:40.000Z");
+      const job = createDueIsolatedJob({
+        id: "startup-start-persist-generation",
+        nowMs: missedAt,
+        nextRunAtMs: missedAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      let now = missedAt + 60_000;
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => {
+          now += 21;
+          return now;
+        },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      const missedJobs = runMissedJobs(state);
+      await persistStarted.promise;
+      advanceCronActiveJobGeneration();
+      releasePersist.resolve();
+      await missedJobs;
+
+      const persisted = await loadCronStore(store.storePath);
+      const persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(
+        listTaskRecords().find((entry) => entry.runtime === "cron" && entry.sourceId === job.id),
+      ).toBeUndefined();
+      expect(persistedJob?.state.lastStatus).toBeUndefined();
+      expect(persistedJob?.state.runningAtMs).toBeUndefined();
+    } finally {
+      persistSpy.mockRestore();
+      resetCronActiveJobs();
+      resetTaskRegistryForTests();
+    }
+  });
+
+  it("does not admit startup catch-up jobs after stop while persisting the start timestamp", async () => {
+    resetTaskRegistryForTests();
+    const originalPersist = cronServiceStore.persist;
+    const persistStarted = createDeferred<void>();
+    const releasePersist = createDeferred<void>();
+    let persistCalls = 0;
+    const persistSpy = vi
+      .spyOn(cronServiceStore, "persist")
+      .mockImplementation(async (state, opts) => {
+        persistCalls += 1;
+        if (persistCalls === 2) {
+          persistStarted.resolve();
+          await releasePersist.promise;
+        }
+        await originalPersist(state, opts);
+      });
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const missedAt = Date.parse("2026-05-10T09:03:10.000Z");
+      const job = createDueIsolatedJob({
+        id: "startup-start-persist-stop",
+        nowMs: missedAt,
+        nextRunAtMs: missedAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      let now = missedAt + 60_000;
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => {
+          now += 23;
+          return now;
+        },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      const missedJobs = runMissedJobs(state);
+      await persistStarted.promise;
+      state.stopped = true;
+      releasePersist.resolve();
+      await missedJobs;
+
+      const persisted = await loadCronStore(store.storePath);
+      const persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(
+        listTaskRecords().find((entry) => entry.runtime === "cron" && entry.sourceId === job.id),
+      ).toBeUndefined();
+      expect(persistedJob?.state.lastStatus).toBeUndefined();
+      expect(persistedJob?.state.runningAtMs).toBeUndefined();
+    } finally {
+      persistSpy.mockRestore();
+      resetCronActiveJobs();
+      resetTaskRegistryForTests();
+    }
+  });
+
+  it("does not admit startup catch-up jobs after restart recovery starts while persisting the start timestamp", async () => {
+    resetTaskRegistryForTests();
+    const originalPersist = cronServiceStore.persist;
+    const persistStarted = createDeferred<void>();
+    const releasePersist = createDeferred<void>();
+    let persistCalls = 0;
+    const persistSpy = vi
+      .spyOn(cronServiceStore, "persist")
+      .mockImplementation(async (state, opts) => {
+        persistCalls += 1;
+        if (persistCalls === 2) {
+          persistStarted.resolve();
+          await releasePersist.promise;
+        }
+        await originalPersist(state, opts);
+      });
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const missedAt = Date.parse("2026-05-10T09:03:40.000Z");
+      const job = createDueIsolatedJob({
+        id: "startup-start-persist-recovery-pending",
+        nowMs: missedAt,
+        nextRunAtMs: missedAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      let now = missedAt + 60_000;
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => {
+          now += 31;
+          return now;
+        },
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      const missedJobs = runMissedJobs(state);
+      await persistStarted.promise;
+      state.restartRecoveryPending = true;
+      releasePersist.resolve();
+      await missedJobs;
+
+      const persisted = await loadCronStore(store.storePath);
+      const persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(
+        listTaskRecords().find((entry) => entry.runtime === "cron" && entry.sourceId === job.id),
+      ).toBeUndefined();
+      expect(persistedJob?.state.lastStatus).toBeUndefined();
+      expect(persistedJob?.state.runningAtMs).toBeUndefined();
+    } finally {
+      persistSpy.mockRestore();
+      resetCronActiveJobs();
+      resetTaskRegistryForTests();
+    }
   });
 
   it("does not clear replacement reservations when stopped timer cleanup releases unclaimed jobs", async () => {

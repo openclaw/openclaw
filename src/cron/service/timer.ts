@@ -1038,6 +1038,42 @@ function finishRetiredCronTaskRuns(
   }
 }
 
+async function persistClaimedCronRunStart(
+  state: CronServiceState,
+  params: { jobId: string; reservedAtMs: number; startedAt: number },
+): Promise<void> {
+  if (params.reservedAtMs === params.startedAt) {
+    return;
+  }
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const job = state.store?.jobs.find((entry) => entry.id === params.jobId);
+    if (job?.state.runningAtMs !== params.reservedAtMs) {
+      return;
+    }
+    // Task maintenance recovers interrupted cron task rows by matching the run
+    // id timestamp to this durable marker; persist the claimed start before
+    // creating the task row so a later restart has one stable key.
+    job.state.runningAtMs = params.startedAt;
+    await persist(state);
+  });
+}
+
+async function releaseClaimedCronRunStart(
+  state: CronServiceState,
+  params: { jobId: string; startedAt: number },
+): Promise<void> {
+  await locked(state, async () => {
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const job = state.store?.jobs.find((entry) => entry.id === params.jobId);
+    if (job?.state.runningAtMs !== params.startedAt) {
+      return;
+    }
+    delete job.state.runningAtMs;
+    await persist(state);
+  });
+}
+
 function releaseUnstartedStartupCatchupReservations(
   state: CronServiceState,
   plan: StartupCatchupPlan,
@@ -1214,23 +1250,36 @@ export async function onTimer(state: CronServiceState) {
       }));
     });
 
+    let stopAdmittingDueJobs = false;
     const runDueJob = async (params: {
       id: string;
       job: CronJob;
       reservedAtMs: number;
-    }): Promise<TimedCronRunOutcome> => {
-      const { id, job } = params;
+    }): Promise<TimedCronRunOutcome | undefined> => {
+      const { id, job, reservedAtMs } = params;
       const startedAt = state.deps.nowMs();
-      job.state.runningAtMs = startedAt;
-      job.state.lastError = undefined;
       const activeJobMarker = markCronJobActive(job.id, {
         preserveAcrossGenerationAdvance: job.sessionTarget === "main",
       });
-      emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
       const jobTimeoutMs = resolveCronJobTimeoutMs(job);
-      const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+      let taskRunId: string | undefined;
 
       try {
+        await persistClaimedCronRunStart(state, { jobId: id, reservedAtMs, startedAt });
+        if (
+          stopAdmittingDueJobs ||
+          state.stopped ||
+          state.restartRecoveryPending ||
+          !isCronActiveJobMarkerCurrent(activeJobMarker)
+        ) {
+          clearCronJobActive(job.id, activeJobMarker);
+          await releaseClaimedCronRunStart(state, { jobId: id, startedAt });
+          return undefined;
+        }
+        job.state.runningAtMs = startedAt;
+        job.state.lastError = undefined;
+        emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
+        taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
         const result = await executeJobCoreWithTimeout(state, job, {
           runId: taskRunId,
           activeJobMarker,
@@ -1314,7 +1363,6 @@ export async function onTimer(state: CronServiceState) {
     const claimedIndexes = new Set<number>();
     let reservationReleaseError: unknown;
     let setupTimeoutNotified = false;
-    let stopAdmittingDueJobs = false;
     const hasSetupTimeoutRecoveryHandler = state.deps.onIsolatedAgentSetupTimeout !== undefined;
     const releaseUnclaimedDueJobReservations = async () => {
       if (claimedIndexes.size >= dueJobs.length) {
@@ -1356,6 +1404,10 @@ export async function onTimer(state: CronServiceState) {
         }
         claimedIndexes.add(index);
         const result = await runDueJob(due);
+        if (!result) {
+          stopAdmittingDueJobs = true;
+          continue;
+        }
         if (result.isolatedAgentSetupTimeout) {
           let finalizedResults: TimedCronRunOutcome[];
           try {
@@ -1720,7 +1772,10 @@ async function executeStartupCatchupPlan(
     if (state.stopped) {
       break;
     }
-    outcomes.push(await runStartupCatchupCandidate(state, candidate));
+    const outcome = await runStartupCatchupCandidate(state, candidate);
+    if (outcome) {
+      outcomes.push(outcome);
+    }
   }
   return outcomes;
 }
@@ -1728,23 +1783,40 @@ async function executeStartupCatchupPlan(
 async function runStartupCatchupCandidate(
   state: CronServiceState,
   candidate: StartupCatchupCandidate,
-): Promise<TimedCronRunOutcome> {
+): Promise<TimedCronRunOutcome | undefined> {
   const startedAt = state.deps.nowMs();
-  const taskRunId = tryCreateCronTaskRun({
-    state,
-    job: candidate.job,
-    startedAt,
-  });
   const activeJobMarker = markCronJobActive(candidate.job.id, {
     preserveAcrossGenerationAdvance: candidate.job.sessionTarget === "main",
   });
-  emit(state, {
-    jobId: candidate.job.id,
-    action: "started",
-    job: candidate.job,
-    runAtMs: startedAt,
-  });
+  let taskRunId: string | undefined;
   try {
+    await persistClaimedCronRunStart(state, {
+      jobId: candidate.jobId,
+      reservedAtMs: candidate.reservedAtMs,
+      startedAt,
+    });
+    if (
+      state.stopped ||
+      state.restartRecoveryPending ||
+      !isCronActiveJobMarkerCurrent(activeJobMarker)
+    ) {
+      clearCronJobActive(candidate.job.id, activeJobMarker);
+      await releaseClaimedCronRunStart(state, { jobId: candidate.jobId, startedAt });
+      return undefined;
+    }
+    candidate.job.state.runningAtMs = startedAt;
+    candidate.job.state.lastError = undefined;
+    taskRunId = tryCreateCronTaskRun({
+      state,
+      job: candidate.job,
+      startedAt,
+    });
+    emit(state, {
+      jobId: candidate.job.id,
+      action: "started",
+      job: candidate.job,
+      runAtMs: startedAt,
+    });
     const result = await executeJobCoreWithTimeout(state, candidate.job, {
       runId: taskRunId,
       activeJobMarker,
