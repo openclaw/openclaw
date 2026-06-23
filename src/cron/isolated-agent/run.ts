@@ -1528,6 +1528,12 @@ export async function runCronIsolatedAgentTurn(params: {
     return prepared.context.withRunSession({
       status: "error",
       error,
+      // Carry the already-resolved run model into the error/timeout row so
+      // cron_run_logs keeps provider/model attribution instead of looking like
+      // an un-attributed cron timeout. finalizeCronRun does the same via
+      // telemetry on the aborted path; this catch never reaches it.
+      provider: prepared.context.liveSelection.provider,
+      model: prepared.context.liveSelection.model,
       diagnostics: createCronRunDiagnosticsFromError(
         isCronLaneTimeout ? "cron-setup" : "agent-run",
         isCronLaneTimeout ? error : err,
