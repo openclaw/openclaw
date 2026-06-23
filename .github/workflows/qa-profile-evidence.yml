@@ -20,6 +20,11 @@ on:
         required: true
         default: release
         type: string
+      fail_on_qa_failure:
+        description: Fail the workflow when the QA profile command exits non-zero
+        required: false
+        default: true
+        type: boolean
   workflow_call:
     inputs:
       ref:
@@ -363,7 +368,7 @@ jobs:
           if-no-files-found: error
 
       - name: Fail if configured QA gate failed
-        if: always() && (github.event_name == 'workflow_dispatch' || inputs.fail_on_qa_failure)
+        if: always() && inputs.fail_on_qa_failure
         env:
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
           QA_PROFILE: ${{ steps.profile.outputs.profile }}

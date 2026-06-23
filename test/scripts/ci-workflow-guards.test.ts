@@ -19,6 +19,14 @@ function readRealBehaviorProofWorkflow() {
   return parse(readFileSync(".github/workflows/real-behavior-proof.yml", "utf8"));
 }
 
+function readMaturityScorecardWorkflow() {
+  return parse(readFileSync(".github/workflows/maturity-scorecard.yml", "utf8"));
+}
+
+function readQaProfileEvidenceWorkflow() {
+  return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
+}
+
 function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
@@ -561,6 +569,75 @@ describe("ci workflow guards", () => {
       path: "ci-timings-summary.txt",
       "retention-days": 14,
     });
+  });
+
+  it("keeps maturity scorecard generated QA evidence handoff strict", () => {
+    const maturityWorkflow = readMaturityScorecardWorkflow();
+    const qaEvidenceWorkflow = readQaProfileEvidenceWorkflow();
+    const generateJob = maturityWorkflow.jobs.generate_qa_evidence;
+    const publishJob = maturityWorkflow.jobs.publish;
+    const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
+
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.fail_on_qa_failure).toEqual({
+      description: "Fail the workflow when the QA profile command exits non-zero",
+      required: false,
+      default: true,
+      type: "boolean",
+    });
+    expect(qaEvidenceWorkflow.on.workflow_call.inputs.fail_on_qa_failure).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
+    expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
+    expect(generateJob.with).toMatchObject({
+      ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      qa_profile: "release",
+      fail_on_qa_failure: false,
+    });
+
+    const generatedDownloadStep = publishJob.steps.find(
+      (step) => step.name === "Download generated QA evidence artifact",
+    );
+    expect(generatedDownloadStep.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
+    expect(generatedDownloadStep.env.GENERATED_ARTIFACT_NAME).toBe(
+      "${{ needs.generate_qa_evidence.outputs.artifact_name }}",
+    );
+    expect(generatedDownloadStep.run).toContain('gh run download "$GITHUB_RUN_ID"');
+    expect(generatedDownloadStep.run).toContain('--name "$GENERATED_ARTIFACT_NAME"');
+    expect(generatedDownloadStep.run).not.toContain("--pattern");
+
+    const requireEvidenceStep = publishJob.steps.find(
+      (step) => step.name === "Require one QA evidence file",
+    );
+    expect(requireEvidenceStep.run).toContain("Expected exactly one qa-evidence.json file");
+
+    const validateManifestStep = publishJob.steps.find(
+      (step) => step.name === "Validate QA evidence manifest",
+    );
+    expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
+
+    expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
+    const qaEvidenceStep = qaRunJob.steps.find(
+      (step) => step.name === "Validate QA profile evidence",
+    );
+    expect(qaEvidenceStep.env.ARTIFACT_NAME).toBe(
+      "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+    );
+    expect(qaEvidenceStep.run).toContain("qa-profile-evidence-manifest.json");
+
+    const qaUploadStep = qaRunJob.steps.find((step) => step.name === "Upload QA profile evidence");
+    expect(qaUploadStep.with).toMatchObject({
+      name: "qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      path: "${{ steps.run_profile.outputs.output_dir }}",
+      "if-no-files-found": "error",
+    });
+
+    const qaFailStep = qaRunJob.steps.find(
+      (step) => step.name === "Fail if configured QA gate failed",
+    );
+    expect(qaFailStep.if).toBe("always() && inputs.fail_on_qa_failure");
   });
 
   it("keeps workflow guards in fast CI-routing checks", () => {
