@@ -38,7 +38,10 @@ function resolveExactNpmPinPackageName(entry: PluginVersionDriftEntry): string |
 export function resolvePluginVersionDriftUpdateCommand(entry: PluginVersionDriftEntry): string {
   const exactNpmPackageName = resolveExactNpmPinPackageName(entry);
   if (exactNpmPackageName) {
-    return `openclaw plugins update ${exactNpmPackageName}@${entry.gatewayVersion}`;
+    const exactNpmTarget = `${exactNpmPackageName}@${entry.gatewayVersion}`;
+    if (parseRegistryNpmSpec(exactNpmTarget)?.selectorKind === "exact-version") {
+      return `openclaw plugins update ${exactNpmTarget}`;
+    }
   }
   return `openclaw plugins update ${entry.pluginId}`;
 }

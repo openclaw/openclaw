@@ -373,4 +373,17 @@ describe("resolvePluginVersionDriftUpdateCommand", () => {
       }),
     ).toBe("openclaw plugins update brave");
   });
+
+  it("keeps plugin-id updates when the gateway version is not a registry version", () => {
+    expect(
+      resolvePluginVersionDriftUpdateCommand({
+        pluginId: "brave",
+        installedVersion: "2026.6.9",
+        gatewayVersion: "unknown",
+        source: "npm",
+        packageName: "@openclaw/brave-plugin",
+        spec: "@openclaw/brave-plugin@2026.6.9",
+      }),
+    ).toBe("openclaw plugins update brave");
+  });
 });
