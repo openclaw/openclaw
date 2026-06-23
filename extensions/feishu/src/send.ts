@@ -311,7 +311,7 @@ function parseInteractivePostFallback(parsed: unknown): string | undefined {
   return textContent && textContent !== POST_FALLBACK_TEXT ? textContent : undefined;
 }
 
-function parseInteractiveCardContent(parsed: unknown): string {
+export function parseInteractiveCardContent(parsed: unknown): string {
   if (!isRecord(parsed)) {
     return INTERACTIVE_CARD_FALLBACK_TEXT;
   }

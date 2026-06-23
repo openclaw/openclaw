@@ -7,6 +7,7 @@ import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { parseInteractiveCardContent } from "./send.js";
 import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 
 type FeishuMention = {
@@ -197,6 +198,10 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Sticker]";
       case "merge_forward":
         return "[Nested Merged Forward]";
+      case "interactive":
+        // FIX #77909: Reuse the existing interactive-card text extractor from
+        // send.ts instead of falling through to bare "[interactive]".
+        return parseInteractiveCardContent(parsed);
       default:
         return `[${contentType}]`;
     }
@@ -227,7 +232,14 @@ export function parseMergeForwardContent(params: { content: string; log?: Feishu
   if (!Array.isArray(items) || items.length === 0) {
     return "[Merged and Forwarded Message - no sub-messages]";
   }
-  const subMessages = items.filter((item) => item.upper_message_id);
+  // FIX #77909: Include all items, not only those with upper_message_id.
+  // Interactive/card sub-messages in a merge-forward may not have
+  // upper_message_id and were silently dropped, losing their content.
+  // Exclude the root merge_forward container to avoid rendering it as
+  // a sub-message (it has no content).
+  const subMessages = items.filter(
+    (item) => Boolean(item.upper_message_id) || item.msg_type !== "merge_forward",
+  );
   if (subMessages.length === 0) {
     return "[Merged and Forwarded Message - no sub-messages found]";
   }
