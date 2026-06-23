@@ -569,6 +569,47 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
   });
 
+  it("downloads attachments during preflight, before the message reaches the run queue", async () => {
+    // Regression for #96165: Discord CDN attachment URLs expire. Downloading
+    // must happen at receipt time (preflight), not after a possible run-queue
+    // delay, or queued messages lose their media.
+    const result = await runDmPreflight({
+      channelId: "dm-channel-image-1",
+      message: createDiscordMessage({
+        id: "m-dm-image-1",
+        channelId: "dm-channel-image-1",
+        content: "look at this",
+        attachments: [
+          {
+            id: "att-dm-image-1",
+            url: "https://cdn.discordapp.com/attachments/1/photo.png?ex=expired",
+            content_type: "image/png",
+            filename: "photo.png",
+          },
+        ],
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.preflightMediaList).toEqual([
+      {
+        path: "/tmp/openclaw-discord-test/photo.png",
+        contentType: "image/png",
+        placeholder: "<media:image>",
+      },
+    ]);
+    expect(preflight.preflightForwardedMediaList).toEqual([]);
+  });
+
   it("keeps no-guild messages direct when channel lookup is unavailable", async () => {
     const result = await runUnresolvedDmPreflight({
       cfg: {

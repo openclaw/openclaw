@@ -7,7 +7,7 @@ import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
-import type { DiscordChannelInfo } from "./message-utils.js";
+import type { DiscordChannelInfo, DiscordMediaInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
 import type { DiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
@@ -60,6 +60,10 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   baseText: string;
   messageText: string;
   preflightAudioTranscript?: string;
+  // Fetched at receipt time, before the run queue may delay processing, so
+  // Discord's expiring CDN attachment URLs are still valid when downloaded.
+  preflightMediaList?: DiscordMediaInfo[];
+  preflightForwardedMediaList?: DiscordMediaInfo[];
   wasMentioned: boolean;
 
   route: ReturnType<typeof resolveAgentRoute>;
