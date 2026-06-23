@@ -21,7 +21,7 @@ as one OpenCode setup.
 
 <Tabs>
   <Tab title="Zen catalog">
-    **Best for:** the curated OpenCode multi-model proxy (Claude, GPT, Gemini).
+    **Best for:** the curated OpenCode multi-model proxy (Claude, GPT, Gemini, GLM).
 
     <Steps>
       <Step title="Run onboarding">
@@ -92,10 +92,10 @@ as one OpenCode setup.
 
 ### Zen
 
-| Property         | Value                                                                     |
-| ---------------- | ------------------------------------------------------------------------- |
-| Runtime provider | `opencode`                                                                |
-| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3.1-pro` |
+| Property         | Value                                                                                         |
+| ---------------- | --------------------------------------------------------------------------------------------- |
+| Runtime provider | `opencode`                                                                                    |
+| Example models   | `opencode/claude-opus-4-6`, `opencode/gpt-5.5`, `opencode/gemini-3.1-pro`, `opencode/glm-5.2` |
 
 ### Go
 

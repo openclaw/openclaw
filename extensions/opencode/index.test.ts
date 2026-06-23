@@ -116,6 +116,7 @@ describe("opencode provider plugin", () => {
       "grok-build-0.1",
       "deepseek-v4-pro",
       "deepseek-v4-flash",
+      "glm-5.2",
       "glm-5.1",
       "glm-5",
       "minimax-m2.7",
@@ -176,6 +177,14 @@ describe("opencode provider plugin", () => {
     expect(requireMapEntry(models, "qwen3.6-plus")).toMatchObject({
       api: "anthropic-messages",
       baseUrl: "https://opencode.ai/zen",
+    });
+    expect(requireMapEntry(models, "glm-5.2")).toMatchObject({
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/v1",
+      input: ["text"],
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+      cost: { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
     });
 
     const dynamicModel = requireRecord(
@@ -264,6 +273,7 @@ describe("opencode provider plugin", () => {
       ["claude-opus-4-5", { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }],
       ["claude-opus-4-1", { input: 15, output: 75, cacheRead: 1.5, cacheWrite: 18.75 }],
       ["gpt-5.4-mini", { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 }],
+      ["glm-5.2", { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 }],
       ["minimax-m2.7", { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 }],
     ] as const);
 
@@ -301,8 +311,9 @@ describe("opencode provider plugin", () => {
       throw new Error("expected OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(48);
+    expect(result.provider.models).toHaveLength(49);
     expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
+    expect(result.provider.models.map((model) => model.id)).toContain("glm-5.2");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m2.7");
     expect(result.provider.models.find((model) => model.id === "minimax-m2.7")).toMatchObject({
       api: "openai-completions",

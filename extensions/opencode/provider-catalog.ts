@@ -74,6 +74,7 @@ const MODEL_COSTS: Record<string, ModelDefinitionConfig["cost"]> = {
   "gemini-3.5-flash": { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 },
   "glm-5": { input: 1, output: 3.2, cacheRead: 0.2, cacheWrite: 0 },
   "glm-5.1": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
+  "glm-5.2": { input: 1.4, output: 4.4, cacheRead: 0.26, cacheWrite: 0 },
   "gpt-5": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
   "gpt-5-codex": { input: 1.07, output: 8.5, cacheRead: 0.107, cacheWrite: 0 },
   "gpt-5-nano": { input: 0.05, output: 0.4, cacheRead: 0.005, cacheWrite: 0 },
@@ -143,6 +144,7 @@ const MODEL_NAMES: Record<string, string> = {
   "gemini-3.5-flash": "Gemini 3.5 Flash",
   "glm-5": "GLM-5",
   "glm-5.1": "GLM-5.1",
+  "glm-5.2": "GLM-5.2",
   "gpt-5": "GPT-5",
   "gpt-5-codex": "GPT-5 Codex",
   "gpt-5-nano": "GPT-5 Nano",
@@ -222,6 +224,9 @@ function resolveContextWindow(modelId: string): number {
   }
   if (lower.includes("claude")) {
     return 200_000;
+  }
+  if (lower === "glm-5.2") {
+    return 1_000_000;
   }
   if (lower.includes("glm") || lower.includes("minimax")) {
     return 204_800;
@@ -337,6 +342,7 @@ const OPENCODE_ZEN_MODELS = [
   "grok-build-0.1",
   "deepseek-v4-pro",
   "deepseek-v4-flash",
+  "glm-5.2",
   "glm-5.1",
   "glm-5",
   "minimax-m2.7",
