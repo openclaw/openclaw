@@ -23,6 +23,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   getBeforeToolCallPolicyDiagnosticState,
   runBeforeToolCallHook,
@@ -1042,6 +1043,27 @@ describe("before_tool_call requireApproval handling", () => {
     }
   }
 
+  function registerDisabledTelegramApprovalCapability(): void {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            approvalCapability: {
+              native: {},
+              getActionAvailabilityState: () => ({ kind: "disabled" as const }),
+              getExecInitiatingSurfaceState: () => ({ kind: "disabled" as const }),
+              describeExecApprovalSetup: () =>
+                "Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`.",
+            },
+          },
+        },
+      ]),
+    );
+  }
+
   beforeEach(() => {
     resetDiagnosticSessionStateForTest();
     resetDiagnosticEventsForTest();
@@ -1603,6 +1625,74 @@ describe("before_tool_call requireApproval handling", () => {
     expect(onResolution).toHaveBeenCalledWith("cancelled");
     expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
       "plugin.approval.request",
+    ]);
+  });
+
+  it("includes Telegram setup guidance when plugin approval has no route", async () => {
+    registerDisabledTelegramApprovalCapability();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "No route",
+        description: "Needs native approval",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-no-route", decision: null });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: {},
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "default",
+      },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty(
+      "reason",
+      "Plugin approval unavailable (no approval route)\n\nApprove it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`.",
+    );
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+    ]);
+  });
+
+  it("includes Telegram setup guidance when plugin approval times out without native delivery", async () => {
+    registerDisabledTelegramApprovalCapability();
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Timed out",
+        description: "Needs native approval",
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-timeout", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-timeout", decision: null });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: {},
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        turnSourceChannel: "telegram",
+        turnSourceTo: "telegram:12345",
+        turnSourceAccountId: "default",
+      },
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result).toHaveProperty(
+      "reason",
+      "Approval timed out\n\nApprove it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure `channels.telegram.execApprovals.approvers` or `commands.ownerAllowFrom`.",
+    );
+    expect(mockCallGateway.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
     ]);
   });
 
