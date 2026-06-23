@@ -1198,5 +1198,9 @@
   {
     "source": "Zalo ClawBot",
     "target": "Zalo ClawBot"
+  },
+  {
+    "source": "Docs map",
+    "target": "文档地图"
   }
 ]

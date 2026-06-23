@@ -2,7 +2,7 @@
 
 // Generates docs/docs_map.md from source docs headings for LLM navigation.
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = process.cwd();
@@ -104,7 +104,7 @@ function extractHeadings(raw) {
     const fenceMatch = /^(?<marker>`{3,}|~{3,})/u.exec(trimmed);
     if (fenceMatch) {
       const marker = fenceMatch.groups.marker[0];
-      fenceMarker = fenceMarker === marker ? null : fenceMarker ?? marker;
+      fenceMarker = fenceMarker === marker ? null : (fenceMarker ?? marker);
       continue;
     }
     if (fenceMarker) {
