@@ -96,6 +96,13 @@ export type BrowserActRequest =
       timeoutMs?: number;
     }
   | { kind: "evaluate"; fn: string; ref?: string; targetId?: string; timeoutMs?: number }
+  | {
+      kind: "readPageState";
+      selector?: string;
+      stateKind?: "page" | "linkedin_invitations";
+      targetId?: string;
+      maxChars?: number;
+    }
   | { kind: "close"; targetId?: string }
   | {
       kind: "batch";

@@ -15,6 +15,7 @@ const ACT_KINDS = [
   "hover",
   "scrollIntoView",
   "press",
+  "readPageState",
   "resize",
   "select",
   "type",

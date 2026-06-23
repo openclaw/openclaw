@@ -187,6 +187,8 @@ const LEGACY_BROWSER_ACT_REQUEST_KEYS = [
   "selector",
   "url",
   "loadState",
+  "stateKind",
+  "maxChars",
   "fn",
   "timeoutMs",
 ] as const;

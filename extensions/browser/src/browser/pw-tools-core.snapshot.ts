@@ -89,6 +89,156 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
   return Array.isArray(urls) ? urls : [];
 }
 
+export type PageStateKind = "page" | "linkedin_invitations";
+
+export type PageStateReadResult = {
+  kind: PageStateKind;
+  state: "auth_required" | "empty" | "cards_found" | "unknown";
+  url: string;
+  title: string;
+  text: string;
+  cards?: Array<{ name: string; profileUrl?: string; message?: string }>;
+};
+
+function normalizeExtractedText(value: unknown, maxChars: number): string {
+  const text = typeof value === "string" ? value : "";
+  return text.replace(/\s+/g, " ").trim().slice(0, maxChars);
+}
+
+function classifyLinkedInInvitationState(params: {
+  url: string;
+  title: string;
+  text: string;
+  cards: Array<{ name: string; profileUrl?: string; message?: string }>;
+}): PageStateReadResult["state"] {
+  const haystack = `${params.url}\n${params.title}\n${params.text}`.toLowerCase();
+  if (
+    haystack.includes("/uas/login") ||
+    haystack.includes("/login") ||
+    haystack.includes("/checkpoint/") ||
+    haystack.includes("linkedin login") ||
+    haystack.includes("sign in | linkedin") ||
+    haystack.includes("join linkedin") ||
+    haystack.includes("sign in to linkedin")
+  ) {
+    return "auth_required";
+  }
+  if (params.cards.length > 0) {
+    return "cards_found";
+  }
+  if (
+    /\ball\s*\(0\)/i.test(params.text) ||
+    /no new invitations/i.test(params.text) ||
+    /no pending invitations/i.test(params.text)
+  ) {
+    return "empty";
+  }
+  return "unknown";
+}
+
+async function collectLinkedInInvitationCards(
+  page: Page,
+  maxChars: number,
+): Promise<Array<{ name: string; profileUrl?: string; message?: string }>> {
+  const cardSelector = [
+    "li.invitation-card",
+    "div.invitation-card",
+    "[data-view-name*='invitation']",
+    "[class*='invitation-card']",
+  ].join(", ");
+  const locator = page.locator(cardSelector);
+  const maybeEvaluateAll = (locator as unknown as { evaluateAll?: unknown }).evaluateAll;
+  if (typeof maybeEvaluateAll !== "function") {
+    return [];
+  }
+  const cards = await (
+    maybeEvaluateAll as (
+      fn: (
+        elements: Element[],
+        maxChars: number,
+      ) => Array<{
+        name: string;
+        profileUrl?: string;
+        message?: string;
+      }>,
+      arg: number,
+    ) => Promise<Array<{ name: string; profileUrl?: string; message?: string }>>
+  )((elements, textLimit) => {
+    return elements
+      .map((element) => {
+        const link = element.querySelector<HTMLAnchorElement>("a[href*='/in/']");
+        const name = (
+          link?.textContent ||
+          element.querySelector("[aria-label]")?.getAttribute("aria-label") ||
+          ""
+        )
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 160);
+        const message =
+          element
+            .querySelector("[class*='message'], [data-test-invitation-message]")
+            ?.textContent?.replace(/\s+/g, " ")
+            .trim()
+            .slice(0, textLimit) || undefined;
+        return {
+          name,
+          ...(link?.href ? { profileUrl: link.href } : {}),
+          ...(message ? { message } : {}),
+        };
+      })
+      .filter((card) => card.name);
+  }, maxChars);
+  return Array.isArray(cards) ? cards : [];
+}
+
+/** Reads bounded page state without relying on unsafe whole-body innerText eval. */
+export async function readPageStateViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  kind?: PageStateKind;
+  selector?: string;
+  maxChars?: number;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<PageStateReadResult> {
+  const kind = opts.kind === "linkedin_invitations" ? opts.kind : "page";
+  const maxChars = resolveIntegerOption(opts.maxChars, 12_000, { min: 0, max: 100_000 });
+  const page = await prepareSnapshotPageViaPlaywright({
+    cdpUrl: opts.cdpUrl,
+    targetId: opts.targetId,
+    ssrfPolicy: opts.ssrfPolicy,
+  });
+  const url = page.url();
+  const title = await page.title().catch(() => "");
+  const selector =
+    normalizeOptionalString(opts.selector) ??
+    (kind === "linkedin_invitations" ? "main, [role='main'], body" : "body");
+  const text = await page
+    .locator(selector)
+    .first()
+    .evaluate((element, limit) => (element.textContent || "").slice(0, limit), maxChars)
+    .then((value) => normalizeExtractedText(value, maxChars))
+    .catch(() => "");
+  const cards =
+    kind === "linkedin_invitations"
+      ? await collectLinkedInInvitationCards(page, maxChars).catch(() => [])
+      : [];
+  const state =
+    kind === "linkedin_invitations"
+      ? classifyLinkedInInvitationState({ url, title, text, cards })
+      : text
+        ? "unknown"
+        : "empty";
+  return {
+    kind,
+    state,
+    url,
+    title,
+    text,
+    ...(kind === "linkedin_invitations" ? { cards } : {}),
+  };
+}
+
 function buildStoredAriaRefs(
   nodes: AriaSnapshotNode[],
   markedRefs: Set<string>,

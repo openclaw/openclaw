@@ -377,6 +377,23 @@ export function normalizeActRequest(
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
     }
+    case "readPageState": {
+      const selector = toStringOrEmpty(body.selector) || undefined;
+      const rawStateKind = toStringOrEmpty(body.stateKind);
+      const stateKind =
+        rawStateKind === "linkedin_invitations" || rawStateKind === "page"
+          ? rawStateKind
+          : undefined;
+      const targetId = toStringOrEmpty(body.targetId) || undefined;
+      const maxChars = readActionNonNegativeInteger(body, "maxChars");
+      return {
+        kind,
+        ...(selector ? { selector } : {}),
+        ...(stateKind ? { stateKind } : {}),
+        ...(targetId ? { targetId } : {}),
+        ...(maxChars !== undefined ? { maxChars } : {}),
+      };
+    }
     case "close": {
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       return {
