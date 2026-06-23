@@ -41,6 +41,7 @@ export async function runGatewayStatusProbePass(params: {
   discoveryTimeoutMs: number;
   wideAreaDomain?: string | null;
   baseTargets: GatewayStatusTarget[];
+  localPortPreferred: number;
   remotePort: number;
   sshTarget: string | null;
   sshIdentity: string | null;
@@ -71,7 +72,7 @@ export async function runGatewayStatusProbePass(params: {
       const tunnel = await startSshPortForward({
         target: sshTarget,
         identity: params.sshIdentity ?? undefined,
-        localPortPreferred: params.remotePort,
+        localPortPreferred: params.localPortPreferred,
         remotePort: params.remotePort,
         timeoutMs: Math.min(1500, params.overallTimeoutMs),
       });
