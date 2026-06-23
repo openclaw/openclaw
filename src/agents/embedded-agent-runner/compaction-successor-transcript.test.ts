@@ -567,7 +567,7 @@ describe("rotateTranscriptAfterCompaction — assistant boundary preservation", 
 
     // Fixture: user-assistant pair, then non-context entries, then surviving user
     // The assistant reply before firstKeptEntryId MUST survive in successor.
-    const oldUserId = manager.appendMessage({ role: "user", content: "summarized question", timestamp: 1 });
+    manager.appendMessage({ role: "user", content: "summarized question", timestamp: 1 });
     manager.appendMessage(makeAssistant("summarized answer", 2));
     manager.appendModelChange("openai", "gpt-5.2");
     manager.appendThinkingLevelChange("high");
@@ -614,6 +614,52 @@ describe("shouldRotateCompactionTranscript", () => {
         agents: { defaults: { compaction: { truncateAfterCompaction: true } } },
       }),
     ).toBe(true);
+  });
+});
+
+
+describe("rotateTranscriptAfterCompaction — repeated compaction", () => {
+  it("preserves older compaction boundary when adjusting the latest one", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+
+    manager.appendMessage({ role: "user", content: "first user", timestamp: 1 });
+    const olderFirstKept = manager.appendMessage({ role: "user", content: "first kept user", timestamp: 2 });
+    manager.appendCompaction("First summary", olderFirstKept, 5000);
+
+    manager.appendMessage({ role: "user", content: "pre-summarized user", timestamp: 3 });
+    manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "pre-summarized answer" }], timestamp: 4 });
+    const secondFirstKept = manager.appendMessage({ role: "user", content: "second kept user", timestamp: 5 });
+    manager.appendMessage({ role: "assistant", content: [{ type: "text", text: "second kept answer" }], timestamp: 6 });
+    manager.appendCompaction("Second summary", secondFirstKept, 5000);
+
+    const sessionFile = requireString(manager.getSessionFile(), "source session file");
+    const result = await rotateTranscriptAfterCompaction({
+      sessionManager: manager,
+      sessionFile,
+      now: () => new Date("2026-06-19T00:00:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successor = SessionManager.open(
+      requireString(result.sessionFile, "successor session file"),
+    );
+
+    const entries = successor.getEntries();
+    const compactionEntries = entries.filter(e => e.type === "compaction");
+    expect(compactionEntries.length).toBeGreaterThanOrEqual(1);
+
+    // The latest compaction should have the adjusted boundary, not the original.
+    // The older compaction (first summary) retains its original boundary.
+    const latestCompaction = compactionEntries[compactionEntries.length - 1];
+    expect(latestCompaction.firstKeptEntryId).not.toBe(secondFirstKept);
+    expect(latestCompaction.summary).toBe("Second summary");
+
+    // The preserved assistant should appear in the successor context
+    const contextText = JSON.stringify(successor.buildSessionContext().messages);
+    expect(contextText).toContain("pre-summarized answer");
+    expect(contextText).toContain("second kept user");
+    expect(contextText).not.toContain("first user");
   });
 });
 

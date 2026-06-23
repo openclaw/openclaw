@@ -129,8 +129,8 @@ function buildSuccessorEntries(params: {
     if (firstKeptIdx > 0) {
       for (let i = firstKeptIdx - 1; i >= 0; i--) {
         const entry = branch[i];
-        if (!entry) continue;
-        if (isDedupedStateEntry(entry) || entry.type === "custom" || entry.type === "label") continue;
+        if (!entry) { continue; }
+        if (isDedupedStateEntry(entry) || entry.type === "custom" || entry.type === "label") { continue; }
         if (entry.type === "message" && entry.message.role === "assistant") {
           effectiveFirstKeptId = entry.id;
         }
@@ -144,7 +144,7 @@ function buildSuccessorEntries(params: {
   let foundFirstKept = false;
   for (let index = 0; index < latestCompactionIndex; index += 1) {
     const entry = branch[index];
-    if (!entry) continue;
+    if (!entry) { continue; }
     if (effectiveFirstKeptId && entry.id === effectiveFirstKeptId) {
       foundFirstKept = true;
     }
@@ -274,7 +274,7 @@ function buildSuccessorEntries(params: {
       continue;
     }
 
-    const current = entry.type === "compaction" ? effectiveCompaction : entry;
+    const current = entry.type === "compaction" && entry.id === compaction.id ? effectiveCompaction : entry;
     let parentId = current.parentId;
     while (parentId !== null && removedIds.has(parentId)) {
       parentId = entryById.get(parentId)?.parentId ?? null;
