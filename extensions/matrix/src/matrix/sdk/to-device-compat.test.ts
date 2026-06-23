@@ -49,6 +49,37 @@ describe("normalizeMatrixToDeviceEventsForRustCrypto", () => {
     expect(result.normalizedAcceptEvents).toBe(0);
     expect(result.events).toBe(events);
   });
+
+  it("normalizes accept events whose method is blank or non-string", () => {
+    const blankMethod = {
+      type: "m.key.verification.accept",
+      content: { method: "   ", transaction_id: "txn-1" },
+    };
+    const nonStringMethod = {
+      type: "m.key.verification.accept",
+      content: { method: null, transaction_id: "txn-2" },
+    };
+    const events = [blankMethod, nonStringMethod];
+
+    const result = normalizeMatrixToDeviceEventsForRustCrypto(events);
+
+    expect(result.normalizedAcceptEvents).toBe(2);
+    expect(result.events).not.toBe(events);
+    expect(
+      (result.events as Array<{ content: { method: string } }>).map((e) => e.content.method),
+    ).toEqual(["m.sas.v1", "m.sas.v1"]);
+  });
+
+  it("leaves accept events without a content object untouched", () => {
+    const noContent = { type: "m.key.verification.accept" };
+    const events = [noContent];
+
+    const result = normalizeMatrixToDeviceEventsForRustCrypto(events);
+
+    expect(result.normalizedAcceptEvents).toBe(0);
+    expect(result.events).toBe(events);
+    expect(events[0]).not.toHaveProperty("content");
+  });
 });
 
 describe("patchMatrixRustCryptoToDeviceCompatibility", () => {
