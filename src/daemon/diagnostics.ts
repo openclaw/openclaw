@@ -4,6 +4,8 @@ import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./rest
 
 // Error patterns worth surfacing from gateway service logs after failed starts.
 const GATEWAY_LOG_ERROR_PATTERNS = [
+  /\bENOSPC\b/i,
+  /no space left on device/i,
   /refusing to bind gateway/i,
   /gateway auth mode/i,
   /gateway start blocked/i,
