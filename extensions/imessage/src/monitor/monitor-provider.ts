@@ -1060,11 +1060,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       channel: "imessage",
       chatType: decision.isGroup ? "group" : "direct",
     });
-    const shouldStartDirectTyping =
-      supportsTyping &&
+    const shouldUseDirectToolTypingOptions =
       !decision.isGroup &&
       sendPolicy !== "deny" &&
       (configuredTypingMode === undefined || configuredTypingMode === "instant");
+    const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
     const earlyDirectTypingTarget = shouldStartDirectTyping
       ? buildDirectIMessageReplyTarget({
           cfg,
@@ -1305,23 +1305,27 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
     let directTypingController: IMessageTypingController | undefined;
-    const directToolTypingOptions = shouldStartDirectTyping
+    const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
           // visible tool-progress message. The suppress flag is what lets
           // dispatch forward this callback even when verbose progress is off;
           // allowProgress covers message_tool_only source delivery. Keep this on
-          // the direct instant/default path so configured typingMode values still
-          // decide when typing can begin.
+          // the direct instant/default path even when older imsg builds do not
+          // report native typing support.
           suppressDefaultToolProgressMessages: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
             typingReplyOptions.onTypingController?.(typing);
           },
-          onToolStart: async () => {
-            await directTypingController?.startTypingLoop();
-          },
+          ...(supportsTyping
+            ? {
+                onToolStart: async () => {
+                  await directTypingController?.startTypingLoop();
+                },
+              }
+            : {}),
         } as const)
       : {};
     const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
