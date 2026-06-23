@@ -1,6 +1,10 @@
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } from "./official-external-plugin-catalog-snapshot-store.js";
 import {
   type OfficialExternalPluginCatalogEntry,
   DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
@@ -245,6 +249,7 @@ describe("official external plugin catalog", () => {
       fetchImpl,
       ifNoneMatch: '"old"',
       ifModifiedSince: "Mon, 22 Jun 2026 00:00:00 GMT",
+      snapshotStore: null,
     });
 
     expect(result.source).toBe("hosted");
@@ -315,6 +320,7 @@ describe("official external plugin catalog", () => {
 
   it("falls back to the bundled catalog when hosted feed validation fails", async () => {
     const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
       fetchImpl: vi.fn(
         async () =>
           new Response(JSON.stringify({ schemaVersion: 1, id: " ", entries: [] }), {
@@ -333,6 +339,7 @@ describe("official external plugin catalog", () => {
 
   it("falls back to the bundled catalog on HTTP 304 until a snapshot cache exists", async () => {
     const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
       fetchImpl: vi.fn(
         async () =>
           new Response(null, {
@@ -393,6 +400,108 @@ describe("official external plugin catalog", () => {
       metadata: { etag: '"fresh"' },
     });
     expect(snapshot?.metadata.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("persists hosted feed snapshots in OpenClaw state for HTTP 304 reuse", async () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-hosted-catalog-"));
+    try {
+      const body = JSON.stringify({
+        schemaVersion: 1,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:00.000Z",
+        sequence: 7,
+        entries: [
+          {
+            name: "@openclaw/sqlite-snapshot-proof",
+            kind: "plugin",
+            openclaw: { plugin: { id: "sqlite-snapshot-proof" } },
+          },
+        ],
+      });
+
+      const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+        stateDir,
+        now: () => new Date("2026-06-22T02:03:04.000Z"),
+        fetchImpl: vi.fn(
+          async () =>
+            new Response(body, {
+              status: 200,
+              headers: {
+                etag: '"sqlite"',
+                "last-modified": "Mon, 22 Jun 2026 02:00:00 GMT",
+              },
+            }),
+        ),
+      });
+      if (seeded.source !== "hosted") {
+        throw new Error("expected seeded hosted feed");
+      }
+      closeOpenClawStateDatabaseForTest();
+
+      const result = await loadHostedOfficialExternalPluginCatalogEntries({
+        stateDir,
+        fetchImpl: vi.fn(async () => new Response(null, { status: 304 })),
+      });
+
+      expect(result.source).toBe("hosted-snapshot");
+      expect(result.entries.map((entry) => entry.name)).toEqual([
+        "@openclaw/sqlite-snapshot-proof",
+      ]);
+      if (result.source === "hosted-snapshot") {
+        expect(result.snapshot.savedAt).toBe("2026-06-22T02:03:04.000Z");
+        expect(result.metadata.checksum).toBe(seeded.metadata.checksum);
+      }
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads and updates hosted catalog snapshots in the SQLite store", async () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-hosted-store-"));
+    try {
+      const store = createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({ stateDir });
+      const url = "https://register.openclaw.ai/official-external-plugin-catalog.json";
+
+      const firstBody = JSON.stringify({ entries: [] });
+      const secondBody = JSON.stringify({ entries: [{}] });
+
+      await expect(store.read(url)).resolves.toBeNull();
+      await store.write({
+        body: firstBody,
+        metadata: {
+          url,
+          status: 200,
+          etag: '"first"',
+          checksum: "sha256:first",
+        },
+        savedAt: "2026-06-22T02:03:04.000Z",
+      });
+      await store.write({
+        body: secondBody,
+        metadata: {
+          url,
+          status: 200,
+          lastModified: "Mon, 22 Jun 2026 03:00:00 GMT",
+          checksum: "sha256:second",
+        },
+        savedAt: "2026-06-22T03:04:05.000Z",
+      });
+
+      await expect(store.read(url)).resolves.toMatchObject({
+        body: secondBody,
+        metadata: {
+          url,
+          status: 200,
+          lastModified: "Mon, 22 Jun 2026 03:00:00 GMT",
+          checksum: "sha256:second",
+        },
+        savedAt: "2026-06-22T03:04:05.000Z",
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("uses the last known good snapshot when the hosted feed returns HTTP 304", async () => {
@@ -655,6 +764,7 @@ describe("official external plugin catalog", () => {
 
   it("falls back to the bundled catalog on checksum mismatch and oversized bodies", async () => {
     const mismatch = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
       expectedSha256: "sha256:not-current",
       fetchImpl: vi.fn(
         async () =>
@@ -677,6 +787,7 @@ describe("official external plugin catalog", () => {
     }
 
     const oversized = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
       maxBytes: 4,
       fetchImpl: vi.fn(async () => new Response("12345", { status: 200 })),
     });
