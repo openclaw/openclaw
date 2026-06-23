@@ -282,6 +282,8 @@ export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityE
     return;
   }
   if (passiveProgress) {
+    // Claude live active-tool heartbeats are observability ticks, not work progress.
+    // Refreshing the session clock here can hide wedged CLI tools from stall detection.
     return;
   }
   touchSessionActivity(activity, params.reason);

@@ -604,6 +604,31 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("does not refresh progress age for Claude live active-tool heartbeats", () => {
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticRunProgressForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      reason: "cli_live:tool_started",
+    });
+
+    vi.advanceTimersByTime(10_000);
+    markDiagnosticRunProgressForTest({
+      sessionId: "s1",
+      sessionKey: "main",
+      reason: "cli_live:tool_running",
+    });
+
+    expectRecordFields(
+      getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" }),
+      {
+        hasActiveEmbeddedRun: true,
+        lastProgressAgeMs: 10_000,
+        lastProgressReason: "cli_live:tool_started",
+      },
+    );
+  });
+
   it("aborts and drains embedded runs after an extended no-progress stall", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
