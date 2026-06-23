@@ -191,9 +191,13 @@ describe("qa suite runtime launcher", () => {
         await vitestBlocked;
         const evidencePath = path.join(params.outputDir, "qa-evidence.json");
         await writeEvidence(evidencePath);
+        const scenario = params.scenarios[0];
+        if (!scenario) {
+          throw new Error("expected scenario");
+        }
         return {
           outputDir: params.outputDir,
-          executionKind: params.scenarios[0]!.execution.kind,
+          executionKind: scenario.execution.kind,
           evidencePath,
           results: params.scenarios.map((scenarioItem) => ({
             durationMs: 1,

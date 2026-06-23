@@ -202,9 +202,13 @@ function partitionSharedFlowScenarios(
     MAX_SHARED_FLOW_PARTITIONS,
     scenarios.length,
   );
-  const partitions = Array.from({ length: partitionCount }, () => [] as QaSeedScenarioWithSource[]);
+  const partitions = Array.from({ length: partitionCount }, (): QaSeedScenarioWithSource[] => []);
   for (const [index, scenario] of scenarios.entries()) {
-    partitions[index % partitionCount]!.push(scenario);
+    const partition = partitions[index % partitionCount];
+    if (!partition) {
+      throw new Error("failed to partition shared QA flow scenarios");
+    }
+    partition.push(scenario);
   }
   return partitions.filter((partition) => partition.length > 0);
 }
@@ -217,14 +221,17 @@ async function runWeightedUnifiedPartitionTasks(
     return [];
   }
   const limit = Math.max(1, Math.floor(maxWeight));
-  const results = new Array<QaUnifiedPartitionResult>(tasks.length);
+  const results: QaUnifiedPartitionResult[] = [];
   let activeWeight = 0;
   let completed = 0;
   let nextIndex = 0;
   return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
     const launch = () => {
       while (nextIndex < tasks.length) {
-        const task = tasks[nextIndex]!;
+        const task = tasks[nextIndex];
+        if (!task) {
+          return;
+        }
         const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
         if (activeWeight > 0 && activeWeight + taskWeight > limit) {
           return;
@@ -244,7 +251,7 @@ async function runWeightedUnifiedPartitionTasks(
             launch();
           },
           (error: unknown) => {
-            reject(error);
+            reject(error instanceof Error ? error : new Error(String(error)));
           },
         );
       }
