@@ -15,6 +15,8 @@ import { vectorToBlob } from "./vector-blob.js";
 const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const SHORT_CJK_TRIGRAM_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u3131-\u3163]/u;
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
+// sqlite-vec hard-caps kNN `k` at 4096; the widen fallback must not exceed it.
+const MAX_VECTOR_KNN_K = 4096;
 
 // Scan fallback vector rows in bounded batches so large chunk tables (no usable
 // vec0 index) cannot pin the main thread for multi-second windows and starve
@@ -210,7 +212,7 @@ export async function searchVector(params: {
             | undefined,
         );
         if (vectorCount > candidateLimit) {
-          rows = runVectorQuery(vectorCount);
+          rows = runVectorQuery(Math.min(vectorCount, MAX_VECTOR_KNN_K));
         }
       }
     }
