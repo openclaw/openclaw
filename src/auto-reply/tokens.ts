@@ -535,6 +535,20 @@ export function parseContinuationSignal(text: string | undefined): ContinuationS
     }
   }
 
+  // Check for [[CONTINUE_WORK]] or [[CONTINUE_WORK:<delay>]] at end of response.
+  // This mirrors the bracket convention used by CONTINUE_DELEGATE and keeps
+  // tool-less / light-context continuation surfaces from depending on the bare
+  // token form alone. Keep this grammar narrow: only a terminal bracket token is
+  // consumed, and bracket text elsewhere in the reply is left alone.
+  const bracketWorkMatch = trimmed.match(/\[\[\s*CONTINUE_WORK(?::(\d+))?\s*\]\]\s*$/);
+  if (bracketWorkMatch) {
+    const delaySec = bracketWorkMatch[1] ? Number.parseInt(bracketWorkMatch[1], 10) : undefined;
+    return {
+      kind: "work",
+      delayMs: delaySec !== undefined ? delaySec * 1000 : undefined,
+    };
+  }
+
   // Check for CONTINUE_WORK or CONTINUE_WORK:<delay> at end of response
   const workMatch = trimmed.match(/\bCONTINUE_WORK(?::(\d+))?\s*$/);
   if (workMatch) {
@@ -566,6 +580,11 @@ export function stripContinuationSignal(text: string): {
     // Strip the [[CONTINUE_DELEGATE: ...]] bracket directive.
     // Mirrors the parser grammar exactly.
     stripped = text.replace(/\[\[\s*CONTINUE_DELEGATE:\s*(?:(?!\]\])[\s\S])+?\s*\]\]\s*$/, "");
+  } else if (/\[\[\s*CONTINUE_WORK(?::\d+)?\s*\]\]\s*$/.test(text.trim())) {
+    // Strip the bracket continue_work directive. Must run before the bare-token
+    // replacement below: otherwise only the inner CONTINUE_WORK would be
+    // removed and the display text would leak a dangling "[[".
+    stripped = text.replace(/\[\[\s*CONTINUE_WORK(?::\d+)?\s*\]\]\s*$/, "");
   } else {
     // Only strip CONTINUE_WORK when it's the signal type parsed
     stripped = text.replace(/\bCONTINUE_WORK(?::\d+)?\s*$/, "");
