@@ -68,7 +68,8 @@ export function isProviderConversationStateErrorMessage(message: string): boolea
       lower.includes("previous turn")) ||
     lower.includes("function call turn comes immediately after") ||
     lower.includes("incorrect role information") ||
-    lower.includes("roles must alternate")
+    lower.includes("roles must alternate") ||
+    lower.includes("invalid_replay_transcript")
   );
 }
 

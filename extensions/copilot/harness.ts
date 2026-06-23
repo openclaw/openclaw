@@ -62,6 +62,14 @@ interface CopilotHistoryCompactResult {
   tokensRemoved: number;
   messagesRemoved: number;
   summaryContent?: string;
+  contextWindow?: {
+    tokenLimit: number;
+    currentTokens: number;
+    messagesLength: number;
+    systemTokens?: number;
+    conversationTokens?: number;
+    toolDefinitionsTokens?: number;
+  };
 }
 
 interface CopilotHistoryCompactSession {
@@ -872,6 +880,21 @@ export function createCopilotAgentHarness(
         ok: true,
         compacted,
         reason: compacted ? "copilot-sdk-history-compacted" : "already under target",
+        ...(compacted
+          ? {
+              result: {
+                summary: compactResult.summaryContent ?? "",
+                firstKeptEntryId: "",
+                tokensBefore:
+                  params.currentTokenCount ??
+                  (compactResult.contextWindow?.currentTokens ?? 0) + compactResult.tokensRemoved,
+                tokensAfter: compactResult.contextWindow?.currentTokens,
+                details: compactResult,
+                sessionId: params.sessionId,
+                sessionFile: params.sessionFile,
+              },
+            }
+          : {}),
       };
     },
 

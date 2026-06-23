@@ -13,6 +13,7 @@ import {
   createPlainTextToolCallCompatWrapper,
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
+  normalizeOpenAICompatibleReasoningPayload,
   setQwenChatTemplateThinking,
   stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
@@ -190,6 +191,45 @@ describe("setQwenChatTemplateThinking", () => {
         preserve_thinking: true,
       },
     });
+  });
+});
+
+describe("normalizeOpenAICompatibleReasoningPayload", () => {
+  it("removes the legacy field and adds the selected reasoning effort", () => {
+    const payload: Record<string, unknown> = {
+      reasoning_effort: "high",
+    };
+
+    normalizeOpenAICompatibleReasoningPayload(payload, "adaptive");
+
+    expect(payload).toEqual({ reasoning: { effort: "medium" } });
+  });
+
+  it("preserves explicit reasoning controls", () => {
+    const withMaxTokens: Record<string, unknown> = {
+      reasoning_effort: "high",
+      reasoning: { max_tokens: 256 },
+    };
+    const withEffort: Record<string, unknown> = {
+      reasoning_effort: "high",
+      reasoning: { effort: "low", summary: "auto" },
+    };
+
+    normalizeOpenAICompatibleReasoningPayload(withMaxTokens, "high");
+    normalizeOpenAICompatibleReasoningPayload(withEffort, "high");
+
+    expect(withMaxTokens).toEqual({ reasoning: { max_tokens: 256 } });
+    expect(withEffort).toEqual({ reasoning: { effort: "low", summary: "auto" } });
+  });
+
+  it("removes only the legacy field when thinking is disabled", () => {
+    const payload: Record<string, unknown> = {
+      reasoning_effort: "high",
+    };
+
+    normalizeOpenAICompatibleReasoningPayload(payload, "off");
+
+    expect(payload).toEqual({});
   });
 });
 

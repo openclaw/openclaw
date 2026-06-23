@@ -23,8 +23,8 @@ OpenClaw agent or Gateway.
 
 ```bash
 openclaw skills search "calendar"
-openclaw skills install <slug>
-openclaw skills update <slug>
+openclaw skills install @owner/<slug>
+openclaw skills update @owner/<slug>
 openclaw skills verify <slug>
 
 openclaw plugins search "calendar"

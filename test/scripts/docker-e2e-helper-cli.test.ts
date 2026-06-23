@@ -1,6 +1,6 @@
 // Docker E2E Helper Cli tests cover docker e2e helper cli script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -21,6 +21,15 @@ function runHelper(script: string, ...args: Array<string | Record<string, string
       ...env,
     },
   });
+}
+
+function downloadedDir(stdout: string) {
+  const match = stdout.match(/^Downloaded: (.+)$/mu);
+  const dir = match?.[1];
+  if (!dir) {
+    throw new Error(`missing downloaded dir in stdout:\n${stdout}`);
+  }
+  return dir;
 }
 
 describe("Docker E2E helper CLIs", () => {
@@ -376,6 +385,89 @@ describe("Docker E2E helper CLIs", () => {
         "published_upgrade_survivor_baselines='openclaw@2026.5.3'",
       );
     } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("downloads GitHub run artifacts into distinct default directories", () => {
+    const root = mkdtempSync(`${tmpdir()}/openclaw-docker-e2e-rerun-gh-`);
+    const generatedDirs: string[] = [];
+    try {
+      const binDir = path.join(root, "bin");
+      const ghPath = path.join(binDir, "gh");
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(
+        ghPath,
+        [
+          "#!/usr/bin/env node",
+          "const fs = require('node:fs');",
+          "const path = require('node:path');",
+          "const args = process.argv.slice(2);",
+          "if (args[0] === 'run' && args[1] === 'view') {",
+          "  console.log(JSON.stringify({",
+          "    conclusion: 'failure',",
+          "    databaseId: 12345,",
+          "    headBranch: 'main',",
+          "    headSha: 'abc123',",
+          "    status: 'completed',",
+          "    url: 'https://github.com/openclaw/openclaw/actions/runs/12345',",
+          "    workflowName: 'OpenClaw Live and E2E Checks',",
+          "  }));",
+          "  process.exit(0);",
+          "}",
+          "if (args[0] === 'api') {",
+          "  console.log(JSON.stringify([{ expired: false, name: 'docker-e2e-gateway-network' }]));",
+          "  process.exit(0);",
+          "}",
+          "if (args[0] === 'run' && args[1] === 'download') {",
+          "  const dir = args[args.indexOf('--dir') + 1];",
+          "  fs.mkdirSync(path.join(dir, 'artifact'), { recursive: true });",
+          "  fs.writeFileSync(path.join(dir, 'artifact', 'failures.json'), JSON.stringify({",
+          "    lanes: [{ name: 'gateway-network', status: 1 }],",
+          "    status: 'failed',",
+          "  }));",
+          "  process.exit(0);",
+          "}",
+          "console.error(`unexpected gh args: ${args.join(' ')}`);",
+          "process.exit(1);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      chmodSync(ghPath, 0o755);
+
+      const env = {
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      };
+      const first = runHelper(
+        "scripts/docker-e2e-rerun.mjs",
+        "12345",
+        "--repo",
+        "openclaw/openclaw",
+        env,
+      );
+      const second = runHelper(
+        "scripts/docker-e2e-rerun.mjs",
+        "12345",
+        "--repo",
+        "openclaw/openclaw",
+        env,
+      );
+
+      expect(first.status, first.stderr).toBe(0);
+      expect(second.status, second.stderr).toBe(0);
+      const firstDir = downloadedDir(first.stdout);
+      const secondDir = downloadedDir(second.stdout);
+      generatedDirs.push(firstDir, secondDir);
+      expect(firstDir).not.toBe(secondDir);
+      expect(path.basename(firstDir)).toMatch(/^openclaw-docker-e2e-rerun-12345-/u);
+      expect(path.basename(secondDir)).toMatch(/^openclaw-docker-e2e-rerun-12345-/u);
+      expect(existsSync(path.join(firstDir, "artifact", "failures.json"))).toBe(true);
+      expect(existsSync(path.join(secondDir, "artifact", "failures.json"))).toBe(true);
+    } finally {
+      for (const dir of generatedDirs) {
+        rmSync(dir, { force: true, recursive: true });
+      }
       rmSync(root, { force: true, recursive: true });
     }
   });

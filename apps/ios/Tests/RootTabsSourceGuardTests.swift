@@ -550,6 +550,20 @@ struct RootTabsSourceGuardTests {
         #expect(docsSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
     }
 
+    @Test func `push enrollment stays behind notification disclosure flow`() throws {
+        let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
+        let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+
+        #expect(appSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(appSource.contains("await Self.isNotificationAuthorizationAllowed()"))
+        #expect(actionsSource.contains("PushEnrollmentConsent.markDisclosureAccepted()"))
+        #expect(actionsSource.contains("self.registerForRemoteNotificationsIfEnrollmentReady()"))
+        #expect(modelSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(modelSource.contains("notifications_not_authorized"))
+        #expect(modelSource.contains("enrollment_disclosure_not_accepted"))
+    }
+
     @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {
         let settingsSource = try String(contentsOf: Self.settingsProTabSourceURL(), encoding: .utf8)
         let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
@@ -784,6 +798,13 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/SettingsProTab.swift")
+    }
+
+    private static func openClawAppSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/OpenClawApp.swift")
     }
 
     private static func notificationPermissionGuidanceDialogSourceURL() -> URL {

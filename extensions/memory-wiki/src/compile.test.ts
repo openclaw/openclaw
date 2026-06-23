@@ -559,6 +559,85 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+  it("excludes concept and synthesis pages from stale-pages report", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "entity-alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.alpha",
+          title: "Alpha Entity",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Alpha Entity\n",
+      }),
+      "utf8",
+    );
+
+    await fs.writeFile(
+      path.join(rootDir, "sources", "source-alpha.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Alpha Source\n",
+      }),
+      "utf8",
+    );
+
+    // Concept page with old updatedAt — should be excluded from stale-pages
+    await fs.writeFile(
+      path.join(rootDir, "concepts", "concept-beta.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "concept",
+          id: "concept.beta",
+          title: "Beta Concept",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Beta Concept\n",
+      }),
+      "utf8",
+    );
+
+    // Synthesis page with old updatedAt — should be excluded from stale-pages
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "synthesis-gamma.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.gamma",
+          title: "Gamma Synthesis",
+          sourceIds: ["source.alpha"],
+          updatedAt: "2025-06-01T00:00:00.000Z",
+        },
+        body: "# Gamma Synthesis\n",
+      }),
+      "utf8",
+    );
+
+    await compileMemoryWikiVault(config);
+
+    const stalePages = await fs.readFile(path.join(rootDir, "reports", "stale-pages.md"), "utf8");
+
+    // Entity and source pages still appear in stale-pages
+    expect(stalePages).toContain("[Alpha Entity](../entities/entity-alpha.md)");
+    expect(stalePages).toContain("[Alpha Source](../sources/source-alpha.md)");
+    // Concept and synthesis pages are excluded
+    expect(stalePages).not.toContain("[Beta Concept](../concepts/concept-beta.md)");
+    expect(stalePages).not.toContain("[Gamma Synthesis](../syntheses/synthesis-gamma.md)");
+  });
+
   it("skips dashboard report pages when createDashboards is disabled", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),

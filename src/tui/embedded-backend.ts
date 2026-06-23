@@ -75,6 +75,7 @@ import type {
   ChatSendOptions,
   TuiAgentsList,
   TuiBackend,
+  TuiChatSendResult,
   TuiEvent,
   TuiModelChoice,
   TuiSessionList,
@@ -355,7 +356,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     setEmbeddedMode(false);
   }
 
-  async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
+  async sendChat(opts: ChatSendOptions): Promise<TuiChatSendResult> {
     const runId = opts.runId ?? randomUUID();
     const question = resolveBtwQuestion(opts.message);
     const runScope = {

@@ -221,6 +221,38 @@ describe("handleUsageCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
   });
+
+  it("updates usage footer mode as a session preference", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage tokens";
+    params.sessionEntry = {
+      sessionId: "target-session",
+      updatedAt: Date.now(),
+      responseUsage: "full",
+    };
+    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: tokens.");
+    expect(params.sessionEntry.responseUsage).toBe("tokens");
+  });
+
+  it("clears usage footer mode on off updates", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage off";
+    params.sessionEntry = {
+      sessionId: "target-session",
+      updatedAt: Date.now(),
+      responseUsage: "full",
+    };
+    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: off.");
+    expect(params.sessionEntry.responseUsage).toBeUndefined();
+  });
 });
 
 describe("handleFastCommand", () => {

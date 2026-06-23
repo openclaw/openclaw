@@ -118,6 +118,13 @@ function isExecutableFile(path, platform) {
 function spawnInvocation(command, commandArgs, env, platform) {
   const extension = extname(command).toLowerCase();
   if (platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
+    const nodeShim = resolveNodeCmdShim(command, platform);
+    if (nodeShim) {
+      return {
+        command: nodeShim.node,
+        args: [...nodeShim.args, ...commandArgs],
+      };
+    }
     return {
       command: resolveWindowsCmdExePath(env),
       args: ["/d", "/s", "/c", buildBatchCommandLine(command, commandArgs)],
@@ -125,6 +132,56 @@ function spawnInvocation(command, commandArgs, env, platform) {
     };
   }
   return { command, args: commandArgs };
+}
+
+function resolveNodeCmdShim(command, platform) {
+  let content;
+  try {
+    content = readFileSync(command, "utf8");
+  } catch {
+    return null;
+  }
+  for (const rawLine of content.split(/\r?\n/u)) {
+    const line = rawLine.trim();
+    const match = /^"([^"]+node(?:\.exe)?)"\s+"%~dp0([^"]+)"\s+%\*$/iu.exec(line);
+    if (!match) {
+      continue;
+    }
+    const script = resolve(dirname(command), match[2]);
+    if (!isExecutableFile(script, platform)) {
+      continue;
+    }
+    return { node: match[1], args: [script] };
+  }
+  const npmCmdShim = resolveNpmNodeCmdShim(command, content, platform);
+  if (npmCmdShim) {
+    return npmCmdShim;
+  }
+  return null;
+}
+
+function resolveNpmNodeCmdShim(command, content, platform) {
+  const lines = content.split(/\r?\n/u).map((line) => line.trim());
+  if (
+    !lines.some((line) => /^IF EXIST "%dp0%\\node\.exe" \($/iu.test(line)) ||
+    !lines.some((line) => /^SET "_prog=node(?:\.exe)?"$/iu.test(line))
+  ) {
+    return null;
+  }
+  const invocation = lines.find((line) => line.includes('"%_prog%"') && line.endsWith("%*"));
+  if (!invocation) {
+    return null;
+  }
+  const match = /(?:^|&)\s*"%_prog%"\s+(.*?)"(%dp0%\\[^"]+)"\s+%\*$/iu.exec(invocation);
+  if (!match || match[1].trim()) {
+    return null;
+  }
+  const script = resolve(dirname(command), match[2].replace(/^%dp0%\\/iu, ""));
+  if (!isExecutableFile(script, platform)) {
+    return null;
+  }
+  const localNode = resolve(dirname(command), "node.exe");
+  return { node: isExecutableFile(localNode, platform) ? localNode : "node", args: [script] };
 }
 
 const cmdMetaCharactersRe = /([()\][%!^"`<>&|;, *?])/g;
@@ -713,6 +770,39 @@ function ensureAwsMacOnDemandMarket(commandArgs, providerName) {
   const optionEnd = commandOptionEnd(commandArgs);
   const normalizedArgs = [...commandArgs];
   normalizedArgs.splice(optionEnd, 0, "--market", "on-demand");
+  return normalizedArgs;
+}
+
+function ensureNativeWindowsHydrateJob(commandArgs) {
+  if (
+    commandArgs[0] !== "actions" ||
+    commandArgs[1] !== "hydrate" ||
+    !isNativeWindowsRemoteTarget(commandArgs)
+  ) {
+    return commandArgs;
+  }
+
+  const currentJob = optionValue(commandArgs, "--job");
+  if (currentJob && currentJob !== "hydrate") {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const replacementJob = "hydrate-windows-daemon";
+  const optionEnd = commandOptionEnd(normalizedArgs);
+  for (let index = 0; index < optionEnd; index += 1) {
+    const arg = normalizedArgs[index];
+    if (arg === "--job" || arg === "-job") {
+      normalizedArgs[index + 1] = replacementJob;
+      return normalizedArgs;
+    }
+    if (arg.startsWith("--job=") || arg.startsWith("-job=")) {
+      normalizedArgs[index] = `${arg.slice(0, arg.indexOf("=") + 1)}${replacementJob}`;
+      return normalizedArgs;
+    }
+  }
+
+  normalizedArgs.splice(optionEnd, 0, "--job", replacementJob);
   return normalizedArgs;
 }
 
@@ -1897,6 +1987,10 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
   );
 }
 
+function isHydratedNativeWindowsProvider(providerName) {
+  return providerName === "aws" || providerName === "azure";
+}
+
 function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
     "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
@@ -1914,7 +2008,7 @@ function injectRemoteWindowsHydratedNodeModulesBootstrap(commandArgs, providerNa
   const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(commandArgs));
   if (
     commandArgs[0] !== "run" ||
-    providerName !== "aws" ||
+    !isHydratedNativeWindowsProvider(providerName) ||
     !isNativeWindowsRemoteTarget(commandArgs) ||
     !hasOption(commandArgs, "--id") ||
     !runtimeEntrypoint
@@ -2581,6 +2675,20 @@ function assertFullCheckoutAvailableBeforeExit(dir) {
   return false;
 }
 
+function injectFullCheckoutLeaseReclaim(commandArgs) {
+  if (
+    commandArgs[0] !== "run" ||
+    !hasOption(commandArgs, "--id") ||
+    hasOption(commandArgs, "--reclaim")
+  ) {
+    return commandArgs;
+  }
+  const normalizedArgs = [...commandArgs];
+  const { optionEnd } = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(optionEnd, 0, "--reclaim");
+  return normalizedArgs;
+}
+
 const version = checkedOutput(binary, ["--version"]);
 const help = checkedOutput(binary, ["run", "--help"]);
 const providerAliases = new Map([
@@ -2678,7 +2786,7 @@ const provider = selectedProvider(args, providers);
 const canonicalProvider = providerAliases.get(provider) ?? provider;
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
-  ensureAzureWindowsProvider(args, provider, providers),
+  ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
   provider,
 );
 
@@ -2762,6 +2870,7 @@ try {
     const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
     const checkout = prepareFullCheckoutForSync({ changedGateBase });
     fullCheckout = checkout;
+    normalizedArgs = injectFullCheckoutLeaseReclaim(normalizedArgs);
     childCwd = checkout.dir;
     cleanupChildCwd = () => checkout.cleanup();
     remoteChangedGateBase = checkout.changedGateBase;
