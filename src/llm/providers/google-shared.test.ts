@@ -1,6 +1,7 @@
 // Google shared provider tests cover response conversion and finish reasons.
 import { FinishReason, type GenerateContentResponse } from "@google/genai";
 import { describe, expect, it } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { AssistantMessage, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
@@ -145,5 +146,15 @@ describe("buildGoogleGenerateContentParams", () => {
     );
 
     expect(params.config?.stopSequences).toEqual(["STOP"]);
+  });
+
+  it("strips the internal cache boundary marker from systemInstruction", () => {
+    const params = buildGoogleGenerateContentParams(model, {
+      systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+      messages: [{ role: "user", content: "hello", timestamp: 0 }],
+    });
+
+    expect(params.config?.systemInstruction).toBe("Stable\nDynamic");
+    expect(JSON.stringify(params)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 });

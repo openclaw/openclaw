@@ -119,7 +119,11 @@ describe("parseArgs", () => {
 
   it("rejects missing CI diff refs", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
+    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow(
+      "--base requires a value",
+    );
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
+    expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
   });
 });
@@ -296,27 +300,44 @@ describe("detectChangedScope", () => {
   });
 
   it("runs macOS CI for macOS packaging scripts with Darwin-only tests", () => {
-    expect(detectChangedScope(["scripts/create-dmg.sh"])).toEqual({
-      runNode: true,
-      runMacos: true,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-    });
+    for (const changedPath of [
+      "scripts/codesign-mac-app.sh",
+      "scripts/create-dmg.sh",
+      "scripts/lib/plistbuddy.sh",
+      "scripts/notarize-mac-artifact.sh",
+      "scripts/package-mac-app.sh",
+      "scripts/package-mac-dist.sh",
+    ]) {
+      expect(detectChangedScope([changedPath])).toEqual({
+        runNode: true,
+        runMacos: true,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
   });
 
-  it("runs macOS CI for the Darwin-only DMG owner test", () => {
-    expect(detectChangedScope(["test/scripts/create-dmg.test.ts"])).toEqual({
-      runNode: true,
-      runMacos: true,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-    });
+  it("runs macOS CI for Darwin-only mac packaging owner tests", () => {
+    for (const changedPath of [
+      "test/scripts/codesign-mac-app.test.ts",
+      "test/scripts/create-dmg.test.ts",
+      "test/scripts/notarize-mac-artifact.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/package-mac-dist.test.ts",
+    ]) {
+      expect(detectChangedScope([changedPath])).toEqual({
+        runNode: true,
+        runMacos: true,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
   });
 
   it("runs Windows only for Windows-relevant changes", () => {

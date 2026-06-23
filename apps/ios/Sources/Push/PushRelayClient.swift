@@ -40,6 +40,9 @@ private struct PushRelayRegisterSignedPayload: Encodable {
     var installationId: String
     var bundleId: String
     var environment: String
+    var relayProfile: String
+    var apnsEnvironment: String
+    var proofPolicy: String
     var distribution: String
     var gateway: PushRelayGatewayIdentity
     var appVersion: String
@@ -63,12 +66,16 @@ private struct PushRelayRegisterRequest: Encodable {
     var installationId: String
     var bundleId: String
     var environment: String
+    var relayProfile: String
+    var apnsEnvironment: String
+    var proofPolicy: String
     var distribution: String
     var gateway: PushRelayGatewayIdentity
     var appVersion: String
     var apnsToken: String
-    var appAttest: PushRelayAppAttestPayload
-    var receipt: PushRelayReceiptPayload
+    var appAttest: PushRelayAppAttestPayload?
+    var receipt: PushRelayReceiptPayload?
+    var simulatorProof: PushRelaySimulatorProofPayload?
 }
 
 struct PushRelayRegisterResponse: Decodable {
@@ -93,23 +100,34 @@ private struct PushRelayAppAttestProof {
     var signedPayloadBase64: String
 }
 
+private struct PushRelaySimulatorProofPayload: Encodable {
+    var signedPayloadBase64: String
+    var hmacSha256Base64Url: String
+}
+
 private final class PushRelayAppAttestService {
-    func createProof(challenge: String, signedPayload: Data) async throws -> PushRelayAppAttestProof {
+    func createProof(
+        challenge: String,
+        signedPayload: Data,
+        scope: PushRelayRegistrationStore.AppAttestScope)
+    async throws -> PushRelayAppAttestProof {
         let service = DCAppAttestService.shared
         guard service.isSupported else {
             throw PushRelayError.unsupportedAppAttest
         }
 
-        let keyID = try await self.loadOrCreateKeyID(using: service)
+        let keyID = try await self.loadOrCreateKeyID(using: service, scope: scope)
         let attestationObject = try await self.attestKeyIfNeeded(
             service: service,
             keyID: keyID,
-            challenge: challenge)
+            challenge: challenge,
+            scope: scope)
         let signedPayloadHash = Data(SHA256.hash(data: signedPayload))
         let assertion = try await self.generateAssertion(
             service: service,
             keyID: keyID,
-            signedPayloadHash: signedPayloadHash)
+            signedPayloadHash: signedPayloadHash,
+            scope: scope)
 
         return PushRelayAppAttestProof(
             keyId: keyID,
@@ -119,21 +137,27 @@ private final class PushRelayAppAttestService {
             signedPayloadBase64: signedPayload.base64EncodedString())
     }
 
-    private func loadOrCreateKeyID(using service: DCAppAttestService) async throws -> String {
-        if let existing = PushRelayRegistrationStore.loadAppAttestKeyID(), !existing.isEmpty {
+    private func loadOrCreateKeyID(
+        using service: DCAppAttestService,
+        scope: PushRelayRegistrationStore.AppAttestScope)
+    async throws -> String {
+        if let existing = PushRelayRegistrationStore.loadAppAttestKeyID(scope: scope),
+           !existing.isEmpty
+        {
             return existing
         }
         let keyID = try await service.generateKey()
-        _ = PushRelayRegistrationStore.saveAppAttestKeyID(keyID)
+        _ = PushRelayRegistrationStore.saveAppAttestKeyID(keyID, scope: scope)
         return keyID
     }
 
     private func attestKeyIfNeeded(
         service: DCAppAttestService,
         keyID: String,
-        challenge: String)
+        challenge: String,
+        scope: PushRelayRegistrationStore.AppAttestScope)
     async throws -> String? {
-        if PushRelayRegistrationStore.loadAttestedKeyID() == keyID {
+        if PushRelayRegistrationStore.loadAttestedKeyID(scope: scope) == keyID {
             return nil
         }
         let challengeData = Data(challenge.utf8)
@@ -142,20 +166,21 @@ private final class PushRelayAppAttestService {
         // Apple treats App Attest key attestation as a one-time operation. Save the
         // attested marker immediately so later receipt/network failures do not cause a
         // permanently broken re-attestation loop on the same key.
-        _ = PushRelayRegistrationStore.saveAttestedKeyID(keyID)
+        _ = PushRelayRegistrationStore.saveAttestedKeyID(keyID, scope: scope)
         return attestation.base64EncodedString()
     }
 
     private func generateAssertion(
         service: DCAppAttestService,
         keyID: String,
-        signedPayloadHash: Data)
+        signedPayloadHash: Data,
+        scope: PushRelayRegistrationStore.AppAttestScope)
     async throws -> Data {
         do {
             return try await service.generateAssertion(keyID, clientDataHash: signedPayloadHash)
         } catch {
-            _ = PushRelayRegistrationStore.clearAppAttestKeyID()
-            _ = PushRelayRegistrationStore.clearAttestedKeyID()
+            _ = PushRelayRegistrationStore.clearAppAttestKeyID(scope: scope)
+            _ = PushRelayRegistrationStore.clearAttestedKeyID(scope: scope)
             throw error
         }
     }
@@ -190,6 +215,47 @@ private final class PushRelayReceiptProvider {
     }
 }
 
+private final class PushRelaySimulatorProofProvider {
+    func createProof(signedPayload: Data) throws -> PushRelaySimulatorProofPayload {
+        #if targetEnvironment(simulator)
+        guard let secret = ProcessInfo.processInfo.environment["OPENCLAW_SIMULATOR_PUSH_PROOF_SECRET"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !secret.isEmpty
+        else {
+            throw PushRelayError.relayMisconfigured("Simulator push proof secret missing")
+        }
+        let signedPayloadBase64 = signedPayload.base64EncodedString()
+        let signature = HMAC<SHA256>.authenticationCode(
+            for: Data(signedPayloadBase64.utf8),
+            using: SymmetricKey(data: Data(secret.utf8)))
+        return PushRelaySimulatorProofPayload(
+            signedPayloadBase64: signedPayloadBase64,
+            hmacSha256Base64Url: Self.base64URL(Data(signature)))
+        #else
+        throw PushRelayError.relayMisconfigured("Simulator proof is only available in iOS Simulator")
+        #endif
+    }
+
+    private static func base64URL(_ data: Data) -> String {
+        data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+struct PushRelayRegistrationInput {
+    var installationId: String
+    var bundleId: String
+    var appVersion: String
+    var environment: PushAPNsEnvironment
+    var relayProfile: PushRelayProfile
+    var proofPolicy: PushProofPolicy
+    var distribution: PushDistributionMode
+    var apnsTokenHex: String
+    var gatewayIdentity: PushRelayGatewayIdentity
+}
+
 /// The client is constructed once and used behind PushRegistrationManager actor isolation.
 final class PushRelayClient: @unchecked Sendable {
     private let baseURL: URL
@@ -198,6 +264,7 @@ final class PushRelayClient: @unchecked Sendable {
     private let jsonEncoder = JSONEncoder()
     private let appAttest = PushRelayAppAttestService()
     private let receiptProvider = PushRelayReceiptProvider()
+    private let simulatorProofProvider = PushRelaySimulatorProofProvider()
 
     init(baseURL: URL, session: URLSession = .shared) {
         self.baseURL = baseURL
@@ -208,46 +275,57 @@ final class PushRelayClient: @unchecked Sendable {
         Self.normalizeBaseURLString(self.baseURL)
     }
 
-    func register(
-        installationId: String,
-        bundleId: String,
-        appVersion: String,
-        environment: PushAPNsEnvironment,
-        distribution: PushDistributionMode,
-        apnsTokenHex: String,
-        gatewayIdentity: PushRelayGatewayIdentity)
-    async throws -> PushRelayRegisterResponse {
+    func register(_ input: PushRelayRegistrationInput) async throws -> PushRelayRegisterResponse {
         let challenge = try await self.fetchChallenge()
         let signedPayload = PushRelayRegisterSignedPayload(
             challengeId: challenge.challengeId,
-            installationId: installationId,
-            bundleId: bundleId,
-            environment: environment.rawValue,
-            distribution: distribution.rawValue,
-            gateway: gatewayIdentity,
-            appVersion: appVersion,
-            apnsToken: apnsTokenHex)
+            installationId: input.installationId,
+            bundleId: input.bundleId,
+            environment: input.environment.rawValue,
+            relayProfile: input.relayProfile.rawValue,
+            apnsEnvironment: input.environment.rawValue,
+            proofPolicy: input.proofPolicy.rawValue,
+            distribution: input.distribution.rawValue,
+            gateway: input.gatewayIdentity,
+            appVersion: input.appVersion,
+            apnsToken: input.apnsTokenHex)
         let signedPayloadData = try self.jsonEncoder.encode(signedPayload)
-        let appAttest = try await self.appAttest.createProof(
+        let appAttestScope = PushRelayRegistrationStore.AppAttestScope(
+            relayOrigin: self.normalizedBaseURLString,
+            apnsEnvironment: input.environment.rawValue,
+            relayProfile: input.relayProfile.rawValue,
+            proofPolicy: input.proofPolicy.rawValue)
+        let appAttest = try await self.createAppAttestProofIfNeeded(
+            proofPolicy: input.proofPolicy,
             challenge: challenge.challenge,
-            signedPayload: signedPayloadData)
-        let receiptBase64 = try await self.receiptProvider.loadReceiptBase64()
+            signedPayloadData: signedPayloadData,
+            scope: appAttestScope)
+        let receipt = try await self.createReceiptIfNeeded(proofPolicy: input.proofPolicy)
+        let simulatorProof = try self.createSimulatorProofIfNeeded(
+            proofPolicy: input.proofPolicy,
+            signedPayloadData: signedPayloadData)
         let requestBody = PushRelayRegisterRequest(
             challengeId: signedPayload.challengeId,
             installationId: signedPayload.installationId,
             bundleId: signedPayload.bundleId,
             environment: signedPayload.environment,
+            relayProfile: signedPayload.relayProfile,
+            apnsEnvironment: signedPayload.apnsEnvironment,
+            proofPolicy: signedPayload.proofPolicy,
             distribution: signedPayload.distribution,
             gateway: signedPayload.gateway,
             appVersion: signedPayload.appVersion,
             apnsToken: signedPayload.apnsToken,
-            appAttest: PushRelayAppAttestPayload(
-                keyId: appAttest.keyId,
-                attestationObject: appAttest.attestationObject,
-                assertion: appAttest.assertion,
-                clientDataHash: appAttest.clientDataHash,
-                signedPayloadBase64: appAttest.signedPayloadBase64),
-            receipt: PushRelayReceiptPayload(base64: receiptBase64))
+            appAttest: appAttest.map {
+                PushRelayAppAttestPayload(
+                    keyId: $0.keyId,
+                    attestationObject: $0.attestationObject,
+                    assertion: $0.assertion,
+                    clientDataHash: $0.clientDataHash,
+                    signedPayloadBase64: $0.signedPayloadBase64)
+            },
+            receipt: receipt,
+            simulatorProof: simulatorProof)
 
         let endpoint = self.baseURL.appending(path: "v1/push/register")
         var request = URLRequest(url: endpoint)
@@ -262,14 +340,51 @@ final class PushRelayClient: @unchecked Sendable {
             if status == 401 {
                 // If the relay rejects registration, drop local App Attest state so the next
                 // attempt re-attests instead of getting stuck without an attestation object.
-                _ = PushRelayRegistrationStore.clearAppAttestKeyID()
-                _ = PushRelayRegistrationStore.clearAttestedKeyID()
+                _ = PushRelayRegistrationStore.clearAppAttestKeyID(scope: appAttestScope)
+                _ = PushRelayRegistrationStore.clearAttestedKeyID(scope: appAttestScope)
             }
             throw PushRelayError.requestFailed(
                 status: status,
                 message: Self.decodeErrorMessage(data: data))
         }
         return try self.decode(PushRelayRegisterResponse.self, from: data)
+    }
+
+    private func createAppAttestProofIfNeeded(
+        proofPolicy: PushProofPolicy,
+        challenge: String,
+        signedPayloadData: Data,
+        scope: PushRelayRegistrationStore.AppAttestScope)
+    async throws -> PushRelayAppAttestProof? {
+        guard proofPolicy != .internalSimulator else { return nil }
+        return try await self.appAttest.createProof(
+            challenge: challenge,
+            signedPayload: signedPayloadData,
+            scope: scope)
+    }
+
+    private func createReceiptIfNeeded(
+        proofPolicy: PushProofPolicy)
+    async throws -> PushRelayReceiptPayload? {
+        switch proofPolicy {
+        case .appleStrict:
+            return try await PushRelayReceiptPayload(base64: self.receiptProvider.loadReceiptBase64())
+        case .appleDevelopment:
+            guard let receiptBase64 = try? await self.receiptProvider.loadReceiptBase64() else {
+                return nil
+            }
+            return PushRelayReceiptPayload(base64: receiptBase64)
+        case .internalSimulator:
+            return nil
+        }
+    }
+
+    private func createSimulatorProofIfNeeded(
+        proofPolicy: PushProofPolicy,
+        signedPayloadData: Data)
+    throws -> PushRelaySimulatorProofPayload? {
+        guard proofPolicy == .internalSimulator else { return nil }
+        return try self.simulatorProofProvider.createProof(signedPayload: signedPayloadData)
     }
 
     private func fetchChallenge() async throws -> PushRelayChallengeResponse {

@@ -1104,6 +1104,42 @@ describe("skills-clawhub", () => {
       }
     });
 
+    it("does not install configured skills during update all without ClawHub tracking", async () => {
+      const workspaceDir = await tempDirs.make("openclaw-configured-update-");
+      const results = await updateSkillsFromClawHub({
+        workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              skills: ["apple-notes", "sherpa-onnx-tts"],
+            },
+          },
+        },
+      });
+
+      expect(results).toEqual([]);
+      expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
+      expect(installPackageDirMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects untracked requested updates instead of installing by slug", async () => {
+      const workspaceDir = await tempDirs.make("openclaw-untracked-update-");
+
+      const results = await updateSkillsFromClawHub({
+        workspaceDir,
+        slug: "calendar",
+      });
+
+      expect(results).toEqual([
+        {
+          ok: false,
+          error: 'Skill "calendar" is not tracked as a ClawHub install.',
+        },
+      ]);
+      expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
+      expect(installPackageDirMock).not.toHaveBeenCalled();
+    });
+
     it("updates a legacy Unicode slug when requested explicitly", async () => {
       const slug = "re\u0430ct";
       const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);

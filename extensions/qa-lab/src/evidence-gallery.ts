@@ -43,6 +43,7 @@ const UX_MATRIX_PRODUCER_FILES = [
   { key: "adbDevices", path: path.join("preflight", "adb-devices.txt"), previewKind: "text" },
 ] as const;
 
+type UxMatrixProducerFileKey = (typeof UX_MATRIX_PRODUCER_FILES)[number]["key"];
 type QaEvidenceArtifact = NonNullable<QaEvidenceSummaryEntry["execution"]>["artifacts"][number];
 
 export class QaEvidenceGalleryError extends Error {
@@ -244,6 +245,40 @@ export async function resolveQaEvidenceArtifactFileByIndex(params: {
   return artifactFile;
 }
 
+export async function resolveQaEvidenceProducerFile(params: {
+  evidencePath: string;
+  producerFile: string;
+  repoRoot: string;
+}): Promise<string> {
+  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const evidencePath = await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot });
+  const producerFile = UX_MATRIX_PRODUCER_FILES.find((file) => file.key === params.producerFile);
+  if (!producerFile) {
+    throw evidenceError("Evidence producer file is unknown.", 400);
+  }
+  const summary = validateQaEvidenceSummaryJson(
+    JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
+  );
+  const producerRoot = await findUxMatrixProducerRoot({
+    evidencePath,
+    repoRoot,
+    summaryEntries: summary.entries,
+  });
+  if (!producerRoot) {
+    throw evidenceError("Evidence producer context not found.", 404);
+  }
+  const evidenceDir = path.dirname(evidencePath);
+  const producerPath = path.join(producerRoot, producerFile.path);
+  const realProducerFile = await resolveContainedFileIfExists(producerPath, [
+    repoRoot,
+    evidenceDir,
+  ]);
+  if (!realProducerFile) {
+    throw evidenceError("Evidence producer file not found.", 404);
+  }
+  return realProducerFile;
+}
+
 function isExplicitRepoRootArtifactPath(raw: string): boolean {
   const normalized = raw.split(/[\\/]+/u).join("/");
   return normalized.startsWith(".artifacts/");
@@ -412,11 +447,16 @@ function artifactHref(
     | {
         artifactIndex: number;
         entryIndex: number;
+      }
+    | {
+        producerFile: UxMatrixProducerFileKey;
       },
 ) {
   const params = new URLSearchParams({ evidencePath });
   if ("artifactPath" in artifact) {
     params.set("artifactPath", artifact.artifactPath);
+  } else if ("producerFile" in artifact) {
+    params.set("producerFile", artifact.producerFile);
   } else {
     params.set("entryIndex", String(artifact.entryIndex));
     params.set("artifactIndex", String(artifact.artifactIndex));
@@ -426,21 +466,20 @@ function artifactHref(
 
 async function buildProducerContextFile(params: {
   allowedRoots: readonly string[];
-  artifactPath: string;
   extraRoots: readonly string[];
   filePath: string;
   hrefEvidencePath: string;
   previewKind: "json" | "text";
+  producerFile: UxMatrixProducerFileKey;
   repoRoot: string;
 }): Promise<QaEvidenceProducerContextFile | null> {
   const realFile = await resolveContainedFileIfExists(params.filePath, params.allowedRoots);
   if (!realFile) {
     return null;
   }
-  const repoPath = toRepoRelativePath(params.repoRoot, params.filePath);
   return {
-    href: artifactHref(params.hrefEvidencePath, { artifactPath: params.artifactPath }),
-    path: repoPath,
+    href: artifactHref(params.hrefEvidencePath, { producerFile: params.producerFile }),
+    path: displayGalleryPath(params.filePath, params),
     preview: await readPreview(realFile, params.previewKind)
       .then((preview) =>
         sanitizeGalleryPreview(preview, {
@@ -754,11 +793,11 @@ async function buildProducerContext(params: {
         file.key,
         await buildProducerContextFile({
           allowedRoots,
-          artifactPath: toRepoRelativePath(repoRoot, producerPaths[file.key]),
           extraRoots: params.extraRoots,
           filePath: producerPaths[file.key],
           hrefEvidencePath: params.hrefEvidencePath,
           previewKind: file.previewKind,
+          producerFile: file.key,
           repoRoot,
         }),
       ]),
@@ -788,7 +827,7 @@ async function buildProducerContext(params: {
       ? {
           cells: matrixCells,
           counts: readCountRecord(matrix.counts),
-          path: toRepoRelativePath(repoRoot, matrixPath),
+          path: displayGalleryPath(matrixPath, { extraRoots: params.extraRoots, repoRoot }),
           stages: readMatrixDimensionIds({
             extraRoots: params.extraRoots,
             fallback: matrixCells.map((cell) => cell.stage),
@@ -814,7 +853,7 @@ async function buildProducerContext(params: {
             counts: readCountRecord(releaseLedger.counts),
           }
         : null,
-    rootPath: toRepoRelativePath(repoRoot, rootPath),
+    rootPath: displayGalleryPath(rootPath, { extraRoots: params.extraRoots, repoRoot }),
     scorecard: producerFiles.scorecard,
   };
 }

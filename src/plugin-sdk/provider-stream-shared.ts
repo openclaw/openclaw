@@ -13,6 +13,7 @@ import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-comp
 import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
 import type { StreamFn } from "../agents/runtime/index.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
@@ -409,6 +410,56 @@ export function isOpenAICompatibleThinkingEnabled(params: {
   }
   const normalized = raw.trim().toLowerCase();
   return normalized !== "off" && normalized !== "none";
+}
+
+/** Applies the shared reasoning payload policy used by OpenAI-compatible proxy providers. */
+export function normalizeOpenAICompatibleReasoningPayload(
+  payload: Record<string, unknown>,
+  thinkingLevel?: ThinkLevel,
+): void {
+  delete payload.reasoning_effort;
+  if (!thinkingLevel || thinkingLevel === "off") {
+    return;
+  }
+
+  const existingReasoning = payload.reasoning;
+  if (
+    existingReasoning &&
+    typeof existingReasoning === "object" &&
+    !Array.isArray(existingReasoning)
+  ) {
+    const reasoning = existingReasoning as Record<string, unknown>;
+    if (!("max_tokens" in reasoning) && !("effort" in reasoning)) {
+      reasoning.effort = mapThinkingLevelToReasoningEffort(thinkingLevel);
+    }
+  } else if (!existingReasoning) {
+    payload.reasoning = {
+      effort: mapThinkingLevelToReasoningEffort(thinkingLevel),
+    };
+  }
+}
+
+/** Applies Qwen chat-template thinking flags without discarding provider-specific kwargs. */
+export function setQwenChatTemplateThinking(
+  payload: Record<string, unknown>,
+  enabled: boolean,
+): void {
+  const existing = payload.chat_template_kwargs;
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    const next: Record<string, unknown> = {
+      ...(existing as Record<string, unknown>),
+      enable_thinking: enabled,
+    };
+    if (!Object.hasOwn(next, "preserve_thinking")) {
+      next.preserve_thinking = true;
+    }
+    payload.chat_template_kwargs = next;
+    return;
+  }
+  payload.chat_template_kwargs = {
+    enable_thinking: enabled,
+    preserve_thinking: true,
+  };
 }
 
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */

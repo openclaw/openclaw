@@ -2,7 +2,7 @@
 // validation compatibility for cron jobs.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { normalizeToolParameterSchema } from "../agent-tools.schema.js";
+import { normalizeToolParameterSchema } from "../agent-tools-parameter-schema.js";
 import { createCronToolSchema } from "./cron-tool.js";
 
 /** Walk a TypeBox schema by dot-separated property path and return sorted keys. */
@@ -32,6 +32,10 @@ describe("createCronToolSchema", () => {
   const schemaRecord = createCronToolSchema() as unknown as Record<string, unknown>;
   const providerSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
     modelProvider: "gemini",
+  }) as unknown as Record<string, unknown>;
+  const jjccGeminiSchemaRecord = normalizeToolParameterSchema(createCronToolSchema(), {
+    modelProvider: "jjcc",
+    modelId: "gemini-3.1-pro-preview",
   }) as unknown as Record<string, unknown>;
 
   // Regression: models like GPT-5.4 rely on these fields to populate job/patch.
@@ -252,6 +256,22 @@ describe("createCronToolSchema", () => {
     expect(patchProps?.payload?.properties?.toolsAllow?.description).toMatch(/null to clear/i);
     expect(patchProps?.payload?.properties?.model?.type).toBe("string");
     expect(patchProps?.payload?.properties?.model?.description).toMatch(/null to clear/i);
+  });
+
+  it("projects nullable cron fields for Gemini models behind OpenAI-compatible providers", () => {
+    expect(propertyAt(jjccGeminiSchemaRecord, "job.agentId")).toMatchObject({
+      type: "string",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "job.sessionKey")).toMatchObject({
+      type: "string",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "patch.payload.toolsAllow")).toMatchObject({
+      type: "array",
+    });
+    expect(propertyAt(jjccGeminiSchemaRecord, "patch.delivery.channel")).toMatchObject({
+      type: "string",
+    });
+    expect(JSON.stringify(jjccGeminiSchemaRecord)).not.toContain('"anyOf"');
   });
 
   // Regression guard: ensure no OpenAPI 3.0 incompatible keywords leak into the

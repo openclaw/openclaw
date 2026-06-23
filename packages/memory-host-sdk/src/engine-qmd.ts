@@ -7,8 +7,13 @@ export {
   loadDreamingNarrativeTranscriptPathSetForAgent,
   loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
+  parseCanonicalSessionSyncTargetFromPath,
+  resolveSessionIdentityForTranscriptFile,
+  resolveSessionFileForSyncTarget,
   sessionPathForFile,
   type BuildSessionEntryOptions,
+  type ResolvedMemorySessionSyncTarget,
+  type ResolvedSessionTranscriptIdentity,
   type SessionFileEntry,
   type SessionTranscriptClassification,
 } from "./host/session-files.js";

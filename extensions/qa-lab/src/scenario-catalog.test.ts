@@ -50,22 +50,19 @@ describe("qa scenario catalog", () => {
     expect(
       scenarioIds.filter((scenarioId) => requiredScenarioIds.includes(scenarioId)).toSorted(),
     ).toEqual(requiredScenarioIds);
-    expect(
-      pack.scenarios
-        .filter((scenario) => scenario.execution?.kind !== "flow")
-        .map((scenario) => scenario.id)
-        .toSorted(),
-    ).toStrictEqual(
-      [
-        "channel-message-flows",
-        "control-ui-chat-flow-playwright",
-        "gateway-smoke",
-        "package-openclaw-for-docker",
-        "plugin-lifecycle-probe",
-        "qa-otel-smoke",
-        "ux-matrix-evidence-dashboard",
-      ].toSorted(),
+    const nativeExecutionScenarios = pack.scenarios.filter(
+      (scenario) => scenario.execution.kind !== "flow",
     );
+    expect(nativeExecutionScenarios.length).toBeGreaterThan(0);
+    for (const scenario of nativeExecutionScenarios) {
+      const execution = scenario.execution;
+      if (execution.kind === "flow") {
+        throw new Error(`expected native execution scenario: ${scenario.id}`);
+      }
+      expect(["playwright", "script", "vitest"]).toContain(execution.kind);
+      expect(fs.existsSync(execution.path), `${scenario.id} execution.path exists`).toBe(true);
+      expect(execution.flow).toBeUndefined();
+    }
     expect(
       pack.scenarios
         .filter((scenario) => scenario.execution.kind === "flow")
@@ -176,6 +173,21 @@ describe("qa scenario catalog", () => {
     expect(uxMatrix.coverage?.primary).toContain("qa.artifact-safety");
   });
 
+  it("loads folded HTTP API script scenarios with primary taxonomy coverage", () => {
+    expect(readQaScenarioById("openai-compatible-chat-tools").coverage?.primary).toStrictEqual([
+      "gateway.openai-compatible-apis",
+    ]);
+    expect(readQaScenarioById("openai-web-search-minimal").coverage?.primary).toStrictEqual([
+      "runtime.reasoning-and-cache-controls",
+    ]);
+    expect(
+      readQaScenarioById("openai-web-search-native-assertions").coverage?.primary,
+    ).toStrictEqual(["web-search.openai-native-web-search", "plugins.web-search-and-fetch"]);
+    expect(readQaScenarioById("openwebui-openai-compatible").coverage?.primary).toStrictEqual([
+      "gateway.openai-compatible-apis",
+    ]);
+  });
+
   it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
     const firstHour = readQaScenarioById("runtime-first-hour-20-turn");
     const soak = readQaScenarioById("runtime-soak-100-turn");
@@ -236,6 +248,7 @@ describe("qa scenario catalog", () => {
     });
     expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
     expect(readQaScenarioExecutionConfig(imageGenerate.id)).toMatchObject({
+      requiredProviderMode: "mock-openai",
       toolName: "image_generate",
       toolCoverage: {
         bucket: "openclaw-dynamic-integration",
@@ -299,6 +312,14 @@ describe("qa scenario catalog", () => {
     expect(
       JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
     ).toContain("liveTurnTimeoutMs(env, 180000)");
+    const longContextFlow = JSON.stringify(
+      readQaScenarioById("long-context-progress-watchdog").execution.flow,
+    );
+    expect(longContextFlow).toContain("originalCodexPluginEnabled");
+    expect(longContextFlow).not.toContain(
+      "originalPluginAllow === undefined ? null : originalPluginAllow",
+    );
+    expect(longContextFlow).not.toContain("{ ...originalCodexPluginEntry, enabled:");
     expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",
@@ -521,6 +542,23 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
+  it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {
+    const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
+      | { requiredProviderMode?: string }
+      | undefined;
+    const stranded = readQaScenarioById("message-tool-stranded-final-reply");
+    const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
+    const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
+
+    expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
+    expect(JSON.stringify(stranded.execution.flow)).toContain(
+      "this seeded scenario is mock-openai only",
+    );
+    expect(heartbeatFlow).toContain("sessionKey");
+    expect(heartbeatFlow).toContain("targetOutbound.length === 0");
+    expect(heartbeatFlow).not.toContain("waitForNoOutbound");
+  });
+
   it("includes the thinking slash model remap scenario", () => {
     const scenario = readQaScenarioById("thinking-slash-model-remap");
     const config = readQaScenarioExecutionConfig("thinking-slash-model-remap") as
@@ -537,6 +575,9 @@ describe("qa scenario catalog", () => {
     expect(config?.anthropicModelRef).toBe("anthropic/claude-sonnet-4-6");
     expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.5");
     expect(config?.noXhighModelRef).toBe("anthropic/claude-sonnet-4-6");
+    const flowText = JSON.stringify(scenario.execution.flow);
+    expect(flowText).toContain("include max and omit xhigh");
+    expect(flowText).not.toContain("omit xhigh/max");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "selects Anthropic and verifies adaptive options",
       "maps adaptive to medium when switching to OpenAI",

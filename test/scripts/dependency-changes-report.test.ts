@@ -84,6 +84,7 @@ describe("dependency-changes-report", () => {
       "--markdown",
     ]) {
       expect(() => parseArgs([flag, "--json"])).toThrow(`${flag} requires a value`);
+      expect(() => parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
   });
 

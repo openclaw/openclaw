@@ -1,11 +1,12 @@
 // Qa Lab plugin module implements suite runtime flow behavior.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-host-core";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   callQaBrowserRequest,
@@ -84,6 +85,39 @@ type QaSuiteScenarioFlowEnv = {
   webSessionIds: Set<string>;
   transport: QaSuiteRuntimeEnv["transport"] & QaScenarioRuntimeEnv["transport"];
 } & Omit<QaSuiteRuntimeEnv, "transport">;
+
+function activeMemoryToggleKey(sessionKey: string) {
+  return createHash("sha256").update(sessionKey, "utf8").digest("hex");
+}
+
+function setActiveMemorySessionDisabled(
+  env: QaSuiteScenarioFlowEnv,
+  sessionKey: string,
+  disabled: boolean,
+) {
+  const store = createPluginStateSyncKeyedStore<{
+    sessionKey: string;
+    disabled: true;
+    updatedAt: number;
+  }>("active-memory", {
+    namespace: "session-toggles",
+    maxEntries: 10_000,
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
+    },
+  });
+  const key = activeMemoryToggleKey(sessionKey);
+  if (disabled) {
+    store.register(key, {
+      sessionKey,
+      disabled: true,
+      updatedAt: Date.now(),
+    });
+    return;
+  }
+  store.delete(key);
+}
 
 type QaSuiteStep = {
   name: string;
@@ -204,6 +238,8 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     extractQaToolPayload,
     formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent,
+    activeMemoryToggleKey,
+    setActiveMemorySessionDisabled,
     buildAgentSessionKey,
     normalizeLowercaseStringOrEmpty,
     formatErrorMessage: params.formatErrorMessage,
