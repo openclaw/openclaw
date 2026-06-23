@@ -80,6 +80,24 @@ describe("verify-pr-hosted-gates", () => {
     });
   });
 
+  it("uses the latest CI run when an older duplicate was cancelled", () => {
+    expect(
+      collectHostedGateEvidence({
+        sha,
+        workflowRuns: [
+          {
+            ...successfulRun("CI", 1, "2026-06-17T10:47:00Z"),
+            conclusion: "cancelled",
+          },
+          successfulRun("CI", 2, "2026-06-17T10:48:00Z"),
+        ],
+      }),
+    ).toEqual({
+      headSha: sha,
+      workflows: [expect.objectContaining({ name: "CI", id: 2 })],
+    });
+  });
+
   it("accepts the explicit exact-SHA manual CI release gate", () => {
     expect(
       collectHostedGateEvidence({

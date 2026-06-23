@@ -98,12 +98,6 @@ function latestRun(runs) {
 
 function preferredCiRun(runs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
-  const failedScheduledRun = scheduledRuns.find(
-    (run) => run.status === "completed" && run.conclusion !== "success",
-  );
-  if (failedScheduledRun) {
-    return failedScheduledRun;
-  }
   const latestScheduledRun = latestRun(scheduledRuns);
   if (latestScheduledRun?.status === "completed") {
     return latestScheduledRun;
