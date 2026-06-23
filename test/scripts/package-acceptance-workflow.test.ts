@@ -2237,6 +2237,13 @@ describe("package artifact reuse", () => {
     expect(clawHubReleasePlanScript).toContain("--plugin-clawhub-bootstrap-run");
     expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
     expect(releaseWorkflow).toContain("openclaw-release-postpublish-evidence");
+    const postpublishEvidenceUpload = workflowStep(
+      workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
+      "Upload postpublish evidence",
+    );
+    expect(postpublishEvidenceUpload.if).toContain("always()");
+    expect(postpublishEvidenceUpload.if).toContain("inputs.publish_openclaw_npm");
+    expect(postpublishEvidenceUpload.with?.["if-no-files-found"]).toBe("error");
     expect(releaseWorkflow).toContain("Failed child job summary");
     expect(releaseWorkflow).toContain("Workflow completion waits for ClawHub");
     expect(releaseWorkflow).toContain("Workflow completion does not wait for ClawHub");
