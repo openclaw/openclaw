@@ -1970,7 +1970,7 @@ ${JSON.stringify({
     expect(parsed.response.response.toolUseID).toBe("tool-allow-1");
   });
 
-  it("reports Claude live stream progress and keeps native tools fresh while they are running", async () => {
+  it("reports Claude live stream progress without treating active tool heartbeats as progress", async () => {
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
@@ -2069,14 +2069,12 @@ ${JSON.stringify({
 
       await vi.advanceTimersByTimeAsync(10_000);
       await waitForDiagnosticEventsDrained();
-      expect(
-        getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
-          .lastProgressReason,
-      ).toBe("cli_live:tool_running");
-      expect(
-        getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
-          .lastProgressAgeMs,
-      ).toBeLessThan(100);
+      expect(diagnosticEvents).toContain("run.progress");
+      const snapshotAfterToolHeartbeat = getDiagnosticSessionActivitySnapshot({
+        sessionKey: "agent:main:diagnostics",
+      });
+      expect(snapshotAfterToolHeartbeat.lastProgressReason).toBe("cli_live:tool_started");
+      expect(snapshotAfterToolHeartbeat.lastProgressAgeMs).toBeGreaterThanOrEqual(10_000);
 
       stdoutListener?.(
         [

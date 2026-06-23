@@ -271,9 +271,17 @@ function recordRunProgress(event: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(event);
 }
 
+function isPassiveRunProgressReason(reason: string): boolean {
+  return reason === "cli_live:tool_running";
+}
+
 export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
-  const activity = resolveSessionActivity({ ...params, create: true });
+  const passiveProgress = isPassiveRunProgressReason(params.reason);
+  const activity = resolveSessionActivity({ ...params, create: !passiveProgress });
   if (!activity) {
+    return;
+  }
+  if (passiveProgress) {
     return;
   }
   touchSessionActivity(activity, params.reason);
