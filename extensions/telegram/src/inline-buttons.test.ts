@@ -109,6 +109,20 @@ describe("resolveTelegramInlineButtonsScope (#75433 SecretRef tolerance)", () =>
     expect(isTelegramInlineButtonsEnabled({ cfg })).toBe(true);
   });
 
+  it("falls back to default when array capabilities is empty", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+          capabilities: [],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramInlineButtonsScope({ cfg })).toBe("allowlist");
+    expect(isTelegramInlineButtonsEnabled({ cfg })).toBe(true);
+  });
+
   it('preserves configured "off" when botToken is an unresolved SecretRef', () => {
     const cfg = {
       channels: {
