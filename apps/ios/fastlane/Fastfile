@@ -495,6 +495,9 @@ def produce_services_for_target(target)
   if target.fetch("capabilities").include?("APP_GROUPS")
     services[:app_group] = "on"
   end
+  if target.fetch("capabilities").include?("APP_ATTEST")
+    services[:app_attest] = "on"
+  end
   services
 end
 
@@ -602,6 +605,15 @@ def validate_match_profile_capabilities!(target)
     unless missing.empty?
       UI.user_error!(
         "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing App Groups #{missing.join(", ")}; actual groups: #{actual_app_groups.empty? ? "missing" : actual_app_groups.join(", ")}."
+      )
+    end
+  end
+
+  if capabilities.include?("APP_ATTEST")
+    app_attest_environments = profile_plist_array_values(profile_path, "Entitlements:com.apple.developer.devicecheck.appattest-environment")
+    unless app_attest_environments.include?("production")
+      UI.user_error!(
+        "Provisioning profile #{target.fetch("profileName")} for #{target.fetch("bundleId")} is missing production App Attest entitlement; actual environments: #{app_attest_environments.empty? ? "missing" : app_attest_environments.join(", ")}."
       )
     end
   end

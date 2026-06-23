@@ -5,8 +5,13 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { getCommandPathWithRootOptions, hasFlag, isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
+import {
+  resolvePrecomputedSubcommandHelpCommand,
+  type PrecomputedSubcommandHelpName,
+} from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
+import { createGatewayStartupTrace } from "./cli/startup-trace.js";
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import {
   enableOpenClawCompileCache,
@@ -15,8 +20,7 @@ import {
 } from "./entry.compile-cache.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
-import { consumeRootOptionToken } from "./infra/cli-root-options.js";
-import { isTruthyEnvValue, normalizeEnv } from "./infra/env.js";
+import { normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
@@ -27,17 +31,7 @@ const ENTRY_WRAPPER_PAIRS = [
 ] as const;
 
 type PrecomputedCommandHelpName = "browser" | "secrets" | "nodes";
-type PrecomputedSubcommandHelpName =
-  | "doctor"
-  | "gateway"
-  | "models"
-  | "plugins"
-  | "sessions"
-  | "tasks";
 type OutputPrecomputedHelpText = () => boolean;
-
-const HELP_FLAGS = new Set(["-h", "--help"]);
-const VERSION_FLAGS = new Set(["-V", "--version"]);
 
 const loadRootHelpLiveConfigModule = async () => await import("./cli/root-help-live-config.js");
 const loadRootHelpMetadataModule = async () => await import("./cli/root-help-metadata.js");
@@ -52,40 +46,7 @@ function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
   return false;
 }
 
-function createGatewayEntryStartupTrace(argv: string[]) {
-  const enabled =
-    isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) &&
-    argv.slice(2).includes("gateway");
-  const started = performance.now();
-  let last = started;
-  const emit = (name: string, durationMs: number, totalMs: number) => {
-    if (!enabled) {
-      return;
-    }
-    process.stderr.write(
-      `[gateway] startup trace: entry.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
-    );
-  };
-  return {
-    mark(name: string) {
-      const now = performance.now();
-      emit(name, now - last, now - started);
-      last = now;
-    },
-    async measure<T>(name: string, run: () => Promise<T>): Promise<T> {
-      const before = performance.now();
-      try {
-        return await run();
-      } finally {
-        const now = performance.now();
-        emit(name, now - before, now - started);
-        last = now;
-      }
-    },
-  };
-}
-
-const gatewayEntryStartupTrace = createGatewayEntryStartupTrace(process.argv);
+const gatewayEntryStartupTrace = createGatewayStartupTrace(process.argv, "entry");
 
 // Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
@@ -241,57 +202,7 @@ function resolvePrecomputedCommandHelpName(argv: string[]): PrecomputedCommandHe
 function resolvePrecomputedSubcommandHelpName(
   argv: string[],
 ): PrecomputedSubcommandHelpName | null {
-  const args = argv.slice(2);
-  let commandName: PrecomputedSubcommandHelpName | null = null;
-  let sawHelp = false;
-
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (!arg || arg === "--") {
-      return null;
-    }
-    if (VERSION_FLAGS.has(arg)) {
-      return null;
-    }
-    if (!commandName) {
-      const consumed = consumeRootOptionToken(args, index);
-      if (consumed > 0) {
-        index += consumed - 1;
-        continue;
-      }
-      if (arg.startsWith("-")) {
-        return null;
-      }
-      commandName = resolvePrecomputedSubcommandName(arg);
-      if (!commandName) {
-        return null;
-      }
-      continue;
-    }
-    if (HELP_FLAGS.has(arg)) {
-      sawHelp = true;
-      continue;
-    }
-    return null;
-  }
-
-  return commandName && sawHelp ? commandName : null;
-}
-
-function resolvePrecomputedSubcommandName(
-  commandName: string,
-): PrecomputedSubcommandHelpName | null {
-  if (
-    commandName === "doctor" ||
-    commandName === "gateway" ||
-    commandName === "models" ||
-    commandName === "plugins" ||
-    commandName === "sessions" ||
-    commandName === "tasks"
-  ) {
-    return commandName;
-  }
-  return null;
+  return resolvePrecomputedSubcommandHelpCommand(argv);
 }
 
 export async function tryHandlePrecomputedCommandHelpFastPath(

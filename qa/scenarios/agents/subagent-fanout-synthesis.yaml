@@ -25,14 +25,13 @@ scenario:
     summary: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
     config:
       prompt: |-
-        Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially.
-        Subagent 1: verify that `HEARTBEAT.md` exists and report `ok` if it does.
-        Subagent 2: verify that `repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml` exists and report `ok` if it does.
-        Wait for both subagents to finish.
+        Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.
+        First spawn exactly one child with label qa-fanout-alpha and task: verify that `HEARTBEAT.md` exists and reply exactly `ok` if it does. Wait for that child to finish.
+        Then spawn exactly one child with label qa-fanout-beta and task: verify that `repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml` exists and reply exactly `ok` if it does. Wait for that child to finish.
+        Do not spawn any more children after qa-fanout-beta finishes.
         Then reply with exactly these two lines and nothing else:
         subagent-1: ok
         subagent-2: ok
-        Do not use ACP.
       expectedReplyAny:
         - "subagent-1: ok"
         - "subagent-2: ok"
@@ -89,11 +88,14 @@ flow:
                                   expr: config.prompt
                                 timeoutMs:
                                   expr: liveTurnTimeoutMs(env, 90000)
-                          - call: waitForCondition
+                          - call: waitForAgentHistoryReply
                             saveAs: outbound
                             args:
+                              - ref: env
+                              - ref: sessionKey
                               - lambda:
-                                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === 'qa-operator' && config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(message.text ?? '').includes(needle)))).at(-1)"
+                                  params: [text]
+                                  expr: "config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(text).includes(needle)))"
                               - expr: liveTurnTimeoutMs(env, 120000)
                               - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                           - if:

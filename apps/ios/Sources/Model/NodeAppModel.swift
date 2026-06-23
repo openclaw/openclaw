@@ -4102,29 +4102,48 @@ extension NodeAppModel {
     }
 
     private func registerAPNsTokenIfNeeded() async {
-        guard self.gatewayConnected else { return }
+        let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
+        guard self.gatewayConnected else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("gateway_offline")
+            }
+            return
+        }
         guard let token = self.apnsDeviceTokenHex?.trimmingCharacters(in: .whitespacesAndNewlines),
               !token.isEmpty
         else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("missing_apns_token")
+            }
             return
         }
-        let usesRelayTransport = await self.pushRegistrationManager.usesRelayTransport
         if !usesRelayTransport, token == self.apnsLastRegisteredTokenHex {
             return
         }
         guard let topic = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),
               !topic.isEmpty
         else {
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.skipped("missing_topic")
+            }
             return
         }
 
         do {
             let gatewayIdentity: PushRelayGatewayIdentity?
             if usesRelayTransport {
-                guard self.operatorConnected else { return }
+                guard self.operatorConnected else {
+                    GatewayDiagnostics.pushRelay.skipped("operator_offline")
+                    return
+                }
+                GatewayDiagnostics.pushRelay.stage("gateway identity request start")
                 gatewayIdentity = try await self.fetchPushRelayGatewayIdentity()
+                GatewayDiagnostics.pushRelay.stage("gateway identity request complete")
             } else {
                 gatewayIdentity = nil
+            }
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.stage("gateway registration payload start")
             }
             let payloadJSON = try await self.pushRegistrationManager.makeGatewayRegistrationPayload(
                 apnsTokenHex: token,
@@ -4132,9 +4151,15 @@ extension NodeAppModel {
                 gatewayIdentity: gatewayIdentity)
             await self.nodeGateway.sendEvent(event: "push.apns.register", payloadJSON: payloadJSON)
             self.apnsLastRegisteredTokenHex = token
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.stage("gateway registration event published")
+            }
         } catch {
             self.pushWakeLogger.error(
                 "APNs registration publish failed: \(error.localizedDescription, privacy: .public)")
+            if usesRelayTransport {
+                GatewayDiagnostics.pushRelay.failed("registration", error: error)
+            }
         }
     }
 

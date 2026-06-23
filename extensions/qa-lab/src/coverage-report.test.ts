@@ -7,7 +7,7 @@ import {
   renderQaScenarioMatchesMarkdownReport,
 } from "./coverage-report.js";
 import { readQaScenarioPack, type QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import { buildQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
+import { buildQaScorecardTaxonomyReport, type QaMaturityTaxonomy } from "./scorecard-taxonomy.js";
 
 const TEST_EXECUTABLE_CATEGORY_ID = "agent-runtime-and-provider-execution.agent-turn-execution";
 const TEST_EXECUTABLE_COVERAGE_ID = "channels.dm";
@@ -22,14 +22,15 @@ function testMaturityTaxonomy(params?: {
   featureCoverageIds?: readonly (readonly string[])[];
   includeAllCategories?: boolean;
   profileCategoryIds?: readonly string[];
-}) {
+}): QaMaturityTaxonomy {
   const categoryId = params?.categoryId ?? TEST_EXECUTABLE_CATEGORY_ID;
   const firstDot = categoryId.indexOf(".");
   const surfaceId = firstDot === -1 ? categoryId : categoryId.slice(0, firstDot);
   const categoryLocalId = firstDot === -1 ? categoryId : categoryId.slice(firstDot + 1);
   return {
-    version: 1,
+    version: 1 as const,
     title: "Test taxonomy",
+    levels: [],
     profiles: [
       {
         id: "smoke-ci",
@@ -52,10 +53,15 @@ function testMaturityTaxonomy(params?: {
       {
         id: surfaceId,
         name: "Test surface",
+        family: "test",
+        level: "experimental",
         categories: [
           {
             id: categoryLocalId,
             name: "Test category",
+            category_note: "test-category.md",
+            docs: [],
+            search_anchors: [],
             features: (
               params?.featureCoverageIds ??
               (params?.coverageIds ?? [TEST_EXECUTABLE_COVERAGE_ID]).map((coverageId) => [

@@ -74,7 +74,9 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.util.Collections
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -400,6 +402,15 @@ class NodeRuntime(
   private val _nodesDevicesErrorText = MutableStateFlow<String?>(null)
   val nodesDevicesErrorText: StateFlow<String?> = _nodesDevicesErrorText.asStateFlow()
   private val nodeApprovalRefreshGuard = GatewayNodeApprovalRefreshGuard()
+  private val _execApprovals = MutableStateFlow<List<GatewayExecApprovalSummary>>(emptyList())
+  val execApprovals: StateFlow<List<GatewayExecApprovalSummary>> = _execApprovals.asStateFlow()
+  private val _execApprovalsRefreshing = MutableStateFlow(false)
+  val execApprovalsRefreshing: StateFlow<Boolean> = _execApprovalsRefreshing.asStateFlow()
+  private val _execApprovalsErrorText = MutableStateFlow<String?>(null)
+  val execApprovalsErrorText: StateFlow<String?> = _execApprovalsErrorText.asStateFlow()
+  private val execApprovalsRefreshSeq = AtomicLong(0)
+  private val execApprovalsStateLock = Any()
+  private val resolvedExecApprovalIds = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
   private val _channelsSummary = MutableStateFlow(GatewayChannelsSummary(channels = emptyList()))
   val channelsSummary: StateFlow<GatewayChannelsSummary> = _channelsSummary.asStateFlow()
   private val _channelsRefreshing = MutableStateFlow(false)
@@ -449,6 +460,7 @@ class NodeRuntime(
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
           subscribeOperatorSessionEvents()
+          refreshExecApprovalsFromGateway()
           refreshHomeCanvasOverviewIfConnected()
           if (voiceReplySpeakerLazy.isInitialized()) {
             voiceReplySpeaker.refreshConfig()
@@ -478,6 +490,11 @@ class NodeRuntime(
             pendingDevices = emptyList(),
             pairedDevices = emptyList(),
           )
+        invalidateExecApprovalRefreshes()
+        resolvedExecApprovalIds.clear()
+        _execApprovals.value = emptyList()
+        _execApprovalsRefreshing.value = false
+        _execApprovalsErrorText.value = null
         _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
         _dreamingSummary.value = GatewayDreamingSummary()
         _healthLogsSummary.value = GatewayHealthLogsSummary()
@@ -825,6 +842,24 @@ class NodeRuntime(
     }
   }
 
+  fun refreshExecApprovals() {
+    scope.launch {
+      refreshExecApprovalsFromGateway()
+    }
+  }
+
+  fun resolveExecApproval(
+    id: String,
+    decision: String,
+  ) {
+    val normalizedId = id.trim()
+    val normalizedDecision = decision.trim()
+    if (normalizedId.isEmpty() || normalizedDecision.isEmpty()) return
+    scope.launch {
+      resolveExecApprovalOnGateway(id = normalizedId, decision = normalizedDecision)
+    }
+  }
+
   fun refreshChannels() {
     scope.launch {
       refreshChannelsFromGateway()
@@ -1000,6 +1035,9 @@ class NodeRuntime(
     _isForeground.value = value
     if (value) {
       reconnectPreferredGatewayOnForeground()
+      scope.launch {
+        refreshExecApprovalsFromGateway()
+      }
     } else {
       stopManualVoiceSession()
       publishNodePresenceAliveBeacon(NodePresenceAliveBeacon.Trigger.Background, throttleRecentSuccess = true)
@@ -1829,10 +1867,46 @@ class NodeRuntime(
     if (event == "update.available") {
       _gatewayUpdateAvailable.value = parseGatewayUpdateAvailable(payloadJson)
     }
+    handleExecApprovalGatewayEvent(event = event, payloadJson = payloadJson)
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
   }
+
+  private fun handleExecApprovalGatewayEvent(
+    event: String,
+    payloadJson: String?,
+  ) {
+    when (event) {
+      "exec.approval.requested" -> {
+        val approvalId = parseExecApprovalEventId(payloadJson)
+        approvalId?.let(resolvedExecApprovalIds::remove)
+        scope.launch {
+          if (approvalId == null) {
+            refreshExecApprovalsFromGateway()
+          } else {
+            refreshExecApprovalFromGateway(approvalId)
+          }
+        }
+      }
+      "exec.approval.resolved" -> {
+        val approvalId = parseExecApprovalEventId(payloadJson) ?: return
+        markExecApprovalResolved(approvalId)
+      }
+    }
+  }
+
+  private fun parseExecApprovalEventId(payloadJson: String?): String? =
+    try {
+      payloadJson
+        ?.let { json.parseToJsonElement(it).asObjectOrNull() }
+        ?.get("id")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    } catch (_: Throwable) {
+      null
+    }
 
   private fun parseGatewayUpdateAvailable(payloadJson: String?): GatewayUpdateAvailableSummary? {
     return try {
@@ -2080,6 +2154,196 @@ class NodeRuntime(
     }
   }
 
+  private suspend fun refreshExecApprovalsFromGateway() {
+    val refreshGeneration = execApprovalsRefreshSeq.incrementAndGet()
+    _execApprovalsRefreshing.value = true
+    _execApprovalsErrorText.value = null
+    if (!operatorConnected) {
+      if (execApprovalsRefreshSeq.get() == refreshGeneration) {
+        _execApprovals.value = emptyList()
+        _execApprovalsRefreshing.value = false
+      }
+      return
+    }
+    try {
+      val res = operatorSession.request("exec.approval.list", "{}")
+      val existing = _execApprovals.value.associateBy { it.id }
+      val rows =
+        parseGatewayExecApprovalListPayload(res, json)
+          .filterNot { it.id in resolvedExecApprovalIds }
+          .map { row ->
+            val hydrated =
+              try {
+                fetchExecApprovalDetailFromGateway(
+                  id = row.id,
+                  createdAtMs = row.createdAtMs ?: System.currentTimeMillis(),
+                )
+              } catch (_: Throwable) {
+                null
+              } ?: row.copy(errorText = "Could not load approval details. Refresh and try again.")
+            val current = existing[row.id]
+            if (current == null) {
+              hydrated
+            } else {
+              hydrated.copy(
+                resolvingDecision = current.resolvingDecision,
+                errorText = current.errorText ?: hydrated.errorText,
+              )
+            }
+          }
+      publishExecApprovalsIfCurrent(refreshGeneration, rows)
+    } catch (_: Throwable) {
+      if (execApprovalsRefreshSeq.get() == refreshGeneration) {
+        _execApprovalsErrorText.value = "Could not load approvals."
+      }
+    } finally {
+      if (execApprovalsRefreshSeq.get() == refreshGeneration) {
+        _execApprovalsRefreshing.value = false
+      }
+    }
+  }
+
+  private suspend fun refreshExecApprovalFromGateway(id: String) {
+    if (!operatorConnected) return
+    if (id in resolvedExecApprovalIds) return
+    try {
+      val current = _execApprovals.value.firstOrNull { it.id == id }
+      val row =
+        fetchExecApprovalDetailFromGateway(
+          id = id,
+          createdAtMs = current?.createdAtMs ?: System.currentTimeMillis(),
+        ) ?: return
+      if (id in resolvedExecApprovalIds) return
+      invalidateExecApprovalRefreshes()
+      upsertExecApproval(row)
+    } catch (_: Throwable) {
+      refreshExecApprovalsFromGateway()
+    }
+  }
+
+  private suspend fun fetchExecApprovalDetailFromGateway(
+    id: String,
+    createdAtMs: Long,
+  ): GatewayExecApprovalSummary? {
+    val params = buildJsonObject { put("id", JsonPrimitive(id)) }.toString()
+    val res = operatorSession.request("exec.approval.get", params)
+    val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null
+    return parseGatewayExecApprovalDetail(root, createdAtMs = createdAtMs)
+  }
+
+  private suspend fun resolveExecApprovalOnGateway(
+    id: String,
+    decision: String,
+  ) {
+    synchronized(execApprovalsStateLock) {
+      if (!operatorConnected || id in resolvedExecApprovalIds) return
+      val currentRows = _execApprovals.value
+      if (currentRows.none { it.id == id }) return
+      invalidateExecApprovalRefreshes()
+      _execApprovals.value =
+        currentRows.map { row ->
+          if (row.id == id) row.copy(resolvingDecision = decision, errorText = null) else row
+        }
+    }
+    try {
+      val params =
+        buildJsonObject {
+          put("id", JsonPrimitive(id))
+          put("decision", JsonPrimitive(decision))
+        }.toString()
+      operatorSession.request("exec.approval.resolve", params)
+      markExecApprovalResolved(id)
+    } catch (_: Throwable) {
+      synchronized(execApprovalsStateLock) {
+        if (!operatorConnected || id in resolvedExecApprovalIds) return
+        _execApprovals.value =
+          _execApprovals.value.map { row ->
+            if (row.id == id) {
+              row.copy(resolvingDecision = null, errorText = "Could not resolve approval. Refresh and try again.")
+            } else {
+              row
+            }
+          }
+      }
+    }
+  }
+
+  private fun upsertExecApproval(row: GatewayExecApprovalSummary) {
+    synchronized(execApprovalsStateLock) {
+      if (!operatorConnected || row.id in resolvedExecApprovalIds) return
+      if (row.isExpiredExecApproval()) return
+      val rows = _execApprovals.value
+      val replaced = rows.any { it.id == row.id }
+      val nextRows =
+        (
+          if (replaced) {
+            rows.map { current ->
+              if (current.id == row.id) {
+                row.copy(
+                  resolvingDecision = current.resolvingDecision,
+                  errorText = current.errorText,
+                )
+              } else {
+                current
+              }
+            }
+          } else {
+            rows + row
+          }
+        ).filterActiveExecApprovals()
+          .sortedBy { it.createdAtMs ?: Long.MAX_VALUE }
+      _execApprovals.value = nextRows
+      scheduleExecApprovalExpiryPrune(nextRows)
+    }
+  }
+
+  private fun invalidateExecApprovalRefreshes() {
+    execApprovalsRefreshSeq.incrementAndGet()
+    _execApprovalsRefreshing.value = false
+  }
+
+  private fun markExecApprovalResolved(id: String) {
+    synchronized(execApprovalsStateLock) {
+      resolvedExecApprovalIds.add(id)
+      invalidateExecApprovalRefreshes()
+      _execApprovals.value = _execApprovals.value.filterNot { it.id == id }
+    }
+  }
+
+  private fun publishExecApprovalsIfCurrent(
+    refreshGeneration: Long,
+    rows: List<GatewayExecApprovalSummary>,
+  ) {
+    synchronized(execApprovalsStateLock) {
+      if (execApprovalsRefreshSeq.get() == refreshGeneration && operatorConnected) {
+        val nextRows = rows.filterNot { it.id in resolvedExecApprovalIds }.filterActiveExecApprovals()
+        _execApprovals.value = nextRows
+        scheduleExecApprovalExpiryPrune(nextRows)
+      }
+    }
+  }
+
+  private fun scheduleExecApprovalExpiryPrune(rows: List<GatewayExecApprovalSummary>) {
+    val now = System.currentTimeMillis()
+    val nextExpiry = rows.mapNotNull { it.expiresAtMs }.filter { it > now }.minOrNull() ?: return
+    scope.launch {
+      delay((nextExpiry - now + 250).coerceAtLeast(0))
+      pruneExpiredExecApprovals()
+    }
+  }
+
+  private fun pruneExpiredExecApprovals() {
+    synchronized(execApprovalsStateLock) {
+      _execApprovals.value = _execApprovals.value.filterActiveExecApprovals()
+    }
+  }
+
+  private fun GatewayExecApprovalSummary.isExpiredExecApproval(nowMs: Long = System.currentTimeMillis()): Boolean = expiresAtMs?.let { it <= nowMs } == true
+
+  private fun List<GatewayExecApprovalSummary>.filterActiveExecApprovals(
+    nowMs: Long = System.currentTimeMillis(),
+  ): List<GatewayExecApprovalSummary> = filterNot { it.isExpiredExecApproval(nowMs) }
+
   private fun invalidateNodeCapabilityApprovalState() {
     val refreshGeneration = nodeApprovalRefreshGuard.begin()
     nodeApprovalRefreshGuard.publishIfCurrent(refreshGeneration) {
@@ -2194,12 +2458,19 @@ class NodeRuntime(
       }.orEmpty()
 
   private fun parseGatewayLogEntry(line: String): GatewayLogEntry {
+    val sanitizedLine = sanitizeGatewayLogText(line)
     val root =
       try {
         json.parseToJsonElement(line).asObjectOrNull()
       } catch (_: Throwable) {
         null
-      } ?: return GatewayLogEntry(time = null, level = null, subsystem = null, message = line.trim().ifEmpty { "Empty log entry" })
+      } ?: return GatewayLogEntry(
+        time = null,
+        level = null,
+        subsystem = null,
+        message = sanitizedLine.trim().ifEmpty { "Empty log entry" },
+        raw = sanitizedLine,
+      )
     val meta = root["_meta"].asObjectOrNull()
     val time = root["time"].asStringOrNull() ?: meta?.get("date").asStringOrNull()
     val level = normalizeLogLevel(meta?.get("logLevelName").asStringOrNull() ?: meta?.get("level").asStringOrNull())
@@ -2217,7 +2488,7 @@ class NodeRuntime(
         ?: root["message"].asStringOrNull()
         ?: line
     val normalizedMessage =
-      message
+      sanitizeGatewayLogText(message)
         .trim()
         .replace(Regex("\\s+"), " ")
         .take(240)
@@ -2225,8 +2496,9 @@ class NodeRuntime(
     return GatewayLogEntry(
       time = time,
       level = level,
-      subsystem = subsystem?.trim()?.takeIf { it.isNotEmpty() },
+      subsystem = subsystem?.let(::sanitizeGatewayLogText)?.trim()?.takeIf { it.isNotEmpty() },
       message = normalizedMessage,
+      raw = sanitizedLine,
     )
   }
 
@@ -2315,6 +2587,7 @@ class NodeRuntime(
         if (name.isEmpty()) return@mapNotNull null
         val missing = obj["missing"].asObjectOrNull()
         GatewaySkillSummary(
+          skillKey = obj["skillKey"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: name,
           name = name,
           description = obj["description"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
           source = obj["source"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown",
@@ -2837,6 +3110,7 @@ data class GatewaySkillsSummary(
 )
 
 data class GatewaySkillSummary(
+  val skillKey: String,
   val name: String,
   val description: String?,
   val source: String,
@@ -3034,7 +3308,18 @@ data class GatewayLogEntry(
   val level: String?,
   val subsystem: String?,
   val message: String,
+  val raw: String,
 )
+
+private val gatewayAnsiControlPattern = Regex("\\u001B\\[[0-?]*[ -/]*[@-~]")
+private val gatewayEscapedAnsiControlPattern = Regex("""\\u001[Bb]\[[0-?]*[ -/]*[@-~]""")
+private val gatewayVisibleSgrPattern = Regex("\\[(?:0|\\d{1,3}(?:;\\d{1,3})*)m(?!])")
+
+internal fun sanitizeGatewayLogText(value: String): String =
+  value
+    .replace(gatewayAnsiControlPattern, "")
+    .replace(gatewayEscapedAnsiControlPattern, "")
+    .replace(gatewayVisibleSgrPattern, "")
 
 private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
 

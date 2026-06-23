@@ -691,6 +691,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
               payload: normalizedDeliveryPayload,
               info,
               to: conversationId,
+              replyToId: normalizedDeliveryPayload.replyToId ?? null,
               formatting: {
                 textLimit,
                 tableMode,

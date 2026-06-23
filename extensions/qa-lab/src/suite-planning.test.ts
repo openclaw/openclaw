@@ -528,6 +528,54 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["generic", "live-only"]);
   });
 
+  it("filters channel-driver-specific scenarios from implicit suite selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("qa-channel-only", {
+        config: { requiredChannelDriver: "qa-channel" },
+      }),
+      makeQaSuiteTestScenario("crabline-only", {
+        config: { requiredChannelDriver: "crabline" },
+      }),
+    ];
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "qa-channel-only"]);
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "crabline",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic", "crabline-only"]);
+  });
+
+  it("keeps explicitly requested channel-driver-specific scenarios", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("qa-channel-only", {
+        config: { requiredChannelDriver: "qa-channel" },
+      }),
+    ];
+
+    expect(
+      selectQaFlowSuiteScenarios({
+        scenarios,
+        scenarioIds: ["qa-channel-only"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        channelDriver: "crabline",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["qa-channel-only"]);
+  });
+
   it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
