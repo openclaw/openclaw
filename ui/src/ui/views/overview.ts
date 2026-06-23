@@ -2,7 +2,7 @@
 import { html, nothing } from "lit";
 import { t, i18n, SUPPORTED_LOCALES, type Locale, isSupportedLocale } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
+import { buildDocsHref, buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
 import type { GatewayHelloOk } from "../gateway.ts";
 import { icons } from "../icons.ts";
@@ -104,6 +104,7 @@ export function renderOverview(props: OverviewProps) {
     : t("common.na");
   const authMode = snapshot?.authMode;
   const isTrustedProxy = authMode === "trusted-proxy";
+  const dashboardDocsHref = buildDocsHref("/web/dashboard", i18n.getLocale());
 
   const pairingHint = (() => {
     const pairingState = resolvePairingHint(props.connected, props.lastError, props.lastErrorCode);
@@ -129,7 +130,10 @@ export function renderOverview(props: OverviewProps) {
         <div style="margin-top: 6px">
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/web/control-ui#device-pairing-first-connection"
+            href=${buildDocsHref(
+              "/web/control-ui#device-pairing-first-connection",
+              i18n.getLocale(),
+            )}
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
             title=${t("overview.pairing.docsTitle")}
@@ -162,7 +166,7 @@ export function renderOverview(props: OverviewProps) {
           <div style="margin-top: 6px">
             <a
               class="session-link"
-              href="https://docs.openclaw.ai/web/dashboard"
+              href=${dashboardDocsHref}
               target=${EXTERNAL_LINK_TARGET}
               rel=${buildExternalLinkRel()}
               title=${t("overview.connection.authDocsTitle")}
@@ -178,7 +182,7 @@ export function renderOverview(props: OverviewProps) {
         <div style="margin-top: 6px">
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/web/dashboard"
+            href=${dashboardDocsHref}
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
             title=${t("overview.connection.authDocsTitle")}
@@ -211,7 +215,7 @@ export function renderOverview(props: OverviewProps) {
         <div style="margin-top: 6px">
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/gateway/tailscale"
+            href=${buildDocsHref("/gateway/tailscale", i18n.getLocale())}
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
             title=${t("overview.connection.tailscaleDocsTitle")}
@@ -220,7 +224,7 @@ export function renderOverview(props: OverviewProps) {
           <span class="muted"> · </span>
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/web/control-ui#insecure-http"
+            href=${buildDocsHref("/web/control-ui#insecure-http", i18n.getLocale())}
             target=${EXTERNAL_LINK_TARGET}
             rel=${buildExternalLinkRel()}
             title=${t("overview.connection.insecureHttpDocsTitle")}
@@ -400,11 +404,7 @@ export function renderOverview(props: OverviewProps) {
                 </ol>
                 <div class="login-gate__docs">
                   ${t("overview.connection.docsHint")}
-                  <a
-                    class="session-link"
-                    href="https://docs.openclaw.ai/web/dashboard"
-                    target="_blank"
-                    rel="noreferrer"
+                  <a class="session-link" href=${dashboardDocsHref} target="_blank" rel="noreferrer"
                     >${t("overview.connection.docsLink")}</a
                   >
                 </div>

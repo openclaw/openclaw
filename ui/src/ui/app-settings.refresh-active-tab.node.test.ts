@@ -429,6 +429,22 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadUsageMock).toHaveBeenCalled();
   });
 
+  it("links zh-CN missing operator.read attention to localized dashboard docs", async () => {
+    const host = createHost();
+    host.tab = "overview";
+    host.settings = { locale: "zh-CN" };
+    host.hello = { auth: { role: "operator", scopes: [] } };
+
+    await refreshActiveTab(host as never);
+
+    const attentionItems = (host as { attentionItems?: Array<{ title: string; href?: string }> })
+      .attentionItems;
+    const item = attentionItems?.find(
+      (candidate) => candidate.title === "Missing operator.read scope",
+    );
+    expect(item?.href).toBe("https://docs.openclaw.ai/zh-CN/web/dashboard");
+  });
+
   it("skips overview usage refresh if the user leaves while primary loaders run", async () => {
     const host = createHost();
     host.tab = "overview";

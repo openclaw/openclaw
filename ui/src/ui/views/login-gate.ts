@@ -1,9 +1,9 @@
 // Control UI view renders login gate screen content.
 import { html } from "lit";
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { t } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
+import { buildDocsHref, buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";
 import { icons } from "../icons.ts";
 import { normalizeBasePath } from "../navigation.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -75,7 +75,7 @@ function buildFeedback(params: {
   stepKeys: string[];
   stepParams?: Record<string, string>;
 }): LoginFailureFeedback {
-  const docsHref = params.docsHref ?? "https://docs.openclaw.ai/web/dashboard";
+  const docsHref = buildDocsHref(params.docsHref ?? "/web/dashboard", i18n.getLocale());
   return {
     kind: params.kind,
     title: t(params.titleKey, params.stepParams),
@@ -386,7 +386,7 @@ export function renderLoginGate(state: AppViewState) {
           <div class="login-gate__docs">
             <a
               class="session-link"
-              href="https://docs.openclaw.ai/web/dashboard"
+              href=${buildDocsHref("/web/dashboard", i18n.getLocale())}
               target="_blank"
               rel="noreferrer"
               >${t("overview.connection.docsLink")}</a

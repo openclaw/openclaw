@@ -66,6 +66,7 @@ import {
 } from "./controllers/workboard.ts";
 import { isCronJobActiveFailure } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import { buildDocsHref } from "./external-link.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
 import {
   inferBasePathFromPathname,
@@ -912,7 +913,7 @@ function buildAttentionItems(host: SettingsAppHost) {
       title: "Missing operator.read scope",
       description:
         "This connection does not have the operator.read scope. Some features may be unavailable.",
-      href: "https://docs.openclaw.ai/web/dashboard",
+      href: buildDocsHref("/web/dashboard", host.settings.locale),
       external: true,
     });
   }

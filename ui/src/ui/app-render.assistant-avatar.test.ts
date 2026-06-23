@@ -238,6 +238,27 @@ beforeEach(async () => {
 });
 
 describe("renderApp assistant avatar routing", () => {
+  it("links the zh-CN sidebar docs utility to the localized docs root", async () => {
+    try {
+      const container = document.createElement("div");
+      const state = createState({
+        settings: {
+          ...createState().settings,
+          locale: "zh-CN",
+        },
+      });
+
+      await i18n.setLocale("zh-CN");
+      render(renderApp(state), container);
+      await Promise.resolve();
+
+      const docsLink = container.querySelector<HTMLAnchorElement>(".sidebar-utility-link");
+      expect(docsLink?.href).toBe("https://docs.openclaw.ai/zh-CN/");
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
   it("passes the browser-local assistant override to Quick Settings ahead of stale identity metadata", () => {
     const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
     saveLocalAssistantIdentity({ avatar: dataUrl, agentId: "main" });

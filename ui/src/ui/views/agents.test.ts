@@ -389,6 +389,41 @@ describe("renderAgents", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("links zh-CN channel setup guide to localized channel docs", async () => {
+    try {
+      const container = document.createElement("div");
+
+      await i18n.setLocale("zh-CN");
+      render(
+        renderAgents(
+          createProps({
+            activePanel: "channels",
+            channels: {
+              snapshot: {
+                ts: 0,
+                channelOrder: ["telegram"],
+                channelLabels: { telegram: "Telegram" },
+                channels: {},
+                channelAccounts: { telegram: [] },
+                channelDefaultAccountId: {},
+              },
+              loading: false,
+              error: null,
+              lastSuccess: null,
+            },
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
+
+      const docsLink = container.querySelector<HTMLAnchorElement>("a[href*='docs.openclaw.ai']");
+      expect(docsLink?.href).toBe("https://docs.openclaw.ai/zh-CN/channels");
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
 });
 
 describe("renderAgentFiles", () => {

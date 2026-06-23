@@ -95,6 +95,29 @@ describe("overview view rendering", () => {
     await i18n.setLocale("en");
   });
 
+  it("links the zh-CN overview docs affordance to the matching localized docs page", async () => {
+    try {
+      const container = document.createElement("div");
+      const props = createOverviewProps({
+        settings: {
+          ...createOverviewProps().settings,
+          locale: "zh-CN",
+        },
+      });
+
+      await i18n.setLocale("zh-CN");
+      render(renderOverview(props), container);
+      await Promise.resolve();
+
+      const docsLink = Array.from(container.querySelectorAll<HTMLAnchorElement>("a")).find((link) =>
+        link.textContent?.includes("查看文档"),
+      );
+      expect(docsLink?.href).toBe("https://docs.openclaw.ai/zh-CN/web/dashboard");
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
   it("renders a dedicated scope-upgrade approval hint with the exact approve command", async () => {
     const container = document.createElement("div");
     const props = createOverviewProps({
@@ -113,6 +136,63 @@ describe("overview view rendering", () => {
       "openclaw devices approve req-123",
       "openclaw devices list",
     ]);
+  });
+
+  it("links the zh-CN pairing hint to localized Control UI docs", async () => {
+    try {
+      const container = document.createElement("div");
+      const props = createOverviewProps({
+        lastError: "scope upgrade pending approval (requestId: req-123)",
+        lastErrorCode: "PAIRING_REQUIRED",
+        settings: {
+          ...createOverviewProps().settings,
+          locale: "zh-CN",
+        },
+      });
+
+      await i18n.setLocale("zh-CN");
+      render(renderOverview(props), container);
+      await Promise.resolve();
+
+      const docsLink = Array.from(container.querySelectorAll<HTMLAnchorElement>("a")).find((link) =>
+        link.href.includes("device-pairing-first-connection"),
+      );
+      expect(docsLink?.href).toBe(
+        "https://docs.openclaw.ai/zh-CN/web/control-ui#device-pairing-first-connection",
+      );
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
+  it("links zh-CN insecure-context docs hints to localized docs", async () => {
+    try {
+      const container = document.createElement("div");
+      const props = createOverviewProps({
+        lastError: "device identity required",
+        lastErrorCode: "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
+        settings: {
+          ...createOverviewProps().settings,
+          locale: "zh-CN",
+        },
+      });
+
+      await i18n.setLocale("zh-CN");
+      render(renderOverview(props), container);
+      await Promise.resolve();
+
+      const docsHrefs = Array.from(
+        container.querySelectorAll<HTMLAnchorElement>("a[href*='docs.openclaw.ai']"),
+      )
+        .map((link) => link.href)
+        .filter((href) => href.includes("tailscale") || href.includes("insecure-http"));
+      expect(docsHrefs).toEqual([
+        "https://docs.openclaw.ai/zh-CN/gateway/tailscale",
+        "https://docs.openclaw.ai/zh-CN/web/control-ui#insecure-http",
+      ]);
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 
   it("does not suggest preview-only latest approval when the request id is absent", async () => {

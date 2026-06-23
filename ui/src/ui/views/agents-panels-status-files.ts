@@ -4,7 +4,8 @@ import DOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { marked } from "marked";
-import { t } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
+import { buildDocsHref } from "../external-link.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
 import {
@@ -298,7 +299,7 @@ export function renderAgentChannels(params: {
                           ? html`
                               <div>
                                 <a
-                                  href="https://docs.openclaw.ai/channels"
+                                  href=${buildDocsHref("/channels", i18n.getLocale())}
                                   target="_blank"
                                   rel="noopener"
                                   style="color: var(--accent); font-size: 12px"

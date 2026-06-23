@@ -64,6 +64,24 @@ describe("resolveLoginFailureFeedback", () => {
     ]);
   });
 
+  it("links zh-CN auth failures to the matching localized dashboard docs", async () => {
+    try {
+      await i18n.setLocale("zh-CN");
+
+      const feedback = resolveLoginFailureFeedback({
+        connected: false,
+        lastError: "disconnected (4008): connect failed",
+        lastErrorCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+        hasToken: false,
+        hasPassword: false,
+      });
+
+      expect(feedback?.docsHref).toBe("https://docs.openclaw.ai/zh-CN/web/dashboard");
+    } finally {
+      await i18n.setLocale("en");
+    }
+  });
+
   it("explains rejected stale credentials", () => {
     const feedback = resolveLoginFailureFeedback({
       connected: false,
@@ -293,5 +311,28 @@ describe("renderLoginGate", () => {
     expect(docsLink?.getAttribute("href")).toBe(
       "https://docs.openclaw.ai/web/control-ui#debuggingtesting-dev-server--remote-gateway",
     );
+  });
+
+  it("links the zh-CN login help docs affordance to the matching localized docs page", async () => {
+    try {
+      const container = document.createElement("div");
+      const state = createState({
+        settings: {
+          ...createState().settings,
+          locale: "zh-CN",
+        },
+      });
+
+      await i18n.setLocale("zh-CN");
+      render(renderLoginGate(state), container);
+      await Promise.resolve();
+
+      const docsLink = Array.from(container.querySelectorAll<HTMLAnchorElement>("a")).find((link) =>
+        link.textContent?.includes("查看文档"),
+      );
+      expect(docsLink?.href).toBe("https://docs.openclaw.ai/zh-CN/web/dashboard");
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 });
