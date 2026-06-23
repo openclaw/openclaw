@@ -1,5 +1,6 @@
 {
   "id": "mattermost",
+  "icon": "https://cdn.simpleicons.org/mattermost/111111",
   "activation": {
     "onStartup": false
   },

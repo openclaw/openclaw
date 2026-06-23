@@ -322,6 +322,36 @@ describe("verify-pr-hosted-gates", () => {
     ).toThrow("Expected --output <value>.");
   });
 
+  it("rejects duplicate hosted gate verifier CLI arguments", () => {
+    const requiredArgs = [
+      "--repo",
+      "openclaw/openclaw",
+      "--sha",
+      sha,
+      "--output",
+      ".local/gates-hosted-checks.json",
+    ];
+    const duplicateCases = [
+      [
+        "--repo",
+        ["--repo", "openclaw/openclaw", "--repo", "fork/openclaw", "--sha", sha, "--output", "out.json"],
+      ],
+      [
+        "--sha",
+        ["--repo", "openclaw/openclaw", "--sha", sha, "--sha", "other-sha", "--output", "out.json"],
+      ],
+      [
+        "--output",
+        ["--repo", "openclaw/openclaw", "--sha", sha, "--output", "one.json", "--output", "two.json"],
+      ],
+      ["--changelog-only", [...requiredArgs, "--changelog-only", "--changelog-only"]],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once.`);
+    }
+  });
+
   it("accepts JSON emitted through a colorizing GitHub CLI shim", () => {
     expect(
       parseWorkflowRunPages('\u001B[1;37m[{"workflow_runs":[{"id":1,"name":"CI"}]}]\u001B[0m'),

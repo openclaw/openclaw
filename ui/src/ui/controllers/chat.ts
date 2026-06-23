@@ -1,5 +1,6 @@
 // Control UI controller manages chat gateway state.
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { getChatAttachmentDataUrl } from "../chat/attachment-payload-store.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -384,6 +385,7 @@ export type ChatState = {
   connected: boolean;
   sessionKey: string;
   currentSessionId?: string | null;
+  reconnectResumeSessionId?: string | null;
   chatLoading: boolean;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
@@ -753,6 +755,12 @@ async function loadChatHistoryUncached(
         : typeof res.sessionId === "string" && res.sessionId.trim()
           ? res.sessionId
           : null;
+    if (
+      state.reconnectResumeSessionId &&
+      state.reconnectResumeSessionId !== state.currentSessionId
+    ) {
+      state.reconnectResumeSessionId = null;
+    }
     state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
@@ -891,7 +899,7 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
-export type ChatSendAckStatus = "started" | "in_flight" | "ok";
+export type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
 export type ChatSendAckServerTiming = {
   receivedToAckMs?: number;
@@ -936,7 +944,10 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
   const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
   return {
     runId,
-    status: status === "in_flight" || status === "ok" ? status : "started",
+    status:
+      status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+        ? status
+        : "started",
     ...(serverTiming ? { serverTiming } : {}),
   };
 }
@@ -952,17 +963,24 @@ export async function requestChatSend(
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
+  const controlUiReconnectResume = Boolean(
+    routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
+  );
   const payload = await state.client!.request("chat.send", {
     sessionKey: routing.sessionKey,
     ...(isGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
       ? { agentId: routing.selectedAgentId }
       : {}),
     ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+    ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
     attachments: buildApiAttachments(params.attachments),
   });
+  if (controlUiReconnectResume) {
+    state.reconnectResumeSessionId = null;
+  }
   return normalizeChatSendAck(payload, params.runId);
 }
 
@@ -1108,7 +1126,7 @@ export async function sendChatMessage(
   }
 
   const now = Date.now();
-  appendUserChatMessage(state, msg, attachments, now);
+  const optimisticMessage = appendUserChatMessage(state, msg, attachments, now);
 
   state.chatSending = true;
   setChatError(state, null);
@@ -1135,10 +1153,33 @@ export async function sendChatMessage(
           armLocalTerminalReconcile: true,
         },
       );
-    } else {
+    } else if (isNonTerminalAgentRunStatus(ack.status)) {
       state.chatRunId = ack.runId;
+    } else {
+      state.chatMessages = state.chatMessages.filter(
+        (messageEntry) => messageEntry !== optimisticMessage,
+      );
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          outcome: "interrupted",
+          sessionStatus: ack.status === "error" ? "failed" : "killed",
+          runId: ack.runId,
+          sessionKey: state.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          armLocalTerminalReconcile: ack.runId === runId,
+        },
+      );
+      setChatError(
+        state,
+        ack.status === "error"
+          ? "Chat failed before the run started; try again."
+          : "The run ended before the message was accepted.",
+      );
+      return null;
     }
-    return ack.status === "ok" ? ack.runId : runId;
+    return ack.runId;
   } catch (err) {
     const error = formatConnectError(err);
     reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
@@ -1170,21 +1211,20 @@ export function appendUserChatMessage(
   attachments?: ChatAttachment[],
   timestamp = Date.now(),
 ) {
-  state.chatMessages = [
-    ...state.chatMessages,
-    {
-      role: "user",
-      content: buildUserChatMessageContentBlocks(message, attachments),
-      timestamp,
-    },
-  ];
+  const entry = {
+    role: "user" as const,
+    content: buildUserChatMessageContentBlocks(message, attachments),
+    timestamp,
+  };
+  state.chatMessages = [...state.chatMessages, entry];
+  return entry;
 }
 
 async function sendChatMessageWithGeneratedRunId(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
-): Promise<string | null> {
+): Promise<ChatSendAck | null> {
   if (!state.client || !state.connected) {
     return null;
   }
@@ -1196,8 +1236,7 @@ async function sendChatMessageWithGeneratedRunId(
   setChatError(state, null);
   const runId = generateUUID();
   try {
-    const ack = await requestChatSend(state, { message: msg, attachments, runId });
-    return ack.runId;
+    return await requestChatSend(state, { message: msg, attachments, runId });
   } catch (err) {
     setChatError(state, formatConnectError(err));
     return null;
@@ -1208,7 +1247,7 @@ export async function sendDetachedChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
-): Promise<string | null> {
+): Promise<ChatSendAck | null> {
   return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 
@@ -1216,7 +1255,7 @@ export async function sendSteerChatMessage(
   state: ChatState,
   message: string,
   attachments?: ChatAttachment[],
-): Promise<string | null> {
+): Promise<ChatSendAck | null> {
   return sendChatMessageWithGeneratedRunId(state, message, attachments);
 }
 

@@ -7,6 +7,7 @@ import {
   spawnSync,
   type SpawnOptionsWithoutStdio,
 } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -270,6 +271,10 @@ function parseTcpPort(value: string, label: string) {
   return parsed;
 }
 
+function createTelegramProofRunId() {
+  return `${new Date().toISOString().replace(/[:.]/gu, "-")}-${randomUUID().slice(0, 8)}`;
+}
+
 export function parseArgs(argvInput: string[]): Options {
   let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -285,7 +290,6 @@ export function parseArgs(argvInput: string[]): Options {
     "view",
   ]);
   const command = commands.has(argv[0] ?? "") ? (argv.shift() as Options["command"]) : "probe";
-  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
   const opts: Options = {
     crabboxClass: "standard",
     command,
@@ -299,7 +303,7 @@ export function parseArgs(argvInput: string[]): Options {
     keepBox: false,
     mockResponseText: "OPENCLAW_E2E_OK",
     mockPort: 19_882,
-    outputDir: path.join(DEFAULT_OUTPUT_ROOT, stamp),
+    outputDir: path.join(DEFAULT_OUTPUT_ROOT, createTelegramProofRunId()),
     previewCropWidth: TELEGRAM_PROOF_CROP.cropWidth,
     previewFps: 24,
     previewWidth: 1920,

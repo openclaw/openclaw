@@ -97,10 +97,20 @@ describe("lazy protocol validators", () => {
       validateChatSendParams({
         sessionKey: "global",
         agentId: "work",
+        sessionId: "session-work",
         message: "hello",
         idempotencyKey: "run-global-work",
       }),
     ).toBe(true);
+    expect(
+      validateChatSendParams({
+        sessionKey: "global",
+        sessionId: "session-work",
+        resumeSession: true,
+        message: "hello",
+        idempotencyKey: "run-global-work",
+      }),
+    ).toBe(false);
     expect(
       validateChatAbortParams({
         sessionKey: "global",

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { emitSessionTranscriptUpdate } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
@@ -32,6 +33,25 @@ type SyncParams = {
   sessionFiles?: string[];
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
+
+type MemorySessionTranscriptUpdate = {
+  agentId?: string;
+  sessionFile?: string;
+  sessionKey?: string;
+  target?: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+  };
+};
+
+type MemoryTranscriptUpdateSubscriber = (
+  listener: (update: MemorySessionTranscriptUpdate) => void,
+) => () => void;
+
+const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
+  "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
+);
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
 
@@ -111,8 +131,25 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return Array.from(this.sessionsDirtyFiles);
   }
 
+  getPendingSessionTargets(): MemorySyncParams["sessions"] {
+    return Array.from(this.sessionPendingTargets.values());
+  }
+
+  getPendingSessionFiles(): string[] {
+    return Array.from(this.sessionPendingFiles);
+  }
+
   isSessionsDirty(): boolean {
     return this.sessionsDirty;
+  }
+
+  startTranscriptListener(): void {
+    this.ensureSessionListener();
+  }
+
+  stopTranscriptListener(): void {
+    this.sessionUnsubscribe?.();
+    this.sessionUnsubscribe = null;
   }
 
   protected computeProviderKey(): string {
@@ -162,6 +199,8 @@ describe("session startup catch-up", () => {
   });
 
   afterEach(async () => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -355,5 +394,85 @@ describe("session startup catch-up", () => {
     });
 
     expect(harness.indexedPaths).toEqual([]);
+  });
+
+  it("queues transcript update identity without requiring a session file", async () => {
+    vi.useFakeTimers();
+    const harness = new SessionStartupCatchupHarness([]);
+    const originalSubscriber = (globalThis as Record<symbol, unknown>)[
+      MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
+    ];
+    let transcriptListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
+    (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] = ((
+      listener,
+    ) => {
+      transcriptListener = listener;
+      return () => {
+        if (transcriptListener === listener) {
+          transcriptListener = undefined;
+        }
+      };
+    }) satisfies MemoryTranscriptUpdateSubscriber;
+    harness.startTranscriptListener();
+
+    try {
+      transcriptListener?.({
+        target: {
+          agentId: "main",
+          sessionId: "thread",
+          sessionKey: "agent:main:thread",
+        },
+      });
+
+      expect(harness.getPendingSessionTargets()).toEqual([
+        { agentId: "main", sessionId: "thread", sessionKey: "agent:main:thread" },
+      ]);
+    } finally {
+      harness.stopTranscriptListener();
+      if (originalSubscriber === undefined) {
+        delete (globalThis as Record<symbol, unknown>)[
+          MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
+        ];
+      } else {
+        (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] =
+          originalSubscriber;
+      }
+    }
+  });
+
+  it("keeps canonical path transcript update compatibility", async () => {
+    vi.useFakeTimers();
+    const session = await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+    harness.startTranscriptListener();
+
+    emitSessionTranscriptUpdate({
+      sessionFile: session.filePath,
+      sessionKey: "agent:main:thread",
+    });
+
+    expect(harness.getPendingSessionFiles()).toEqual([session.filePath]);
+    expect(harness.getPendingSessionTargets()).toEqual([]);
+    harness.stopTranscriptListener();
+  });
+
+  it("prefers transcript update path compatibility before identity", async () => {
+    vi.useFakeTimers();
+    const session = await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+    harness.startTranscriptListener();
+
+    emitSessionTranscriptUpdate({
+      sessionFile: session.filePath,
+      target: {
+        agentId: "main",
+        sessionId: "identity-target",
+        sessionKey: "agent:main:identity-target",
+      },
+    });
+
+    expect(harness.getPendingSessionFiles()).toEqual([session.filePath]);
+    expect(harness.getPendingSessionTargets()).toEqual([]);
+    harness.stopTranscriptListener();
   });
 });

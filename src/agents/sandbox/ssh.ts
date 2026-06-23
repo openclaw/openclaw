@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveRootPath } from "../../infra/boundary-path.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveUserPath } from "../../utils.js";
@@ -743,7 +744,7 @@ export async function uploadDirectoryToSshTarget(params: {
     const fail = (error: unknown) => {
       tar.kill("SIGKILL");
       ssh.kill("SIGKILL");
-      reject(toLintErrorObject(error, "Non-Error rejection"));
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
 
     tar.on("error", fail);
@@ -845,18 +846,4 @@ async function writeSecretMaterial(
   });
   await fs.chmod(pathname, 0o600);
   return pathname;
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

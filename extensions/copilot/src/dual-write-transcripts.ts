@@ -96,6 +96,7 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 export interface MirrorCopilotTranscriptParams {
   sessionFile: string;
   sessionKey?: string;
+  sessionId?: string;
   agentId?: string;
   messages: AgentMessage[];
   /**
@@ -168,7 +169,20 @@ export async function mirrorCopilotTranscript(
   }
 
   if (params.sessionKey) {
-    emitSessionTranscriptUpdate({ sessionFile: params.sessionFile, sessionKey: params.sessionKey });
+    emitSessionTranscriptUpdate({
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionId && params.agentId
+        ? {
+            target: {
+              agentId: params.agentId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+            },
+          }
+        : {}),
+    });
   } else {
     emitSessionTranscriptUpdate(params.sessionFile);
   }

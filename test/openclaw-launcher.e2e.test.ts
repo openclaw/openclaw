@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
@@ -130,7 +131,10 @@ function isProcessAlive(pid: number | undefined): boolean {
 function launcherEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env, ...extra };
   delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  delete env.OPENCLAW_CONFIG_PATH;
   delete env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  delete env.OPENCLAW_HOME;
+  delete env.OPENCLAW_STATE_DIR;
   delete env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
   delete env.NODE_COMPILE_CACHE;
   delete env.NODE_DISABLE_COMPILE_CACHE;
@@ -211,7 +215,12 @@ describe("openclaw launcher", () => {
 
     const result = spawnSync(
       process.execPath,
-      ["--import", mockNodeVersionPath, path.join(fixtureRoot, "openclaw.mjs"), "--help"],
+      [
+        "--import",
+        pathToFileURL(mockNodeVersionPath).href,
+        path.join(fixtureRoot, "openclaw.mjs"),
+        "--help",
+      ],
       {
         cwd: fixtureRoot,
         env: launcherEnv(),
@@ -1010,7 +1019,7 @@ describe("openclaw launcher", () => {
 
       const result = spawnSync(
         process.execPath,
-        ["--import", mockRuntime, path.join(fixtureRoot, "openclaw.mjs")],
+        ["--import", pathToFileURL(mockRuntime).href, path.join(fixtureRoot, "openclaw.mjs")],
         {
           cwd: fixtureRoot,
           env: launcherEnv({
@@ -1039,7 +1048,7 @@ describe("openclaw launcher", () => {
 
       const result = spawnSync(
         process.execPath,
-        ["--import", mockRuntime, path.join(fixtureRoot, "openclaw.mjs")],
+        ["--import", pathToFileURL(mockRuntime).href, path.join(fixtureRoot, "openclaw.mjs")],
         {
           cwd: fixtureRoot,
           env: launcherEnv({
@@ -1072,7 +1081,7 @@ describe("openclaw launcher", () => {
 
       const result = spawnSync(
         process.execPath,
-        ["--import", mockRuntime, path.join(fixtureRoot, "openclaw.mjs")],
+        ["--import", pathToFileURL(mockRuntime).href, path.join(fixtureRoot, "openclaw.mjs")],
         {
           cwd: fixtureRoot,
           env: launcherEnv({

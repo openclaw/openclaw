@@ -1609,6 +1609,12 @@ describe("createCopilotAgentHarness", () => {
         success: true,
         tokensRemoved: 123,
         messagesRemoved: 4,
+        summaryContent: "compacted summary",
+        contextWindow: {
+          tokenLimit: 1000,
+          currentTokens: 777,
+          messagesLength: 12,
+        },
       }));
       const disconnect = vi.fn(async () => {
         throw new Error("disconnect failed");
@@ -1649,6 +1655,7 @@ describe("createCopilotAgentHarness", () => {
         model: "gpt-4.1",
         sessionKey: "agent:main:main",
         sessionId: "oc-sess-compact-1",
+        currentTokenCount: 900,
         workspaceDir: "/this\u0000is/illegal",
         customInstructions: "Keep decisions.",
       });
@@ -1684,6 +1691,25 @@ describe("createCopilotAgentHarness", () => {
         ok: true,
         compacted: true,
         reason: "copilot-sdk-history-compacted",
+        result: {
+          summary: "compacted summary",
+          firstKeptEntryId: "",
+          tokensBefore: 900,
+          tokensAfter: 777,
+          details: {
+            success: true,
+            tokensRemoved: 123,
+            messagesRemoved: 4,
+            summaryContent: "compacted summary",
+            contextWindow: {
+              tokenLimit: 1000,
+              currentTokens: 777,
+              messagesLength: 12,
+            },
+          },
+          sessionId: "oc-sess-compact-1",
+          sessionFile: "/session.json",
+        },
       });
     });
 

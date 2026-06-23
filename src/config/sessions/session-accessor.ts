@@ -10,7 +10,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type {
+  SessionTranscriptUpdate,
+  SessionTranscriptUpdateTarget,
+} from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
@@ -910,6 +913,7 @@ export async function publishTranscriptUpdate(
   emitSessionTranscriptUpdate({
     ...update,
     sessionFile: transcript.sessionFile,
+    ...(transcript.target ? { target: transcript.target } : {}),
   });
 }
 
@@ -1542,8 +1546,7 @@ export async function resolveSessionTranscriptRuntimeTarget(
 export async function resolveSessionTranscriptRuntimeReadTarget(
   scope: SessionTranscriptRuntimeScope,
 ): Promise<SessionTranscriptRuntimeTarget> {
-  const { agentId, sessionEntry, sessionKey, sessionStore } =
-    resolveSessionTranscriptRuntimeContext(scope);
+  const { agentId, sessionEntry, sessionKey } = resolveSessionTranscriptRuntimeContext(scope);
   if (scope.sessionFile?.trim()) {
     return {
       agentId,
@@ -1761,11 +1764,47 @@ function resolveAccessStorePath(scope: SessionAccessScope): string {
   });
 }
 
-async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Promise<{
+type ResolvedTranscriptAccess = {
   sessionFile: string;
-}> {
+  target?: SessionTranscriptUpdateTarget;
+};
+
+function projectTranscriptUpdateTarget(
+  target: Pick<Partial<SessionTranscriptRuntimeTarget>, "agentId" | "sessionId" | "sessionKey">,
+): SessionTranscriptUpdateTarget | undefined {
+  if (!target.agentId || !target.sessionId || !target.sessionKey) {
+    return undefined;
+  }
+  return {
+    agentId: target.agentId,
+    sessionId: target.sessionId,
+    sessionKey: target.sessionKey,
+  };
+}
+
+async function resolveTranscriptAccess(
+  scope: SessionTranscriptWriteScope,
+): Promise<ResolvedTranscriptAccess> {
   if (scope.sessionFile?.trim()) {
-    return { sessionFile: scope.sessionFile };
+    const scopeSessionKey = scope.sessionKey?.trim();
+    const agentId = scopeSessionKey
+      ? (scope.agentId ?? resolveAgentIdFromSessionKey(scopeSessionKey))
+      : undefined;
+    return {
+      sessionFile: scope.sessionFile,
+      ...(agentId && scope.sessionId && scopeSessionKey
+        ? {
+            target: projectTranscriptUpdateTarget({
+              agentId,
+              sessionId: scope.sessionId,
+              sessionKey: scopeSessionKey,
+            }),
+          }
+        : {}),
+    };
+  }
+  if (!scope.sessionId) {
+    throw new Error(`Cannot resolve transcript scope without a session id: ${scope.sessionKey}`);
   }
   // Past this point resolution goes through the session entry, so the owning
   // key is mandatory; explicit-artifact writes returned above never need it.
@@ -1775,14 +1814,16 @@ async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Prom
       "Cannot resolve a transcript write scope without a session key or explicit session file",
     );
   }
-  if (!scope.sessionId) {
-    throw new Error(`Cannot resolve transcript scope without a session id: ${scopeSessionKey}`);
-  }
-  return await resolveSessionTranscriptRuntimeTarget({
+  const target = await resolveSessionTranscriptRuntimeTarget({
     ...scope,
     sessionId: scope.sessionId,
     sessionKey: scopeSessionKey,
   });
+  const updateTarget = projectTranscriptUpdateTarget(target);
+  return {
+    sessionFile: target.sessionFile,
+    ...(updateTarget ? { target: updateTarget } : {}),
+  };
 }
 
 async function resolveTranscriptTurnTarget(

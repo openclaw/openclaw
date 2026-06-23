@@ -773,6 +773,39 @@ function ensureAwsMacOnDemandMarket(commandArgs, providerName) {
   return normalizedArgs;
 }
 
+function ensureNativeWindowsHydrateJob(commandArgs) {
+  if (
+    commandArgs[0] !== "actions" ||
+    commandArgs[1] !== "hydrate" ||
+    !isNativeWindowsRemoteTarget(commandArgs)
+  ) {
+    return commandArgs;
+  }
+
+  const currentJob = optionValue(commandArgs, "--job");
+  if (currentJob && currentJob !== "hydrate") {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const replacementJob = "hydrate-windows-daemon";
+  const optionEnd = commandOptionEnd(normalizedArgs);
+  for (let index = 0; index < optionEnd; index += 1) {
+    const arg = normalizedArgs[index];
+    if (arg === "--job" || arg === "-job") {
+      normalizedArgs[index + 1] = replacementJob;
+      return normalizedArgs;
+    }
+    if (arg.startsWith("--job=") || arg.startsWith("-job=")) {
+      normalizedArgs[index] = `${arg.slice(0, arg.indexOf("=") + 1)}${replacementJob}`;
+      return normalizedArgs;
+    }
+  }
+
+  normalizedArgs.splice(optionEnd, 0, "--job", replacementJob);
+  return normalizedArgs;
+}
+
 const localPathRunOptions = new Set([
   "capture-stderr",
   "capture-stdout",
@@ -1954,6 +1987,10 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
   );
 }
 
+function isHydratedNativeWindowsProvider(providerName) {
+  return providerName === "aws" || providerName === "azure";
+}
+
 function remoteWindowsHydratedNodeModulesBootstrap() {
   return [
     "$openclawModulesDir = $env:PNPM_CONFIG_MODULES_DIR",
@@ -1971,7 +2008,7 @@ function injectRemoteWindowsHydratedNodeModulesBootstrap(commandArgs, providerNa
   const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(commandArgs));
   if (
     commandArgs[0] !== "run" ||
-    providerName !== "aws" ||
+    !isHydratedNativeWindowsProvider(providerName) ||
     !isNativeWindowsRemoteTarget(commandArgs) ||
     !hasOption(commandArgs, "--id") ||
     !runtimeEntrypoint
@@ -2638,6 +2675,20 @@ function assertFullCheckoutAvailableBeforeExit(dir) {
   return false;
 }
 
+function injectFullCheckoutLeaseReclaim(commandArgs) {
+  if (
+    commandArgs[0] !== "run" ||
+    !hasOption(commandArgs, "--id") ||
+    hasOption(commandArgs, "--reclaim")
+  ) {
+    return commandArgs;
+  }
+  const normalizedArgs = [...commandArgs];
+  const { optionEnd } = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(optionEnd, 0, "--reclaim");
+  return normalizedArgs;
+}
+
 const version = checkedOutput(binary, ["--version"]);
 const help = checkedOutput(binary, ["run", "--help"]);
 const providerAliases = new Map([
@@ -2735,7 +2786,7 @@ const provider = selectedProvider(args, providers);
 const canonicalProvider = providerAliases.get(provider) ?? provider;
 const commandProviderValue = commandProvider(args);
 let normalizedArgs = ensureAwsMacOnDemandMarket(
-  ensureAzureWindowsProvider(args, provider, providers),
+  ensureNativeWindowsHydrateJob(ensureAzureWindowsProvider(args, provider, providers)),
   provider,
 );
 
@@ -2819,6 +2870,7 @@ try {
     const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
     const checkout = prepareFullCheckoutForSync({ changedGateBase });
     fullCheckout = checkout;
+    normalizedArgs = injectFullCheckoutLeaseReclaim(normalizedArgs);
     childCwd = checkout.dir;
     cleanupChildCwd = () => checkout.cleanup();
     remoteChangedGateBase = checkout.changedGateBase;

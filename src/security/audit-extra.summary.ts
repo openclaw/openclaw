@@ -1,18 +1,18 @@
 // Summarizes extra security audit findings for user-facing output.
-import { resolveProviderToolPolicy } from "../agents/agent-tools.policy.js";
+import {
+  resolveConfiguredToolPolicies,
+  resolveProviderToolPolicy,
+} from "../agents/agent-tools.policy.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
-import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 
 /** Lightweight audit finding shape used by summary-only audit helpers. */
 export type SecurityAuditFinding = {
@@ -67,46 +67,23 @@ function resolveToolPolicies(params: {
   modelProvider?: string;
   modelId?: string;
 }): SandboxToolPolicy[] {
-  const policies: SandboxToolPolicy[] = [];
-  const profile = params.agentTools?.profile ?? params.cfg.tools?.profile;
-  const profilePolicy = resolveToolProfilePolicy(profile);
-  if (profilePolicy) {
-    policies.push(profilePolicy);
-  }
-
-  const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
-  if (globalPolicy) {
-    policies.push(globalPolicy);
-  }
-
-  const agentPolicy = pickSandboxToolPolicy(params.agentTools);
-  if (agentPolicy) {
-    policies.push(agentPolicy);
-  }
-
   const globalProviderPolicy = resolveProviderToolPolicy({
     byProvider: params.cfg.tools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  if (globalProviderPolicy) {
-    policies.push(globalProviderPolicy);
-  }
-
   const agentProviderPolicy = resolveProviderToolPolicy({
     byProvider: params.agentTools?.byProvider,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
   });
-  if (agentProviderPolicy) {
-    policies.push(agentProviderPolicy);
-  }
-
-  if (params.sandboxMode === "all") {
-    policies.push(resolveSandboxToolPolicyForAgent(params.cfg, params.agentId ?? undefined));
-  }
-
-  return policies;
+  return resolveConfiguredToolPolicies({
+    cfg: params.cfg,
+    agentTools: params.agentTools,
+    sandboxMode: params.sandboxMode,
+    agentId: params.agentId,
+    extraPolicies: [globalProviderPolicy, agentProviderPolicy],
+  });
 }
 
 function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
