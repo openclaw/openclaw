@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryDreamingConfig,
@@ -538,7 +539,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   try {
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
     const totalFiles = entries.filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
+      (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
     ).length;
     return { source: "sessions", totalFiles, issues };
   } catch (err) {

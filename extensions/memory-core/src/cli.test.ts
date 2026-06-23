@@ -426,6 +426,55 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("counts only indexable session transcripts in status totals", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const stateDir = path.join(workspaceDir, ".openclaw-state");
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+      try {
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        await fs.mkdir(sessionsDir, { recursive: true });
+        await fs.writeFile(path.join(sessionsDir, "active.jsonl"), "", "utf-8");
+        await fs.writeFile(
+          path.join(sessionsDir, "active.jsonl.reset.2026-01-01T00-00-00.000Z"),
+          "",
+          "utf-8",
+        );
+        await fs.writeFile(
+          path.join(sessionsDir, "active.checkpoint.11111111-1111-4111-8111-111111111111.jsonl"),
+          "",
+          "utf-8",
+        );
+        await fs.writeFile(path.join(sessionsDir, "active.trajectory.jsonl"), "", "utf-8");
+        const close = vi.fn(async () => {});
+        mockManager({
+          status: () =>
+            makeMemoryStatus({
+              files: 2,
+              chunks: 2,
+              sources: ["sessions"],
+              sourceCounts: [{ source: "sessions", files: 2, chunks: 2 }],
+              workspaceDir,
+            }),
+          close,
+        });
+
+        const log = spyRuntimeLogs(defaultRuntime);
+        await runMemoryCli(["status"]);
+
+        expectLogged(log, "Indexed: 2/2 files · 2 chunks");
+        expectLogged(log, "sessions · 2/2 files · 2 chunks");
+        expect(close).toHaveBeenCalled();
+      } finally {
+        if (previousStateDir === undefined) {
+          Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+        } else {
+          Reflect.set(process.env, "OPENCLAW_STATE_DIR", previousStateDir);
+        }
+      }
+    });
+  });
+
   it("prints index identity mismatch reasons", async () => {
     const close = vi.fn(async () => {});
     mockManager({
