@@ -31,6 +31,10 @@ import {
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import {
+  describeNativeExecApprovalClientSetup,
+  resolveApprovalInitiatingSurfaceState,
+} from "../infra/exec-approval-surface.js";
+import {
   DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
   MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
 } from "../infra/plugin-approvals.js";
@@ -643,6 +647,31 @@ function notifyPluginApprovalResolution(
   }
 }
 
+function buildPluginApprovalFailureReason(params: {
+  fallbackReason: string;
+  ctx?: HookContext;
+}): string {
+  const turnSourceChannel = params.ctx?.turnSourceChannel;
+  if (!turnSourceChannel?.trim()) {
+    return params.fallbackReason;
+  }
+  const initiatingSurface = resolveApprovalInitiatingSurfaceState({
+    channel: turnSourceChannel,
+    accountId: params.ctx?.turnSourceAccountId,
+    cfg: params.ctx?.config,
+    approvalKind: "plugin",
+  });
+  if (initiatingSurface.kind !== "disabled") {
+    return params.fallbackReason;
+  }
+  const setupText = describeNativeExecApprovalClientSetup({
+    channel: initiatingSurface.channel,
+    channelLabel: initiatingSurface.channelLabel,
+    accountId: initiatingSurface.accountId,
+  });
+  return setupText ? `${params.fallbackReason}\n\n${setupText}` : params.fallbackReason;
+}
+
 async function requestPluginToolApproval(params: {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -705,7 +734,10 @@ async function requestPluginToolApproval(params: {
           blocked: true,
           kind: "failure",
           deniedReason: "plugin-approval",
-          reason: "Plugin approval unavailable (no approval route)",
+          reason: buildPluginApprovalFailureReason({
+            fallbackReason: "Plugin approval unavailable (no approval route)",
+            ctx: params.ctx,
+          }),
           params: params.baseParams,
         };
       }
@@ -783,7 +815,10 @@ async function requestPluginToolApproval(params: {
       blocked: true,
       kind: "failure",
       deniedReason: "plugin-approval",
-      reason: "Approval timed out",
+      reason: buildPluginApprovalFailureReason({
+        fallbackReason: "Approval timed out",
+        ctx: params.ctx,
+      }),
       params: params.baseParams,
     };
   } catch (err) {
