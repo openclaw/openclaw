@@ -2856,6 +2856,86 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("expands a forwarded interactive card to its text in BodyForAgent", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const card = {
+      schema: "2.0",
+      header: { title: { tag: "plain_text", content: "Q2 Sales Report" } },
+      body: {
+        elements: [
+          { tag: "markdown", content: "**Region**: APAC  |  **Total**: 1,240" },
+          {
+            tag: "column_set",
+            columns: [
+              {
+                tag: "column",
+                elements: [{ tag: "div", text: { tag: "lark_md", content: "Q1: 540" } }],
+              },
+              {
+                tag: "column",
+                elements: [{ tag: "div", text: { tag: "plain_text", content: "Q2: 700" } }],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const mockGetMerged = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "container",
+            msg_type: "merge_forward",
+            body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+          },
+          {
+            message_id: "card",
+            upper_message_id: "container",
+            msg_type: "interactive",
+            body: { content: JSON.stringify(card) },
+            create_time: "1000",
+          },
+        ],
+      },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+      im: { message: { get: mockGetMerged } },
+    } as unknown as PluginRuntime);
+
+    const cfg: ClawdbotConfig = {
+      channels: { feishu: { dmPolicy: "open" } },
+    } as ClawdbotConfig;
+
+    await dispatchMessage({
+      cfg,
+      event: {
+        sender: { sender_id: { open_id: "ou-merge-card" } },
+        message: {
+          message_id: "msg-merge-forward-card",
+          chat_id: "oc-dm",
+          chat_type: "p2p",
+          message_type: "merge_forward",
+          content: JSON.stringify({ text: "Merged and Forwarded Message" }),
+        },
+      },
+    });
+
+    expect(mockGetMerged).toHaveBeenCalledWith({
+      params: { card_msg_content_type: "user_card_content" },
+      path: { message_id: "msg-merge-forward-card" },
+    });
+    const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
+    expect(context.BodyForAgent).toContain(
+      "[Merged and Forwarded Messages]\n- Q2 Sales Report\n**Region**: APAC  |  **Total**: 1,240\nQ1: 540\nQ2: 700",
+    );
+  });
+
   it("does not partially parse malformed merge_forward create_time values", () => {
     const content = JSON.stringify([
       {
