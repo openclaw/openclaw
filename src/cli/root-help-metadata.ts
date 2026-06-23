@@ -1,7 +1,13 @@
 // Cached startup metadata readers for precomputed root and subcommand help text.
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
-export type PrecomputedSubcommandHelpName = "doctor" | "gateway" | "models" | "plugins";
+export type PrecomputedSubcommandHelpName =
+  | "doctor"
+  | "gateway"
+  | "models"
+  | "plugins"
+  | "sessions"
+  | "tasks";
 
 let precomputedRootHelpText: string | null | undefined;
 let precomputedBrowserHelpText: string | null | undefined;
@@ -139,7 +145,9 @@ function isPrecomputedSubcommandHelpName(
     commandName === "doctor" ||
     commandName === "gateway" ||
     commandName === "models" ||
-    commandName === "plugins"
+    commandName === "plugins" ||
+    commandName === "sessions" ||
+    commandName === "tasks"
   );
 }
 

@@ -16,26 +16,6 @@ path_is_docsish() {
   return 1
 }
 
-path_is_testish() {
-  local path="$1"
-  case "$path" in
-    *__tests__/*|*.test.*|*.spec.*|test/*|tests/*)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
-path_is_maintainer_workflow_only() {
-  local path="$1"
-  case "$path" in
-    .agents/*|scripts/pr|scripts/pr-*|docs/subagent.md)
-      return 0
-      ;;
-  esac
-  return 1
-}
-
 file_list_is_docsish_only() {
   local files="$1"
   local saw_any=false

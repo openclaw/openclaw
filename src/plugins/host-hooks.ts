@@ -2,7 +2,6 @@
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { AgentEventPayload, AgentEventStream } from "../infra/agent-events.js";
 import type {
-  PluginHookAgentContext,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
@@ -67,14 +66,6 @@ export type PluginSessionExtensionProjection = {
   value: PluginJsonValue;
 };
 
-export type PluginSessionExtensionPatchParams = {
-  key: string;
-  pluginId: string;
-  namespace: string;
-  value?: PluginJsonValue;
-  unset?: boolean;
-};
-
 export type PluginToolPolicyDecision =
   | PluginHookBeforeToolCallResult
   | {
@@ -97,10 +88,6 @@ export type PluginToolMetadataRegistration = {
   description?: string;
   risk?: "low" | "medium" | "high";
   tags?: string[];
-};
-
-export type PluginCommandContinuation = {
-  continueAgent?: boolean;
 };
 
 export type PluginControlUiDescriptor = {
@@ -331,5 +318,3 @@ export function buildPluginAgentTurnPrepareContext(params: {
     ...(append.length > 0 ? { appendContext: append.join("\n\n") } : {}),
   };
 }
-
-export type PluginHostHookRunContext = PluginHookAgentContext;

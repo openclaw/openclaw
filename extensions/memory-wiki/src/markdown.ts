@@ -448,6 +448,52 @@ function hasHumanNotesBlock(markdown: string): boolean {
   return markdown.includes(HUMAN_START_MARKER) && markdown.includes(HUMAN_END_MARKER);
 }
 
+const SOURCE_CONTENT_HEADING = /(?:^|\r?\n)## Content\r?\n/u;
+
+function afterSourceContentFence(page: string): number {
+  const heading = SOURCE_CONTENT_HEADING.exec(page);
+  if (!heading) {
+    return 0;
+  }
+  const fenceLineStart = heading.index + heading[0].length;
+  const fence = /^`+/.exec(page.slice(fenceLineStart))?.[0];
+  if (!fence) {
+    return fenceLineStart;
+  }
+  const closingFence = new RegExp(`\\r?\\n${fence}(?=\\r?\\n|$)`, "u");
+  const close = closingFence.exec(page.slice(fenceLineStart + fence.length));
+  if (!close) {
+    return fenceLineStart;
+  }
+  return fenceLineStart + fence.length + close.index + close[0].length;
+}
+
+function findNotesHumanBlock(page: string): { start: number; end: number } | null {
+  const searchFrom = afterSourceContentFence(page);
+  const start = page.indexOf(HUMAN_START_MARKER, searchFrom);
+  if (start === -1) {
+    return null;
+  }
+  const endMarker = page.lastIndexOf(HUMAN_END_MARKER);
+  if (endMarker < start) {
+    return null;
+  }
+  return { start, end: endMarker + HUMAN_END_MARKER.length };
+}
+
+export function preserveHumanNotesBlock(rendered: string, existing: string): string {
+  const existingBlock = findNotesHumanBlock(existing);
+  const renderedBlock = findNotesHumanBlock(rendered);
+  if (!existingBlock || !renderedBlock) {
+    return rendered;
+  }
+  return (
+    rendered.slice(0, renderedBlock.start) +
+    existing.slice(existingBlock.start, existingBlock.end) +
+    rendered.slice(renderedBlock.end)
+  );
+}
+
 function detectGeneratedSourceBody(markdown: string): GeneratedSourceBody | undefined {
   const lines = normalizeMarkdownLines(markdown);
   const normalized = lines.join("\n");

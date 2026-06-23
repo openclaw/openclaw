@@ -150,15 +150,15 @@ export function resolveProbeBudgetMs(
   if (target.kind === "sshTunnel") {
     return Math.min(2000, overallMs);
   }
+  if (target.active) {
+    return overallMs;
+  }
+  if (target.kind === "localLoopback") {
+    return Math.min(800, overallMs);
+  }
   if (!isLoopbackProbeTarget(target)) {
     return Math.min(1500, overallMs);
   }
-  if (target.kind === "localLoopback" && !target.active) {
-    return Math.min(800, overallMs);
-  }
-  // Active/discovered loopback probes and explicit loopback URLs should honor
-  // the caller budget because healthy local detail RPCs can legitimately take
-  // longer than the legacy short caps.
   return overallMs;
 }
 

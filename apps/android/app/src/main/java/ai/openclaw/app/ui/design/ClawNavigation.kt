@@ -95,15 +95,17 @@ internal fun ClawBottomNav(
   Box(modifier = modifier.fillMaxWidth().background(ClawTheme.colors.canvas)) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
-      color = ClawTheme.colors.surface.copy(alpha = 0.96f),
-      border = BorderStroke(1.dp, ClawTheme.colors.border),
+      color = ClawTheme.colors.surface.copy(alpha = 0.92f),
+      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.42f)),
       shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
+      tonalElevation = 2.dp,
+      shadowElevation = 8.dp,
     ) {
       Row(
         modifier =
           Modifier
             .windowInsetsPadding(safeInsets)
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
       ) {
@@ -131,13 +133,13 @@ private fun ClawBottomNavItem(
     onClick = onClick,
     modifier = modifier.heightIn(min = 48.dp),
     shape = RoundedCornerShape(ClawTheme.radii.control),
-    color = if (selected) ClawTheme.colors.primary else Color.Transparent,
-    contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
+    color = if (selected) ClawTheme.colors.surfacePressed.copy(alpha = 0.72f) else Color.Transparent,
+    contentColor = if (selected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
   ) {
     Column(
-      modifier = Modifier.padding(horizontal = 5.dp, vertical = 6.dp),
+      modifier = Modifier.padding(horizontal = 5.dp, vertical = 5.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(3.dp),
+      verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
       Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(18.dp))
       Text(text = item.label, style = ClawTheme.type.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)

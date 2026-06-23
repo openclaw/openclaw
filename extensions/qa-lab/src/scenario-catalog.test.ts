@@ -248,6 +248,7 @@ describe("qa scenario catalog", () => {
     });
     expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
     expect(readQaScenarioExecutionConfig(imageGenerate.id)).toMatchObject({
+      requiredProviderMode: "mock-openai",
       toolName: "image_generate",
       toolCoverage: {
         bucket: "openclaw-dynamic-integration",
@@ -311,6 +312,14 @@ describe("qa scenario catalog", () => {
     expect(
       JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
     ).toContain("liveTurnTimeoutMs(env, 180000)");
+    const longContextFlow = JSON.stringify(
+      readQaScenarioById("long-context-progress-watchdog").execution.flow,
+    );
+    expect(longContextFlow).toContain("originalCodexPluginEnabled");
+    expect(longContextFlow).not.toContain(
+      "originalPluginAllow === undefined ? null : originalPluginAllow",
+    );
+    expect(longContextFlow).not.toContain("{ ...originalCodexPluginEntry, enabled:");
     expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",
@@ -533,6 +542,23 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
+  it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {
+    const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
+      | { requiredProviderMode?: string }
+      | undefined;
+    const stranded = readQaScenarioById("message-tool-stranded-final-reply");
+    const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
+    const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
+
+    expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
+    expect(JSON.stringify(stranded.execution.flow)).toContain(
+      "this seeded scenario is mock-openai only",
+    );
+    expect(heartbeatFlow).toContain("sessionKey");
+    expect(heartbeatFlow).toContain("targetOutbound.length === 0");
+    expect(heartbeatFlow).not.toContain("waitForNoOutbound");
+  });
+
   it("includes the thinking slash model remap scenario", () => {
     const scenario = readQaScenarioById("thinking-slash-model-remap");
     const config = readQaScenarioExecutionConfig("thinking-slash-model-remap") as
@@ -549,6 +575,9 @@ describe("qa scenario catalog", () => {
     expect(config?.anthropicModelRef).toBe("anthropic/claude-sonnet-4-6");
     expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.5");
     expect(config?.noXhighModelRef).toBe("anthropic/claude-sonnet-4-6");
+    const flowText = JSON.stringify(scenario.execution.flow);
+    expect(flowText).toContain("include max and omit xhigh");
+    expect(flowText).not.toContain("omit xhigh/max");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "selects Anthropic and verifies adaptive options",
       "maps adaptive to medium when switching to OpenAI",

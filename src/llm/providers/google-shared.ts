@@ -12,6 +12,7 @@ import {
   type Part,
   type ThinkingConfig,
 } from "@google/genai";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
@@ -500,7 +501,9 @@ export function buildGoogleGenerateContentParams<T extends GoogleApiType>(
 
   const config: GenerateContentConfig = {
     ...(Object.keys(generationConfig).length > 0 && generationConfig),
-    ...(context.systemPrompt && { systemInstruction: sanitizeSurrogates(context.systemPrompt) }),
+    ...(context.systemPrompt && {
+      systemInstruction: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
+    }),
     ...(context.tools && context.tools.length > 0 && { tools: convertTools(context.tools) }),
   };
 

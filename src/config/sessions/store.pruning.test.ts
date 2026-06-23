@@ -10,7 +10,6 @@ import {
 import {
   isProtectedSessionMaintenanceEntry,
   resolveMaintenanceConfigFromInput,
-  pruneQuotaSuspensions,
   resolveQuotaSuspensionEntryMaintenance,
   resolveSessionEntryMaintenanceHighWater,
 } from "./store-maintenance.js";
@@ -143,57 +142,6 @@ describe("resolveQuotaSuspensionEntryMaintenance", () => {
       patch: { quotaSuspension: undefined },
       cleared: true,
     });
-  });
-});
-
-describe("pruneQuotaSuspensions", () => {
-  it("returns whole-store resume and clear results from the storage-neutral operation", () => {
-    const now = Date.now();
-    const store = makeStore([
-      [
-        "suspended",
-        {
-          ...makeEntry(now),
-          quotaSuspension: {
-            schemaVersion: 1,
-            suspendedAt: now - 30_000,
-            expectedResumeBy: now - 1,
-            state: "suspended",
-            reason: "quota_exhausted",
-            failedProvider: "anthropic",
-            failedModel: "claude-opus-4-6",
-            laneId: "main",
-          },
-        },
-      ],
-      [
-        "expired",
-        {
-          ...makeEntry(now),
-          quotaSuspension: {
-            schemaVersion: 1,
-            suspendedAt: now - 61_000,
-            expectedResumeBy: now - 31_000,
-            state: "active",
-            reason: "circuit_open",
-            failedProvider: "anthropic",
-            failedModel: "claude-opus-4-6",
-            laneId: "fallback",
-          },
-        },
-      ],
-    ]);
-
-    const result = pruneQuotaSuspensions({
-      store,
-      now,
-      ttlMs: 30_000,
-      log: false,
-    });
-
-    expect(result).toEqual({ resumed: [{ sessionKey: "suspended", laneId: "main" }], cleared: 1 });
-    expect(store.suspended.quotaSuspension?.state).toBe("resuming");
-    expect(store.expired.quotaSuspension).toBeUndefined();
   });
 });
 

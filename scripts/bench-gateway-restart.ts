@@ -1582,8 +1582,8 @@ async function main() {
     return;
   }
 
-  ensureSupportedRestartPlatform();
   const options = parseOptions(argv);
+  ensureSupportedRestartPlatform();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
     results.push(

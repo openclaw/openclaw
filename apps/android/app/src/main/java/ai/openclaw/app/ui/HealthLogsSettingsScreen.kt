@@ -8,6 +8,8 @@ import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawTheme
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -15,13 +17,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,6 +50,7 @@ internal fun HealthLogsSettingsScreen(
   val logsSummary by viewModel.healthLogsSummary.collectAsState()
   val logsRefreshing by viewModel.healthLogsRefreshing.collectAsState()
   val logsErrorText by viewModel.healthLogsErrorText.collectAsState()
+  var selectedLogEntry by remember { mutableStateOf<GatewayLogEntry?>(null) }
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
@@ -50,6 +58,11 @@ internal fun HealthLogsSettingsScreen(
       // later updates so this screen does not poll.
       viewModel.refreshHealthLogs()
     }
+  }
+
+  selectedLogEntry?.let { entry ->
+    GatewayLogDetailSettingsScreen(entry = entry, onBack = { selectedLogEntry = null })
+    return
   }
 
   SettingsDetailFrame(
@@ -93,7 +106,46 @@ internal fun HealthLogsSettingsScreen(
         Text(text = error, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
-    GatewayLogsPanel(isConnected = isConnected, summary = logsSummary)
+    GatewayLogsPanel(isConnected = isConnected, summary = logsSummary, onLogClick = { selectedLogEntry = it })
+  }
+}
+
+@Composable
+private fun GatewayLogDetailSettingsScreen(
+  entry: GatewayLogEntry,
+  onBack: () -> Unit,
+) {
+  BackHandler(onBack = onBack)
+  SettingsDetailFrame(
+    title = "Log Entry",
+    subtitle = "Readable gateway log detail.",
+    icon = Icons.Default.Settings,
+    onBack = onBack,
+  ) {
+    SettingsMetricPanel(
+      rows =
+        listOf(
+          SettingsMetric("Time", compactLogTime(entry.time)),
+          SettingsMetric("Level", entry.level?.uppercase() ?: "LOG"),
+          SettingsMetric("Subsystem", entry.subsystem ?: "Unknown"),
+        ),
+    )
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(text = "Message", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = entry.message, style = ClawTheme.type.body, color = ClawTheme.colors.text)
+      }
+    }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(text = "Raw", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(
+          text = entry.raw.take(4_000),
+          style = ClawTheme.type.caption,
+          color = ClawTheme.colors.textMuted,
+        )
+      }
+    }
   }
 }
 
@@ -148,6 +200,7 @@ private fun HealthStatusRow(
 private fun GatewayLogsPanel(
   isConnected: Boolean,
   summary: GatewayHealthLogsSummary,
+  onLogClick: (GatewayLogEntry) -> Unit,
 ) {
   Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -170,7 +223,7 @@ private fun GatewayLogsPanel(
           val entries = summary.entries.takeLast(12)
           Column {
             entries.forEachIndexed { index, entry ->
-              GatewayLogRow(entry = entry)
+              GatewayLogRow(entry = entry, onClick = { onLogClick(entry) })
               if (index != entries.lastIndex) {
                 HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
               }
@@ -185,9 +238,16 @@ private fun GatewayLogsPanel(
 }
 
 @Composable
-private fun GatewayLogRow(entry: GatewayLogEntry) {
+private fun GatewayLogRow(
+  entry: GatewayLogEntry,
+  onClick: () -> Unit,
+) {
   Row(
-    modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clickable(onClickLabel = "Open log entry", onClick = onClick)
+        .padding(horizontal = 10.dp, vertical = 7.dp),
     verticalAlignment = Alignment.Top,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
@@ -199,6 +259,11 @@ private fun GatewayLogRow(entry: GatewayLogEntry) {
       }
     }
     ClawStatusPill(text = entry.level?.uppercase() ?: "LOG", status = logLevelStatus(entry.level))
+    Icon(
+      imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+      contentDescription = null,
+      tint = ClawTheme.colors.textSubtle,
+    )
   }
 }
 

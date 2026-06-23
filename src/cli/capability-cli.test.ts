@@ -5,7 +5,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
-import { registerCapabilityCli } from "./capability-cli.js";
+import { CAPABILITY_METADATA, registerCapabilityCli } from "./capability-cli.js";
 
 const PNG_1X1_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
@@ -1685,6 +1685,35 @@ describe("capability cli", () => {
     expect(inputImages[0]?.fileName).toBe(path.basename(inputPath));
   });
 
+  it("forwards --count through to the image edit runtime", async () => {
+    mocks.generateImage.mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1.5",
+      attempts: [],
+      images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png", fileName: "edit.png" }],
+    });
+    const inputPath = path.join(os.tmpdir(), `openclaw-image-edit-count-${Date.now()}.png`);
+    await fs.writeFile(inputPath, Buffer.from("png-input"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "edit",
+        "--file",
+        inputPath,
+        "--prompt",
+        "make three variants",
+        "--count",
+        "3",
+        "--json",
+      ],
+    });
+
+    expect(firstImageGenerationCall()?.count).toBe(3);
+  });
+
   it("rejects unsupported image output format and background hints", async () => {
     await expect(
       runRegisteredCli({
@@ -1854,6 +1883,7 @@ describe("capability cli", () => {
       "--file",
       "--prompt",
       "--model",
+      "--count",
       "--size",
       "--aspect-ratio",
       "--resolution",
@@ -1891,6 +1921,37 @@ describe("capability cli", () => {
       "--output",
       "--json",
     ]);
+  });
+
+  it("keeps capability inspect metadata flags in sync with each command's registered options", () => {
+    const program = new Command();
+    registerCapabilityCli(program);
+    const capability =
+      program.commands.find((command) => command.name() === "infer") ??
+      program.commands.find((command) => command.aliases().includes("capability"));
+    expect(capability).toBeDefined();
+
+    const registeredFlags = (id: string): string[] => {
+      let command: Command | undefined = capability;
+      for (const segment of id.split(".")) {
+        command = command?.commands.find((child) => child.name() === segment);
+      }
+      if (!command) {
+        throw new Error(`no registered command for capability id ${id}`);
+      }
+      return command.options
+        .map((option) => option.long)
+        .filter((long): long is string => Boolean(long));
+    };
+
+    // CAPABILITY_METADATA.flags is the inspect/list contract; it must list exactly what each
+    // command actually registers, or `infer inspect` reports working flags as unsupported.
+    for (const entry of CAPABILITY_METADATA) {
+      expect({ id: entry.id, flags: entry.flags }).toEqual({
+        id: entry.id,
+        flags: registeredFlags(entry.id),
+      });
+    }
   });
 
   it("streams url-only generated videos to --output paths", async () => {

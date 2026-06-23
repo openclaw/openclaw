@@ -835,6 +835,7 @@ async function sendMessageSlackQueuedInner(params: {
   let lastMessageId = "";
   let deliveredChannelId = channelId;
   let canonicalDeliveredThreadTs: string | undefined;
+  let chunksToPost: string[];
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
@@ -851,42 +852,27 @@ async function sendMessageSlackQueuedInner(params: {
       maxBytes: mediaMaxBytes,
     });
     sentMessageIds.push(lastMessageId);
-    for (const chunk of rest) {
-      const response = await postSlackMessageBestEffort({
-        client,
-        channelId,
-        text: chunk,
-        threadTs: opts.threadTs,
-        replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
-        identity,
-        metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
-        unfurl,
-      });
-      lastMessageId = response.ts ?? lastMessageId;
-      deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
-      canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
-      if (response.ts) {
-        sentMessageIds.push(response.ts);
-      }
-    }
+    chunksToPost = rest;
   } else {
-    for (const chunk of resolvedChunks.length ? resolvedChunks : [""]) {
-      const response = await postSlackMessageBestEffort({
-        client,
-        channelId,
-        text: chunk,
-        threadTs: opts.threadTs,
-        replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
-        identity,
-        metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
-        unfurl,
-      });
-      lastMessageId = response.ts ?? lastMessageId;
-      deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
-      canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
-      if (response.ts) {
-        sentMessageIds.push(response.ts);
-      }
+    chunksToPost = resolvedChunks.length ? resolvedChunks : [""];
+  }
+
+  for (const chunk of chunksToPost) {
+    const response = await postSlackMessageBestEffort({
+      client,
+      channelId,
+      text: chunk,
+      threadTs: opts.threadTs,
+      replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
+      identity,
+      metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
+      unfurl,
+    });
+    lastMessageId = response.ts ?? lastMessageId;
+    deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
+    canonicalDeliveredThreadTs ??= resolvePostedMessageThreadTs(response);
+    if (response.ts) {
+      sentMessageIds.push(response.ts);
     }
   }
 

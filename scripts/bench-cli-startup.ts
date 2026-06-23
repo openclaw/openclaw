@@ -663,6 +663,10 @@ function parseMaxRssMb(stderr: string): number | null {
   return Number(lastMatch[1]) / 1024;
 }
 
+function nodeImportSpecifierForPath(filePath: string): string {
+  return pathToFileURL(filePath).href;
+}
+
 function buildCpuOrHeapFlags(options: { cpuProfDir?: string; heapProfDir?: string }): string[] {
   const flags: string[] = [];
   if (options.cpuProfDir) {
@@ -697,7 +701,7 @@ async function runSample(params: {
   }
   const nodeArgs = [
     "--import",
-    params.rssHookPath,
+    nodeImportSpecifierForPath(params.rssHookPath),
     ...buildCpuOrHeapFlags({
       cpuProfDir: params.cpuProfDir,
       heapProfDir: params.heapProfDir,
@@ -1268,6 +1272,7 @@ async function main(): Promise<void> {
 export const testing = {
   buildConfigFixture,
   collectFailedSamples,
+  nodeImportSpecifierForPath,
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,

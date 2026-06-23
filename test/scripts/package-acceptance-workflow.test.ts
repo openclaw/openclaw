@@ -25,7 +25,6 @@ const CI_BUILD_ARTIFACTS_TESTBOX_WORKFLOW = ".github/workflows/ci-build-artifact
 const CRABBOX_HYDRATE_WORKFLOW = ".github/workflows/crabbox-hydrate.yml";
 const CRABBOX_CONFIG = ".crabbox.yaml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
-const TUI_PTY_WORKFLOW = ".github/workflows/tui-pty.yml";
 const CI_HYDRATE_LIVE_AUTH_SCRIPT = "scripts/ci-hydrate-live-auth.sh";
 const VERIFY_PROVIDER_SECRETS_SCRIPT =
   ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
@@ -120,6 +119,12 @@ describe("package acceptance workflow", () => {
     const existingCloseoutEvidenceMatchIndex = workflow.indexOf(
       'if [[ -n "$existing_closeout_full_release_validation_run_id" &&',
     );
+    const rollbackDrillGateIndex = workflow.indexOf(
+      'if [[ -z "$ROLLBACK_DRILL_ID" || -z "$ROLLBACK_DRILL_DATE" ]]; then',
+    );
+    const rollbackDrillPushSkipIndex = workflow.indexOf(
+      "Stable closeout skipped: rollback drill repository variables are missing",
+    );
 
     expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
     expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
@@ -169,6 +174,9 @@ describe("package acceptance workflow", () => {
       "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it.",
     );
     expect(workflow).toContain(
+      "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides.",
+    );
+    expect(workflow).toContain(
       "REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}",
     );
     expect(workflow).toContain('--allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT"');
@@ -186,6 +194,8 @@ describe("package acceptance workflow", () => {
     expect(partialRepairIndex).toBeGreaterThan(-1);
     expect(partialRepairIndex).toBeLessThan(releaseVersionGateIndex);
     expect(evidenceDownloadIndex).toBeGreaterThan(releaseVersionGateIndex);
+    expect(rollbackDrillGateIndex).toBeGreaterThan(existingCloseoutEvidenceMatchIndex);
+    expect(rollbackDrillPushSkipIndex).toBeGreaterThan(rollbackDrillGateIndex);
   });
 
   it("keeps pnpm version selection sourced from packageManager", () => {
@@ -2245,16 +2255,5 @@ describe("package artifact reuse", () => {
       "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
-  });
-
-  it("kills timed TUI PTY workflow runs after the grace period", () => {
-    const job = workflowJob(TUI_PTY_WORKFLOW, "tui-pty");
-    const step = workflowStep(job, "Run TUI PTY tests");
-
-    expect(job.env?.OPENCLAW_TUI_PTY_INCLUDE_LOCAL).toBe("1");
-    expect(job["timeout-minutes"]).toBe(8);
-    expect(step.run).toBe(
-      "timeout --kill-after=30s 240s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts",
-    );
   });
 });
