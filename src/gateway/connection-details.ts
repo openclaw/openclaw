@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isSecureWebSocketUrl } from "./net.js";
+import { isGatewayRemoteSshTransport } from "./ssh-transport.js";
 
 /** Resolved gateway target plus redacted display text for diagnostics. */
 export type GatewayConnectionDetails = {
@@ -79,7 +80,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     options.allowConfiguredSshTransport === true &&
     !urlOverride &&
     Boolean(remoteUrl) &&
-    remote?.transport === "ssh" &&
+    isGatewayRemoteSshTransport(remote) &&
     Boolean(normalizeOptionalString(remote?.sshTarget));
   if (!usesConfiguredSshTransport && !isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(

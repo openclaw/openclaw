@@ -152,6 +152,44 @@ describe("resolveGatewayClientBootstrap", () => {
     });
   });
 
+  it("opens an SSH tunnel when remote transport is omitted", async () => {
+    mockState.buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://remote.example.com:18789",
+      urlSource: "config gateway.remote.url",
+    });
+    mockState.startSshPortForward.mockResolvedValue({
+      parsedTarget: { user: "user", host: "gateway.example", port: 22 },
+      localPort: 19091,
+      remotePort: 18789,
+      pid: 1234,
+      stderr: [],
+      stop: mockState.stopSshTunnel,
+    });
+
+    const result = await resolveGatewayClientBootstrap({
+      config: {
+        gateway: {
+          mode: "remote",
+          remote: {
+            url: "ws://remote.example.com:18789",
+            sshTarget: "user@gateway.example",
+          },
+        },
+      } as never,
+      env: process.env,
+    });
+
+    expect(mockState.startSshPortForward).toHaveBeenCalledWith({
+      target: "user@gateway.example",
+      identity: undefined,
+      localPortPreferred: 18789,
+      remotePort: 18789,
+      timeoutMs: expect.any(Number),
+    });
+    expect(result.url).toBe("ws://127.0.0.1:19091");
+    expect(result.urlSource).toBe("config gateway.remote.url via ssh tunnel");
+  });
+
   it("carries configured preauth handshake timeout for GatewayClient callers", async () => {
     mockState.buildGatewayConnectionDetails.mockReturnValue({
       url: "ws://127.0.0.1:18789",

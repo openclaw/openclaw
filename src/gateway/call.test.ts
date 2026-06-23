@@ -1556,6 +1556,25 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.urlSource).toBe("config gateway.remote.url");
   });
 
+  it("allows plaintext ws remote URLs for the default SSH transport when the caller owns the tunnel", () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          sshTarget: "user@gateway.example",
+        },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    const details = buildGatewayConnectionDetails({ allowConfiguredSshTransport: true });
+
+    expect(details.url).toBe("ws://remote.example.com:18789");
+    expect(details.urlSource).toBe("config gateway.remote.url");
+  });
+
   it("rejects plaintext ws remote URLs when SSH transport has no sshTarget", () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {

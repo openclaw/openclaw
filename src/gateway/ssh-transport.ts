@@ -13,6 +13,12 @@ export type GatewaySshTunnelConnection = {
 
 const DEFAULT_SSH_TUNNEL_TIMEOUT_MS = 5_000;
 
+export function isGatewayRemoteSshTransport(
+  remote: { transport?: "ssh" | "direct" } | undefined,
+): boolean {
+  return Boolean(remote) && remote?.transport !== "direct";
+}
+
 function parseExplicitUrlPort(rawUrl: string): number | undefined {
   try {
     const port = Number(new URL(rawUrl).port);
@@ -48,7 +54,7 @@ function shouldStartConfiguredSshTunnel(params: {
 }): boolean {
   return (
     params.config.gateway?.mode === "remote" &&
-    params.config.gateway.remote?.transport === "ssh" &&
+    isGatewayRemoteSshTransport(params.config.gateway.remote) &&
     params.urlSource === "config gateway.remote.url"
   );
 }
