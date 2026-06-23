@@ -903,7 +903,11 @@ export function codexSandboxPolicyForTurn(
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
-    networkAccess: false,
+    // Workspace-write keeps filesystem writes scoped to the task workspace. Keep
+    // network available so local agents can perform normal development tasks
+    // (git fetch/clone, package metadata checks, API health probes) without
+    // falling back to danger-full-access.
+    networkAccess: true,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
