@@ -771,117 +771,15 @@ jobs:
     name: Generate QA profile release evidence
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa"]'), needs.resolve_target.outputs.rerun_group)
-    continue-on-error: true
-    runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 60
     permissions:
       contents: read
-    environment: qa-live-shared
-    env:
-      OPENCLAW_BUILD_PRIVATE_QA: "1"
-      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
-      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
-      OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-    steps:
-      - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: true
-          ref: ${{ needs.resolve_target.outputs.revision }}
-          fetch-depth: 1
-
-      - name: Setup Node environment
-        uses: ./.github/actions/setup-node-env
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          install-bun: "true"
-
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "Missing required OPENAI_API_KEY." >&2
-            exit 1
-          fi
-
-      - name: Build private QA runtime
-        env:
-          NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
-
-      - name: Run release QA profile
-        id: run_profile
-        shell: bash
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          set -euo pipefail
-
-          output_dir=".artifacts/qa-e2e/release-profile-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
-
-          pnpm openclaw qa run \
-            --repo-root . \
-            --qa-profile release \
-            --output-dir "${output_dir}"
-
-      - name: Upload release QA profile evidence
-        id: upload_profile_evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-qa-profile-release-${{ needs.resolve_target.outputs.revision }}
-          path: ${{ steps.run_profile.outputs.output_dir || '.artifacts/qa-e2e/' }}
-          retention-days: 30
-          if-no-files-found: warn
-
-      - name: Record advisory status
-        if: always()
-        shell: bash
-        env:
-          RELEASE_CHECK_JOB: qa_profile_release_evidence_release_checks
-          JOB_STATUS: ${{ job.status }}
-          RELEASE_CHECK_STEP_OUTCOMES: ${{ steps.run_profile.outcome }} ${{ steps.upload_profile_evidence.outcome }}
-        run: |
-          set -euo pipefail
-          status="success"
-          mark_status() {
-            case "$1" in
-              failure) status="failure" ;;
-              cancelled)
-                if [[ "$status" != "failure" ]]; then
-                  status="cancelled"
-                fi
-                ;;
-              success|skipped|"") ;;
-              *) status="failure" ;;
-            esac
-          }
-          mark_status "${JOB_STATUS:-}"
-          for outcome in ${RELEASE_CHECK_STEP_OUTCOMES:-}; do
-            mark_status "$outcome"
-          done
-          mkdir -p .artifacts/release-check-status
-          status_path=".artifacts/release-check-status/${RELEASE_CHECK_JOB}.env"
-          {
-            printf 'job=%s\n' "$RELEASE_CHECK_JOB"
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "${JOB_STATUS:-}"
-            printf 'step_outcomes=%s\n' "${RELEASE_CHECK_STEP_OUTCOMES:-}"
-          } > "$status_path"
-
-      - name: Upload advisory status
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-check-status-qa-profile-release-${{ needs.resolve_target.outputs.revision }}
-          path: .artifacts/release-check-status/qa_profile_release_evidence_release_checks.env
-          retention-days: 14
-          if-no-files-found: error
+    uses: ./.github/workflows/qa-profile-evidence.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.ref }}
+      expected_sha: ${{ needs.resolve_target.outputs.revision }}
+      qa_profile: release
+      fail_on_qa_failure: true
+    secrets: inherit # zizmor: ignore[secrets-inherit] Release checks already validates the selected OpenClaw ref before invoking this secret-bearing reusable QA evidence workflow.
 
   qa_lab_parity_lane_release_checks:
     name: Run QA Lab parity lane (${{ matrix.lane }})
@@ -2132,7 +2030,7 @@ jobs:
           }
           advisory_status_override_allowed() {
             case "$1" in
-              qa_lab_parity_lane_release_checks|qa_profile_release_evidence_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_matrix_release_checks|qa_live_telegram_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
+              qa_lab_parity_lane_release_checks|qa_lab_parity_report_release_checks|qa_lab_runtime_parity_release_checks|qa_live_matrix_release_checks|qa_live_telegram_release_checks|qa_live_discord_release_checks|qa_live_whatsapp_release_checks|qa_live_slack_release_checks)
                 return 0
                 ;;
               *)
