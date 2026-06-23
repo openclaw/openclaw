@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { execPlainGh } from "./lib/plain-gh.mjs";
 
 export const SCHEDULED_HOSTED_WORKFLOWS = [
   "Blacksmith Testbox",
@@ -209,8 +209,7 @@ export function collectHostedGateEvidence({ sha, workflowRuns, changelogOnly = f
 }
 
 function loadWorkflowRuns(repo, sha) {
-  const raw = execFileSync(
-    "gh",
+  const raw = execPlainGh(
     ["api", `repos/${repo}/actions/runs?head_sha=${sha}&per_page=100`, "--paginate", "--slurp"],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );

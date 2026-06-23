@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { compileFunction } from "node:vm";
+import { deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
@@ -316,41 +317,47 @@ function u32(value: number): Buffer {
   return buffer;
 }
 
-function makeZip(files: Record<string, string>): Buffer {
+function makeZip(
+  files: Record<string, string>,
+  options: { compressionMethod?: 0 | 8 } = {},
+): Buffer {
   const localParts: Buffer[] = [];
   const centralParts: Buffer[] = [];
   let offset = 0;
+  const compressionMethod = options.compressionMethod ?? 0;
 
   for (const [name, contents] of Object.entries(files)) {
     const nameBuffer = Buffer.from(name, "utf8");
     const contentsBuffer = Buffer.from(contents, "utf8");
+    const compressedBuffer =
+      compressionMethod === 8 ? deflateRawSync(contentsBuffer) : contentsBuffer;
     const checksum = crc32(contentsBuffer);
     const localHeader = Buffer.concat([
       u32(0x04034b50),
       u16(20),
       u16(0),
-      u16(0),
+      u16(compressionMethod),
       u16(0),
       u16(0),
       u32(checksum),
-      u32(contentsBuffer.length),
+      u32(compressedBuffer.length),
       u32(contentsBuffer.length),
       u16(nameBuffer.length),
       u16(0),
       nameBuffer,
     ]);
-    localParts.push(localHeader, contentsBuffer);
+    localParts.push(localHeader, compressedBuffer);
     centralParts.push(
       Buffer.concat([
         u32(0x02014b50),
         u16(20),
         u16(20),
         u16(0),
-        u16(0),
+        u16(compressionMethod),
         u16(0),
         u16(0),
         u32(checksum),
-        u32(contentsBuffer.length),
+        u32(compressedBuffer.length),
         u32(contentsBuffer.length),
         u16(nameBuffer.length),
         u16(0),
@@ -362,7 +369,7 @@ function makeZip(files: Record<string, string>): Buffer {
         nameBuffer,
       ]),
     );
-    offset += localHeader.length + contentsBuffer.length;
+    offset += localHeader.length + compressedBuffer.length;
   }
 
   const localData = Buffer.concat(localParts);
@@ -391,11 +398,27 @@ function markFirstCentralDirectoryEntryEncrypted(archive: Buffer): Buffer {
   return result;
 }
 
+function setFirstEntryUncompressedSize(archive: Buffer, size: number): Buffer {
+  const result = Buffer.from(archive);
+  if (result.readUInt32LE(0) !== 0x04034b50) {
+    throw new Error("missing ZIP local file header");
+  }
+  result.writeUInt32LE(size, 22);
+  const centralOffset = result.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+  if (centralOffset < 0) {
+    throw new Error("missing ZIP central directory entry");
+  }
+  result.writeUInt32LE(size, centralOffset + 24);
+  return result;
+}
+
 describe("iOS Periphery comment workflow", () => {
   it("parses the workflow YAML and embedded github-script JavaScript", () => {
-    expect(() => commenterScript()).not.toThrow();
+    const script = commenterScript();
+    expect(script).not.toContain("node:child_process");
+    expect(script).not.toContain("execFileSync");
     expect(() =>
-      compileFunction(`return (async () => {\n${commenterScript()}\n})();`, [
+      compileFunction(`return (async () => {\n${script}\n})();`, [
         "require",
         "context",
         "core",
@@ -486,6 +509,55 @@ describe("iOS Periphery comment workflow", () => {
 
     expect(result.downloadCount).toBe(1);
     expect(result.core.warnings).toEqual([]);
+  });
+
+  it("accepts deflated Periphery artifacts", async () => {
+    const archive = makeZip(
+      {
+        "periphery.json": "[]\n",
+        "periphery.status": "0\n",
+      },
+      { compressionMethod: 8 },
+    );
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: ARTIFACT_NAME,
+        size_in_bytes: archive.length,
+      },
+      archive,
+    );
+
+    expect(result.downloadCount).toBe(1);
+    expect(result.core.warnings).toEqual([]);
+  });
+
+  it("rejects deflated entries that inflate past the per-file limit", async () => {
+    const archive = setFirstEntryUncompressedSize(
+      makeZip(
+        {
+          "periphery.json": `${" ".repeat(2 * 1024 * 1024 + 1)}[]\n`,
+          "periphery.status": "0\n",
+        },
+        { compressionMethod: 8 },
+      ),
+      1,
+    );
+    const result = await runCommenter(
+      {
+        expired: false,
+        id: 77,
+        name: ARTIFACT_NAME,
+        size_in_bytes: archive.length,
+      },
+      archive,
+    );
+
+    expectUnavailableComment(result.createdBodies);
+    expect(result.core.warnings).toEqual([
+      `Skipping ${ARTIFACT_NAME}; periphery.json exceeded the per-file size limit while reading.`,
+    ]);
   });
 
   it("rejects oversized artifact metadata before download", async () => {

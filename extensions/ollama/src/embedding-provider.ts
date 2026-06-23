@@ -52,6 +52,7 @@ export type OllamaEmbeddingClient = {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   model: string;
+  outputDimensionality?: number;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
@@ -76,8 +77,10 @@ const QUERY_INSTRUCTION_TEMPLATES = [
   },
 ] as const;
 
-function sanitizeAndNormalizeEmbedding(vec: unknown[]): number[] {
-  const sanitized = vec.map((value) => {
+function sanitizeAndNormalizeEmbedding(vec: unknown[], outputDimensionality?: number): number[] {
+  const selected =
+    typeof outputDimensionality === "number" ? vec.slice(0, outputDimensionality) : vec;
+  const sanitized = selected.map((value) => {
     if (typeof value !== "number") {
       throw new Error("Ollama embed response contains a non-number embedding value");
     }
@@ -320,6 +323,7 @@ function resolveOllamaEmbeddingClient(
     headers,
     ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     model,
+    outputDimensionality: options.outputDimensionality,
   };
 }
 
@@ -364,7 +368,7 @@ export async function createOllamaEmbeddingProvider(
       if (!Array.isArray(embedding)) {
         throw new Error("Ollama embed response contains a non-array embedding");
       }
-      return sanitizeAndNormalizeEmbedding(embedding);
+      return sanitizeAndNormalizeEmbedding(embedding, client.outputDimensionality);
     });
   };
 

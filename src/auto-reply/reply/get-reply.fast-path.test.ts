@@ -663,6 +663,35 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
   });
 
+  it("preserves usage footer mode during fast reset bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reset-usage-"));
+    const storePath = path.join(home, "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await seedFastPathSessionStore(storePath, {
+      [sessionKey]: {
+        sessionId: "existing-fast-reset-usage",
+        updatedAt: Date.now(),
+        responseUsage: "full",
+      },
+    });
+
+    const result = initFastReplySessionState({
+      ctx: buildGetReplyCtx({
+        Body: "/reset",
+        RawBody: "/reset",
+        CommandBody: "/reset",
+        SessionKey: sessionKey,
+      }),
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      agentId: "main",
+      commandAuthorized: true,
+      workspaceDir: home,
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.responseUsage).toBe("full");
+  });
+
   it("maps explicit gateway origin into command context", () => {
     const command = buildFastReplyCommandContext({
       ctx: buildGetReplyCtx({

@@ -1,7 +1,7 @@
 ---
 title: Claw Supervisor
-description: Fleet supervision plan for Codex app-server sessions controlled by OpenClaw.
-readWhen:
+summary: "Fleet supervision plan for Codex app-server sessions controlled by OpenClaw."
+read_when:
   - Designing Codex fleet supervision
   - Building OpenClaw tools that read, steer, or spawn Codex sessions
   - Choosing between local, Cloudflare, and VPS deployment for supervised Codex

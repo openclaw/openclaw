@@ -1389,6 +1389,11 @@ describe("scripts/test-projects changed-target routing", () => {
       targets: ["test/scripts/update-clawtributors.test.ts"],
     });
 
+    expect(resolveChangedTestTargetPlan(["scripts/docs-list.js"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/docs-list.test.ts"],
+    });
+
     expect(resolveChangedTestTargetPlan(["scripts/docs-link-audit.mjs"])).toEqual({
       mode: "targets",
       targets: ["src/scripts/docs-link-audit.test.ts"],

@@ -2164,56 +2164,6 @@ async function executeDetachedCronJob(
   };
 }
 
-/** Executes a cron job and applies the resulting state transitions in memory. */
-export async function executeJob(
-  state: CronServiceState,
-  job: CronJob,
-  _nowMs: number,
-  _opts: { forced: boolean },
-) {
-  if (!job.state) {
-    job.state = {};
-  }
-  const startedAt = state.deps.nowMs();
-  job.state.runningAtMs = startedAt;
-  job.state.lastError = undefined;
-  const activeJobMarker = markCronJobActive(job.id, {
-    preserveAcrossGenerationAdvance: job.sessionTarget === "main",
-  });
-  emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
-
-  let coreResult: {
-    status: CronRunStatus;
-    delivered?: boolean;
-    delivery?: CronDeliveryTrace;
-  } & CronRunOutcome &
-    CronRunTelemetry;
-  try {
-    coreResult = await executeJobCoreWithTimeout(state, job, { activeJobMarker });
-  } catch (err) {
-    coreResult = { status: "error", error: String(err) };
-  }
-
-  const endedAt = state.deps.nowMs();
-  const shouldDelete = applyJobResult(state, job, {
-    status: coreResult.status,
-    error: coreResult.error,
-    diagnostics: coreResult.diagnostics,
-    delivered: coreResult.delivered,
-    provider: coreResult.provider,
-    startedAt,
-    endedAt,
-  });
-
-  emitJobFinished(state, job, coreResult, startedAt);
-
-  if (shouldDelete && state.store) {
-    state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
-    emit(state, { jobId: job.id, action: "removed", job });
-  }
-  clearCronJobActive(job.id, activeJobMarker);
-}
-
 function emitJobFinished(
   state: CronServiceState,
   job: CronJob,

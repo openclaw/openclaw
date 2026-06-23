@@ -1,5 +1,6 @@
 // Plugin Sdk Surface Report tests cover plugin sdk surface report script behavior.
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 function runSurfaceReport(env: Record<string, string>) {
@@ -11,6 +12,18 @@ function runSurfaceReport(env: Record<string, string>) {
       ...env,
     },
   });
+}
+
+function readDefaultPublicFunctionExportBudget() {
+  const source = readFileSync("scripts/plugin-sdk-surface-report.mjs", "utf8");
+  const match =
+    /publicFunctionExports:\s*readBudgetEnv\("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",\s*(\d+)\)/u.exec(
+      source,
+    );
+  if (match === null || match[1] === undefined) {
+    throw new Error("failed to read default public function export budget");
+  }
+  return Number(match[1]);
 }
 
 describe("plugin SDK surface report", () => {
@@ -50,12 +63,13 @@ describe("plugin SDK surface report", () => {
   });
 
   it("keeps generated package declarations out of source surface counts", () => {
+    const budget = readDefaultPublicFunctionExportBudget();
     const result = runSurfaceReport({
-      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: "5173",
+      OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS: String(budget - 1),
     });
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("public callable exports 5174 > 5173");
+    expect(result.stderr).toContain(`public callable exports ${budget} > ${budget - 1}`);
   });
 
   it("rejects deprecated export growth by public entrypoint", () => {

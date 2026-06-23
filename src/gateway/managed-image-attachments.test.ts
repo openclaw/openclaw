@@ -859,6 +859,24 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks).type).toBe("image");
   });
 
+  it("allows managed inbound image paths before validating explicit roots", async () => {
+    const inboundPath = path.join(stateDir, "media", "inbound", "inbound.png");
+    await fs.mkdir(path.dirname(inboundPath), { recursive: true });
+    await fs.writeFile(inboundPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [inboundPath],
+        stateDir,
+        localRoots: [path.parse(stateDir).root],
+      });
+
+      expect(blocks).toHaveLength(1);
+      expect(requireBlock(blocks).type).toBe("image");
+    });
+  });
+
   it("rejects relative local image paths that resolve outside allowed roots", async () => {
     const allowedWorkspaceDir = path.join(stateDir, "workspace");
     const outsidePath = path.join(stateDir, "outside.png");

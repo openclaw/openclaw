@@ -20,6 +20,10 @@ import {
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
 import {
+  omitFoundryBearerCredentialHeaders,
+  usesFoundryBearerAuth,
+} from "../../shared/anthropic-auth-headers.js";
+import {
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
@@ -61,26 +65,13 @@ import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   findActiveAnthropicToolTurnAssistantIndex,
 } from "./anthropic-thinking-replay.js";
+import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
-
-/**
- * Resolve cache retention preference.
- * Defaults to "short" and uses OPENCLAW_CACHE_RETENTION for backward compatibility.
- */
-function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
-  if (cacheRetention) {
-    return cacheRetention;
-  }
-  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
-    return "long";
-  }
-  return "short";
-}
 
 function getCacheControl(
   model: Model<"anthropic-messages">,
@@ -257,39 +248,6 @@ function mergeHeaders(
     }
   }
   return merged;
-}
-
-function hasBearerAuthorizationHeader(headers?: Record<string, string>): boolean {
-  if (!headers) {
-    return false;
-  }
-  return Object.entries(headers).some(
-    ([key, value]) => key.toLowerCase() === "authorization" && /^bearer\s+\S+/i.test(value.trim()),
-  );
-}
-
-function usesFoundryBearerAuth(model: Model<"anthropic-messages">): boolean {
-  return (
-    model.provider === "microsoft-foundry" &&
-    (model.authHeader === true || hasBearerAuthorizationHeader(model.headers))
-  );
-}
-
-function omitFoundryBearerCredentialHeaders(
-  headers?: Record<string, string>,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const next: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    if (lower === "authorization" || lower === "x-api-key" || lower === "api-key") {
-      continue;
-    }
-    next[key] = value;
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 interface ServerSentEvent {

@@ -72,6 +72,9 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalReplyDelivered = false;
+  // Final delivery cancels the compositor gate before Discord decides whether
+  // to edit the progress preview, so keep the pre-final eligibility bit.
+  let progressDraftStartedBeforeFinal = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const suppressDefaultToolProgressMessages =
@@ -132,12 +135,13 @@ export function createDiscordDraftPreviewController(params: {
       return discordStreamMode === "progress";
     },
     get hasProgressDraftStarted() {
-      return progressDraft.hasStarted;
+      return progressDraft.hasStarted || progressDraftStartedBeforeFinal;
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
     markFinalReplyStarted() {
+      progressDraftStartedBeforeFinal ||= progressDraft.hasStarted;
       progressDraft.markFinalReplyStarted();
     },
     markFinalReplyDelivered() {

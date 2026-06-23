@@ -410,6 +410,39 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
   });
 
+  it("does not reopen a completed session via current-generation maintenance-expired abort controller", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: 3_000,
+        status: "done",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main"],
+      sessionIds: ["main-session"],
+      activeRuns: [
+        {
+          runId: "stale-abort-controller-run",
+          lifecycleGeneration,
+          sessionKey: "agent:main:main",
+          sessionId: "main-session",
+          observedAt: 5_000,
+        },
+      ],
+      isActiveRun: () => true,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 0, skipped: 0 });
+    expect(store["agent:main:main"]?.status).toBe("done");
+    expect(store["agent:main:main"]?.restartRecoveryRuns).toBeUndefined();
+  });
+
   it("preserves current-generation markers across repeated restart marking", async () => {
     const sessionsDir = await makeSessionsDir();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();

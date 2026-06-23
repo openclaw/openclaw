@@ -248,6 +248,7 @@ describe("qa scenario catalog", () => {
     });
     expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
     expect(readQaScenarioExecutionConfig(imageGenerate.id)).toMatchObject({
+      requiredProviderMode: "mock-openai",
       toolName: "image_generate",
       toolCoverage: {
         bucket: "openclaw-dynamic-integration",
@@ -311,6 +312,14 @@ describe("qa scenario catalog", () => {
     expect(
       JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
     ).toContain("liveTurnTimeoutMs(env, 180000)");
+    const longContextFlow = JSON.stringify(
+      readQaScenarioById("long-context-progress-watchdog").execution.flow,
+    );
+    expect(longContextFlow).toContain("originalCodexPluginEnabled");
+    expect(longContextFlow).not.toContain(
+      "originalPluginAllow === undefined ? null : originalPluginAllow",
+    );
+    expect(longContextFlow).not.toContain("{ ...originalCodexPluginEntry, enabled:");
     expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",
@@ -533,6 +542,23 @@ describe("qa scenario catalog", () => {
     ]);
   });
 
+  it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {
+    const strandedConfig = readQaScenarioExecutionConfig("message-tool-stranded-final-reply") as
+      | { requiredProviderMode?: string }
+      | undefined;
+    const stranded = readQaScenarioById("message-tool-stranded-final-reply");
+    const heartbeat = readQaScenarioById("commitments-heartbeat-target-none");
+    const heartbeatFlow = JSON.stringify(heartbeat.execution.flow);
+
+    expect(strandedConfig?.requiredProviderMode).toBe("mock-openai");
+    expect(JSON.stringify(stranded.execution.flow)).toContain(
+      "this seeded scenario is mock-openai only",
+    );
+    expect(heartbeatFlow).toContain("sessionKey");
+    expect(heartbeatFlow).toContain("targetOutbound.length === 0");
+    expect(heartbeatFlow).not.toContain("waitForNoOutbound");
+  });
+
   it("includes the thinking slash model remap scenario", () => {
     const scenario = readQaScenarioById("thinking-slash-model-remap");
     const config = readQaScenarioExecutionConfig("thinking-slash-model-remap") as
@@ -549,6 +575,9 @@ describe("qa scenario catalog", () => {
     expect(config?.anthropicModelRef).toBe("anthropic/claude-sonnet-4-6");
     expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.5");
     expect(config?.noXhighModelRef).toBe("anthropic/claude-sonnet-4-6");
+    const flowText = JSON.stringify(scenario.execution.flow);
+    expect(flowText).toContain("include max and omit xhigh");
+    expect(flowText).not.toContain("omit xhigh/max");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "selects Anthropic and verifies adaptive options",
       "maps adaptive to medium when switching to OpenAI",
@@ -610,6 +639,7 @@ describe("qa scenario catalog", () => {
       | {
           workspaceFiles?: Record<string, string>;
           prompt?: string;
+          requiredChannelDriver?: string;
           expectedReplyAll?: string[];
           expectedArtifactAll?: string[];
           expectedArtifactAny?: string[];
@@ -622,10 +652,44 @@ describe("qa scenario catalog", () => {
       "Mission: prove you followed the repo contract.",
     );
     expect(config?.prompt).toContain("Repo contract followthrough check.");
+    expect(config?.requiredChannelDriver).toBe("qa-channel");
     expect(config?.expectedReplyAll).toEqual(["read:", "wrote:", "status:"]);
     expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
     expect(config?.expectedArtifactAny).toContain("evidence path");
     expect(scenario.title).toBe("Instruction followthrough repo contract");
+  });
+
+  it("keeps native QA-channel fixtures out of Crabline profile selection", () => {
+    const scenarioIds = [
+      "subagent-forked-context",
+      "subagent-handoff",
+      "group-message-tool-unavailable-fallback",
+      "qa-channel-reconnect-dedupe",
+      "reaction-edit-delete",
+      "thread-follow-up",
+      "image-generation-roundtrip",
+      "image-understanding-attachment",
+      "native-image-generation",
+      "active-memory-preprompt-recall",
+      "memory-recall",
+      "session-memory-ranking",
+      "thread-memory-isolation",
+      "personal-channel-thread-reply",
+      "personal-memory-preference-recall",
+      "personal-reminder-roundtrip",
+      "cron-natural-fire-no-duplicate",
+      "cron-one-minute-ping",
+      "cron-single-run-no-duplicate",
+      "control-ui-qa-channel-image-roundtrip",
+      "config-apply-restart-wakeup",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const config = readQaScenarioExecutionConfig(scenarioId) as
+        | { requiredChannelDriver?: string }
+        | undefined;
+      expect(config?.requiredChannelDriver, scenarioId).toBe("qa-channel");
+    }
   });
 
   it("adds a dreaming shadow trial report scenario", () => {

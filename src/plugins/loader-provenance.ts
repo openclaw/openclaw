@@ -223,13 +223,18 @@ export function warnWhenAllowlistIsOpen(params: {
   if (!params.pluginsEnabled) {
     return;
   }
-  if (params.allow.length > 0) {
-    return;
-  }
   const autoDiscoverable = params.discoverablePlugins.filter(
     (entry) => entry.origin === "workspace" || entry.origin === "global",
   );
   if (autoDiscoverable.length === 0) {
+    return;
+  }
+  // Match allow entries against every discovered plugin id, including bundled ids. Otherwise a
+  // valid bundled-only allowlist would look mismatched whenever workspace/global plugins exist.
+  const allDiscoveredIds = new Set(params.discoverablePlugins.map((entry) => entry.id));
+  const hasConfiguredAllowlist = params.allow.length > 0;
+  const allowHasDiscoveredMatch = params.allow.some((id) => allDiscoveredIds.has(id));
+  if (hasConfiguredAllowlist && allowHasDiscoveredMatch) {
     return;
   }
   if (params.warningCache.hasOpenAllowlistWarning(params.warningCacheKey)) {
@@ -241,8 +246,21 @@ export function warnWhenAllowlistIsOpen(params: {
     .join(", ");
   const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
   params.warningCache.recordOpenAllowlistWarning(params.warningCacheKey);
+  if (!hasConfiguredAllowlist) {
+    params.logger.warn(
+      `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
+    );
+    return;
+  }
+  const unmatchedEntries = params.allow.filter((id) => !allDiscoveredIds.has(id));
+  const unmatchedPreview = unmatchedEntries
+    .slice(0, 6)
+    .map((id) => `"${id}"`)
+    .join(", ");
+  const unmatchedExtra =
+    unmatchedEntries.length > 6 ? ` (+${unmatchedEntries.length - 6} more)` : "";
   params.logger.warn(
-    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
+    `[plugins] plugins.allow entries ${unmatchedPreview}${unmatchedExtra} do not match any discovered plugin ids; discovered non-bundled plugins: ${preview}${extra}. Use the plugin id (not a channel id or npm package name).`,
   );
 }
 

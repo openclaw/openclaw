@@ -261,8 +261,8 @@ export function getToolResultTextLength(msg: AgentMessage): number {
   }
   let totalLength = 0;
   for (const block of content) {
-    if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
-      const text = (block as TextContent).text;
+    if (isToolResultTextBlock(block)) {
+      const text = block.text;
       if (typeof text === "string") {
         totalLength += text.length;
       }
@@ -299,10 +299,10 @@ export function truncateToolResultMessage(
 
   // Distribute the budget proportionally among text blocks
   const newContent = content.map((block: unknown) => {
-    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+    if (!isToolResultTextBlock(block)) {
       return block; // Keep non-text blocks (images) as-is
     }
-    const textBlock = block as TextContent;
+    const textBlock = block;
     if (typeof textBlock.text !== "string") {
       return block;
     }
@@ -316,15 +316,31 @@ export function truncateToolResultMessage(
       1,
       Math.min(maxChars, Math.max(minKeepChars + defaultSuffix.length, proportionalBudget)),
     );
-    return Object.assign({}, textBlock, {
-      text: truncateToolResultText(textBlock.text, blockBudget, {
-        suffix: suffixFactory,
-        minKeepChars,
-      }),
+    const truncatedText = truncateToolResultText(textBlock.text, blockBudget, {
+      suffix: suffixFactory,
+      minKeepChars,
     });
+    const nextBlock = Object.assign({}, textBlock, { text: truncatedText });
+    if (typeof textBlock.content === "string") {
+      nextBlock.content = truncatedText;
+    }
+    return nextBlock;
   });
 
   return { ...msg, content: newContent } as AgentMessage;
+}
+
+function isToolResultTextBlock(
+  block: unknown,
+): block is TextContent & { content?: unknown; type: "text" | "toolResult" } {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return (
+    (type === "text" || type === "toolResult") &&
+    typeof (block as { text?: unknown }).text === "string"
+  );
 }
 
 /**
@@ -393,7 +409,7 @@ export function truncateOversizedToolResultsInMessages(
     }
   }
   if (plan.replacements.length === 0) {
-    const projectedMessages = branch.map((entry) => entry.message as AgentMessage);
+    const projectedMessages = branch.map((entry) => entry.message);
     const hasProjectedChanges = projectedMessages.some(
       (message, index) => message !== messages[index],
     );
@@ -555,7 +571,7 @@ function mergeProjectedToolResultMessage(
       return block;
     }
     const projectedBlock = projectedText[textIndex++];
-    return projectedBlock ? { ...block, text: projectedBlock.text } : block;
+    return projectedBlock ? Object.assign({}, block, { text: projectedBlock.text }) : block;
   });
   return { ...message, content: mergedContent } as AgentMessage;
 }
@@ -588,7 +604,7 @@ function buildAggregateToolResultReplacements(params: {
       (
         item,
       ): item is {
-        entry: { id: string; type: string; message: AgentMessage };
+        entry: { id: string; type: string; message: AgentMessage; aggregateEligible?: boolean };
         index: number;
       } =>
         item.entry.type === "message" &&
@@ -697,7 +713,7 @@ function clearToolResultText(message: AgentMessage): AgentMessage {
     ...message,
     content: content.map((block) =>
       block && typeof block === "object" && (block as { type?: unknown }).type === "text"
-        ? { ...block, text: "" }
+        ? Object.assign({}, block, { text: "" })
         : block,
     ),
   } as AgentMessage;

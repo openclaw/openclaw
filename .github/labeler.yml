@@ -103,6 +103,11 @@
       - any-glob-to-any-file:
           - "extensions/qqbot/**"
           - "docs/channels/qqbot.md"
+"channel: raft":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/raft/**"
+          - "docs/channels/raft.md"
 "channel: qa-channel":
   - changed-files:
       - any-glob-to-any-file:
