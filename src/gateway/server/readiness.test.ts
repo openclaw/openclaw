@@ -74,6 +74,7 @@ function createReadinessHarness(params: {
     typeof createReadinessChecker
   >[0]["shouldSkipChannelReadiness"];
   cacheTtlMs?: number;
+  getWorkspaceWritable?: () => { writable: boolean; failing?: string };
 }) {
   const startedAt = Date.now() - (params.startedAgoMs ?? FIVE_MIN_MS);
   const manager = createManager(snapshotWith(params.accounts ?? {}));
@@ -87,6 +88,7 @@ function createReadinessHarness(params: {
       getGatewayDraining: params.getGatewayDraining,
       getEventLoopHealth: params.getEventLoopHealth,
       shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
+      getWorkspaceWritable: params.getWorkspaceWritable,
       cacheTtlMs: params.cacheTtlMs,
     }),
   };
@@ -328,6 +330,45 @@ describe("createReadinessChecker", () => {
       vi.advanceTimersByTime(600);
       expect(readiness()).toEqual(readySnapshot(301_100));
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("surfaces workspace-unwritable in the failing list when the probe reports not writable", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        getWorkspaceWritable: () => ({ writable: false, failing: "workspace-enospc" }),
+      });
+      expect(readiness()).toEqual(failingSnapshot(["workspace-enospc"]));
+    });
+  });
+
+  it("keeps workspace-enospc readiness alongside unhealthy channels", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: stoppedAccount({ running: false }),
+        },
+        getWorkspaceWritable: () => ({ writable: false, failing: "workspace-enospc" }),
+      });
+      expect(readiness()).toEqual(failingSnapshot(["workspace-enospc", "discord"]));
+    });
+  });
+
+  it("stays ready when workspace writability probe returns writable", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        getWorkspaceWritable: () => ({ writable: true }),
+      });
+      expect(readiness()).toEqual(readySnapshot());
+    });
+  });
+
+  it("stays ready when no workspace writability probe is configured", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        getWorkspaceWritable: undefined,
+      });
+      expect(readiness()).toEqual(readySnapshot());
     });
   });
 

@@ -117,6 +117,7 @@ import {
 } from "./server/health-state.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import { createReadinessChecker } from "./server/readiness.js";
+import { createWorkspaceWritableChecker } from "./server/workspace-writable.js";
 import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
@@ -889,6 +890,7 @@ export async function startGatewayServer(
     deferStartupAccountStartsUntil: startupAccountStartsReady,
   });
   const deferStartupSidecars = opts.deferStartupSidecars === true;
+  const getWorkspaceWritable = createWorkspaceWritableChecker(defaultWorkspaceDir);
   const isGatewayStartupPending = () => !startupSidecarsReady && !deferStartupSidecars;
   const getReadiness = createReadinessChecker({
     channelManager,
@@ -897,6 +899,7 @@ export async function startGatewayServer(
     getStartupPendingReason: () => startupPendingReason,
     getGatewayDraining: isGatewayDraining,
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
+    getWorkspaceWritable,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),

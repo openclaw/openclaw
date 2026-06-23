@@ -45,6 +45,9 @@ export function createReadinessChecker(deps: {
   getGatewayDraining?: () => boolean;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   shouldSkipChannelReadiness?: () => boolean;
+  /** Optional workspace-writability probe (see #96084).  When omitted
+   * workspace health is not checked. */
+  getWorkspaceWritable?: () => { writable: boolean; failing?: string };
   cacheTtlMs?: number;
 }): ReadinessChecker {
   const { channelManager, startedAt } = deps;
@@ -77,6 +80,15 @@ export function createReadinessChecker(deps: {
 
     const snapshot = channelManager.getRuntimeSnapshot();
     const failing: string[] = [];
+
+    // Workspace writability: probe before channel health so that
+    // disk-full / ENOSPC conditions are surfaced even when channels
+    // are healthy.  The probe result is separately cached inside
+    // createWorkspaceWritableChecker (default 30 s TTL).
+    const workspace = deps.getWorkspaceWritable?.();
+    if (workspace && !workspace.writable && workspace.failing) {
+      failing.push(workspace.failing);
+    }
 
     for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
       if (!accounts) {
