@@ -271,21 +271,9 @@ function buildAgentFollowupArgs(params: {
     deliver: deliveryTarget.deliver,
     ...(deliveryTarget.deliver ? { bestEffortDeliver: true as const } : {}),
     channel: deliveryTarget.deliver ? deliveryTarget.channel : fallbackChannel,
-    to: deliveryTarget.deliver
-      ? deliveryTarget.to
-      : sessionOnlyOriginChannel
-        ? params.turnSourceTo
-        : undefined,
-    accountId: deliveryTarget.deliver
-      ? deliveryTarget.accountId
-      : sessionOnlyOriginChannel
-        ? params.turnSourceAccountId
-        : undefined,
-    threadId: deliveryTarget.deliver
-      ? deliveryTarget.threadId
-      : sessionOnlyOriginChannel
-        ? params.turnSourceThreadId
-        : undefined,
+    to: deliveryTarget.deliver ? deliveryTarget.to : params.turnSourceTo,
+    accountId: deliveryTarget.deliver ? deliveryTarget.accountId : params.turnSourceAccountId,
+    threadId: deliveryTarget.deliver ? deliveryTarget.threadId : params.turnSourceThreadId,
     idempotencyKey:
       params.idempotencyKey ??
       buildExecApprovalFollowupIdempotencyKey({
