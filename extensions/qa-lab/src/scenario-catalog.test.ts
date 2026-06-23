@@ -248,6 +248,7 @@ describe("qa scenario catalog", () => {
     });
     expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
     expect(readQaScenarioExecutionConfig(imageGenerate.id)).toMatchObject({
+      requiredProviderMode: "mock-openai",
       toolName: "image_generate",
       toolCoverage: {
         bucket: "openclaw-dynamic-integration",
