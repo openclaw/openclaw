@@ -49,7 +49,7 @@ type TimedProxylineManagedDispatcherState = {
   dispatch: UndiciDispatcher["dispatch"];
 };
 
-/** Manages a shared direct-agent fallback for NO_PROXY-bypassed requests. */
+/** Manages a shared direct-agent fallback for proxy-bypassed requests. */
 let sharedDirectAgent: UndiciDispatcher | undefined;
 
 function resolveSharedDirectAgent(): UndiciDispatcher {
@@ -146,7 +146,7 @@ function createTimedProxylineManagedDispatcher(
 
 /**
  * Wraps an EnvHttpProxyAgent so each request is first checked against
- * OpenClaw's enhanced NO_PROXY matcher (with subdomain/CIDR/wildcard support).
+ * the enhanced proxy-bypass matcher (with subdomain/CIDR/wildcard support).
  * Requests that should bypass the proxy are routed through a direct Agent
  * instead of the EnvHttpProxyAgent, while requests matching the proxy
  * configuration use the proxy agent as usual.
