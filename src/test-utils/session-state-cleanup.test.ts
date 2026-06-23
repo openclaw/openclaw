@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetSessionWriteLockStateForTest } from "../agents/session-write-lock.js";
+import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
   clearSessionStoreCacheForTest,
   getSessionStoreWriterQueueSizeForTest,
-  withSessionStoreWriterForTest,
 } from "../config/sessions/store.js";
 import { resetFileLockStateForTest } from "../infra/file-lock.js";
 import { createDeferred } from "./deferred.js";
@@ -67,7 +67,7 @@ describe("cleanupSessionStateForTest", () => {
     });
     let running: Promise<void> | undefined;
     try {
-      running = withSessionStoreWriterForTest(storePath, async () => {
+      running = runExclusiveSessionStoreWrite(storePath, async () => {
         started.resolve();
         await release.promise;
       });

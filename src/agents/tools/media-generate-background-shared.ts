@@ -19,7 +19,12 @@ import {
   resolveRequiredCompletionDeliveryFailureTerminalResult,
   type RequiredCompletionTerminalResult,
 } from "../../tasks/task-completion-contract.js";
-import { normalizeDeliveryContext, type DeliveryContext } from "../../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.js";
+import type { DeliveryContextSessionSource } from "../../utils/delivery-context.types.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -29,8 +34,12 @@ import {
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "../internal-events.js";
-import { deliverSubagentAnnouncement } from "../subagent-announce-delivery.js";
+import {
+  deliverSubagentAnnouncement,
+  loadRequesterSessionEntry,
+} from "../subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
+import { resolveAnnounceOrigin } from "../subagent-announce-origin.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
@@ -54,6 +63,21 @@ export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => vo
 
 /** Optional callback invoked when async media generation starts. */
 export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
+
+function resolvePinnedMediaRequesterOrigin(params: {
+  requesterOrigin?: DeliveryContext;
+  sessionEntry?: DeliveryContextSessionSource;
+}): DeliveryContext | undefined {
+  const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  const sessionOrigin = deliveryContextFromSession(params.sessionEntry);
+  const accountsConflict =
+    requesterOrigin?.accountId &&
+    sessionOrigin?.accountId &&
+    requesterOrigin.accountId !== sessionOrigin.accountId;
+  return accountsConflict
+    ? requesterOrigin
+    : resolveAnnounceOrigin(params.sessionEntry, requesterOrigin);
+}
 
 /** Returns whether a media generation request should detach for a session. */
 export function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
@@ -141,6 +165,12 @@ function createMediaGenerationTaskRun(params: {
   }
   const runId = `tool:${params.toolName}:${crypto.randomUUID()}`;
   try {
+    // Pin the complete requester route when detached work starts. Completion-time
+    // session state can move to another peer while generation is still running.
+    const requesterOrigin = resolvePinnedMediaRequesterOrigin({
+      requesterOrigin: params.requesterOrigin,
+      sessionEntry: loadRequesterSessionEntry(sessionKey).entry,
+    });
     const task = createRunningTaskRun({
       runtime: "cli",
       taskKind: params.taskKind,
@@ -148,7 +178,7 @@ function createMediaGenerationTaskRun(params: {
       requesterSessionKey: sessionKey,
       ownerKey: sessionKey,
       scopeKind: "session",
-      requesterOrigin: params.requesterOrigin,
+      requesterOrigin,
       childSessionKey: sessionKey,
       runId,
       label: params.label,
@@ -166,7 +196,7 @@ function createMediaGenerationTaskRun(params: {
       taskId: task.taskId,
       runId,
       requesterSessionKey: sessionKey,
-      requesterOrigin: params.requesterOrigin,
+      requesterOrigin,
       taskLabel: params.prompt,
     };
     touchMediaGenerationTaskRunContext(handle);

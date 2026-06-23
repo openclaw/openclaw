@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { stripLeadingPackageManagerSeparator } from "../../../../scripts/lib/arg-utils.mjs";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 
@@ -200,6 +201,10 @@ function readPositiveIntegerEnv(
   return parsed;
 }
 
+function createOtelSmokeRunId(): string {
+  return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
+}
+
 function oversizedBodyError(
   label: string,
   actualBytes: number,
@@ -228,7 +233,7 @@ function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     collectorMode: "local",
     logsExporter: "otlp",
-    outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${Date.now().toString(36)}`),
+    outputDir: path.join(".artifacts", "qa-e2e", `otel-smoke-${createOtelSmokeRunId()}`),
     providerMode: "mock-openai",
     scenarioId: DEFAULT_SCENARIO_ID,
     help: false,
@@ -242,7 +247,7 @@ function parseArgs(argv: string[]): CliOptions {
     }
     const readValue = () => {
       const value = args[index + 1]?.trim();
-      if (!value) {
+      if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a value`);
       }
       index += 1;
@@ -1275,12 +1280,13 @@ async function waitForChild(
   timeoutMs = QA_SUITE_TIMEOUT_MS,
   killGraceMs = QA_SUITE_KILL_GRACE_MS,
 ): Promise<number> {
+  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, QA_SUITE_TIMEOUT_MS);
   const childExit = new Promise<number>((resolve) => {
     child.once("close", (code) => resolve(code ?? 1));
   });
   let timeoutHandle: NodeJS.Timeout | undefined;
   const timeout = new Promise<"timeout">((resolve) => {
-    timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
+    timeoutHandle = setTimeout(() => resolve("timeout"), resolvedTimeoutMs);
     timeoutHandle.unref();
   });
   const result = await Promise.race([childExit, timeout]).finally(() => {
@@ -1298,7 +1304,7 @@ async function waitForChild(
     terminateChildTree(child, "SIGKILL", cleanupPids);
     await waitForProcessTreeExit(child, 1000, cleanupPids);
   }
-  throw new Error(`openclaw qa suite timed out after ${timeoutMs}ms`);
+  throw new Error(`openclaw qa suite timed out after ${resolvedTimeoutMs}ms`);
 }
 
 function collectChildProcessTreePids(child: ChildProcess): number[] {

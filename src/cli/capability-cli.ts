@@ -67,15 +67,9 @@ import {
 } from "../media-understanding/runtime.js";
 import { convertHeicToJpeg, getImageMetadata } from "../media/media-services.js";
 import { saveMediaBuffer } from "../media/store.js";
-import {
-  createEmbeddingProvider,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "../plugin-sdk/memory-core-bundled-runtime.js";
+import { createEmbeddingProvider } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { listEmbeddingProviders } from "../plugins/embedding-provider-runtime.js";
-import {
-  listMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
+import { listMemoryEmbeddingProviders } from "../plugins/memory-embedding-providers.js";
 import { writeRuntimeJson, defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { canonicalizeSpeechProviderId, listSpeechProviders } from "../tts/provider-registry.js";
@@ -144,12 +138,12 @@ type CapabilityEnvelope = {
   error?: string;
 };
 
-const CAPABILITY_METADATA: CapabilityMetadata[] = [
+export const CAPABILITY_METADATA: CapabilityMetadata[] = [
   {
     id: "model.run",
     description: "Run a one-shot inference turn through the selected model provider.",
     transports: ["local", "gateway"],
-    flags: ["--prompt", "--file", "--model", "--local", "--gateway", "--json"],
+    flags: ["--prompt", "--file", "--model", "--thinking", "--local", "--gateway", "--json"],
     resultShape: "normalized payloads plus provider/model attribution",
   },
   {
@@ -177,14 +171,14 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "model.auth.login",
     description: "Run the existing provider auth login flow.",
     transports: ["local"],
-    flags: ["--provider"],
+    flags: ["--provider", "--method"],
     resultShape: "interactive auth result",
   },
   {
     id: "model.auth.logout",
     description: "Remove saved auth profiles for one provider.",
     transports: ["local"],
-    flags: ["--provider", "--json"],
+    flags: ["--provider", "--agent", "--json"],
     resultShape: "removed profile ids",
   },
   {
@@ -224,6 +218,7 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
       "--file",
       "--prompt",
       "--model",
+      "--count",
       "--size",
       "--aspect-ratio",
       "--resolution",
@@ -263,7 +258,7 @@ const CAPABILITY_METADATA: CapabilityMetadata[] = [
     id: "audio.transcribe",
     description: "Transcribe one audio file.",
     transports: ["local"],
-    flags: ["--file", "--model", "--json"],
+    flags: ["--file", "--language", "--prompt", "--model", "--json"],
     resultShape: "normalized text output",
   },
   {
@@ -2040,7 +2035,6 @@ async function runMemoryEmbeddingCreate(params: {
   provider?: string;
   model?: string;
 }) {
-  ensureMemoryEmbeddingProvidersRegistered();
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: "infer embedding create",
     targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
@@ -2073,15 +2067,6 @@ async function runMemoryEmbeddingCreate(params: {
       dimensions: embedding.length,
     })),
   } satisfies CapabilityEnvelope;
-}
-
-function ensureMemoryEmbeddingProvidersRegistered(): void {
-  if (listMemoryEmbeddingProviders().length > 0) {
-    return;
-  }
-  registerBuiltInMemoryEmbeddingProviders({
-    registerMemoryEmbeddingProvider,
-  });
 }
 
 function registerCapabilityListAndInspect(capability: Command) {
@@ -2313,6 +2298,7 @@ export function registerCapabilityCli(program: Command) {
     .requiredOption("--file <path>", "Input file", collectOption, [])
     .requiredOption("--prompt <text>", "Prompt text")
     .option("--model <provider/model>", "Model override")
+    .option("--count <n>", "Number of images")
     .option("--size <size>", "Size hint like 1024x1024")
     .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
     .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
@@ -2331,6 +2317,7 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.edit",
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
+          count: parseOptionalPositiveInteger(opts.count, "--count"),
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
@@ -2858,7 +2845,6 @@ export function registerCapabilityCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        ensureMemoryEmbeddingProvidersRegistered();
         const cfg = getRuntimeConfig();
         const agentId = resolveDefaultAgentId(cfg);
         const resolvedMemory = resolveMemorySearchConfig(cfg, agentId);

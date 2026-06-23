@@ -46,6 +46,8 @@ const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
   /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
+const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
+  /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const TARGETED_CORE_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
@@ -57,7 +59,8 @@ const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/fastlane/metadata/android/en-US/release_notes.txt",
   "apps/android/version.json",
 ]);
-const MACOS_APP_CI_PATH_RE = /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/)/u;
+const MACOS_APP_CI_PATH_RE =
+  /^(?:apps\/(?:macos|macos-mlx-tts|shared|swabble)\/|Swabble\/|scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.sh$|scripts\/lib\/plistbuddy\.sh$|test\/scripts\/(?:codesign-mac-app|create-dmg|notarize-mac-artifact|package-mac-app|package-mac-dist)\.test\.ts$)/u;
 let corepackPnpmShimDir;
 let corepackPnpmShimCleanupRegistered = false;
 
@@ -196,6 +199,12 @@ export function shouldRunRuntimeSidecarBaselineCheck(paths) {
   return paths.some((changedPath) => RUNTIME_SIDECAR_BASELINE_PATH_RE.test(changedPath));
 }
 
+export function shouldRunCanvasA2uiNativeResourceCheck(paths) {
+  return paths.some((changedPath) =>
+    CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE.test(normalizeChangedPath(changedPath)),
+  );
+}
+
 export function shouldRunAppcastOwnerTest(paths) {
   return paths.some((changedPath) => normalizeChangedPath(changedPath) === "appcast.xml");
 }
@@ -290,21 +299,34 @@ export function createChangedCheckPlan(result, options = {}) {
     add("prompt snapshot drift", ["prompt:snapshots:check"]);
   }
   if (shouldRunPromptSnapshotOwnerTest(result.paths)) {
-    add("prompt snapshot owner test", ["test:serial", "test/scripts/prompt-snapshots.test.ts"]);
+    add(
+      "prompt snapshot owner test",
+      ["test:serial", "test/scripts/prompt-snapshots.test.ts"],
+      baseEnv,
+    );
   }
   if (shouldRunRuntimeSidecarBaselineCheck(result.paths)) {
     add("runtime sidecar baseline", ["runtime-sidecars:check"]);
-    add("runtime sidecar owner test", [
-      "test:serial",
-      "src/plugins/bundled-plugin-metadata.test.ts",
-    ]);
+    add(
+      "runtime sidecar owner test",
+      ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
+      baseEnv,
+    );
+  }
+  if (shouldRunCanvasA2uiNativeResourceCheck(result.paths)) {
+    addCommand(
+      "Canvas A2UI native resource sync",
+      "node",
+      ["scripts/sync-native-a2ui.mjs", "--check"],
+      baseEnv,
+    );
   }
   if (shouldRunAppcastOwnerTest(result.paths)) {
-    add("appcast owner tests", [
-      "test:serial",
-      "test/appcast.test.ts",
-      "test/scripts/make-appcast.test.ts",
-    ]);
+    add(
+      "appcast owner tests",
+      ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
+      baseEnv,
+    );
   }
   add("package patch guard", ["deps:patches:check"]);
 
@@ -409,8 +431,8 @@ export function createChangedCheckPlan(result, options = {}) {
   } else if (lanes.apps) {
     addLint("lint apps", ["lint:apps"]);
   }
-  if (lanes.apps && hasMacosAppCiPath(result.paths)) {
-    add("macOS app CI tests", ["test:macos:ci"]);
+  if (hasMacosAppCiPath(result.paths)) {
+    add("macOS app CI tests", ["test:macos:ci"], baseEnv);
   }
 
   if (lanes.core || lanes.extensions) {

@@ -3,7 +3,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import {
+  ensureUxMatrixVideoDependencies,
+  launchUxMatrixChromium,
+} from "../../scripts/qa/ux-matrix-evidence-producer.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 
@@ -34,6 +38,16 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("prints help after boolean options without consuming valued option slots", () => {
+    const result = runCli("--skip-visual-proof", "--help");
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/qa/ux-matrix-evidence-producer.ts",
+    );
+    expect(result.stderr).toBe("");
+  });
+
   it("reports invalid args without a Node stack trace", () => {
     const result = runCli("--wat");
 
@@ -50,6 +64,20 @@ describe("QA UX Matrix evidence producer CLI", () => {
     expect(result.stdout).toBe("");
     expect(result.stderr.trim()).toBe("--artifact-base requires a value");
     expectNoNodeStack(result.stderr);
+  });
+
+  it("reports short flag values without treating them as help", () => {
+    const artifactBaseResult = runCli("--artifact-base", "-h");
+    const repoRootResult = runCli("--artifact-base", "/tmp/openclaw-ux-test", "--repo-root", "-h");
+
+    expect(artifactBaseResult.status).toBe(1);
+    expect(artifactBaseResult.stdout).toBe("");
+    expect(artifactBaseResult.stderr.trim()).toBe("--artifact-base requires a value");
+    expectNoNodeStack(artifactBaseResult.stderr);
+    expect(repoRootResult.status).toBe(1);
+    expect(repoRootResult.stdout).toBe("");
+    expect(repoRootResult.stderr.trim()).toBe("--repo-root requires a value");
+    expectNoNodeStack(repoRootResult.stderr);
   });
 
   it("sanitizes local checkout paths from generated evidence artifacts", () => {
@@ -77,5 +105,51 @@ describe("QA UX Matrix evidence producer CLI", () => {
       fs.rmSync(artifactBase, { recursive: true, force: true });
       fs.rmSync(fakeRepoRoot, { recursive: true, force: true });
     }
+  });
+
+  it("falls back to system Chromium when the managed Playwright browser is missing", async () => {
+    const browser = { close: vi.fn() };
+    const launch = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          [
+            "browserType.launch: Executable doesn't exist at /home/user/.cache/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-linux64/chrome-headless-shell",
+            "Please run the following command to download new browsers:",
+            "pnpm exec playwright install",
+          ].join("\n"),
+        ),
+      )
+      .mockResolvedValueOnce(browser);
+
+    const result = await launchUxMatrixChromium({
+      chromium: { launch } as unknown as NonNullable<
+        Parameters<typeof launchUxMatrixChromium>[0]
+      >["chromium"],
+      systemExecutablePath: "/usr/bin/chromium-browser",
+    });
+
+    expect(result).toEqual({
+      browser,
+      usedSystemExecutablePath: "/usr/bin/chromium-browser",
+    });
+    expect(launch).toHaveBeenNthCalledWith(1);
+    expect(launch).toHaveBeenNthCalledWith(2, {
+      executablePath: "/usr/bin/chromium-browser",
+    });
+  });
+
+  it("ensures Playwright ffmpeg when video proof uses system Chromium", () => {
+    const ensureChromium = vi.fn(() => 0);
+
+    ensureUxMatrixVideoDependencies({
+      ensureChromium,
+      usedSystemExecutablePath: "/usr/bin/chromium-browser",
+    });
+
+    expect(ensureChromium).toHaveBeenCalledWith({
+      ensureFfmpeg: true,
+      systemExecutablePath: "/usr/bin/chromium-browser",
+    });
   });
 });

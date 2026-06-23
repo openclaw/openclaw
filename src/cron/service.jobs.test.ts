@@ -320,6 +320,53 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("clears agentTurn payload.fallbacks when patch requests null", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks-clear", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      fallbacks: ["openrouter/gpt-4.1-mini"],
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.fallbacks).toBeUndefined();
+    }
+  });
+
+  it("omits null payload.fallbacks when replacing a non-agent payload", () => {
+    const job = createIsolatedAgentTurnJob("job-fallbacks-kind-switch", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = { kind: "systemEvent", text: "tick" };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        fallbacks: null,
+      },
+    });
+
+    const payload = job.payload as CronJob["payload"];
+    expect(payload.kind).toBe("agentTurn");
+    if (payload.kind === "agentTurn") {
+      expect(payload.fallbacks).toBeUndefined();
+    }
+  });
+
   it("persists agentTurn payload.toolsAllow updates when editing existing jobs", () => {
     const job = createIsolatedAgentTurnJob("job-tools", {
       mode: "announce",

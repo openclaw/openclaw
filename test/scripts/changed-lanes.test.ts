@@ -20,6 +20,7 @@ import {
   createTargetedCoreLintCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunAppcastOwnerTest,
+  shouldRunCanvasA2uiNativeResourceCheck,
   shouldRunPromptSnapshotCheck,
   shouldRunPromptSnapshotOwnerTest,
   shouldRunRuntimeSidecarBaselineCheck,
@@ -807,6 +808,21 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("runs changed-check app tests under the parent heavy-check lock", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
+    ]);
+    const plan = createChangedCheckPlan(result, { env: { PATH: "/usr/bin" } });
+    const testCommand = plan.commands.find((command) => command.args[0] === "test:macos:ci");
+
+    expect(testCommand?.env).toEqual({
+      OPENCLAW_OXLINT_SKIP_LOCK: "1",
+      OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+      OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
   it("routes core test-only changes to core test lanes only", () => {
     const result = detectChangedLanes([
       "packages/normalization-core/src/string-normalization.test.ts",
@@ -1315,10 +1331,12 @@ describe("scripts/changed-lanes", () => {
       name: "prompt snapshot drift",
       args: ["prompt:snapshots:check"],
     });
-    expect(plan.commands).toContainEqual({
-      name: "prompt snapshot owner test",
-      args: ["test:serial", "test/scripts/prompt-snapshots.test.ts"],
-    });
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "prompt snapshot owner test",
+        args: ["test:serial", "test/scripts/prompt-snapshots.test.ts"],
+      }),
+    );
   });
 
   it("runs the prompt snapshot owner test for model fixture generator surfaces", () => {
@@ -1332,10 +1350,12 @@ describe("scripts/changed-lanes", () => {
     const result = detectChangedLanes(["scripts/sync-codex-model-prompt-fixture.ts"]);
     const plan = createChangedCheckPlan(result);
 
-    expect(plan.commands).toContainEqual({
-      name: "prompt snapshot owner test",
-      args: ["test:serial", "test/scripts/prompt-snapshots.test.ts"],
-    });
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "prompt snapshot owner test",
+        args: ["test:serial", "test/scripts/prompt-snapshots.test.ts"],
+      }),
+    );
   });
 
   it("runs runtime sidecar baseline checks for baseline owner surfaces", () => {
@@ -1355,10 +1375,12 @@ describe("scripts/changed-lanes", () => {
       name: "runtime sidecar baseline",
       args: ["runtime-sidecars:check"],
     });
-    expect(plan.commands).toContainEqual({
-      name: "runtime sidecar owner test",
-      args: ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
-    });
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "runtime sidecar owner test",
+        args: ["test:serial", "src/plugins/bundled-plugin-metadata.test.ts"],
+      }),
+    );
   });
 
   it("guards release metadata package changes to the top-level version field", () => {
@@ -1472,10 +1494,46 @@ describe("scripts/changed-lanes", () => {
           bin: "node",
         }),
       );
-      expect(plan.commands).toContainEqual({
-        name: "macOS app CI tests",
-        args: ["test:macos:ci"],
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "macOS app CI tests",
+          args: ["test:macos:ci"],
+        }),
+      );
+    }
+  });
+
+  it("runs macOS app CI tests for macOS packaging scripts and owner tests", () => {
+    for (const changedPath of [
+      "scripts/codesign-mac-app.sh",
+      "scripts/create-dmg.sh",
+      "scripts/lib/plistbuddy.sh",
+      "scripts/notarize-mac-artifact.sh",
+      "scripts/package-mac-app.sh",
+      "scripts/package-mac-dist.sh",
+      "test/scripts/codesign-mac-app.test.ts",
+      "test/scripts/create-dmg.test.ts",
+      "test/scripts/notarize-mac-artifact.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/package-mac-dist.test.ts",
+    ]) {
+      const result = detectChangedLanes([changedPath]);
+      const plan = createChangedCheckPlan(result, {
+        env: { PATH: "/usr/bin" },
+        platform: "linux",
+        swiftlintAvailable: false,
       });
+
+      expectLanes(result.lanes, {
+        tooling: true,
+      });
+      expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "macOS app CI tests",
+          args: ["test:macos:ci"],
+        }),
+      );
     }
   });
 
@@ -1484,10 +1542,12 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
 
     expect(shouldRunAppcastOwnerTest(result.paths)).toBe(true);
-    expect(plan.commands).toContainEqual({
-      name: "appcast owner tests",
-      args: ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
-    });
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "appcast owner tests",
+        args: ["test:serial", "test/appcast.test.ts", "test/scripts/make-appcast.test.ts"],
+      }),
+    );
     expect(plan.commands.map((command) => command.name)).not.toContain("macOS app CI tests");
   });
 
@@ -1502,10 +1562,12 @@ describe("scripts/changed-lanes", () => {
     });
 
     expect(plan.commands.map((command) => command.args[0])).toContain("lint:apps");
-    expect(plan.commands).toContainEqual({
-      name: "macOS app CI tests",
-      args: ["test:macos:ci"],
-    });
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "macOS app CI tests",
+        args: ["test:macos:ci"],
+      }),
+    );
   });
 
   it("keeps macOS app CI tests out of Android-only app changes", () => {
@@ -1549,6 +1611,51 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.args[0])).toContain("tsgo:extensions");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "Canvas A2UI native resource sync",
+        bin: "node",
+        args: ["scripts/sync-native-a2ui.mjs", "--check"],
+      }),
+    );
+  });
+
+  it("checks native A2UI resources when the copied resource tree changes", () => {
+    const result = detectChangedLanes([
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/CanvasA2UI/a2ui.bundle.js",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expectLanes(result.lanes, {
+      apps: true,
+    });
+    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "Canvas A2UI native resource sync",
+        bin: "node",
+        args: ["scripts/sync-native-a2ui.mjs", "--check"],
+      }),
+    );
+  });
+
+  it("checks native A2UI resources when bundle inputs or generated outputs change", () => {
+    const result = detectChangedLanes([
+      "extensions/canvas/package.json",
+      "extensions/canvas/src/host/a2ui/.bundle.hash",
+      "extensions/canvas/src/host/a2ui/a2ui.bundle.js",
+      "pnpm-lock.yaml",
+    ]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(shouldRunCanvasA2uiNativeResourceCheck(result.paths)).toBe(true);
+    expect(plan.commands).toContainEqual(
+      expect.objectContaining({
+        name: "Canvas A2UI native resource sync",
+        bin: "node",
+        args: ["scripts/sync-native-a2ui.mjs", "--check"],
+      }),
+    );
   });
 
   it("keeps shared Vitest wiring changes out of check test execution", () => {

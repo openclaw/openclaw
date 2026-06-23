@@ -95,8 +95,17 @@ export function readWindowsListeningPidsResultSync(
 // Windows process-args reading (PowerShell → WMIC fallback)
 // ---------------------------------------------------------------------------
 
-function extractWindowsCommandLine(raw: string): string | null {
-  const lines = normalizeStringEntries(raw.split(/\r?\n/));
+function decodeWindowsProcessOutput(output: Buffer | string): string {
+  if (!Buffer.isBuffer(output)) {
+    return output;
+  }
+  return output.length >= 2 && output[0] === 0xff && output[1] === 0xfe
+    ? output.toString("utf16le")
+    : output.toString("utf8");
+}
+
+function extractWindowsCommandLine(raw: Buffer | string): string | null {
+  const lines = normalizeStringEntries(decodeWindowsProcessOutput(raw).split(/\r?\n/));
   for (const line of lines) {
     if (!normalizeLowercaseStringOrEmpty(line).startsWith("commandline=")) {
       continue;
@@ -140,9 +149,9 @@ export function readWindowsProcessArgsResultSync(
     getWindowsWmicExePath(),
     ["process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/value"],
     {
-      encoding: "utf8",
       timeout: timeoutMs,
       windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
     },
   );
   if (!wmic.error && wmic.status === 0) {

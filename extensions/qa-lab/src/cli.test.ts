@@ -217,6 +217,8 @@ describe("qa cli registration", () => {
       "agent-runtime-and-provider-execution",
       "--category",
       "agent-runtime-and-provider-execution.agent-turn-execution",
+      "--scenario",
+      "dm-chat-baseline",
       "--evidence-mode",
       "slim",
       "--transport",
@@ -239,6 +241,7 @@ describe("qa cli registration", () => {
       profile: "smoke-ci",
       surface: "agent-runtime-and-provider-execution",
       category: "agent-runtime-and-provider-execution.agent-turn-execution",
+      scenarioIds: ["dm-chat-baseline"],
       evidenceMode: "slim",
       transportId: "qa-channel",
       providerMode: "mock-openai",
@@ -255,6 +258,7 @@ describe("qa cli registration", () => {
     ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
     ["--surface", ["agent-runtime-and-provider-execution"]],
     ["--category", ["agent-runtime-and-provider-execution.agent-turn-execution"]],
+    ["--scenario", ["dm-chat-baseline"]],
     ["--evidence-mode", ["slim"]],
     ["--exclude-test-execution-evidence", []],
     ["--transport", ["qa-channel"]],
@@ -785,6 +789,33 @@ describe("qa cli registration", () => {
     [["qa", "up", "--qa-lab-port", "0x43124"], "--qa-lab-port must be a positive integer."],
     [["qa", "aimock", "--port", "1e4"], "--port must be a positive integer."],
   ])("rejects non-decimal QA numeric option %j", async (args, message) => {
+    const invalidProgram = new Command();
+    invalidProgram.exitOverride();
+    invalidProgram.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerQaLabCli(invalidProgram);
+
+    await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
+  });
+
+  it.each([
+    [["qa", "ui", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+    [
+      ["qa", "ui", "--advertise-port", "999999"],
+      "--advertise-port must be a TCP port between 1 and 65535.",
+    ],
+    [
+      ["qa", "docker-scaffold", "--output-dir", "/tmp/qa", "--gateway-port", "65536"],
+      "--gateway-port must be a TCP port between 1 and 65535.",
+    ],
+    [
+      ["qa", "up", "--qa-lab-port", "65536"],
+      "--qa-lab-port must be a TCP port between 1 and 65535.",
+    ],
+    [["qa", "aimock", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+  ])("rejects out-of-range QA port option %j", async (args, message) => {
     const invalidProgram = new Command();
     invalidProgram.exitOverride();
     invalidProgram.configureOutput({

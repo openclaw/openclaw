@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../../../scripts/lib/windows-taskkill.mjs";
 import { testing } from "./qa-otel-smoke-runtime.js";
@@ -135,6 +136,18 @@ describe("qa-otel-smoke receiver bounds", () => {
     });
   });
 
+  it.each([
+    ["--collector", ["--collector", "--logs-exporter"]],
+    ["--logs-exporter", ["--logs-exporter", "--collector"]],
+    ["--output-dir", ["--output-dir", "--collector"]],
+    ["--provider-mode", ["--provider-mode", "--collector"]],
+    ["--scenario", ["--scenario", "--collector"]],
+    ["--model", ["--model", "--collector"]],
+    ["--alt-model", ["--alt-model", "--collector"]],
+  ])("rejects missing values for %s before shifting parser state", (flag, args) => {
+    expect(() => testing.parseArgs(args)).toThrow(`${flag} requires a value`);
+  });
+
   it("selects the matching scenario for the requested log exporter", () => {
     expect(testing.parseArgs(["--logs-exporter", "otlp"]).scenarioId).toBe("otel-trace-smoke");
     expect(testing.parseArgs(["--logs-exporter", "stdout"]).scenarioId).toBe(
@@ -157,6 +170,18 @@ describe("qa-otel-smoke receiver bounds", () => {
       testing.parseArgs(["--logs-exporter", "stdout", "--scenario", "custom-stdout-smoke"])
         .scenarioId,
     ).toBe("custom-stdout-smoke");
+  });
+
+  it("uses unique default output dirs", () => {
+    const firstOutputDir = testing.parseArgs([]).outputDir;
+    const secondOutputDir = testing.parseArgs([]).outputDir;
+
+    expect(path.dirname(firstOutputDir)).toBe(path.join(".artifacts", "qa-e2e"));
+    expect(path.basename(firstOutputDir)).toMatch(/^otel-smoke-[a-z0-9]+-[a-f0-9]{8}$/u);
+    expect(secondOutputDir).not.toBe(firstOutputDir);
+    expect(testing.parseArgs(["--output-dir", ".artifacts/custom"]).outputDir).toBe(
+      ".artifacts/custom",
+    );
   });
 
   it("parses body-size limit env values as strict positive integers", () => {
@@ -648,6 +673,16 @@ describe("qa-otel-smoke receiver bounds", () => {
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it("clamps oversized QA suite child timers before scheduling", async () => {
+    const child = spawn(
+      process.execPath,
+      ["--input-type=module", "--eval", "setTimeout(() => process.exit(0), 25);"],
+      { stdio: "ignore" },
+    );
+
+    await expect(testing.waitForChild(child, MAX_TIMER_TIMEOUT_MS + 1, 100)).resolves.toBe(0);
   });
 
   it("uses taskkill for Windows QA suite timeout cleanup", () => {

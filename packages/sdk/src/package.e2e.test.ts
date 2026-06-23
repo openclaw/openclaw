@@ -6,7 +6,9 @@ import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveNpmRunner } from "../../../scripts/npm-runner.mjs";
 import { createPnpmRunnerSpawnSpec } from "../../../scripts/pnpm-runner.mjs";
+import { getWindowsSystem32ExePath } from "../../../src/infra/windows-install-roots.js";
 import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 
 type CommandResult = {
@@ -100,12 +102,13 @@ function signalCommandProcess(
       if (signal === "SIGKILL") {
         args.push("/F");
       }
-      const result = runTaskkill("taskkill", args, { stdio: "ignore", windowsHide: true });
+      const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
+      const result = runTaskkill(taskkillPath, args, { stdio: "ignore", windowsHide: true });
       if (!result.error && result.status === 0) {
         return;
       }
       if (signal !== "SIGKILL") {
-        const forceResult = runTaskkill("taskkill", [...args, "/F"], {
+        const forceResult = runTaskkill(taskkillPath, [...args, "/F"], {
           stdio: "ignore",
           windowsHide: true,
         });
@@ -160,6 +163,24 @@ function runPnpmCommand(
   });
 }
 
+function runNpmCommand(
+  args: string[],
+  options: { cwd: string; timeoutMs?: number },
+): Promise<CommandResult> {
+  const env = createCommandEnv();
+  const runner = resolveNpmRunner({
+    env,
+    npmArgs: args,
+  });
+  return runCommand(runner.command, runner.args, {
+    cwd: options.cwd,
+    env: runner.env ?? env,
+    shell: runner.shell,
+    timeoutMs: options.timeoutMs,
+    windowsVerbatimArguments: runner.windowsVerbatimArguments,
+  });
+}
+
 function normalizeWorkspaceDependencies(
   dependencies: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
@@ -196,7 +217,7 @@ async function createPackStagingRoot(
   const stagingRoot = path.join(destinationRoot, `pack-${packageSlug}`);
   await fs.mkdir(stagingRoot, { recursive: true });
   await fs.writeFile(path.join(stagingRoot, "package.json"), JSON.stringify(manifest, null, 2));
-  const files = Array.isArray(manifest.files) ? manifest.files : [];
+  const files: string[] = Array.isArray(manifest.files) ? (manifest.files as string[]) : [];
   for (const entry of files) {
     if (typeof entry !== "string") {
       continue;
@@ -303,11 +324,12 @@ describe("OpenClaw SDK package e2e", () => {
 
       signalCommandProcess(child, "SIGTERM", runTaskkill);
 
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
+      const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
         stdio: "ignore",
         windowsHide: true,
       });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
         stdio: "ignore",
         windowsHide: true,
       });
@@ -337,7 +359,7 @@ describe("OpenClaw SDK package e2e", () => {
     }
     for (const packageRoot of packageRoots) {
       const stagingRoot = await createPackStagingRoot(packageRoot, tempDir);
-      await runCommand("npm", ["pack", "--ignore-scripts", "--pack-destination", tempDir], {
+      await runNpmCommand(["pack", "--ignore-scripts", "--pack-destination", tempDir], {
         cwd: stagingRoot,
       });
     }
@@ -360,13 +382,9 @@ describe("OpenClaw SDK package e2e", () => {
     );
     await fs.writeFile(path.join(tempDir, ".npmrc"), `@openclaw:registry=${registry.registryUrl}`);
     try {
-      await runCommand(
-        "npm",
-        ["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball],
-        {
-          cwd: tempDir,
-        },
-      );
+      await runNpmCommand(["install", "--ignore-scripts", "--no-audit", "--no-fund", sdkTarball], {
+        cwd: tempDir,
+      });
     } finally {
       await registry.close();
     }

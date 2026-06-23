@@ -12,6 +12,8 @@ import {
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
   finalizeHarnessContextEngineTurn,
+  FAST_MODE_AUTO_PROGRESS_KIND,
+  formatFastModeAutoProgressText,
   formatErrorMessage,
   getAgentHarnessHookRunner,
   getBeforeToolCallPolicyDiagnosticState,
@@ -27,9 +29,11 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
+  resolveFastModeForElapsed,
   setActiveEmbeddedRun,
   supportsModelTools,
   runAgentCleanupStep,
+  type FastModeAutoProgressState,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
   type NativeHookRelayEvent,
@@ -85,6 +89,7 @@ import {
   isCurrentThreadOptionalTurnRequestParams,
   isCurrentThreadTurnRequestParams,
   isNativeResponseStreamDeltaNotification,
+  isRawFunctionToolOutputCompletionNotification,
   isTerminalTurnStatus,
   readCodexNotificationItem,
   readRawResponseToolCallId,
@@ -274,6 +279,22 @@ const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
 const CODEX_APP_SERVER_ACTIVE_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
 const ensuredCodexWorkspaceDirs = new Set<string>();
 
+function withCodexAppServerFastModeServiceTier(
+  appServer: CodexAppServerRuntimeOptions,
+  params: EmbeddedRunAttemptParams,
+): CodexAppServerRuntimeOptions {
+  const fastMode = typeof params.fastMode === "function" ? params.fastMode() : params.fastMode;
+  const serviceTier =
+    fastMode === undefined ? appServer.serviceTier : fastMode ? "priority" : undefined;
+  if (serviceTier === appServer.serviceTier) {
+    return appServer;
+  }
+  if (serviceTier) {
+    return { ...appServer, serviceTier };
+  }
+  return { ...appServer, serviceTier: null };
+}
+
 function estimateCodexAppServerProjectedTurnTokens(params: {
   prompt: string;
   developerInstructions?: string;
@@ -306,10 +327,10 @@ async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> 
   ensuredCodexWorkspaceDirs.add(normalized);
 }
 
-function emitCodexAppServerEvent(
+async function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
   event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
-): void {
+): Promise<void> {
   try {
     emitGlobalAgentEvent({
       runId: params.runId,
@@ -321,10 +342,7 @@ function emitCodexAppServerEvent(
     embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
   }
   try {
-    const maybePromise = params.onAgentEvent?.(event);
-    void Promise.resolve(maybePromise).catch((error: unknown) => {
-      embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
-    });
+    await params.onAgentEvent?.(event);
   } catch (error) {
     // Event consumers are observational; they must not abort or strand the
     // canonical app-server turn lifecycle.
@@ -416,6 +434,14 @@ export async function runCodexAppServerAttempt(
   );
   const codexModelContentCapture = resolveDiagnosticModelContentCapturePolicy(params.config);
   const codexModelCallId = `${params.runId}:codex-model:1`;
+  const fastModeAutoStartedAtMs =
+    typeof params.fastModeStartedAtMs === "number" && Number.isFinite(params.fastModeStartedAtMs)
+      ? params.fastModeStartedAtMs
+      : undefined;
+  const fastModeAutoProgressState: FastModeAutoProgressState = params.fastModeAutoProgressState ?? {
+    offAnnounced: false,
+    resetAnnounced: false,
+  };
   // Startup phase timings are profiler-gated because this function runs before
   // every Codex turn; normal production should not do timing bookkeeping here.
   const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
@@ -764,7 +790,9 @@ export async function runCodexAppServerAttempt(
     onYieldDetected: () => {
       yieldDetected = true;
     },
-    onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
+    onCodexAppServerEvent: (event) => {
+      void emitCodexAppServerEvent(params, event);
+    },
     onPersistentWebSearchPolicyResolved: (allowed) => {
       persistentWebSearchAllowed = allowed;
     },
@@ -791,7 +819,9 @@ export async function runCodexAppServerAttempt(
     onYieldDetected: () => {
       yieldDetected = true;
     },
-    onCodexAppServerEvent: (event) => emitCodexAppServerEvent(params, event),
+    onCodexAppServerEvent: (event) => {
+      void emitCodexAppServerEvent(params, event);
+    },
   });
   const toolBridge = createCodexDynamicToolBridge({
     tools,
@@ -1424,13 +1454,15 @@ export async function runCodexAppServerAttempt(
     };
   };
   try {
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "startup" },
     });
+    const attemptAppServer = withCodexAppServerFastModeServiceTier(appServer, params);
+    pluginAppServer = attemptAppServer;
     const startupResult = await startCodexAttemptThread({
       attemptClientFactory,
-      appServer,
+      appServer: attemptAppServer,
       pluginConfig,
       computerUseConfig,
       startupAuthProfileId,
@@ -1469,7 +1501,7 @@ export async function runCodexAppServerAttempt(
     codexSandboxPolicy = startupResult.sandboxPolicy;
     releaseSharedClientLease = startupResult.releaseSharedClientLease;
     restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "thread_ready", threadId: thread.threadId },
     });
@@ -1713,7 +1745,7 @@ export async function runCodexAppServerAttempt(
   };
 
   const emitLifecycleStart = () => {
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "lifecycle",
       data: { phase: "start", startedAt: attemptStartedAt },
     });
@@ -1724,7 +1756,7 @@ export async function runCodexAppServerAttempt(
     if (!lifecycleStarted || lifecycleTerminalEmitted) {
       return;
     }
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "lifecycle",
       data: {
         startedAt: attemptStartedAt,
@@ -1759,6 +1791,75 @@ export async function runCodexAppServerAttempt(
       notification,
       emitExecutionPhaseOnce,
     });
+  };
+  const emitFastModeAutoProgress = async (payload: {
+    enabled: boolean;
+    elapsedSeconds: number;
+    fastAutoOnSeconds?: number;
+  }): Promise<void> => {
+    const summary = formatFastModeAutoProgressText(payload);
+    await emitCodexAppServerEvent(params, {
+      stream: "item",
+      data: {
+        kind: "status",
+        title: "Fast",
+        phase: "update",
+        summary,
+      },
+    });
+    try {
+      await params.onToolResult?.({
+        text: summary,
+        channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
+      });
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server fast mode auto progress delivery failed", {
+        error,
+      });
+    }
+  };
+  const maybeAnnounceFastModeAutoOff = async (): Promise<void> => {
+    if (
+      params.fastModeAuto !== true ||
+      fastModeAutoStartedAtMs === undefined ||
+      fastModeAutoProgressState.offAnnounced
+    ) {
+      return;
+    }
+    const next = resolveFastModeForElapsed({
+      mode: "auto",
+      startedAtMs: fastModeAutoStartedAtMs,
+      fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+    });
+    if (next.enabled) {
+      return;
+    }
+    fastModeAutoProgressState.offAnnounced = true;
+    await emitFastModeAutoProgress(next);
+  };
+  const maybeEmitFastModeAutoReset = async (): Promise<void> => {
+    if (
+      params.fastModeAuto !== true ||
+      !fastModeAutoProgressState.offAnnounced ||
+      fastModeAutoProgressState.resetAnnounced
+    ) {
+      return;
+    }
+    fastModeAutoProgressState.resetAnnounced = true;
+    await emitFastModeAutoProgress({
+      enabled: true,
+      elapsedSeconds: 0,
+      fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+    });
+  };
+  const maybeEmitFastModeAutoResetBestEffort = async (): Promise<void> => {
+    try {
+      await maybeEmitFastModeAutoReset();
+    } catch (error) {
+      embeddedAgentLog.warn(
+        `codex app-server fast mode auto reset progress failed: ${formatErrorMessage(error)}`,
+      );
+    }
   };
 
   const isTerminalTurnNotificationForTurn = (
@@ -1806,6 +1907,13 @@ export async function runCodexAppServerAttempt(
     try {
       await waitForCodexNotificationDispatchTurn();
       await projector.handleNotification(notification);
+      if (
+        notificationState.isCurrentTurnNotification &&
+        activeTurnItemIds.size === 0 &&
+        isRawFunctionToolOutputCompletionNotification(notification)
+      ) {
+        await maybeAnnounceFastModeAutoOff();
+      }
     } catch (error) {
       embeddedAgentLog.debug("codex app-server projector notification threw", {
         method: notification.method,
@@ -2082,7 +2190,7 @@ export async function runCodexAppServerAttempt(
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
       const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
       if (shouldEmitDynamicToolProgress) {
-        emitCodexAppServerEvent(params, {
+        void emitCodexAppServerEvent(params, {
           stream: "tool",
           data: {
             phase: "start",
@@ -2172,7 +2280,7 @@ export async function runCodexAppServerAttempt(
         });
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
-          emitCodexAppServerEvent(params, {
+          void emitCodexAppServerEvent(params, {
             stream: "tool",
             data: {
               phase: "result",
@@ -2322,10 +2430,12 @@ export async function runCodexAppServerAttempt(
     throw error;
   };
   const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
+    const turnAppServer = withCodexAppServerFastModeServiceTier(pluginAppServer, params);
+    pluginAppServer = turnAppServer;
     const turnStartParams = buildTurnStartParams(params, {
       threadId: thread.threadId,
       cwd: codexExecutionCwd,
-      appServer: pluginAppServer,
+      appServer: turnAppServer,
       promptText: codexTurnPromptText,
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
@@ -2357,7 +2467,7 @@ export async function runCodexAppServerAttempt(
       "codex app-server resumed thread has active native turn; waiting before turn/start",
       { threadId: thread.threadId, activeTurnIds: activeNativeTurnIds },
     );
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: {
         phase: "turn_start_waiting_for_native_turn",
@@ -2380,7 +2490,7 @@ export async function runCodexAppServerAttempt(
       ctx: hookContext,
       hookRunner,
     });
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_starting", threadId: thread.threadId },
     });
@@ -2397,7 +2507,7 @@ export async function runCodexAppServerAttempt(
       );
       const compactTurnCompleted = await waitForActiveNativeTurnCompletion();
       if (compactTurnCompleted && !runAbortController.signal.aborted) {
-        emitCodexAppServerEvent(params, {
+        void emitCodexAppServerEvent(params, {
           stream: "codex_app_server.lifecycle",
           data: { phase: "turn_start_retry_after_compact", threadId: thread.threadId },
         });
@@ -2479,7 +2589,7 @@ export async function runCodexAppServerAttempt(
               );
             }
           }
-          emitCodexAppServerEvent(params, {
+          void emitCodexAppServerEvent(params, {
             stream: "codex_app_server.lifecycle",
             data: { phase: "thread_ready_retry", threadId: thread.threadId },
           });
@@ -2509,7 +2619,7 @@ export async function runCodexAppServerAttempt(
           error: turnStartErrorMessage,
         });
       }
-      emitCodexAppServerEvent(params, {
+      void emitCodexAppServerEvent(params, {
         stream: "codex_app_server.lifecycle",
         data: { phase: "turn_start_failed", error: turnStartErrorMessage },
       });
@@ -2610,6 +2720,8 @@ export async function runCodexAppServerAttempt(
   }
   turnIdRef.current = turn.turn.id;
   const activeTurnId = turn.turn.id;
+  let assistantStreamEventEmitted = false;
+  let assistantStreamNeedsTerminalSnapshot = false;
   emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridgeRef.current = createCodexUserInputBridge({
     paramsForRun: params,
@@ -2624,7 +2736,16 @@ export async function runCodexAppServerAttempt(
     imagesCount: params.images?.length ?? 0,
   });
   projectorRef.current = new CodexAppServerEventProjector(
-    dynamicToolParams,
+    {
+      ...dynamicToolParams,
+      onAgentEvent: (event) => {
+        if (event.stream === "assistant" && typeof event.data.delta === "string") {
+          assistantStreamEventEmitted = true;
+          assistantStreamNeedsTerminalSnapshot ||= event.data.replaceable === true;
+        }
+        return dynamicToolParams.onAgentEvent?.(event);
+      },
+    },
     thread.threadId,
     activeTurnId,
     {
@@ -2632,6 +2753,7 @@ export async function runCodexAppServerAttempt(
         nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         nativeHookRelay.shouldRelayEvent("post_tool_use"),
       trajectoryRecorder,
+      onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
     },
   );
   if (
@@ -2891,8 +3013,13 @@ export async function runCodexAppServerAttempt(
       turnId: activeTurnId,
     });
     const terminalAssistantText = collectTerminalAssistantText(result);
-    if (terminalAssistantText && !finalAborted && !finalPromptError) {
-      emitCodexAppServerEvent(params, {
+    if (
+      terminalAssistantText &&
+      (!assistantStreamEventEmitted || assistantStreamNeedsTerminalSnapshot) &&
+      !finalAborted &&
+      !finalPromptError
+    ) {
+      void emitCodexAppServerEvent(params, {
         stream: "assistant",
         data: { text: terminalAssistantText },
       });
@@ -3024,6 +3151,9 @@ export async function runCodexAppServerAttempt(
       systemPromptReport,
     };
   } finally {
+    if (params.isFinalFallbackAttempt !== false) {
+      await maybeEmitFastModeAutoResetBestEffort();
+    }
     codexModelCallDiagnostics.emitError(
       "codex app-server run completed without model-call terminal event",
     );

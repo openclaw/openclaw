@@ -2,7 +2,7 @@
 import crypto from "node:crypto";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { type FastMode, normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -409,6 +409,10 @@ type RunPreparedReplyParams = {
   directives: InlineDirectives;
   defaultActivation: Parameters<typeof buildGroupIntro>[0]["defaultActivation"];
   resolvedThinkLevel: ThinkLevel | undefined;
+  resolvedFastMode?: FastMode;
+  resolvedFastModeAutoOnSeconds?: number;
+  resolvedFastModeOverride?: boolean;
+  resolvedFastModeAutoOnSecondsOverride?: boolean;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -1299,6 +1303,9 @@ export async function runPreparedReply(
       replyRoute.accountId,
       replyRoute.chatType,
     ),
+    originatingChatId:
+      normalizeOptionalString(sessionCtx.NativeChannelId) ??
+      normalizeOptionalString(sessionCtx.ChatId),
     originatingChatType: replyRoute.chatType,
     run: {
       agentId,
@@ -1315,6 +1322,7 @@ export async function runPreparedReply(
         normalizeOptionalString(sessionCtx.GroupSubject),
       groupSpace: normalizeOptionalString(sessionCtx.GroupSpace),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
+      channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
@@ -1323,6 +1331,7 @@ export async function runPreparedReply(
       senderIsOwner: command.senderIsOwner,
       traceAuthorized:
         command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+      approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
       sessionFile: preparedSessionState.sessionFile,
       workspaceDir,
       cwd: normalizeOptionalString(sessionEntry?.spawnedCwd),
@@ -1337,15 +1346,31 @@ export async function runPreparedReply(
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,
-      fastMode: useFastReplyRuntime
-        ? false
-        : resolveFastModeState({
-            cfg,
-            provider,
-            model,
-            agentId,
-            sessionEntry: preparedSessionState.sessionEntry,
-          }).enabled,
+      ...(() => {
+        if (useFastReplyRuntime) {
+          return {
+            fastMode: false,
+            fastModeAutoOnSeconds: undefined,
+            fastModeOverride: true,
+          };
+        }
+        const fastModeState = resolveFastModeState({
+          cfg,
+          provider,
+          model,
+          agentId,
+          sessionEntry: preparedSessionState.sessionEntry,
+        });
+        return {
+          fastMode: params.resolvedFastMode ?? fastModeState.mode,
+          fastModeAutoOnSeconds:
+            params.resolvedFastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds,
+          ...(params.resolvedFastModeOverride ? { fastModeOverride: true } : {}),
+          ...(params.resolvedFastModeAutoOnSecondsOverride
+            ? { fastModeAutoOnSecondsOverride: true }
+            : {}),
+        };
+      })(),
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,

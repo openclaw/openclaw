@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -382,6 +383,10 @@ type ClawHubConfigLike = {
   user?: ClawHubConfigLike | null;
 };
 
+function resolveClawHubRequestTimeoutMs(timeoutMs: unknown): number {
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
+}
+
 export class ClawHubRequestError extends Error {
   readonly status: number;
   readonly requestPath: string;
@@ -637,15 +642,14 @@ async function clawhubRequest(
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
+  const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
       controller.abort(
-        new Error(
-          `ClawHub request timed out after ${params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS}ms`,
-        ),
+        new Error(`ClawHub request timed out after ${timeoutMs}ms`),
       ),
-    params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+    timeoutMs,
   );
   try {
     const headers = {
@@ -729,7 +733,7 @@ async function readClawHubResponseBytes(params: {
   timeoutMs?: number;
   resourceLabel: string;
 }): Promise<Uint8Array> {
-  const timeoutMs = params.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS;
+  const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
   return await readResponseWithLimit(params.response, params.maxBytes ?? Number.MAX_SAFE_INTEGER, {
     chunkTimeoutMs: timeoutMs,
     onOverflow: ({ size, maxBytes }) =>

@@ -9,7 +9,11 @@ import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
-import { getWindowsCmdExePath, getWindowsInstallRoots } from "../infra/windows-install-roots.js";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+} from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { sleep } from "../utils.js";
 import { parseCmdScriptCommandLine, quoteCmdScriptArg } from "./cmd-argv.js";
@@ -96,9 +100,10 @@ function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vb
 function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
   const primaryPath = resolveStartupEntryPath(env);
   const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
-  // Hidden VBS launchers supersede cmd launchers, but uninstall must remove the
-  // legacy cmd path from older installs too.
-  return uniqueStrings([primaryPath, legacyCmdPath]);
+  const hiddenLauncherPath = resolveStartupEntryPath(env, "vbs");
+  // Hidden VBS launchers supersede cmd launchers, but lifecycle operations must
+  // discover both variants even when the caller env lacks the persisted marker.
+  return uniqueStrings([primaryPath, legacyCmdPath, hiddenLauncherPath]);
 }
 
 // `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
@@ -743,7 +748,7 @@ async function terminateGatewayProcessTree(pid: number, graceMs: number): Promis
     killProcessTree(pid, { graceMs });
     return;
   }
-  const taskkillPath = path.join(getWindowsInstallRoots().systemRoot, "System32", "taskkill.exe");
+  const taskkillPath = getWindowsSystem32ExePath("taskkill.exe");
   spawnSync(taskkillPath, ["/T", "/PID", String(pid)], {
     stdio: "ignore",
     timeout: 5_000,
@@ -796,7 +801,7 @@ function readWindowsProcessSnapshot(): WindowsProcessSnapshotEntry[] | null {
   }
 
   const processSnapshot = spawnSync(
-    "powershell",
+    getWindowsPowerShellExePath(),
     [
       "-NoProfile",
       "-Command",
@@ -919,6 +924,70 @@ async function restartStartupEntry(
   return { outcome: "completed" };
 }
 
+const CALLER_OWNED_SERVICE_IDENTITY_KEYS = [
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_WINDOWS_TASK_NAME",
+] as const;
+
+function resolveScheduledTaskRenderEnv(
+  env: GatewayServiceEnv,
+  environment: GatewayServiceEnv | undefined,
+): GatewayServiceEnv {
+  if (!environment) {
+    return env;
+  }
+  const merged = { ...env, ...environment };
+  for (const key of CALLER_OWNED_SERVICE_IDENTITY_KEYS) {
+    const value = env[key]?.trim();
+    if (value) {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+function resolveScheduledTaskScriptEnvironment(
+  taskEnv: GatewayServiceEnv,
+  environment: GatewayServiceEnv | undefined,
+): GatewayServiceEnv | undefined {
+  const scriptEnv = environment ? { ...environment } : {};
+  for (const key of CALLER_OWNED_SERVICE_IDENTITY_KEYS) {
+    const value = taskEnv[key]?.trim();
+    if (value) {
+      scriptEnv[key] = value;
+    }
+  }
+  return Object.keys(scriptEnv).length > 0 ? scriptEnv : undefined;
+}
+
+const SCHEDULED_TASK_ACTIVATION_KEYS = [
+  "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",
+  "OPENCLAW_TASK_SCRIPT_NAME",
+  "OPENCLAW_TASK_SCRIPT",
+  "OPENCLAW_SERVICE_KIND",
+  "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_PROFILE",
+] as const;
+
+function resolveScheduledTaskActivationEnv(
+  env: GatewayServiceEnv,
+  environment: GatewayServiceEnv | undefined,
+): GatewayServiceEnv {
+  if (!environment) {
+    return env;
+  }
+  const activationEnv = { ...env };
+  for (const key of SCHEDULED_TASK_ACTIVATION_KEYS) {
+    const value = environment[key];
+    if (value !== undefined) {
+      activationEnv[key] = value;
+    }
+  }
+  return activationEnv;
+}
+
 async function writeScheduledTaskScript({
   env,
   programArguments,
@@ -929,17 +998,24 @@ async function writeScheduledTaskScript({
   scriptPath: string;
   taskLaunchPath: string;
   taskDescription: string;
+  taskEnv: GatewayServiceEnv;
 }> {
   await assertSchtasksAvailable().catch(() => undefined);
-  const scriptPath = resolveTaskScriptPath(env);
-  const taskLaunchPath = resolveTaskLauncherScriptPath(env, scriptPath);
+  const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
+  const scriptPath = resolveTaskScriptPath(taskEnv);
+  const taskLaunchPath = resolveTaskLauncherScriptPath(taskEnv, scriptPath);
   await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-  const taskDescription = resolveGatewayServiceDescription({ env, environment, description });
+  const taskDescription = resolveGatewayServiceDescription({
+    env: taskEnv,
+    environment,
+    description,
+  });
+  const scriptEnvironment = resolveScheduledTaskScriptEnvironment(taskEnv, environment);
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,
     workingDirectory,
-    environment,
+    environment: scriptEnvironment,
   });
   await fs.writeFile(scriptPath, script, "utf8");
   if (taskLaunchPath !== scriptPath) {
@@ -949,7 +1025,7 @@ async function writeScheduledTaskScript({
     });
     await fs.writeFile(taskLaunchPath, launcher, "utf8");
   }
-  return { scriptPath, taskLaunchPath, taskDescription };
+  return { scriptPath, taskLaunchPath, taskDescription, taskEnv };
 }
 
 export async function stageScheduledTask({
@@ -1239,7 +1315,7 @@ export async function installScheduledTask(
 ): Promise<{ scriptPath: string }> {
   const staged = await writeScheduledTaskScript(args);
   await activateScheduledTask({
-    env: args.env,
+    env: resolveScheduledTaskActivationEnv(args.env, args.environment),
     stdout: args.stdout,
     scriptPath: staged.scriptPath,
     taskLaunchPath: staged.taskLaunchPath,
@@ -1267,8 +1343,15 @@ export async function uninstallScheduledTask({
   }
 
   const scriptPath = resolveTaskScriptPath(env);
-  const launcherPath = resolveTaskLauncherScriptPath(env, scriptPath);
-  if (launcherPath !== scriptPath) {
+  const parsedScriptPath = path.parse(scriptPath);
+  const launcherPaths = uniqueStrings([
+    resolveTaskLauncherScriptPath(env, scriptPath),
+    path.join(parsedScriptPath.dir, `${parsedScriptPath.name}.vbs`),
+  ]);
+  for (const launcherPath of launcherPaths) {
+    if (launcherPath === scriptPath) {
+      continue;
+    }
     try {
       await fs.unlink(launcherPath);
       stdout.write(`${formatLine("Removed task launcher", launcherPath)}\n`);

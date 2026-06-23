@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
+import {
+  getWindowsCmdExePath,
+  getWindowsPowerShellExePath,
+} from "../infra/windows-install-roots.js";
 import "./test-helpers/schtasks-base-mocks.js";
 import {
   inspectPortUsage,
@@ -136,7 +139,11 @@ function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyn
 function mockWindowsNodeHostProcess(processId = 5151): void {
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   spawnSync.mockImplementation((command, args) => {
-    if (command === "powershell" && Array.isArray(args) && args.includes(NODE_PROCESS_QUERY)) {
+    if (
+      command === getWindowsPowerShellExePath() &&
+      Array.isArray(args) &&
+      args.includes(NODE_PROCESS_QUERY)
+    ) {
       return makeSpawnSyncResult({
         stdout: JSON.stringify([
           {
@@ -405,7 +412,7 @@ describe("Windows startup fallback", () => {
       findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
       spawnSync.mockImplementation((command, args) => {
         if (
-          command === "powershell" &&
+          command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
@@ -475,7 +482,7 @@ describe("Windows startup fallback", () => {
       fastForwardTaskStartWait();
       spawnSync.mockImplementation((command, args) => {
         if (
-          command === "powershell" &&
+          command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
@@ -563,7 +570,7 @@ describe("Windows startup fallback", () => {
       );
       spawnSync.mockImplementation((command, args) => {
         if (
-          command === "powershell" &&
+          command === getWindowsPowerShellExePath() &&
           Array.isArray(args) &&
           args.includes(
             "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
@@ -663,6 +670,22 @@ describe("Windows startup fallback", () => {
           OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
         },
         stdout,
+      });
+
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
+    });
+  });
+
+  it("removes hidden Startup-folder entries when the caller env lacks the marker", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
+      const startupEntryPath = resolveStartupEntryPath(env, "vbs");
+      await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+      await fs.writeFile(startupEntryPath, 'CreateObject("WScript.Shell")\n', "utf8");
+
+      await uninstallScheduledTask({
+        env,
+        stdout: new PassThrough(),
       });
 
       await expect(fs.access(startupEntryPath)).rejects.toThrow();

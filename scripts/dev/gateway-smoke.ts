@@ -56,7 +56,7 @@ function validateArgs(argv: readonly string[]): void {
     }
     if (VALUE_FLAGS.has(arg)) {
       const value = argv[index + 1];
-      if (!value || value.startsWith("--")) {
+      if (!value || value.startsWith("-")) {
         throw new GatewaySmokeArgError(`${arg} requires a value`);
       }
       index += 1;

@@ -680,11 +680,30 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/workspace",
       slug: undefined,
     });
+    expect(updateAllArgs.config).toEqual({});
     expectLogger(updateAllArgs.logger);
     expect(
       runtimeLogs.some((line) => line.includes("Updated calendar: 1.2.2 -> 1.2.3")),
       "update result log",
     ).toBe(true);
+    expect(runtimeErrors).toStrictEqual([]);
+  });
+
+  it("does not bootstrap configured skills during update all", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      agents: {
+        defaults: {
+          skills: ["apple-notes"],
+        },
+      },
+    });
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
+
+    await runCommand(["skills", "update", "--all"]);
+
+    expect(readTrackedClawHubSkillSlugsMock).toHaveBeenCalledWith("/tmp/workspace");
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
+    expect(runtimeLogs).toContain("No tracked ClawHub skills to update.");
     expect(runtimeErrors).toStrictEqual([]);
   });
 
@@ -791,6 +810,7 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/openclaw-config",
       slug: undefined,
       logger: expect.any(Object),
+      config: {},
     });
   });
 
@@ -817,6 +837,7 @@ describe("skills cli commands", () => {
       workspaceDir: "/tmp/openclaw-config",
       slug: "calendar",
       logger: expect.any(Object),
+      config: {},
     });
   });
 

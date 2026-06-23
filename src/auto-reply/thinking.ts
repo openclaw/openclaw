@@ -9,28 +9,24 @@ import {
 } from "./thinking.shared.js";
 import type { ThinkLevel, ThinkingCatalogEntry } from "./thinking.shared.js";
 export {
-  formatXHighModelHint,
   isSessionDefaultDirectiveValue,
   normalizeElevatedLevel,
   normalizeFastMode,
-  normalizeNoticeLevel,
   normalizeReasoningLevel,
   normalizeTraceLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
   resolveResponseUsageMode,
-  resolveElevatedMode,
 } from "./thinking.shared.js";
 export type {
   ElevatedLevel,
-  ElevatedMode,
+  FastMode,
   NoticeLevel,
   ReasoningLevel,
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,
-  UsageDisplayLevel,
   VerboseLevel,
 } from "./thinking.shared.js";
 import {

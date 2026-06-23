@@ -195,6 +195,18 @@ describe("create-dmg plist validation", () => {
     expect(script).not.toContain('tell application "Finder" to close every window');
   });
 
+  it("fails malformed DMG resize slack before creating images", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const validationBlock = script.slice(
+      script.indexOf("require_integer_list()"),
+      script.indexOf('to_applescript_list4()'),
+    );
+
+    expect(validationBlock).toContain("require_nonnegative_integer()");
+    expect(validationBlock).toContain('require_nonnegative_integer DMG_EXTRA_SECTORS "$DMG_EXTRA_SECTORS"');
+    expect(validationBlock).toContain("must be a finite non-negative integer");
+  });
+
   it.runIf(process.platform === "darwin")(
     "fails before hdiutil when required plist keys are missing",
     () => {
@@ -263,6 +275,42 @@ describe.runIf(process.platform === "darwin")("create-dmg ownership boundaries",
     expect(result.status).not.toBe(0);
     expect(readFileSync(output, "utf8")).toBe("previous output");
     expect(readFileSync(tools.hdiutilLog, "utf8")).not.toContain("detach");
+  });
+
+  it("fails before image creation when Finder layout values are malformed", () => {
+    const app = makeValidApp();
+    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
+    tempDirs.push(outputDir);
+    const output = path.join(outputDir, "OpenClaw.dmg");
+    const tools = makeFakeDmgTools();
+
+    const result = runScript([app, output], {
+      ...tools.env,
+      DMG_WINDOW_BOUNDS: "400 nope 900 420",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("DMG_WINDOW_BOUNDS must contain only integer values");
+    expect(existsSync(output)).toBe(false);
+    expect(existsSync(tools.hdiutilLog) ? readFileSync(tools.hdiutilLog, "utf8") : "").toBe("");
+  });
+
+  it("fails before image creation when Finder layout values span multiple lines", () => {
+    const app = makeValidApp();
+    const outputDir = mkdtempSync(path.join(tmpdir(), "openclaw-create-dmg-output-"));
+    tempDirs.push(outputDir);
+    const output = path.join(outputDir, "OpenClaw.dmg");
+    const tools = makeFakeDmgTools();
+
+    const result = runScript([app, output], {
+      ...tools.env,
+      DMG_WINDOW_BOUNDS: "400 100 900 420\nnope",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("DMG_WINDOW_BOUNDS must be a single line");
+    expect(existsSync(output)).toBe(false);
+    expect(existsSync(tools.hdiutilLog) ? readFileSync(tools.hdiutilLog, "utf8") : "").toBe("");
   });
 
   it("preserves an existing output when verification fails", () => {

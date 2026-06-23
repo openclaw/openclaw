@@ -126,6 +126,24 @@ describe("provider-catalog-live-runtime", () => {
     ).resolves.toEqual(["custom-a", "custom-b"]);
   });
 
+  it("accepts UTF-8 BOM-prefixed catalog responses", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response("\uFEFF" + JSON.stringify({ data: [{ id: "model-a" }] })),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    await expect(
+      fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+      }),
+    ).resolves.toEqual(["model-a"]);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("caches raw live model rows for provider-specific projection", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard({
       models: [{ slug: "custom-a" }, { slug: "custom-b" }],
@@ -155,6 +173,91 @@ describe("provider-catalog-live-runtime", () => {
     expect(first).toEqual([{ slug: "custom-a" }, { slug: "custom-b" }]);
     expect(second).toEqual(first);
     expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds an unbounded live catalog success stream and cancels the body", async () => {
+    const encoder = new TextEncoder();
+    let pullCount = 0;
+    let cancelled = false;
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pullCount += 1;
+            // Stream a JSON array prefix followed by an effectively endless run of
+            // padding so the body never terminates under its own power.
+            if (pullCount === 1) {
+              controller.enqueue(encoder.encode('[{"id":"model-a","object":"model"},'));
+              return;
+            }
+            controller.enqueue(encoder.encode("0".repeat(1024 * 1024)));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    const error = await fetchLiveProviderModelIds({
+      providerId: "provider",
+      endpoint: "https://provider.example.test/v1/models",
+      fetchGuard: fetchGuardMock,
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/Live model catalog response exceeded \d+ bytes/);
+    expect(cancelled).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts a stalled live catalog success stream", async () => {
+    vi.useFakeTimers();
+    try {
+      const encoder = new TextEncoder();
+      let cancelReason: unknown;
+      const release = vi.fn(async () => undefined);
+      const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+        response: new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              // Emit a partial JSON prefix and then idle forever without closing.
+              controller.enqueue(encoder.encode('[{"id":"model-a",'));
+            },
+            cancel(reason) {
+              cancelReason = reason;
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+        finalUrl: "https://provider.example.test/v1/models",
+        release,
+      }));
+
+      const resultPromise = fetchLiveProviderModelIds({
+        providerId: "provider",
+        endpoint: "https://provider.example.test/v1/models",
+        fetchGuard: fetchGuardMock,
+        timeoutMs: 1234,
+      }).catch((err: unknown) => err);
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1234);
+      const error = await resultPromise;
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(
+        "Live model catalog response stalled: no data received for 1234ms",
+      );
+      expect(cancelReason).toBeInstanceOf(Error);
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("throws structured HTTP errors after releasing guarded fetches", async () => {

@@ -1,5 +1,6 @@
 {
   "id": "deepgram",
+  "icon": "https://cdn.simpleicons.org/deepgram/111111",
   "activation": {
     "onStartup": false
   },

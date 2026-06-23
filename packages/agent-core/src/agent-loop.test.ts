@@ -767,6 +767,154 @@ describe("agentLoop tool termination", () => {
     expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
+
+  it("does not request another model turn after a tool aborts the run", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-abort", name: "abort_tool", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const abortTool: AgentTool = {
+      name: "abort_tool",
+      label: "abort_tool",
+      description: "Abort the active run",
+      parameters: Type.Object({}, { additionalProperties: false }),
+      execute: async () => {
+        controller.abort(new Error("user aborted"));
+        return {
+          content: [{ type: "text", text: "aborted" }],
+          details: { aborted: true },
+        };
+      },
+    };
+    const events: AgentEvent[] = [];
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "abort during tool", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [abortTool],
+      },
+      config,
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(events.map((event) => event.type)).toEqual([
+      "agent_start",
+      "turn_start",
+      "message_start",
+      "message_end",
+      "message_start",
+      "message_end",
+      "tool_execution_start",
+      "tool_execution_end",
+      "message_start",
+      "message_end",
+      "turn_end",
+      "turn_start",
+      "message_start",
+      "message_end",
+      "turn_end",
+      "agent_end",
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+  });
+
+  it("does not request another model turn when an async turn hook aborts the run", async () => {
+    const controller = new AbortController();
+    let streamCalls = 0;
+    const streamFn: StreamFn = () => {
+      streamCalls += 1;
+      if (streamCalls > 1) {
+        throw new Error("model was called after abort");
+      }
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message = makeAssistantMessage([
+          { type: "toolCall", id: "call-hook-abort", name: "hook_abort", arguments: {} },
+        ]);
+        stream.push({ type: "done", reason: "toolUse", message });
+        stream.end();
+      });
+      return stream;
+    };
+    const events: AgentEvent[] = [];
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "abort from hook", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [makeTool("hook_abort", [])],
+      },
+      {
+        ...config,
+        prepareNextTurn: async () => {
+          await Promise.resolve();
+          controller.abort(new Error("user aborted"));
+          return undefined;
+        },
+      },
+      (event) => {
+        events.push(event);
+      },
+      controller.signal,
+      streamFn,
+    );
+
+    expect(streamCalls).toBe(1);
+    expect(messages.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+    expect(events.map((event) => event.type)).toEqual([
+      "agent_start",
+      "turn_start",
+      "message_start",
+      "message_end",
+      "message_start",
+      "message_end",
+      "tool_execution_start",
+      "tool_execution_end",
+      "message_start",
+      "message_end",
+      "turn_end",
+      "turn_start",
+      "message_start",
+      "message_end",
+      "turn_end",
+      "agent_end",
+    ]);
+    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+  });
 });
 
 describe("agentLoop thinking state", () => {
