@@ -1,6 +1,10 @@
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsDiagnoseResult } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
+} from "../../agents/embedded-agent-runner/run-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { writeSessionStore } from "../test-helpers.js";
 import {
@@ -21,6 +25,11 @@ vi.mock("../../plugins/host-hook-state.js", async () => {
 });
 
 const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+
+afterEach(() => {
+  ACTIVE_EMBEDDED_RUNS.clear();
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+});
 
 test("sessions.diagnose returns read-only live and stored evidence without transcript paths", async () => {
   const { dir } = await createSessionStoreDir();
@@ -126,6 +135,49 @@ test("sessions.diagnose picks a visible active session beyond the bounded newest
       key: "agent:main:stuck",
       sessionId: "sess-stuck",
       hasActiveRun: true,
+    },
+  });
+});
+
+test("sessions.diagnose picks an embedded active session beyond the bounded newest scan", async () => {
+  await createSessionStoreDir();
+  const now = Date.now();
+  const entries: Record<string, SessionEntry> = {
+    "agent:main:embedded": sessionStoreEntry("sess-embedded", {
+      status: "running",
+      updatedAt: 1,
+    }),
+  };
+  for (let index = 0; index < 105; index += 1) {
+    entries[`agent:main:newer-${index}`] = sessionStoreEntry(`sess-newer-${index}`, {
+      updatedAt: now + index,
+    });
+  }
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set("agent:main:embedded", "sess-embedded");
+  ACTIVE_EMBEDDED_RUNS.set("sess-embedded", {
+    queueMessage: async () => {},
+    isStreaming: () => true,
+    isCompacting: () => false,
+    abort: () => {},
+  });
+  await writeSessionStore({ entries });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {});
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    outcome: "diagnosed",
+    chosenBecause: "highest live or contradictory evidence score",
+    session: {
+      key: "agent:main:embedded",
+      sessionId: "sess-embedded",
+      hasActiveRun: true,
+    },
+    live: {
+      embeddedRun: {
+        active: true,
+        streaming: true,
+      },
     },
   });
 });
