@@ -477,6 +477,26 @@ describe("callGateway url resolution", () => {
     expect(stopSshTunnelMock).toHaveBeenCalledTimes(1);
   });
 
+  it("uses externally managed SSH tunnel URLs when sshTarget is absent", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://127.0.0.1:18789",
+          transport: "ssh",
+          token: "remote-token",
+        },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    await callGateway({ method: "health" });
+
+    expect(startSshPortForwardMock).not.toHaveBeenCalled();
+    expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18789");
+    expect(lastClientOptions?.token).toBe("remote-token");
+  });
+
   it("stops configured SSH tunnels when auth validation fails before connecting", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {
@@ -1260,6 +1280,26 @@ describe("buildGatewayConnectionDetails", () => {
     expect(stopSshTunnelMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps externally managed SSH tunnel probe URLs when sshTarget is absent", async () => {
+    const config = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://127.0.0.1:18789",
+          transport: "ssh",
+        },
+      },
+    } satisfies OpenClawConfig;
+    resolveGatewayPort.mockReturnValue(18789);
+
+    const details = await buildGatewayProbeConnectionDetails({ config });
+
+    expect(startSshPortForwardMock).not.toHaveBeenCalled();
+    expect(details.url).toBe("ws://127.0.0.1:18789");
+    expect(details.urlSource).toBe("config gateway.remote.url");
+    expect(details.sshTunnel).toBeUndefined();
+  });
+
   it("lets probe details local port override bypass gateway env URL and port", async () => {
     const config = {
       gateway: {
@@ -1497,6 +1537,22 @@ describe("buildGatewayConnectionDetails", () => {
 
     expect(details.url).toBe("ws://remote.example.com:18789");
     expect(details.urlSource).toBe("config gateway.remote.url");
+  });
+
+  it("rejects plaintext ws remote URLs when SSH transport has no sshTarget", () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          transport: "ssh",
+        },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    expect(() => buildGatewayConnectionDetails()).toThrow("SECURITY ERROR");
   });
 
   it("redacts credential-bearing target URLs from insecure ws:// errors", () => {
