@@ -237,6 +237,11 @@ openclaw-path-alias-*/
 /C:\\openclaw/
 *.log
 *.tmp
+
+# Backup artifacts (telegram hotfix backups, local backup dirs)
+*.bak*
+backups/
+_local_backups_ignored/
 *.heapsnapshot
 *.cpuprofile
 *.prof
