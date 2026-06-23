@@ -1,9 +1,7 @@
 // Nextcloud Talk plugin module implements send behavior.
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import {
-  readResponseTextSnippet,
-  readResponseWithLimit,
-} from "openclaw/plugin-sdk/response-limit-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
 import {
   convertMarkdownTables,
@@ -22,15 +20,26 @@ import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 // misbehaving endpoint cannot stream an unbounded body into memory.
 const NEXTCLOUD_TALK_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES = 8 * 1024;
+const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
+
+/** Collapses whitespace and caps an error-body prefix to a short, log-safe snippet. */
+function collapseErrorSnippet(text: string): string {
+  const collapsed = text.replace(/\s+/g, " ").trim();
+  if (collapsed.length > NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS) {
+    return `${collapsed.slice(0, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS)}…`;
+  }
+  return collapsed;
+}
 
 /** Reads a bounded, collapsed error-body snippet without buffering hostile responses. */
 async function readNextcloudTalkErrorSnippet(response: Response): Promise<string> {
   try {
-    return (
-      (await readResponseTextSnippet(response, {
-        maxBytes: NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES,
-      })) ?? ""
-    );
+    // readResponseTextLimited caps the read at the byte budget and cancels the
+    // upstream stream once full, so a hostile endpoint cannot stream an
+    // unbounded body into memory. Collapse the bounded prefix locally to keep a
+    // short, log-safe error snippet (no new plugin SDK surface required).
+    const text = await readResponseTextLimited(response, NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_BYTES);
+    return collapseErrorSnippet(text);
   } catch {
     return "";
   }
