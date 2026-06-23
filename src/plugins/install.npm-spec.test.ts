@@ -218,8 +218,12 @@ function writeInstalledNpmPlugin(params: {
   hoistedDependency?: { name: string; version: string };
   peerDependencies?: Record<string, string>;
   openclaw?: Record<string, unknown>;
+  replaceExisting?: boolean;
 }) {
   const pluginDir = path.join(params.npmRoot, "node_modules", params.packageName);
+  if (params.replaceExisting) {
+    fs.rmSync(pluginDir, { recursive: true, force: true });
+  }
   fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
   fs.writeFileSync(
     path.join(pluginDir, "package.json"),
@@ -302,6 +306,7 @@ type MockNpmPackage = {
   skipLockfileEntry?: boolean;
   packArchivePath?: string;
   packTarballName?: string;
+  replaceExisting?: boolean;
 };
 
 function writeNpmRootPackageLock(params: {
@@ -903,7 +908,7 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
-  it("installs npm updates into artifact generations so stale dist imports remain available", async () => {
+  it("keeps lazy imports from a loaded old npm generation available across updates", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "@openclaw/codex";
     mockNpmViewAndInstall({
@@ -914,7 +919,10 @@ describe("installPluginFromNpmSpec", () => {
       npmRoot,
       integrity: "sha512-codex-v1",
       shasum: "codexv1sha",
-      indexJs: `require("./run-attempt-old.js");\nmodule.exports = { version: "v1" };\n`,
+      indexJs: `module.exports = {
+  version: "v1",
+  runAttempt: async () => (await import("./run-attempt-old.js")).default,
+};\n`,
       extraDistFiles: {
         "run-attempt-old.js": "module.exports = { chunk: 'old' };\n",
       },
@@ -933,6 +941,8 @@ describe("installPluginFromNpmSpec", () => {
     }
     const firstEntry = path.join(first.targetDir, "dist", "index.js");
     expect(first.targetDir).toBe(resolveTestPluginPackageDir(npmRoot, packageName));
+    const oldModule = await import(pathToFileURL(firstEntry).href);
+    expect(oldModule.default.version).toBe("v1");
 
     mockNpmViewAndInstall({
       spec: `${packageName}@2.0.0`,
@@ -942,10 +952,14 @@ describe("installPluginFromNpmSpec", () => {
       npmRoot,
       integrity: "sha512-codex-v2",
       shasum: "codexv2sha",
-      indexJs: `require("./run-attempt-new.js");\nmodule.exports = { version: "v2" };\n`,
+      indexJs: `module.exports = {
+  version: "v2",
+  runAttempt: async () => (await import("./run-attempt-new.js")).default,
+};\n`,
       extraDistFiles: {
         "run-attempt-new.js": "module.exports = { chunk: 'new' };\n",
       },
+      replaceExisting: true,
       expectedDependencySpec: "2.0.0",
     });
 
@@ -978,8 +992,11 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(path.join(first.targetDir, "dist", "run-attempt-old.js"))).toBe(true);
     expect(fs.existsSync(path.join(update.targetDir, "dist", "run-attempt-new.js"))).toBe(true);
 
-    const oldModule = await import(pathToFileURL(firstEntry).href);
-    expect(oldModule.default).toEqual({ version: "v1" });
+    await expect(oldModule.default.runAttempt()).resolves.toEqual({ chunk: "old" });
+    const newModule = await import(
+      pathToFileURL(path.join(update.targetDir, "dist", "index.js")).href
+    );
+    await expect(newModule.default.runAttempt()).resolves.toEqual({ chunk: "new" });
   });
 
   it("installs into a fresh generation when the legacy npm target is retained", async () => {
