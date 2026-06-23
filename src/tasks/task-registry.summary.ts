@@ -16,6 +16,7 @@ function createEmptyTaskStatusCounts(): TaskStatusCounts {
     timed_out: 0,
     cancelled: 0,
     lost: 0,
+    delivering: 0,
   };
 }
 

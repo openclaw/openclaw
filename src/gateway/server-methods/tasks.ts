@@ -37,6 +37,7 @@ const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
   timed_out: "timed_out",
   cancelled: "cancelled",
   lost: "failed",
+  delivering: "running",
 };
 
 const LEDGER_STATUS_TO_TASK_STATUSES: Record<TaskLedgerStatus, TaskStatus[]> = {

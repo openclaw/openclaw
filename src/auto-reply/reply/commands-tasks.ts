@@ -26,6 +26,7 @@ const TASK_STATUS_ICONS: Record<TaskRecord["status"], string> = {
   timed_out: "⏱️",
   cancelled: "⚪️",
   lost: "⚠️",
+  delivering: "📦",
 };
 
 const TASK_RUNTIME_LABELS: Record<TaskRecord["runtime"], string> = {
