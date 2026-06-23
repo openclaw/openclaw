@@ -586,6 +586,32 @@ function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegate
   } as AcpxDelegateEnsureInput;
 }
 
+// acpx@0.10.0 throws RequestedModelUnsupportedError out of ensureSession() when a
+// model is requested but the harness never advertised ACP `models`/`session/set_model`
+// support at all (e.g. opencode). That error class isn't exported from acpx's public
+// `runtime` entrypoint, so this matches the one phrase that is specific to "harness has
+// no model capability" rather than "harness rejected this model id" (which must still
+// surface). Drop this once acpx exposes a typed/opt-out way to skip model passthrough.
+const ACP_MODEL_SUPPORT_UNADVERTISED_MESSAGE = "did not advertise model support";
+
+function isAcpModelSupportUnadvertisedError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(ACP_MODEL_SUPPORT_UNADVERTISED_MESSAGE);
+}
+
+async function ensureDelegateSessionWithModelFallback(
+  delegate: BaseAcpxRuntime,
+  input: OpenClawRuntimeEnsureInput,
+): Promise<AcpRuntimeHandle> {
+  try {
+    return await delegate.ensureSession(withAcpxSessionOptions(input));
+  } catch (error) {
+    if (!input.model || !isAcpModelSupportUnadvertisedError(error)) {
+      throw error;
+    }
+    return await delegate.ensureSession(withAcpxSessionOptions({ ...input, model: undefined }));
+  }
+}
+
 function quoteShellArg(value: string): string {
   if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
     return value;
@@ -989,7 +1015,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
+            run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
           }),
       });
     }

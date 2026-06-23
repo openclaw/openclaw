@@ -708,6 +708,81 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
   });
 
+  it("retries ensureSession without a model when the ACP harness never advertised model support (issue #95869)", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "opencode" ? "opencode acp" : agentName),
+        list: () => ["opencode"],
+      },
+    });
+    const ensure = vi
+      .spyOn(delegate, "ensureSession")
+      .mockRejectedValueOnce(
+        new Error(
+          'Cannot apply --model "openrouter/owl-alpha": the ACP agent did not advertise model support. Generic model selection requires ACP models plus session/set_model support, or an adapter-specific startup model flag.',
+        ),
+      )
+      .mockResolvedValueOnce({
+        sessionKey: "agent:opencode:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "opencode",
+      });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:opencode:acp:test",
+      agent: "opencode",
+      mode: "persistent",
+      model: "openrouter/owl-alpha",
+    });
+
+    expect(ensure).toHaveBeenCalledTimes(2);
+    expect(readFirstEnsureSessionInput(ensure)).toMatchObject({
+      model: "openrouter/owl-alpha",
+      sessionOptions: { model: "openrouter/owl-alpha" },
+    });
+    const [, secondCall] = ensure.mock.calls;
+    if (!secondCall) {
+      throw new Error("Expected ensureSession to be retried");
+    }
+    expect(secondCall[0]).not.toHaveProperty("sessionOptions");
+    expect((secondCall[0] as { model?: string }).model).toBeUndefined();
+  });
+
+  it("does not retry ensureSession when the ACP harness rejects a specific unsupported model id", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "opencode" ? "opencode acp" : agentName),
+        list: () => ["opencode"],
+      },
+    });
+    const ensure = vi
+      .spyOn(delegate, "ensureSession")
+      .mockRejectedValueOnce(
+        new Error(
+          'Cannot apply --model "unknown/model": the ACP agent did not advertise that model. Available models: none advertised.',
+        ),
+      );
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:opencode:acp:test",
+        agent: "opencode",
+        mode: "persistent",
+        model: "unknown/model",
+      }),
+    ).rejects.toThrow("did not advertise that model");
+
+    expect(ensure).toHaveBeenCalledTimes(1);
+  });
+
   it("injects Codex ACP startup config into the scoped registry", () => {
     expect(testing.isCodexAcpCommand(CODEX_ACP_COMMAND)).toBe(true);
     expect(testing.isCodexAcpCommand(CODEX_ACP_WRAPPER_COMMAND)).toBe(true);
