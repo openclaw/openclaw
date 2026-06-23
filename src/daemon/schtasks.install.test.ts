@@ -264,7 +264,7 @@ describe("installScheduledTask", () => {
         platform: "win32",
       });
 
-      expect(callerEnv.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBeUndefined();
+      expect("OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER" in callerEnv).toBe(false);
       expect(gatewayEnv.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
       expect(gatewayEnv.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
 
