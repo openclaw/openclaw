@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
@@ -94,6 +95,7 @@ type LegacyMemorySidecarImportResult = {
   chunks: number;
   cacheEntries: number;
   vectorEntries: number;
+  vectorEntriesImported: boolean;
 };
 
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
@@ -330,7 +332,11 @@ function copyLegacyMemoryFtsRows(db: DatabaseSync, schema: string): void {
   );
 }
 
-function copyLegacyMemoryIndexRows(db: DatabaseSync, schema: string): void {
+function copyLegacyMemoryIndexRows(
+  db: DatabaseSync,
+  schema: string,
+  options: { copyVectorRows: boolean },
+): void {
   db.exec(`
     INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
     SELECT key, value FROM ${schema}.meta;
@@ -388,7 +394,9 @@ function copyLegacyMemoryIndexRows(db: DatabaseSync, schema: string): void {
     "chunks",
   );
   copyLegacyMemoryFtsRows(db, schema);
-  copyLegacyMemoryVectorRows(db, schema);
+  if (options.copyVectorRows) {
+    copyLegacyMemoryVectorRows(db, schema);
+  }
   if (hasLegacyEmbeddingCacheTable(db, schema)) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS main.${MEMORY_EMBEDDING_CACHE_TABLE} (
@@ -429,6 +437,7 @@ function copyLegacyMemoryIndexRows(db: DatabaseSync, schema: string): void {
 function importLegacyMemorySidecarIndex(params: {
   db: DatabaseSync;
   legacySidecarDatabasePath: string | undefined;
+  copyVectorRows: boolean;
 }): LegacyMemorySidecarImportResult {
   if (!params.legacySidecarDatabasePath || !fsSync.existsSync(params.legacySidecarDatabasePath)) {
     return {
@@ -438,6 +447,7 @@ function importLegacyMemorySidecarIndex(params: {
       chunks: 0,
       cacheEntries: 0,
       vectorEntries: 0,
+      vectorEntriesImported: true,
     };
   }
   params.db
@@ -452,14 +462,21 @@ function importLegacyMemorySidecarIndex(params: {
         chunks: 0,
         cacheEntries: 0,
         vectorEntries: 0,
+        vectorEntriesImported: true,
       };
     }
     const counts = readLegacySidecarCounts(params.db, LEGACY_MEMORY_SIDECAR_SCHEMA);
     params.db.exec("SAVEPOINT import_legacy_sidecar_memory_index");
     try {
-      copyLegacyMemoryIndexRows(params.db, LEGACY_MEMORY_SIDECAR_SCHEMA);
+      copyLegacyMemoryIndexRows(params.db, LEGACY_MEMORY_SIDECAR_SCHEMA, {
+        copyVectorRows: params.copyVectorRows,
+      });
       params.db.exec("RELEASE import_legacy_sidecar_memory_index");
-      return { imported: true, ...counts };
+      return {
+        imported: true,
+        ...counts,
+        vectorEntriesImported: counts.vectorEntries === 0 || params.copyVectorRows,
+      };
     } catch (err) {
       params.db.exec("ROLLBACK TO import_legacy_sidecar_memory_index");
       params.db.exec("RELEASE import_legacy_sidecar_memory_index");
@@ -486,6 +503,25 @@ function resolveConfiguredAgentIds(config: unknown): string[] {
     ids.add(normalizeAgentId(undefined));
   }
   return [...ids];
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function readMemorySearchVectorExtensionPath(config: unknown, agentId: string): string | undefined {
+  const agents = asRecord(asRecord(config)?.agents);
+  const defaultsMemorySearch = asRecord(asRecord(agents?.defaults)?.memorySearch);
+  const defaultVector = asRecord(asRecord(defaultsMemorySearch?.store)?.vector);
+  const entries = Array.isArray(agents?.list) ? agents.list : [];
+  const agentMemorySearch = entries
+    .map(asRecord)
+    .find(
+      (entry) => normalizeAgentId(typeof entry?.id === "string" ? entry.id : undefined) === agentId,
+    )?.memorySearch;
+  const agentVector = asRecord(asRecord(asRecord(agentMemorySearch)?.store)?.vector);
+  const raw = agentVector?.extensionPath ?? defaultVector?.extensionPath;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 async function collectLegacyMemorySidecarSources(params: {
@@ -581,6 +617,7 @@ async function archiveLegacyMemorySidecar(params: {
 
 async function migrateLegacyMemorySidecarSource(params: {
   source: LegacyMemorySidecarSource;
+  config: unknown;
   env: NodeJS.ProcessEnv;
   changes: string[];
   warnings: string[];
@@ -600,12 +637,22 @@ async function migrateLegacyMemorySidecarSource(params: {
       register: true,
     });
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true });
-    await loadSqliteVecExtension({ db });
+    const vectorExtensionPath = readMemorySearchVectorExtensionPath(
+      params.config,
+      params.source.agentId,
+    );
+    const loadedVector = await loadSqliteVecExtension({
+      db,
+      extensionPath: vectorExtensionPath
+        ? resolveUserPath(vectorExtensionPath, params.env)
+        : undefined,
+    });
     let result: LegacyMemorySidecarImportResult;
     try {
       result = importLegacyMemorySidecarIndex({
         db,
         legacySidecarDatabasePath: params.source.legacyPath,
+        copyVectorRows: loadedVector.ok,
       });
     } catch (err) {
       params.warnings.push(
@@ -626,6 +673,12 @@ async function migrateLegacyMemorySidecarSource(params: {
     params.changes.push(
       `Migrated Memory Core legacy memory index for agent ${params.source.agentId} -> per-agent SQLite (${result.sources} source(s), ${result.chunks} chunk(s), ${result.cacheEntries} cache row(s))`,
     );
+    if (!result.vectorEntriesImported) {
+      params.warnings.push(
+        `Left Memory Core legacy memory index sidecar in place for agent ${params.source.agentId} because ${result.vectorEntries} vector row(s) still require sqlite-vec: ${loadedVector.error ?? "unknown sqlite-vec load error"}`,
+      );
+      return;
+    }
     await archiveLegacyMemorySidecar(params);
   } finally {
     db.close();
@@ -894,6 +947,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         try {
           await migrateLegacyMemorySidecarSource({
             source,
+            config: params.config,
             env: params.env,
             changes,
             warnings,

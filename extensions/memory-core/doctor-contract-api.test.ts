@@ -544,6 +544,47 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
+  it("keeps legacy vector sidecars retryable when sqlite-vec cannot load", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath, { vector: true });
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              vector: {
+                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
+              },
+            },
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    };
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
+
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Left Memory Core legacy memory index sidecar in place for agent main because 1 vector row(s) still require sqlite-vec",
+      ),
+    ]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+    ]);
+    expect(readMemoryRows(agentPath)).toEqual({
+      sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
+      chunks: [{ id: "chunk-1", text: "remember this" }],
+      cache: [{ provider: "openai", hash: "chunk-hash" }],
+    });
+    const keywordRows = await searchMigratedKeywordRows(agentPath, "remember");
+    expect(keywordRows.map((row) => row.id)).toEqual(["chunk-1"]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+  });
+
   it("leaves the legacy memory sidecar in place when canonical rows conflict", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "main.sqlite");
