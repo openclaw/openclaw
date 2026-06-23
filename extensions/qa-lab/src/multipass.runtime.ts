@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawCrablineChannelDriverSelection } from "crabline";
+import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";

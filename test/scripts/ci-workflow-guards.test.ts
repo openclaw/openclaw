@@ -6,6 +6,8 @@ import { parse } from "yaml";
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
+const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -25,6 +27,10 @@ function readMaturityScorecardWorkflow() {
 
 function readQaProfileEvidenceWorkflow() {
   return parse(readFileSync(".github/workflows/qa-profile-evidence.yml", "utf8"));
+}
+
+function readReleaseChecksWorkflow() {
+  return parse(readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"));
 }
 
 function readCriticalQualityWorkflow() {
@@ -104,6 +110,34 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
+  it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
+    const cases = [
+      {
+        workflowPath: OPENGREP_PR_DIFF_WORKFLOW,
+        artifactName: "opengrep-pr-diff-sarif",
+      },
+      {
+        workflowPath: OPENGREP_FULL_WORKFLOW,
+        artifactName: "opengrep-full-sarif",
+      },
+    ];
+
+    for (const item of cases) {
+      const workflow = parse(readFileSync(item.workflowPath, "utf8"));
+      const uploadStep = workflow.jobs.scan.steps.find(
+        (step) => step.name === "Upload SARIF as workflow artifact",
+      );
+
+      expect(uploadStep.if, item.workflowPath).toBe("always()");
+      expect(uploadStep.uses, item.workflowPath).toBe(UPLOAD_ARTIFACT_V7);
+      expect(uploadStep.with, item.workflowPath).toMatchObject({
+        name: item.artifactName,
+        path: ".opengrep-out/precise.sarif",
+        "if-no-files-found": "error",
+      });
+    }
+  });
+
   it("runs real behavior proof from the trusted workflow revision", () => {
     const workflow = readRealBehaviorProofWorkflow();
     const source = readFileSync(".github/workflows/real-behavior-proof.yml", "utf8");
@@ -141,7 +175,7 @@ describe("ci workflow guards", () => {
       "github.event_name == 'pull_request'",
     );
     expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(16);
     expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(8);
     expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(8);
     expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(8);
@@ -578,6 +612,34 @@ describe("ci workflow guards", () => {
     const publishJob = maturityWorkflow.jobs.publish;
     const qaRunJob = qaEvidenceWorkflow.jobs.run_qa_profile;
 
+    expect(maturityWorkflow.on.workflow_call.inputs).toMatchObject({
+      qa_evidence_run_id: {
+        description: "Optional workflow run id containing qa-evidence.json",
+        required: false,
+        default: "",
+        type: "string",
+      },
+      ref: {
+        description: "OpenClaw branch, tag, or SHA containing the maturity score source",
+        required: true,
+        type: "string",
+      },
+      expected_sha: {
+        description: "Optional full SHA that ref must resolve to",
+        required: false,
+        default: "",
+        type: "string",
+      },
+    });
+    expect(maturityWorkflow.on.workflow_call.secrets.OPENAI_API_KEY.required).toBe(true);
+    expect(
+      maturityWorkflow.on.workflow_call.secrets.OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY
+        .required,
+    ).toBe(false);
+    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY.required).toBe(false);
+    expect(maturityWorkflow.on.workflow_call.secrets.GH_APP_PRIVATE_KEY_FALLBACK.required).toBe(
+      false,
+    );
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
@@ -589,13 +651,25 @@ describe("ci workflow guards", () => {
       "taxonomy.profiles.find((entry) => entry.id === requested)",
     );
     expect(validateProfileStep.run).toContain("profile=${profile.id}");
+    const ensurePlaywrightStep = qaRunJob.steps.find(
+      (step) => step.name === "Ensure Playwright Chromium",
+    );
+    expect(ensurePlaywrightStep.run).toBe("node scripts/ensure-playwright-chromium.mjs");
     expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({
-      ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      qa_profile: "all",
+      ref: "${{ inputs.ref }}",
+      expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
+      qa_profile: "release",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
+
+    const validateRefStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
+      (step) => step.name === "Validate selected ref",
+    );
+    expect(validateRefStep.env.EXPECTED_SHA).toBe("${{ inputs.expected_sha }}");
+    expect(validateRefStep.run).toContain("expected_sha must be a full 40-character SHA");
+    expect(validateRefStep.run).toContain('"${selected_revision,,}" != "$expected_sha"');
 
     const generatedDownloadStep = publishJob.steps.find(
       (step) => step.name === "Download generated QA evidence artifact",
@@ -637,6 +711,49 @@ describe("ci workflow guards", () => {
 
     const qaFailStep = qaRunJob.steps.find((step) => step.name === "Fail if QA profile failed");
     expect(qaFailStep.if).toBe("always()");
+
+    const createTokenStep = publishJob.steps.find(
+      (step) => step.name === "Create generated docs PR app token",
+    );
+    const createFallbackTokenStep = publishJob.steps.find(
+      (step) => step.name === "Create generated docs PR fallback app token",
+    );
+    const openDocsPrStep = publishJob.steps.find((step) => step.name === "Open generated docs PR");
+    expect(createTokenStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+    expect(createFallbackTokenStep.if).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && steps.app-token.outcome == 'failure' }}",
+    );
+    expect(openDocsPrStep.if).toBe("${{ github.event_name == 'workflow_dispatch' }}");
+  });
+
+  it("runs maturity scorecard from release checks", () => {
+    const releaseWorkflow = readReleaseChecksWorkflow();
+    const job = releaseWorkflow.jobs.maturity_scorecard_release_checks;
+    const summaryJob = releaseWorkflow.jobs.summary;
+    const verifyStep = summaryJob.steps.find(
+      (step) => step.name === "Verify release check results",
+    );
+
+    expect(releaseWorkflow.jobs).not.toHaveProperty("qa_profile_release_evidence_release_checks");
+    expect(job.name).toBe("Render maturity scorecard release docs");
+    expect(job.if).toBe(
+      'contains(fromJSON(\'["all","qa"]\'), needs.resolve_target.outputs.rerun_group)',
+    );
+    expect(job.permissions).toMatchObject({
+      actions: "read",
+      contents: "read",
+    });
+    expect(job.uses).toBe("./.github/workflows/maturity-scorecard.yml");
+    expect(job.with).toMatchObject({
+      ref: "${{ needs.resolve_target.outputs.ref }}",
+      expected_sha: "${{ needs.resolve_target.outputs.revision }}",
+    });
+    expect(job.with).not.toHaveProperty("qa_profile");
+    expect(summaryJob.needs).toContain("maturity_scorecard_release_checks");
+    expect(verifyStep.run).toContain(
+      '"maturity_scorecard_release_checks=${{ needs.maturity_scorecard_release_checks.result }}"',
+    );
+    expect(verifyStep.run).not.toContain("qa_profile_release_evidence_release_checks");
   });
 
   it("keeps workflow guards in fast CI-routing checks", () => {

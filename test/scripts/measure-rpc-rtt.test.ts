@@ -179,6 +179,9 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(() => parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods"])).toThrow(
       "--methods requires a value.",
     );
+    expect(() =>
+      parseArgs(["--output-dir", "/tmp/rpc-rtt", "--methods", "health, config.get,health"]),
+    ).toThrow("--methods contains duplicate gateway method: health");
     for (const value of ["--methods", "-h"]) {
       for (const flag of ["--output-dir", "--repo-root", "--iterations", "--methods"]) {
         expect(() => parseArgs([flag, value, "health"])).toThrow(`${flag} requires a value.`);

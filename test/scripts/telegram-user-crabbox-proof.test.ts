@@ -157,6 +157,20 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(parseArgs(["--text", "-ping"]).text).toBe("-ping");
   });
 
+  it("uses unique default output dirs", () => {
+    const firstOutputDir = parseArgs([]).outputDir;
+    const secondOutputDir = parseArgs([]).outputDir;
+
+    expect(path.dirname(firstOutputDir)).toBe(
+      path.join(".artifacts", "qa-e2e", "telegram-user-crabbox"),
+    );
+    expect(path.basename(firstOutputDir)).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/u,
+    );
+    expect(secondOutputDir).not.toBe(firstOutputDir);
+    expect(parseArgs(["--output-dir", ".artifacts/custom"]).outputDir).toBe(".artifacts/custom");
+  });
+
   it("clamps proof timeout args before they reach Node timers", () => {
     expect(parseArgs(["--timeout-ms", String(MAX_TIMER_TIMEOUT_MS + 1)]).timeoutMs).toBe(
       MAX_TIMER_TIMEOUT_MS,
@@ -275,6 +289,21 @@ describe("telegram user Crabbox proof log polling", () => {
     expect(fs.existsSync(path.join(stagedDir, "lease.json"))).toBe(false);
     expect(fs.existsSync(path.join(stagedDir, "probe-secret.json"))).toBe(false);
     expect(fs.existsSync(path.join(stagedDir, "stale.txt"))).toBe(false);
+  });
+
+  it("requires finish to write the proof report before full artifact publishing", () => {
+    const outputDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(outputDir, "session.json"),
+      '{"sshKey":"/private/tmp/openclaw/key"}',
+    );
+    fs.writeFileSync(path.join(outputDir, "status.json"), '{"ok":true}');
+    fs.writeFileSync(path.join(outputDir, "telegram-desktop.log"), "log");
+
+    expect(() => stageFullSessionArtifacts(outputDir)).toThrow(
+      "Missing proof report. Run finish first: telegram-user-crabbox-proof.md",
+    );
+    expect(fs.existsSync(path.join(outputDir, "publish-full-artifacts"))).toBe(false);
   });
 
   posixIt("does not expand generated remote probe arguments in the shell", () => {

@@ -490,7 +490,7 @@ jobs:
           if (-not $env:CRABBOX_ID -or $env:CRABBOX_ID -notmatch '^[A-Za-z0-9._-]+$') {
             Write-Error "Invalid crabbox_id"
           }
-          $actionsRoot = Join-Path $HOME ".crabbox\actions"
+          $actionsRoot = "C:\ProgramData\crabbox\actions"
           New-Item -ItemType Directory -Force $actionsRoot | Out-Null
           $state = Join-Path $actionsRoot "$env:CRABBOX_ID.env"
           $envFile = Join-Path $actionsRoot "$env:CRABBOX_ID.env.ps1"
@@ -546,7 +546,7 @@ jobs:
           if ($env:CRABBOX_KEEP_ALIVE_MINUTES -match '^[0-9]+$') {
             $minutes = [int]$env:CRABBOX_KEEP_ALIVE_MINUTES
           }
-          $stop = Join-Path $HOME ".crabbox\actions\$env:CRABBOX_ID.stop"
+          $stop = Join-Path "C:\ProgramData\crabbox\actions" "$env:CRABBOX_ID.stop"
           $deadline = (Get-Date).AddMinutes($minutes)
           while ((Get-Date) -lt $deadline) {
             if (Test-Path $stop) {

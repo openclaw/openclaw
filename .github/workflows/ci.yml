@@ -1177,7 +1177,9 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      max-parallel: 12
+      # The canonical main path waits for the admission debounce above, so
+      # modestly widen this large matrix without recreating registration bursts.
+      max-parallel: 16
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - name: Checkout

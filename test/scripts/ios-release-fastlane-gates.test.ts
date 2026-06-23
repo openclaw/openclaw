@@ -39,6 +39,8 @@ describe("iOS Fastlane release upload gates", () => {
     const script = readFileSync(uploadScriptPath, "utf8");
 
     expect(script).toContain("OPENCLAW_IOS_RELEASE_WRAPPER=1");
+    expect(script).toContain("DELIVER_NUMBER_OF_THREADS=1");
+    expect(script).toContain("FL_MAX_NUMBER_OF_THREADS=1");
     expect(script).toContain("run_ios_fastlane ios release_upload");
   });
 
@@ -70,5 +72,14 @@ describe("iOS Fastlane release upload gates", () => {
 
     expect(validationCall).toBeGreaterThanOrEqual(0);
     expect(uploadCall).toBeGreaterThan(validationCall);
+  });
+
+  it("normalizes Watch screenshots as opaque RGB PNGs for App Store upload", () => {
+    const fastfile = readFastfile();
+
+    expect(fastfile).toContain("def normalize_watch_screenshot_status_bar(path)");
+    expect(fastfile).toContain("CGImageAlphaInfo.noneSkipLast.rawValue");
+    expect(fastfile).toContain("CGImageDestinationCreateWithURL");
+    expect(fastfile).toContain("operation: .sourceOver");
   });
 });

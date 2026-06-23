@@ -3720,6 +3720,7 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).args).toContain("--reclaim");
     expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
 

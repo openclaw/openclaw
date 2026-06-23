@@ -360,6 +360,15 @@ export async function mirrorCodexAppServerTranscript(params: {
       sessionFile: params.sessionFile,
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.sessionId && params.sessionKey && params.agentId
+        ? {
+            target: {
+              agentId: params.agentId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+            },
+          }
+        : {}),
       message: update.message,
       messageId: update.messageId,
       messageSeq: update.messageSeq,

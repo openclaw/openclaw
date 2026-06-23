@@ -10,7 +10,10 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  emitInternalSessionTranscriptUpdate,
+  emitSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -733,6 +736,34 @@ describe("session history HTTP endpoints", () => {
         seq: 2,
         id: appendedId,
       });
+    });
+  });
+
+  test("streams identity-only transcript updates over SSE", async () => {
+    await seedSession({ text: "first message" });
+
+    await withGatewayHarness(async (harness) => {
+      const stream = await openSessionHistorySse(harness.port, "agent:main:main");
+      await expectHistoryEventTexts(stream, ["first message"]);
+
+      emitInternalSessionTranscriptUpdate({
+        target: {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+        },
+        message: makeTranscriptAssistantMessage({ text: "identity second message" }),
+        messageId: "msg-identity-second",
+        messageSeq: 2,
+      });
+
+      await expectMessageEventMatch(stream, {
+        text: "identity second message",
+        seq: 2,
+        id: "msg-identity-second",
+      });
+
+      await stream.reader.cancel();
     });
   });
 
