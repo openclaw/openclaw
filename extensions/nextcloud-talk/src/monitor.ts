@@ -1,6 +1,6 @@
 // Nextcloud Talk plugin module implements monitor behavior.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createAuthRateLimiter,
@@ -110,10 +110,6 @@ function formatError(err: unknown): string {
   return typeof err === "string" ? err : JSON.stringify(err);
 }
 
-function parseWebhookPayload(body: string): NextcloudTalkWebhookPayload | null {
-  return safeParseJsonWithSchema(NextcloudTalkWebhookPayloadSchema, body);
-}
-
 function writeJsonResponse(
   res: ServerResponse,
   status: number,
@@ -184,10 +180,25 @@ function decodeWebhookCreateMessage(params: {
   | { kind: "message"; message: NextcloudTalkInboundMessage }
   | { kind: "ignore" }
   | { kind: "invalid" } {
-  const payload = parseWebhookPayload(params.body);
-  if (!payload) {
+  // Stage 1: Parse valid JSON first — malformed input should still
+  // return 400 so that genuinely broken payloads are not silently
+  // accepted.  JSON.parse errors are distinct from schema mismatches
+  // and signal a broken sender or transport issue.
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(params.body);
+  } catch {
     writeWebhookError(params.res, 400, WEBHOOK_ERRORS.invalidPayloadFormat);
     return { kind: "invalid" };
+  }
+
+  // Stage 2: Validate against the message schema.  Schema mismatches
+  // here are non-message Talk events (system notifications, calls,
+  // file shares) that Nextcloud expects the bot to acknowledge with
+  // 200 rather than 400 — issue #81566.
+  const payload = safeParseWithSchema(NextcloudTalkWebhookPayloadSchema, parsed);
+  if (!payload) {
+    return { kind: "ignore" };
   }
   if (payload.type !== "Create") {
     return { kind: "ignore" };

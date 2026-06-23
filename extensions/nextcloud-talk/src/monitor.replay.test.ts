@@ -182,7 +182,9 @@ describe("createNextcloudTalkWebhookServer replay handling", () => {
 });
 
 describe("createNextcloudTalkWebhookServer payload validation", () => {
-  it("rejects malformed webhook payloads after signature verification", async () => {
+  it("returns 200 for schema-mismatch payloads after signature verification", async () => {
+    // Valid JSON that does NOT match the message schema (target.id is empty)
+    // is a non-message Talk event — should be silently acknowledged per #81566.
     const payload = {
       type: "Create",
       actor: { type: "Person", id: "alice", name: "Alice" },
@@ -201,7 +203,34 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
       secret: "nextcloud-secret", // pragma: allowlist secret
     });
     const harness = await startWebhookServer({
-      path: "/nextcloud-invalid-payload",
+      path: "/nextcloud-schema-mismatch",
+      onMessage: vi.fn(),
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-nextcloud-talk-random": random,
+        "x-nextcloud-talk-signature": signature,
+        "x-nextcloud-talk-backend": "https://nextcloud.example",
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+  });
+
+  it("rejects malformed JSON payloads with 400 after signature verification", async () => {
+    // Truly malformed payload (not valid JSON) should still return 400
+    // per #81566 — broken transports must not be silently accepted.
+    const body = "{ broken json payload";
+    const { random, signature } = generateNextcloudTalkSignature({
+      body,
+      secret: "nextcloud-secret", // pragma: allowlist secret
+    });
+    const harness = await startWebhookServer({
+      path: "/nextcloud-malformed-json",
       onMessage: vi.fn(),
     });
 
