@@ -96,12 +96,14 @@ through [MCPorter](https://github.com/openclaw/mcporter) instead of spawning a
 new `qmd` process for every search. This keeps the QMD MCP server warm and
 eliminates cold-start overhead on large models.
 
-OpenClaw discovers your existing mcporter configuration in the same order
-mcporter itself uses:
+OpenClaw asks mcporter for the active server definition. Use one of
+mcporter's supported config locations:
 
-1. `MCPORTER_CONFIG` environment variable, if set.
-2. `$XDG_CONFIG_HOME/mcporter/mcporter.json` (falls back to `~/.mcporter/mcporter.json`).
-3. `<workspaceDir>/config/mcporter.json` (project-scoped).
+1. `MCPORTER_CONFIG`, if set. It may point to `.json` or `.jsonc`; relative
+   paths resolve from `<workspaceDir>`.
+2. `$XDG_CONFIG_HOME/mcporter/mcporter.json` or `.jsonc`.
+3. `<workspaceDir>/config/mcporter.json` or `.jsonc` for project-scoped config.
+4. The legacy `~/.mcporter/mcporter.json` or `.jsonc` fallback.
 
 If your existing `qmd` server entry has any custom material -- environment
 variables, auth headers, relative paths, or `logging.daemon.enabled` -- OpenClaw

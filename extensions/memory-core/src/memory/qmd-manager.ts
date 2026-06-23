@@ -155,7 +155,7 @@ type McporterEnvMode = "discovery" | McporterConfigMode;
 
 type ConfiguredMcporterServer =
   | { mode: "generated"; server: Record<string, unknown> }
-  | { mode: "external" };
+  | { mode: "external"; useAgentQmdEnv?: boolean };
 
 type RawMcporterEntry = {
   lifecycle?: unknown;
@@ -291,6 +291,17 @@ function isGeneratedMcporterQmdStdioServer(server: Record<string, unknown>): boo
   }
   const args = server.args;
   return Array.isArray(args) && args.length === 1 && args[0] === "mcp";
+}
+
+function normalizeMcporterSerializedStdioServer(
+  server: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const command = server.command ?? server.executable;
+  if (typeof command !== "string" || command.length === 0) {
+    return null;
+  }
+  const { executable: _executable, ...normalized } = server;
+  return { ...normalized, command };
 }
 
 function isQmdExecutableCommand(command: unknown): boolean {
@@ -431,6 +442,12 @@ function expandMcporterHome(input: string): string {
   return input;
 }
 
+function resolveMcporterConfigPath(input: string, workspaceDir: string): string {
+  // mcporter resolves relative config paths from its cwd; OpenClaw runs it in
+  // workspaceDir, so the raw probe has to use the same base directory.
+  return path.resolve(workspaceDir, expandMcporterHome(input.trim()));
+}
+
 function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv, workspaceDir: string): string[] {
   // Match mcporter's config discovery precedence (mcporter source:
   // src/config/path-discovery.ts): explicit override -> XDG/home -> project ->
@@ -440,7 +457,7 @@ function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv, workspaceDir: s
 
   const explicitConfig = env.MCPORTER_CONFIG;
   if (explicitConfig && explicitConfig.trim().length > 0) {
-    candidates.push(path.resolve(expandMcporterHome(explicitConfig.trim())));
+    candidates.push(resolveMcporterConfigPath(explicitConfig, workspaceDir));
   }
 
   const xdgConfigHome = env.XDG_CONFIG_HOME;
@@ -467,6 +484,9 @@ function extractMcporterSourcePath(serialized: Record<string, unknown>): string 
     return undefined;
   }
   const sourceRecord = source as Record<string, unknown>;
+  if (sourceRecord.kind !== "local") {
+    return undefined;
+  }
   if (typeof sourceRecord.path === "string") {
     return sourceRecord.path;
   }
@@ -534,16 +554,13 @@ async function readRawMcporterEntryFromFile(
     }
     throw err;
   }
-  // Try strict JSON first; only fall back to JSONC cleanup for ".jsonc" files
-  // that need comment/trailing-comma removal. The cleanup is string-aware so
-  // URLs containing "//" inside string values are not mistaken for comments.
+  // Try strict JSON first; then mirror mcporter config parsing by accepting
+  // comments and trailing commas for both mcporter.json and mcporter.jsonc.
+  // The cleanup is string-aware so URLs containing "//" are not comments.
   let parsed: unknown;
   try {
     parsed = JSON.parse(text) as unknown;
   } catch {
-    if (!filePath.endsWith(".jsonc")) {
-      return null;
-    }
     try {
       parsed = JSON.parse(stripJsoncCommentsAndTrailingCommas(text)) as unknown;
     } catch {
@@ -569,7 +586,7 @@ async function readRawMcporterEntry(
   // authoritative layer for this server. Fall back to enumerating layers in
   // mcporter's documented precedence order.
   if (sourcePath) {
-    const resolved = path.resolve(expandMcporterHome(sourcePath.trim()));
+    const resolved = resolveMcporterConfigPath(sourcePath, workspaceDir);
     const entry = await readRawMcporterEntryFromFile(serverName, resolved);
     if (entry) {
       return entry;
@@ -586,6 +603,24 @@ async function readRawMcporterEntry(
 }
 
 function hasMcporterStdioLifecycleOrLogging(server: RawMcporterEntry): boolean {
+  if (hasMcporterStdioLifecycleOrDaemonLogging(server)) {
+    return true;
+  }
+  // A user-set cwd or path is context-dependent and must not be copied into
+  // the per-agent generated config under OpenClaw state, where it would
+  // resolve against a different working directory. Check the raw entry so
+  // mcporter's normalized default cwd (added to "config get --json" output)
+  // does not force every bare qmd server into external mode.
+  if (typeof server.cwd === "string" && server.cwd.length > 0) {
+    return true;
+  }
+  if (typeof server.path === "string" && server.path.length > 0) {
+    return true;
+  }
+  return false;
+}
+
+function hasMcporterStdioLifecycleOrDaemonLogging(server: RawMcporterEntry): boolean {
   if (server.lifecycle !== undefined) {
     return true;
   }
@@ -606,17 +641,6 @@ function hasMcporterStdioLifecycleOrLogging(server: RawMcporterEntry): boolean {
     if (daemon?.enabled === true) {
       return true;
     }
-  }
-  // A user-set cwd or path is context-dependent and must not be copied into
-  // the per-agent generated config under OpenClaw state, where it would
-  // resolve against a different working directory. Check the raw entry so
-  // mcporter's normalized default cwd (added to "config get --json" output)
-  // does not force every bare qmd server into external mode.
-  if (typeof server.cwd === "string" && server.cwd.length > 0) {
-    return true;
-  }
-  if (typeof server.path === "string" && server.path.length > 0) {
-    return true;
   }
   return false;
 }
@@ -882,6 +906,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
   private mcporterConfigMode: Promise<McporterConfigMode> | null = null;
+  private externalMcporterUsesAgentQmdEnv = false;
   private readonly sessionWarm = new Set<string>();
   private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
   private multiCollectionFilterSupported: boolean | null = null;
@@ -2783,8 +2808,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     await fs.mkdir(path.dirname(this.mcporterConfigPath), { recursive: true });
     const configured = await this.resolveConfiguredMcporterServer();
     if (configured?.mode === "external") {
+      this.externalMcporterUsesAgentQmdEnv = configured.useAgentQmdEnv === true;
       return "external";
     }
+    this.externalMcporterUsesAgentQmdEnv = false;
     const server = configured?.server ?? this.buildDefaultMcporterQmdServer();
     const config = {
       imports: [],
@@ -2893,21 +2920,33 @@ export class QmdMemoryManager implements MemorySearchManager {
       server[key] = value;
     }
 
-    if (server.command !== undefined && server.command !== null) {
-      // mcporter accepts stdio commands as strings, arrays, or executable
-      // objects. We can only regenerate the string form, so preserve anything
-      // else as external and let mcporter handle the invocation directly.
-      if (typeof server.command !== "string" || server.command.length === 0) {
+    if (
+      (server.command !== undefined && server.command !== null) ||
+      (server.executable !== undefined && server.executable !== null)
+    ) {
+      // mcporter accepts stdio definitions as `command`, command arrays, or
+      // `executable` plus args. We can only regenerate the string command form,
+      // so preserve anything else as external and let mcporter handle it.
+      const stdioServer = normalizeMcporterSerializedStdioServer(server);
+      if (!stdioServer) {
         return { mode: "external" };
       }
+      const isGeneratedQmdServer = isGeneratedMcporterQmdStdioServer(stdioServer);
+      const hasUserOwnedMaterial = hasMcporterStdioUserOwnedMaterial(stdioServer);
+      const hasExternalOnlyRawFields =
+        rawEntry !== null && hasMcporterStdioLifecycleOrLogging(rawEntry);
       if (
-        !isGeneratedMcporterQmdStdioServer(server) ||
-        hasMcporterStdioUserOwnedMaterial(server) ||
-        (rawEntry !== null && hasMcporterStdioLifecycleOrLogging(rawEntry))
+        !isGeneratedQmdServer ||
+        hasUserOwnedMaterial ||
+        hasExternalOnlyRawFields
       ) {
-        return { mode: "external" };
+        return {
+          mode: "external",
+          useAgentQmdEnv:
+            isGeneratedQmdServer && !hasUserOwnedMaterial && hasExternalOnlyRawFields,
+        };
       }
-      return { mode: "generated", server: this.toGeneratedMcporterStdioServer(server) };
+      return { mode: "generated", server: this.toGeneratedMcporterStdioServer(stdioServer) };
     }
 
     const hasRemoteEndpoint =
@@ -2971,6 +3010,17 @@ export class QmdMemoryManager implements MemorySearchManager {
       delete env.XDG_CONFIG_HOME;
       delete env.MCPORTER_CONFIG;
     }
+    if (mode === "external" && this.externalMcporterUsesAgentQmdEnv) {
+      const hasMcporterConfigOverride =
+        Boolean(this.externalMcporterConfigPath) ||
+        (typeof env.MCPORTER_CONFIG === "string" && env.MCPORTER_CONFIG.trim().length > 0);
+      for (const [key, value] of Object.entries(this.buildMcporterQmdEnv())) {
+        if (key === "XDG_CONFIG_HOME" && !hasMcporterConfigOverride) {
+          continue;
+        }
+        env[key] = value;
+      }
+    }
     if (mode === "external" && this.externalMcporterConfigPath) {
       // Point mcporter at the exact user/project config that defined the
       // external server, so calls do not fall back to agent-scoped dirs.
@@ -2983,13 +3033,22 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (configMode === "generated") {
       return this.mcporterConfigPath;
     }
-    return [
+    const keyParts = [
       "external",
       this.qmd.mcporter.serverName,
       this.mcporterEnv.MCPORTER_CONFIG ?? "",
       this.mcporterEnv.XDG_CONFIG_HOME ?? "",
       this.workspaceDir,
-    ].join(":");
+    ];
+    if (this.externalMcporterUsesAgentQmdEnv) {
+      keyParts.push(
+        "agent-qmd-env",
+        this.externalMcporterConfigPath ?? "",
+        this.env.QMD_CONFIG_DIR ?? "",
+        this.env.XDG_CACHE_HOME ?? "",
+      );
+    }
+    return keyParts.join(":");
   }
 
   private async runMcporterCommand(
