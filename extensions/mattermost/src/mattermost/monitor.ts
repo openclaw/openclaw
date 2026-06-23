@@ -116,6 +116,10 @@ import {
 import { sendMessageMattermost } from "./send.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
+import {
+  hasMattermostThreadParticipationWithPersistence,
+  recordMattermostThreadParticipation,
+} from "./thread-participation.js";
 
 export {
   evaluateMattermostMentionGate,
@@ -327,6 +331,10 @@ type MattermostDraftPreviewDeliverParams = {
   previewState: MattermostDraftPreviewState;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<void>;
+  // Visible same-thread finals can be delivered by editing the draft preview in
+  // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
+  // caller record thread participation on that path too.
+  recordThreadParticipation?: () => void;
 };
 
 export async function deliverMattermostReplyWithDraftPreview(
@@ -374,6 +382,9 @@ export async function deliverMattermostReplyWithDraftPreview(
       },
       onPreviewFinalized: () => {
         params.previewState.finalizedViaPreviewPost = true;
+        // The visible final reply landed by editing the preview post, so the normal
+        // deliverPayload record path is skipped; record participation explicitly here.
+        params.recordThreadParticipation?.();
       },
       buildSupplementalPayload: (payload) =>
         getReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : undefined,
@@ -1484,6 +1495,16 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           : { triggered: false, stripped: rawText };
         const oncharTriggered = oncharResult.triggered;
         const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+        // Threads the bot already replied in auto-engage: follow-ups resume without
+        // a re-mention even under requireMention. Keyed by the thread root id.
+        const threadAlreadyEngaged =
+          kind !== "direct" && effectiveReplyToId
+            ? await hasMattermostThreadParticipationWithPersistence({
+                accountId: account.accountId,
+                channelId,
+                threadRootId: effectiveReplyToId,
+              })
+            : false;
         const mentionDecision = evaluateMattermostMentionGate({
           kind,
           cfg,
@@ -1493,6 +1514,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           requireMentionOverride: account.requireMention,
           resolveRequireMention: core.channel.groups.resolveRequireMention,
           wasMentioned,
+          threadAlreadyEngaged,
           isControlCommand,
           commandAuthorized,
           oncharEnabled,
@@ -1781,6 +1803,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
               if (info.kind === "final") {
                 progressDraft.markFinalReplyStarted();
               }
+              // A visible same-thread final arrives either via a normal send or by editing
+              // the draft preview in place; record participation on whichever path fires.
+              const markThreadParticipation = () => {
+                if (kind !== "direct" && effectiveReplyToId) {
+                  recordMattermostThreadParticipation(
+                    account.accountId,
+                    channelId,
+                    effectiveReplyToId,
+                    { agentId: route.agentId },
+                  );
+                }
+              };
               await deliverMattermostReplyWithDraftPreview({
                 payload: payloadEntry,
                 info,
@@ -1791,6 +1825,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 resolvePreviewFinalText,
                 previewState,
                 logVerboseMessage,
+                recordThreadParticipation: markThreadParticipation,
                 deliverPayload: async (payloadToDeliver) => {
                   const outcome = await deliverMattermostReplyPayload({
                     core,
@@ -1809,6 +1844,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                     sendMessage: sendMessageMattermost,
                     onDmChannelResolution: deliveryBarrier.trackDmChannelResolution,
                   });
+                  // Record only on a visible send so threads we merely observed
+                  // (reasoning-only/empty/suppressed) do not auto-engage later.
+                  if (outcome === "text" || outcome === "media") {
+                    markThreadParticipation();
+                  }
                   const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
                     outcome,
                     payload: payloadToDeliver,

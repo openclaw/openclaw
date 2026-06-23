@@ -56,6 +56,18 @@ function parsePositiveInt(value, flag) {
   return parsed;
 }
 
+function parseMethodList(value) {
+  const methods = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const duplicate = methods.find((method, index) => methods.indexOf(method) !== index);
+  if (duplicate) {
+    throw new Error(`--methods contains duplicate gateway method: ${duplicate}`);
+  }
+  return methods;
+}
+
 export function parseArgs(argv) {
   const args = {
     help: false,
@@ -84,10 +96,7 @@ export function parseArgs(argv) {
       continue;
     }
     if (arg === "--methods") {
-      args.methods = readFlagValue(argv, index, arg)
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean);
+      args.methods = parseMethodList(readFlagValue(argv, index, arg));
       index += 1;
       continue;
     }

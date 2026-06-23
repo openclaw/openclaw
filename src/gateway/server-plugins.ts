@@ -617,13 +617,20 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
         },
       );
-      const status = payload?.status;
+      let status = payload?.status;
+      if (status === "completed" || status === "succeeded") {
+        status = "ok";
+      } else if (status === "error" && payload?.error?.trim().toLowerCase() === "completed") {
+        status = "ok";
+      }
       if (status !== "ok" && status !== "error" && status !== "timeout") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${status}`);
+        throw new Error(`Gateway agent.wait returned unexpected status: ${payload?.status}`);
       }
       return {
         status,
-        ...(typeof payload?.error === "string" && payload.error && { error: payload.error }),
+        ...(status !== "ok" &&
+          typeof payload?.error === "string" &&
+          payload.error && { error: payload.error }),
       };
     },
     getSessionMessages,

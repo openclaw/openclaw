@@ -17,6 +17,7 @@ import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawNavItem
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -535,7 +536,7 @@ private fun OverviewHeader(
       overflow = TextOverflow.Ellipsis,
     )
     OverviewStatusPill(status = status, onClick = onOpenStatus)
-    PlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = onOpenCommand)
+    ClawPlainIconButton(icon = Icons.Default.Search, contentDescription = "Search", onClick = onOpenCommand)
   }
 }
 
@@ -824,7 +825,7 @@ private fun TalkEntryPanel(
         Text(text = "Talk", style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 15.sp), color = ClawTheme.colors.textMuted)
         Text(text = "Open Talk", style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-      PlainIconButton(icon = Icons.Default.Tune, contentDescription = "Talk settings", onClick = onOpenVoiceSettings)
+      ClawPlainIconButton(icon = Icons.Default.Tune, contentDescription = "Talk settings", onClick = onOpenVoiceSettings)
     }
   }
 }
@@ -1413,9 +1414,17 @@ private fun SettingsShellScreen(
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(9.dp),
         ) {
-          PlainIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to home", onClick = onBackHome)
+          ClawPlainIconButton(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Back to home",
+            onClick = onBackHome,
+          )
           Text(text = "Settings", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, modifier = Modifier.weight(1f))
-          SettingsSearchButton(onClick = onOpenCommand)
+          ClawPlainIconButton(
+            icon = Icons.Default.Search,
+            contentDescription = "Search settings",
+            onClick = onOpenCommand,
+          )
         }
       }
 
@@ -1766,28 +1775,6 @@ private fun SettingsListRow(
           tint = ClawTheme.colors.text,
         )
       }
-    }
-  }
-}
-
-@Composable
-private fun SettingsSearchButton(onClick: () -> Unit) {
-  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.Default.Search, contentDescription = "Search settings", modifier = Modifier.size(18.dp))
-    }
-  }
-}
-
-@Composable
-private fun PlainIconButton(
-  icon: ImageVector,
-  contentDescription: String,
-  onClick: () -> Unit,
-) {
-  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
   }
 }

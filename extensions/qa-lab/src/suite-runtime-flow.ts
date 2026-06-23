@@ -47,6 +47,7 @@ import {
   runAgentPrompt,
   runQaCli,
   startAgentRun,
+  waitForAgentHistoryReply,
   waitForAgentRun,
   writeWorkspaceSkill,
 } from "./suite-runtime-agent.js";
@@ -213,6 +214,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     resolveGeneratedImagePath,
     startAgentRun,
     waitForAgentRun,
+    waitForAgentHistoryReply,
     listCronJobs,
     findManagedDreamingCronJob,
     waitForCronRunCompletion,

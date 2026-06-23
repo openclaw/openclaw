@@ -1,6 +1,6 @@
-name: Release QA Profile Evidence
+name: QA Profile Evidence
 
-run-name: ${{ format('Release QA Profile Evidence {0}', inputs.ref) }}
+run-name: ${{ format('QA Profile Evidence {0} {1}', inputs.qa_profile, inputs.ref) }}
 
 on:
   workflow_dispatch:
@@ -15,6 +15,11 @@ on:
         required: false
         default: ""
         type: string
+      qa_profile:
+        description: Taxonomy QA profile id to run (for example release or all)
+        required: true
+        default: release
+        type: string
   workflow_call:
     inputs:
       ref:
@@ -26,25 +31,42 @@ on:
         required: false
         default: ""
         type: string
+      qa_profile:
+        description: Taxonomy QA profile id to run
+        required: true
+        type: string
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by live QA profile scenarios
+        required: true
     outputs:
       artifact_name:
-        description: Uploaded release QA profile evidence artifact name
-        value: ${{ jobs.run_release_profile.outputs.artifact_name }}
+        description: Uploaded QA profile evidence artifact name
+        value: ${{ jobs.run_qa_profile.outputs.artifact_name }}
+      qa_profile:
+        description: Taxonomy QA profile id that produced the evidence
+        value: ${{ jobs.run_qa_profile.outputs.qa_profile }}
+      qa_exit_code:
+        description: Exit code from the QA profile run; non-zero evidence is still uploaded
+        value: ${{ jobs.run_qa_profile.outputs.qa_exit_code }}
+      qa_passed:
+        description: Whether the QA profile command exited successfully
+        value: ${{ jobs.run_qa_profile.outputs.qa_passed }}
       target_sha:
         description: Resolved OpenClaw SHA that produced the evidence
-        value: ${{ jobs.run_release_profile.outputs.target_sha }}
+        value: ${{ jobs.run_qa_profile.outputs.target_sha }}
       trusted_reason:
         description: Trust reason accepted before the secret-bearing QA job
-        value: ${{ jobs.run_release_profile.outputs.trusted_reason }}
+        value: ${{ jobs.run_qa_profile.outputs.trusted_reason }}
       qa_evidence_path:
         description: Path to qa-evidence.json inside the uploaded artifact
-        value: ${{ jobs.run_release_profile.outputs.qa_evidence_path }}
+        value: ${{ jobs.run_qa_profile.outputs.qa_evidence_path }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-qa-profile-evidence-${{ inputs.expected_sha || inputs.ref }}
+  group: qa-profile-evidence-${{ inputs.qa_profile }}-${{ inputs.expected_sha || inputs.ref }}
   cancel-in-progress: false
 
 env:
@@ -67,6 +89,13 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
+            // Reusable workflow jobs inherit the caller event but run as
+            // github-actions[bot]; selected ref validation still gates secrets.
+            if (context.actor === "github-actions[bot]") {
+              core.info("Skipping manual actor permission check for a reusable workflow call.");
+              core.setOutput("authorized", "true");
+              return;
+            }
             if (context.eventName !== "workflow_dispatch") {
               core.info(`Skipping manual actor permission check for ${context.eventName}.`);
               core.setOutput("authorized", "true");
@@ -158,8 +187,8 @@ jobs:
             echo "- Trust reason: \`$trusted_reason\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  run_release_profile:
-    name: Generate release QA profile evidence
+  run_qa_profile:
+    name: Generate QA profile evidence
     needs: validate_selected_ref
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
@@ -167,6 +196,9 @@ jobs:
       contents: read
     outputs:
       artifact_name: ${{ steps.evidence.outputs.artifact_name }}
+      qa_profile: ${{ steps.profile.outputs.profile }}
+      qa_exit_code: ${{ steps.evidence.outputs.qa_exit_code }}
+      qa_passed: ${{ steps.evidence.outputs.qa_passed }}
       target_sha: ${{ steps.evidence.outputs.target_sha }}
       trusted_reason: ${{ steps.evidence.outputs.trusted_reason }}
       qa_evidence_path: ${{ steps.evidence.outputs.qa_evidence_path }}
@@ -185,47 +217,70 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
+      - name: Validate QA profile input
+        id: profile
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          QA_PROFILE: ${{ inputs.qa_profile }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "Missing required OPENAI_API_KEY." >&2
-            exit 1
-          fi
+          node --import tsx --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { readQaScorecardTaxonomyReport } from "./extensions/qa-lab/src/scorecard-taxonomy.ts";
+
+          const requested = process.env.QA_PROFILE?.trim() ?? "";
+          if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(requested)) {
+            throw new Error(`qa_profile must use a taxonomy profile id, got ${JSON.stringify(process.env.QA_PROFILE)}`);
+          }
+
+          const taxonomy = readQaScorecardTaxonomyReport([]);
+          const profile = taxonomy.profiles.find((entry) => entry.id === requested);
+          if (!profile) {
+            const available = taxonomy.profiles.map((entry) => entry.id).join(", ");
+            throw new Error(`Unknown QA profile ${requested}. Available profiles: ${available}`);
+          }
+
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `profile=${profile.id}\n`);
+          NODE
+
+          echo "QA profile: \`${QA_PROFILE}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: node scripts/build-all.mjs qaRuntime
 
-      - name: Run release QA profile
+      - name: Ensure Playwright Chromium
+        run: node scripts/ensure-playwright-chromium.mjs
+
+      - name: Run QA profile
         id: run_profile
         env:
+          QA_PROFILE: ${{ steps.profile.outputs.profile }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
           set -euo pipefail
 
-          output_dir=".artifacts/qa-e2e/release-profile-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          output_dir=".artifacts/qa-e2e/profile-${QA_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
           qa_exit_code=0
           pnpm openclaw qa run \
             --repo-root . \
-            --qa-profile release \
+            --qa-profile "${QA_PROFILE}" \
             --output-dir "${output_dir}" || qa_exit_code=$?
 
           echo "qa_exit_code=${qa_exit_code}" >> "$GITHUB_OUTPUT"
 
-      - name: Validate release QA evidence
+      - name: Validate QA profile evidence
         id: evidence
         if: always()
         env:
-          ARTIFACT_NAME: release-qa-profile-evidence-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          ARTIFACT_NAME: qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
           OUTPUT_DIR: ${{ steps.run_profile.outputs.output_dir }}
+          QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
+          QA_PROFILE: ${{ steps.profile.outputs.profile }}
           REQUESTED_REF: ${{ inputs.ref }}
           TARGET_SHA: ${{ needs.validate_selected_ref.outputs.selected_revision }}
           TRUSTED_REASON: ${{ needs.validate_selected_ref.outputs.trusted_reason }}
@@ -241,22 +296,28 @@ jobs:
           if (!outputDir) {
             throw new Error("OUTPUT_DIR is required");
           }
+          if (!process.env.QA_EXIT_CODE) {
+            throw new Error("QA_EXIT_CODE is required");
+          }
 
           const evidencePath = path.join(outputDir, "qa-evidence.json");
           const payload = JSON.parse(fs.readFileSync(evidencePath, "utf8"));
-          if (payload.profile !== "release") {
-            throw new Error(`qa-evidence.json profile must be release, got ${JSON.stringify(payload.profile)}`);
+          if (payload.profile !== process.env.QA_PROFILE) {
+            throw new Error(`qa-evidence.json profile must be ${process.env.QA_PROFILE}, got ${JSON.stringify(payload.profile)}`);
           }
           if (!payload.scorecard || !Array.isArray(payload.scorecard.categoryReports)) {
-            throw new Error("release qa-evidence.json must include scorecard.categoryReports");
+            throw new Error("QA profile qa-evidence.json must include scorecard.categoryReports");
           }
           if (payload.scorecard.categoryReports.length === 0) {
-            throw new Error("release qa-evidence.json scorecard has no category reports");
+            throw new Error("QA profile qa-evidence.json scorecard has no category reports");
           }
 
           const manifest = {
             artifactName: process.env.ARTIFACT_NAME,
             generatedAt: new Date().toISOString(),
+            qaProfile: process.env.QA_PROFILE,
+            qaExitCode: Number(process.env.QA_EXIT_CODE),
+            qaPassed: process.env.QA_EXIT_CODE === "0",
             requestedRef: process.env.REQUESTED_REF,
             targetSha: process.env.TARGET_SHA,
             trustedReason: process.env.TRUSTED_REASON,
@@ -269,45 +330,56 @@ jobs:
             },
           };
           fs.writeFileSync(
-            path.join(outputDir, "release-qa-profile-evidence-manifest.json"),
+            path.join(outputDir, "qa-profile-evidence-manifest.json"),
             `${JSON.stringify(manifest, null, 2)}\n`,
           );
           NODE
 
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
+          echo "qa_profile=${QA_PROFILE}" >> "$GITHUB_OUTPUT"
+          echo "qa_exit_code=${QA_EXIT_CODE}" >> "$GITHUB_OUTPUT"
+          if [[ "$QA_EXIT_CODE" == "0" ]]; then
+            echo "qa_passed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "qa_passed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::QA profile '${QA_PROFILE}' completed with exit code ${QA_EXIT_CODE}; evidence was still validated and uploaded."
+          fi
           echo "target_sha=${TARGET_SHA}" >> "$GITHUB_OUTPUT"
           echo "trusted_reason=${TRUSTED_REASON}" >> "$GITHUB_OUTPUT"
           echo "qa_evidence_path=qa-evidence.json" >> "$GITHUB_OUTPUT"
           {
-            echo "### Release QA profile evidence"
+            echo "### QA profile evidence"
             echo
             echo "- Artifact: \`${ARTIFACT_NAME}\`"
+            echo "- QA profile: \`${QA_PROFILE}\`"
+            echo "- QA exit code: \`${QA_EXIT_CODE}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Evidence path: \`${OUTPUT_DIR}/qa-evidence.json\`"
-            echo "- Manifest: \`${OUTPUT_DIR}/release-qa-profile-evidence-manifest.json\`"
+            echo "- Manifest: \`${OUTPUT_DIR}/qa-profile-evidence-manifest.json\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload release QA profile evidence
+      - name: Upload QA profile evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: release-qa-profile-evidence-${{ needs.validate_selected_ref.outputs.selected_revision }}
+          name: qa-profile-evidence-${{ steps.profile.outputs.profile }}-${{ needs.validate_selected_ref.outputs.selected_revision }}
           path: ${{ steps.run_profile.outputs.output_dir }}
           retention-days: 30
           if-no-files-found: error
 
-      - name: Fail if release QA profile failed
+      - name: Fail if QA profile failed
         if: always()
         env:
           QA_EXIT_CODE: ${{ steps.run_profile.outputs.qa_exit_code }}
+          QA_PROFILE: ${{ steps.profile.outputs.profile }}
         shell: bash
         run: |
           set -euo pipefail
           if [[ -z "${QA_EXIT_CODE:-}" ]]; then
-            echo "Release QA profile did not report an exit code." >&2
+            echo "QA profile did not report an exit code." >&2
             exit 1
           fi
           if [[ "$QA_EXIT_CODE" != "0" ]]; then
-            echo "Release QA profile failed with exit code ${QA_EXIT_CODE}." >&2
+            echo "QA profile '${QA_PROFILE}' failed with exit code ${QA_EXIT_CODE}." >&2
             exit "$QA_EXIT_CODE"
           fi

@@ -533,7 +533,12 @@ function parsePresets(raw: string | undefined): string[] {
 function resolveCases(options: { presets: string[]; caseIds: string[] }): CommandCase[] {
   const byId = new Map(COMMAND_CASES.map((commandCase) => [commandCase.id, commandCase]));
   if (options.caseIds.length > 0) {
+    const seenIds = new Set<string>();
     return options.caseIds.map((id) => {
+      if (seenIds.has(id)) {
+        throw new Error(`Duplicate --case "${id}"`);
+      }
+      seenIds.add(id);
       const commandCase = byId.get(id);
       if (!commandCase) {
         throw new Error(`Unknown --case "${id}"`);

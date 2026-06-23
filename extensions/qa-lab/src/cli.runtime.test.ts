@@ -514,6 +514,69 @@ describe("qa cli runtime", () => {
     expect(suiteArgs.channelDriverSelection).toBeUndefined();
   });
 
+  it("runs the all profile through the live taxonomy profile path", async () => {
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      profile: "all",
+      surface: "agent-runtime-and-provider-execution",
+      category: "agent-runtime-and-provider-execution.agent-turn-execution",
+      providerMode: "mock-openai",
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expectFields(suiteArgs, {
+      providerMode: "mock-openai",
+      channelDriver: "live",
+    });
+    expect(suiteArgs.channelDriverSelection).toBeUndefined();
+    expectWriteContains(stdoutWrite, "QA run profile: all; categories: 1; scenarios:");
+  });
+
+  it("filters QA-channel-pinned scenarios from the Crabline smoke profile", async () => {
+    runQaSuite.mockImplementationOnce(async () => {
+      await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
+      return flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      });
+    });
+
+    await runQaProfileCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      profile: "smoke-ci",
+    });
+
+    const suiteArgs = mockFirstObjectArg(runQaSuite);
+    expect(suiteArgs.channelDriver).toBe("crabline");
+    expect(suiteArgs.scenarioIds).toEqual(expect.arrayContaining(["dm-chat-baseline"]));
+    expect(suiteArgs.scenarioIds).not.toEqual(
+      expect.arrayContaining([
+        "instruction-followthrough-repo-contract",
+        "subagent-forked-context",
+        "subagent-handoff",
+        "group-message-tool-unavailable-fallback",
+        "qa-channel-reconnect-dedupe",
+        "reaction-edit-delete",
+        "thread-follow-up",
+        "image-generation-roundtrip",
+        "image-understanding-attachment",
+        "native-image-generation",
+        "active-memory-preprompt-recall",
+        "memory-recall",
+        "session-memory-ranking",
+        "thread-memory-isolation",
+        "personal-channel-thread-reply",
+        "personal-memory-preference-recall",
+        "personal-reminder-roundtrip",
+        "cron-natural-fire-no-duplicate",
+        "cron-one-minute-ping",
+        "cron-single-run-no-duplicate",
+        "control-ui-qa-channel-image-roundtrip",
+        "config-apply-restart-wakeup",
+      ]),
+    );
+  });
+
   it("rejects qa profile runs that do not match taxonomy categories", async () => {
     await expect(
       runQaProfileCommand({
@@ -547,7 +610,7 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         profile: "nightly",
       }),
-    ).rejects.toThrow('--qa-profile must be one of smoke-ci, release, got "nightly".');
+    ).rejects.toThrow('--qa-profile must be one of smoke-ci, release, all, got "nightly".');
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 

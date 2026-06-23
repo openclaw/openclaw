@@ -44,6 +44,17 @@ docker_e2e_read_nonnegative_decimal_env() {
     echo "invalid $name: $value" >&2
     return 2
   fi
+  local integer_part="${value%%.*}"
+  local fractional_part=""
+  if [[ "$value" == *.* ]]; then
+    fractional_part="${value#*.}"
+  fi
+  # These suite knobs are human-authored resource/time ceilings. Reject
+  # pathological decimal strings before Docker setup instead of failing later.
+  if [ "${#integer_part}" -gt 9 ] || [ "${#fractional_part}" -gt 6 ]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
   printf '%s\n' "$value"
 }
 

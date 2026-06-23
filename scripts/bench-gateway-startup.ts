@@ -282,6 +282,13 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   if (caseIds.length === 0) {
     return [...GATEWAY_CASES];
   }
+  const seenIds = new Set<string>();
+  for (const id of caseIds) {
+    if (seenIds.has(id)) {
+      throw new CliArgumentError(`Duplicate --case "${id}"`);
+    }
+    seenIds.add(id);
+  }
   const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
   return caseIds.map((id) => {
     const benchCase = byId.get(id);

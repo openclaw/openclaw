@@ -8,6 +8,7 @@ export type GatewayServiceEnv = Record<string, string | undefined>;
 export type GatewayServiceInstallArgs = {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
+  warn?: (message: string) => void;
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
@@ -26,6 +27,7 @@ export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
+  warn?: (message: string) => void;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };

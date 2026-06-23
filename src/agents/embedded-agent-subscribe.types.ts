@@ -95,6 +95,13 @@ export type SubscribeEmbeddedAgentSessionParams = {
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+  /**
+   * Skip per-chunk live visible-text parsing in handleMessageUpdate. Set for runs
+   * with no live stream consumer — notably subagents, whose result is read back
+   * from the final message_end path. Suppressing intermediate passes does not
+   * change final output.
+   */
+  suppressLiveStreamOutput?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Current transport channel resolved for this run. */

@@ -219,6 +219,12 @@ profiles:
       - browser-automation-and-exec-sandbox-tools.browser-automation
       - browser-automation-and-exec-sandbox-tools.tool-invocation-and-execution
       - browser-automation-and-exec-sandbox-tools.sandbox-and-tool-policy
+  - id: all
+    description: Full taxonomy scorecard selector for generated maturity coverage evidence across
+      every active category. Intended for explicit QA evidence workflow dispatches rather than the
+      default release gate.
+    channelDriver: live
+    includeAllCategories: true
 levels:
   - id: planned
     code: M0
@@ -245,9 +251,9 @@ levels:
     label: Stable
     meaning: Recommended path for normal users. Failures are treated as regressions.
     promotion_bar: Release gate, doctor/troubleshooting path, broad docs, and repeated real-world proof.
-  - id: lovable
+  - id: clawesome
     code: M5
-    label: Lovable
+    label: Clawesome
     meaning: Polished, delightful, well-instrumented, and competitive with the best comparable workflow.
     promotion_bar: Stable plus user scorecard pass across representative users.
 surfaces:
@@ -6112,7 +6118,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: raspberry-pi-small-linux-devices
-    name: Raspberry Pi / small Linux devices
+    name: Raspberry Pi and small Linux devices
     family: platform-app
     level: beta
     level_code: M3
@@ -6335,7 +6341,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: docker-podman-hosting
-    name: Docker / Podman hosting
+    name: Docker and Podman hosting
     family: platform-app
     level: beta
     level_code: M3
@@ -7534,7 +7540,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: imessage-bluebubbles
-    name: iMessage / BlueBubbles
+    name: iMessage and BlueBubbles
     family: channel
     level: beta
     level_code: M3
@@ -8768,7 +8774,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: openai-codex-provider-path
-    name: OpenAI / Codex provider path
+    name: OpenAI and Codex provider path
     family: provider-tool
     level: beta
     level_code: M3
@@ -10249,7 +10255,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: browser-automation-and-exec-sandbox-tools
-    name: Browser automation and exec/sandbox tools
+    name: Browser automation, exec, and sandbox tools
     family: provider-tool
     level: beta
     level_code: M3
@@ -10400,7 +10406,7 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: image-video-music-generation-tools
-    name: Image/video/music generation tools
+    name: Image, video, and music generation tools
     family: provider-tool
     level: alpha
     level_code: M2

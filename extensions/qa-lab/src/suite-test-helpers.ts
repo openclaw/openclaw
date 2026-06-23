@@ -12,6 +12,7 @@ export function makeQaSuiteTestScenario(
     gatewayConfigPatch?: Record<string, unknown>;
     gatewayRuntime?: { forwardHostHome?: boolean; preserveDebugArtifacts?: boolean };
     runtimeParityTier?: QaSuiteTestScenario["runtimeParityTier"];
+    suiteIsolation?: "isolated";
     surface?: string;
   } = {},
 ): QaSuiteTestScenario {
@@ -29,6 +30,7 @@ export function makeQaSuiteTestScenario(
     execution: {
       kind: "flow",
       ...(params.channel ? { channel: params.channel } : {}),
+      ...(params.suiteIsolation ? { suiteIsolation: params.suiteIsolation } : {}),
       ...(params.config ? { config: params.config } : {}),
       flow: { steps: [{ name: "noop", actions: [{ assert: "true" }] }] },
     },

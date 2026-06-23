@@ -76,6 +76,7 @@ Sources/Permissions/PermissionRequestBridge.swift
 Sources/Push/ExecApprovalNotificationBridge.swift
 Sources/Push/BackgroundAliveBeacon.swift
 Sources/Push/PushBuildConfig.swift
+Sources/Push/PushEnrollmentConsent.swift
 Sources/Push/PushRegistrationManager.swift
 Sources/Push/PushRelayClient.swift
 Sources/Push/PushRelayKeychainStore.swift

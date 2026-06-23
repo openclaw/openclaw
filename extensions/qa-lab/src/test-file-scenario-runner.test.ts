@@ -241,6 +241,26 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+  it("can return aggregate evidence without writing a duplicate evidence file", async () => {
+    const repoRoot = await makeTempRepo("qa-playwright-memory-evidence-");
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "scenario-playwright"),
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.5",
+      scenarios: [makeTestFileScenario("playwright", "ui/src/ui/e2e/chat-flow.e2e.test.ts")],
+      writeEvidenceFile: false,
+      runCommand: async () => ({
+        exitCode: 0,
+        stdout: "pass\n",
+        stderr: "",
+      }),
+    });
+
+    expect(result.evidence.entries).toHaveLength(1);
+    await expect(fs.access(result.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("runs Vitest scenarios with the declared test path and writes Vitest evidence", async () => {
     const repoRoot = await makeTempRepo("qa-vitest-scenario-");
     const commands: QaScenarioCommandExecution[] = [];

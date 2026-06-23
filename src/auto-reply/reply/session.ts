@@ -250,6 +250,7 @@ export async function initSessionState(params: {
   // Native slash/menu commands can arrive on a transport-specific "slash session"
   // while explicitly targeting an existing chat session. Honor that explicit target
   // before any binding lookup so command-side mutations land on the intended session.
+  // Priority: commandTargetSessionKey > boundConversation > route.
   const targetSessionKey =
     commandTargetSessionKey ??
     resolveBoundConversationSessionKey({

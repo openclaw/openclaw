@@ -153,6 +153,7 @@ describe("buildChannelInboundEventContext", () => {
       MediaTypes: ["image/png", "audio/mpeg"],
       MediaTranscribedIndexes: [1],
       ChatType: "group",
+      ChatId: "room-1",
       ConversationLabel: "Room One",
       GroupSubject: "Room One",
       GroupSpace: "workspace",
@@ -191,6 +192,24 @@ describe("buildChannelInboundEventContext", () => {
     for (const [key, value] of Object.entries(expectedFields)) {
       expect(ctx[key as keyof typeof ctx]).toEqual(value);
     }
+  });
+
+  it("preserves channel-owned hook context without rendering it as prompt text", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        channelContext: {
+          sender: { id: "sender-1", customSenderField: "sender-meta" },
+          chat: { id: "chat-1", customChatField: "chat-meta" },
+        },
+      }),
+    );
+
+    expect(ctx.ChannelContext).toEqual({
+      sender: { id: "sender-1", customSenderField: "sender-meta" },
+      chat: { id: "chat-1", customChatField: "chat-meta" },
+    });
+    expect(ctx.Body).not.toContain("customSenderField");
+    expect(ctx.BodyForAgent).not.toContain("customSenderField");
   });
 
   it("uses resolved command authorization instead of recomputing authorizers", async () => {

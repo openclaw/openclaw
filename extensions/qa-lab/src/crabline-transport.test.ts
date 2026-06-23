@@ -1,7 +1,7 @@
 // Qa Lab tests cover Crabline fake-provider transport integration behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { OPENCLAW_CRABLINE_MANIFEST_PATH } from "crabline";
+import { OPENCLAW_CRABLINE_MANIFEST_PATH } from "@openclaw/crabline";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
