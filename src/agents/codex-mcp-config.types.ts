@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpDiagnostic } from "../plugins/bundle-mcp.js";
+import type { McpServerSelection } from "./agent-bundle-mcp-types.js";
 
 export type CodexMcpServersConfig = Record<string, Record<string, unknown>>;
 
@@ -10,6 +11,7 @@ export type CodexBundleMcpThreadConfig = {
   diagnostics: BundleMcpDiagnostic[];
   evaluated: boolean;
   fingerprint?: string;
+  selectedMcpServers?: McpServerSelection;
 };
 
 export type LoadCodexBundleMcpThreadConfigParams = {

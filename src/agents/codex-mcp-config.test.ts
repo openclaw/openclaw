@@ -107,7 +107,34 @@ describe("loadCodexBundleMcpThreadConfig", () => {
         },
       },
     });
+    expect(loaded.selectedMcpServers).toEqual(["search"]);
     expect(loaded.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("returns sorted selected MCP server names for embedded materialization", () => {
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          zulu: {
+            type: "http",
+            url: "https://zulu.example.com/mcp",
+          },
+          alpha: {
+            type: "http",
+            url: "https://alpha.example.com/mcp",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+    });
+
+    expect(loaded.selectedMcpServers).toEqual(["alpha", "zulu"]);
+    expect(Object.keys(loaded.configPatch?.mcp_servers ?? {})).toEqual(["zulu", "alpha"]);
   });
 
   it("leaves user mcp.servers to the Codex user MCP projection path", () => {

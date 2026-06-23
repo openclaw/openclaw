@@ -98,6 +98,19 @@ function handle(message) {
         },
       });
     }, delayMs);
+    return;
+  }
+  if (message.method === "tools/call") {
+    const toolName = String(message.params?.name ?? "unknown");
+    log("call " + toolName);
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        content: [{ type: "text", text: "called " + toolName }],
+        isError: false,
+      },
+    });
   }
 }
 process.stdin.setEncoding("utf8");
@@ -532,7 +545,7 @@ describe("session MCP runtime", () => {
   it("holds a runtime lease until the materialized tool runtime is disposed", async () => {
     let activeLeases = 0;
     const runtime = {
-      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      ...makeRuntime([{ toolName: "get_bundle_probe", description: "Bundle MCP probe" }]),
       acquireLease: () => {
         activeLeases += 1;
         return () => {
@@ -553,7 +566,7 @@ describe("session MCP runtime", () => {
   it("releases a runtime lease when catalog materialization fails", async () => {
     let activeLeases = 0;
     const runtime = {
-      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      ...makeRuntime([{ toolName: "get_bundle_probe", description: "Bundle MCP probe" }]),
       acquireLease: () => {
         activeLeases += 1;
         return () => {
@@ -605,6 +618,333 @@ describe("session MCP runtime", () => {
         toolCount: 1,
       });
       await expect(fs.readFile(logPath, "utf8")).resolves.toContain("delay tools/list 750");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("catalogs only selected MCP servers", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-selected-catalog-"));
+    const alphaPath = path.join(tempDir, "alpha.mjs");
+    const alphaLogPath = path.join(tempDir, "alpha.log");
+    const zuluPath = path.join(tempDir, "zulu.mjs");
+    const zuluLogPath = path.join(tempDir, "zulu.log");
+    await writeListToolsMcpServer({ filePath: alphaPath, logPath: alphaLogPath });
+    await writeListToolsMcpServer({ filePath: zuluPath, logPath: zuluLogPath });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-selected-catalog",
+      sessionKey: "agent:test:session-selected-catalog",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            alpha: {
+              command: process.execPath,
+              args: [alphaPath],
+            },
+            zulu: {
+              command: process.execPath,
+              args: [zuluPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const emptyCatalog = await runtime.getCatalog({ selectedMcpServers: [] });
+      expect(emptyCatalog.tools).toEqual([]);
+      expect(emptyCatalog.servers).toEqual({});
+
+      const catalog = await runtime.getCatalog({ selectedMcpServers: ["zulu"] });
+
+      expect(Object.keys(catalog.servers)).toEqual(["zulu"]);
+      expect(catalog.tools.map((tool) => tool.serverName)).toEqual(["zulu"]);
+      expect(runtime.peekCatalog()).toBeNull();
+      await waitForFileText(zuluLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await expect(fs.readFile(alphaLogPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('selectedMcpServers=["*"] preserves full catalog behavior', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-star-catalog-"));
+    const alphaPath = path.join(tempDir, "alpha.mjs");
+    const alphaLogPath = path.join(tempDir, "alpha.log");
+    const zuluPath = path.join(tempDir, "zulu.mjs");
+    const zuluLogPath = path.join(tempDir, "zulu.log");
+    await writeListToolsMcpServer({ filePath: alphaPath, logPath: alphaLogPath });
+    await writeListToolsMcpServer({ filePath: zuluPath, logPath: zuluLogPath });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-star-catalog",
+      sessionKey: "agent:test:session-star-catalog",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            alpha: {
+              command: process.execPath,
+              args: [alphaPath],
+            },
+            zulu: {
+              command: process.execPath,
+              args: [zuluPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog({ selectedMcpServers: ["*"] });
+
+      expect(Object.keys(catalog.servers)).toEqual(["alpha", "zulu"]);
+      expect(catalog.tools.map((tool) => tool.serverName)).toEqual(["alpha", "zulu"]);
+      await waitForFileText(alphaLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForFileText(zuluLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("undefined selectedMcpServers preserves full catalog behavior", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-undefined-catalog-"));
+    const alphaPath = path.join(tempDir, "alpha.mjs");
+    const alphaLogPath = path.join(tempDir, "alpha.log");
+    const zuluPath = path.join(tempDir, "zulu.mjs");
+    const zuluLogPath = path.join(tempDir, "zulu.log");
+    await writeListToolsMcpServer({ filePath: alphaPath, logPath: alphaLogPath });
+    await writeListToolsMcpServer({ filePath: zuluPath, logPath: zuluLogPath });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-undefined-catalog",
+      sessionKey: "agent:test:session-undefined-catalog",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            alpha: {
+              command: process.execPath,
+              args: [alphaPath],
+            },
+            zulu: {
+              command: process.execPath,
+              args: [zuluPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(Object.keys(catalog.servers)).toEqual(["alpha", "zulu"]);
+      expect(catalog.tools.map((tool) => tool.serverName)).toEqual(["alpha", "zulu"]);
+      await waitForFileText(alphaLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForFileText(zuluLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("repeated selected catalog calls reuse selected cache without full catalog", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-selected-cache-"));
+    const alphaPath = path.join(tempDir, "alpha.mjs");
+    const alphaLogPath = path.join(tempDir, "alpha.log");
+    const zuluPath = path.join(tempDir, "zulu.mjs");
+    const zuluLogPath = path.join(tempDir, "zulu.log");
+    await writeListToolsMcpServer({ filePath: alphaPath, logPath: alphaLogPath });
+    await writeListToolsMcpServer({ filePath: zuluPath, logPath: zuluLogPath });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-selected-cache",
+      sessionKey: "agent:test:session-selected-cache",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            alpha: {
+              command: process.execPath,
+              args: [alphaPath],
+            },
+            zulu: {
+              command: process.execPath,
+              args: [zuluPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const firstCatalog = await runtime.getCatalog({ selectedMcpServers: ["zulu"] });
+      const secondCatalog = await runtime.getCatalog({ selectedMcpServers: ["zulu"] });
+
+      expect(firstCatalog.tools.map((tool) => tool.serverName)).toEqual(["zulu"]);
+      expect(secondCatalog.tools.map((tool) => tool.serverName)).toEqual(["zulu"]);
+      await waitForFileText(zuluLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      const zuluLog = await fs.readFile(zuluLogPath, "utf8");
+      expect(zuluLog.match(/recv tools\/list/g)).toHaveLength(1);
+      await expect(fs.readFile(alphaLogPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(runtime.peekCatalog()).toBeNull();
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("empty catalog does not poison full catalog cache", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-empty-cache-"));
+    const alphaPath = path.join(tempDir, "alpha.mjs");
+    const alphaLogPath = path.join(tempDir, "alpha.log");
+    const zuluPath = path.join(tempDir, "zulu.mjs");
+    const zuluLogPath = path.join(tempDir, "zulu.log");
+    await writeListToolsMcpServer({ filePath: alphaPath, logPath: alphaLogPath });
+    await writeListToolsMcpServer({ filePath: zuluPath, logPath: zuluLogPath });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-empty-cache",
+      sessionKey: "agent:test:session-empty-cache",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            alpha: {
+              command: process.execPath,
+              args: [alphaPath],
+            },
+            zulu: {
+              command: process.execPath,
+              args: [zuluPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const emptyCatalog = await runtime.getCatalog({ selectedMcpServers: [] });
+      expect(emptyCatalog.tools).toEqual([]);
+      expect(emptyCatalog.servers).toEqual({});
+
+      const catalog = await runtime.getCatalog();
+
+      expect(Object.keys(catalog.servers)).toEqual(["alpha", "zulu"]);
+      expect(catalog.tools.map((tool) => tool.serverName)).toEqual(["alpha", "zulu"]);
+      expect(runtime.peekCatalog()?.tools.map((tool) => tool.serverName)).toEqual([
+        "alpha",
+        "zulu",
+      ]);
+      await waitForFileText(alphaLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForFileText(zuluLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('selectedMcpServers=["alpha", "zulu"] starts/connects/lists only those two', async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-selected-two-"));
+    const alphaPath = path.join(tempDir, "alpha.mjs");
+    const alphaLogPath = path.join(tempDir, "alpha.log");
+    const zuluPath = path.join(tempDir, "zulu.mjs");
+    const zuluLogPath = path.join(tempDir, "zulu.log");
+    const otherPath = path.join(tempDir, "other.mjs");
+    const otherLogPath = path.join(tempDir, "other.log");
+    await writeListToolsMcpServer({ filePath: alphaPath, logPath: alphaLogPath });
+    await writeListToolsMcpServer({ filePath: zuluPath, logPath: zuluLogPath });
+    await writeListToolsMcpServer({ filePath: otherPath, logPath: otherLogPath });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-selected-two",
+      sessionKey: "agent:test:session-selected-two",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            alpha: {
+              command: process.execPath,
+              args: [alphaPath],
+            },
+            zulu: {
+              command: process.execPath,
+              args: [zuluPath],
+            },
+            other: {
+              command: process.execPath,
+              args: [otherPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog({ selectedMcpServers: ["alpha", "zulu"] });
+
+      expect(Object.keys(catalog.servers)).toEqual(["alpha", "zulu"]);
+      expect(catalog.tools.map((tool) => tool.serverName)).toEqual(["alpha", "zulu"]);
+      await waitForFileText(alphaLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForFileText(zuluLogPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await expect(fs.readFile(otherLogPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("callTool catalogs only the target server when it is not connected", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-selected-call-"));
+    const alphaPath = path.join(tempDir, "alpha.mjs");
+    const alphaLogPath = path.join(tempDir, "alpha.log");
+    const zuluPath = path.join(tempDir, "zulu.mjs");
+    const zuluLogPath = path.join(tempDir, "zulu.log");
+    await writeListToolsMcpServer({ filePath: alphaPath, logPath: alphaLogPath });
+    await writeListToolsMcpServer({ filePath: zuluPath, logPath: zuluLogPath });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-selected-call",
+      sessionKey: "agent:test:session-selected-call",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            alpha: {
+              command: process.execPath,
+              args: [alphaPath],
+            },
+            zulu: {
+              command: process.execPath,
+              args: [zuluPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const result = await runtime.callTool("zulu", "slow_tool", {});
+
+      expect(result.content).toEqual([{ type: "text", text: "called slow_tool" }]);
+      await waitForFileText(zuluLogPath, "call slow_tool", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await expect(fs.readFile(alphaLogPath, "utf8")).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(runtime.peekCatalog()).toBeNull();
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -702,7 +1042,9 @@ describe("session MCP runtime", () => {
     const created: SessionMcpRuntime[] = [];
     const disposed: string[] = [];
     const createRuntime: RuntimeFactory = (params) => {
-      const runtime = makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]);
+      const runtime = makeRuntime([
+        { toolName: "get_bundle_probe", description: "Bundle MCP probe" },
+      ]);
       created.push(runtime);
       return {
         ...runtime,
@@ -735,8 +1077,8 @@ describe("session MCP runtime", () => {
     });
 
     expect(runtimeA).toBe(runtimeB);
-    expect(materializedA.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
-    expect(materializedB.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(materializedA.tools.map((tool) => tool.name)).toEqual(["bundleProbe__get_bundle_probe"]);
+    expect(materializedB.tools.map((tool) => tool.name)).toEqual(["bundleProbe__get_bundle_probe"]);
     expect(created).toHaveLength(1);
     expect(manager.listSessionIds()).toEqual(["session-a"]);
 
@@ -759,7 +1101,7 @@ describe("session MCP runtime", () => {
         await manager.disposeSession("session-a");
       },
     });
-    expect(materializedC.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe"]);
+    expect(materializedC.tools.map((tool) => tool.name)).toEqual(["bundleProbe__get_bundle_probe"]);
 
     await materializedC.dispose();
 
@@ -770,7 +1112,7 @@ describe("session MCP runtime", () => {
   it("peeks existing runtimes and populated catalogs without creating new runtimes", async () => {
     let catalogReady = false;
     const createRuntime: RuntimeFactory = (params) => {
-      const base = makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]);
+      const base = makeRuntime([{ toolName: "get_bundle_probe", description: "Bundle MCP probe" }]);
       let cachedCatalog: ReturnType<SessionMcpRuntime["peekCatalog"]> = null;
       return {
         ...base,
@@ -804,7 +1146,7 @@ describe("session MCP runtime", () => {
     await runtime.getCatalog();
 
     expect(catalogReady).toBe(true);
-    expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["bundle_probe"]);
+    expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["get_bundle_probe"]);
   });
 
   it("recreates the session runtime when MCP config changes", async () => {
@@ -813,7 +1155,7 @@ describe("session MCP runtime", () => {
         params.cfg?.mcp?.servers?.configuredProbe?.env?.BUNDLE_PROBE_TEXT ?? "FROM-CONFIG",
       );
       return {
-        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        ...makeRuntime([{ toolName: "get_bundle_probe", description: "Bundle MCP probe" }]),
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
@@ -895,7 +1237,7 @@ describe("session MCP runtime", () => {
     });
     let rejectCatalog: ((error: Error) => void) | undefined;
     const createRuntime: RuntimeFactory = (params) => ({
-      ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+      ...makeRuntime([{ toolName: "get_bundle_probe", description: "Bundle MCP probe" }]),
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       workspaceDir: params.workspaceDir,
@@ -980,7 +1322,7 @@ describe("session MCP runtime", () => {
       let lastUsedAt = now;
       let activeLeases = 0;
       return {
-        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        ...makeRuntime([{ toolName: "get_bundle_probe", description: "Bundle MCP probe" }]),
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
@@ -1038,7 +1380,7 @@ describe("session MCP runtime", () => {
     const disposed: string[] = [];
     const manager = testing.createSessionMcpRuntimeManager({
       createRuntime: (params) => ({
-        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        ...makeRuntime([{ toolName: "get_bundle_probe", description: "Bundle MCP probe" }]),
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,

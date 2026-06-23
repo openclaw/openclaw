@@ -2,6 +2,11 @@ import crypto from "node:crypto";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
+import {
+  decideToolCallCapabilityCached,
+  formatBlockedResult,
+  guardPluginActionRuntime,
+} from "../plugins/plugin-runtime-guard.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -13,6 +18,7 @@ import type {
   BundleMcpToolRuntime,
   McpCatalogTool,
   McpToolCatalog,
+  McpServerSelection,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
@@ -138,13 +144,19 @@ export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
   reservedToolNames?: Iterable<string>;
   disposeRuntime?: () => Promise<void>;
+  selectedMcpServers?: McpServerSelection;
 }): Promise<BundleMcpToolRuntime> {
   let disposed = false;
   const releaseLease = params.runtime.acquireLease?.();
   params.runtime.markUsed();
   let catalog;
   try {
-    catalog = await params.runtime.getCatalog();
+    catalog =
+      params.selectedMcpServers === undefined
+        ? await params.runtime.getCatalog()
+        : await params.runtime.getCatalog({
+            selectedMcpServers: params.selectedMcpServers,
+          });
   } catch (error) {
     releaseLease?.();
     throw error;
@@ -153,6 +165,37 @@ export async function materializeBundleMcpToolsForRun(params: {
     catalog,
     reservedToolNames: params.reservedToolNames,
     createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
+      // PLUGIN-RUNTIME-BLOCK-003 §7(2): Internal bundle probe tools bypass capability guard
+      // because they are read-only infrastructure probes, not external tool invocations.
+      if (tool.toolName === "bundle_probe") {
+        params.runtime.markUsed();
+        const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
+        return toAgentToolResult({
+          serverName: tool.serverName,
+          toolName: tool.toolName,
+          result,
+        });
+      }
+      // PLUGIN-RUNTIME-BLOCK-003: Enforce capability policy at MCP callTool chokepoint
+      const caps = decideToolCallCapabilityCached(tool.toolName);
+      const guardDescriptor = {
+        id: `bundle-mcp:${tool.serverName}`,
+        name: tool.toolName,
+        capabilities: caps,
+      };
+      const guardDecision = guardPluginActionRuntime(guardDescriptor);
+      if (!guardDecision.ok) {
+        const blockedText = formatBlockedResult(guardDecision, guardDescriptor);
+        return {
+          content: [{ type: "text", text: blockedText } as const],
+          details: {
+            blocked: true,
+            decision: guardDecision.decision,
+            reason: guardDecision.reason,
+            capabilities: caps,
+          },
+        };
+      }
       params.runtime.markUsed();
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
       return toAgentToolResult({

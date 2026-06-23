@@ -148,7 +148,8 @@ export function loadCodexBundleMcpThreadConfig(
     cfg: params.cfg,
   });
   const mcpServers = buildCodexMcpServersConfig(bundleMcp.config);
-  if (Object.keys(mcpServers).length === 0) {
+  const selectedMcpServers = Object.keys(mcpServers).toSorted((a, b) => a.localeCompare(b));
+  if (selectedMcpServers.length === 0) {
     return {
       diagnostics: bundleMcp.diagnostics,
       evaluated: true,
@@ -161,5 +162,6 @@ export function loadCodexBundleMcpThreadConfig(
     diagnostics: bundleMcp.diagnostics,
     evaluated: true,
     fingerprint: fingerprintCodexMcpServersConfig(mcpServers),
+    selectedMcpServers,
   };
 }

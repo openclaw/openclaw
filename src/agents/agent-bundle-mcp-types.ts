@@ -40,6 +40,12 @@ export type McpToolCatalogDiagnostic = {
   message: string;
 };
 
+export type McpServerSelection = readonly string[] | null | undefined;
+
+export type McpCatalogRequest = {
+  selectedMcpServers?: McpServerSelection;
+};
+
 export type SessionMcpRuntime = {
   sessionId: string;
   sessionKey?: string;
@@ -50,7 +56,7 @@ export type SessionMcpRuntime = {
   activeLeases?: number;
   acquireLease?: () => () => void;
   /** Lists tools if needed and may connect MCP transports. */
-  getCatalog: () => Promise<McpToolCatalog>;
+  getCatalog: (request?: McpCatalogRequest) => Promise<McpToolCatalog>;
   /** Returns the cached catalog only; must not start runtimes, connect transports, or issue tools/list. */
   peekCatalog: () => McpToolCatalog | null;
   markUsed: () => void;

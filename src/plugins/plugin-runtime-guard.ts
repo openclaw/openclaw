@@ -78,6 +78,8 @@ export function decideToolCallCapability(toolName: string): PluginActionCapabili
     if (TOOL_DELETE_PATTERN.test(toolName)) return ["delete", "write"];
     if (TOOL_WRITE_PATTERN.test(toolName)) return ["write"];
     if (TOOL_READ_PATTERN.test(toolName)) return ["read"];
+    // Word-boundary probe check: tools containing "probe" are read-only probes
+    if (/probe/i.test(toolName)) return ["read"];
     // Default: conservative — assume write
     return ["write"];
   } catch {

@@ -94,6 +94,40 @@ describe("createBundleMcpToolRuntime", () => {
     });
   });
 
+  it("passes selected MCP servers into catalog materialization without recataloging on execution", async () => {
+    const catalogRequests: Array<Parameters<SessionMcpRuntime["getCatalog"]>[0]> = [];
+    const callToolRequests: Array<{ serverName: string; toolName: string }> = [];
+    const runtime = makeToolRuntime({
+      serverName: "tavily",
+      resultText: "FROM-TAVILY",
+    });
+    const selectedRuntime: SessionMcpRuntime = {
+      ...runtime,
+      getCatalog: async (request) => {
+        catalogRequests.push(request);
+        if (!request?.selectedMcpServers) {
+          throw new Error("unexpected full catalog");
+        }
+        return runtime.getCatalog(request);
+      },
+      callTool: async (serverName, toolName, input) => {
+        callToolRequests.push({ serverName, toolName });
+        return runtime.callTool(serverName, toolName, input);
+      },
+    };
+
+    const materialized = await materializeBundleMcpToolsForRun({
+      runtime: selectedRuntime,
+      selectedMcpServers: ["tavily"],
+    });
+    const result = await materialized.tools[0].execute("call-tavily", {}, undefined, undefined);
+
+    expect(catalogRequests).toEqual([{ selectedMcpServers: ["tavily"] }]);
+    expect(materialized.tools.map((tool) => tool.name)).toEqual(["tavily__bundle_probe"]);
+    expect(callToolRequests).toEqual([{ serverName: "tavily", toolName: "bundle_probe" }]);
+    expectTextContentBlock(result.content[0], "FROM-TAVILY");
+  });
+
   it("keeps structuredContent visible when MCP tools also return text content", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime({

@@ -21,7 +21,9 @@ import {
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type {
+  McpCatalogRequest,
   McpCatalogTool,
+  McpServerSelection,
   McpServerCatalog,
   McpToolCatalog,
   McpToolCatalogDiagnostic,
@@ -51,6 +53,7 @@ const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
+const FULL_MCP_CATALOG_CACHE_KEY = "*";
 
 function isDraft202012Schema(schema: JsonSchemaType): boolean {
   return (schema as { $schema?: unknown }).$schema === DRAFT_2020_12_SCHEMA;
@@ -282,6 +285,30 @@ function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
   return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
 }
 
+function normalizeMcpServerSelection(selection: McpServerSelection): {
+  cacheKey: string;
+  selectedNames?: ReadonlySet<string>;
+} {
+  if (selection == null) {
+    return { cacheKey: FULL_MCP_CATALOG_CACHE_KEY };
+  }
+  const names = [...new Set(selection.map((name) => name.trim()).filter(Boolean))].toSorted();
+  if (names.includes(FULL_MCP_CATALOG_CACHE_KEY)) {
+    return { cacheKey: FULL_MCP_CATALOG_CACHE_KEY };
+  }
+  return {
+    cacheKey: JSON.stringify(names),
+    selectedNames: new Set(names),
+  };
+}
+
+function shouldCatalogMcpServer(
+  serverName: string,
+  selectedNames: ReadonlySet<string> | undefined,
+): boolean {
+  return selectedNames === undefined || selectedNames.has(serverName);
+}
+
 export function createSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
@@ -297,8 +324,8 @@ export function createSessionMcpRuntime(params: {
   let lastUsedAt = createdAt;
   let activeLeases = 0;
   let disposed = false;
-  let catalog: McpToolCatalog | null = null;
-  let catalogInFlight: Promise<McpToolCatalog> | undefined;
+  const catalogs = new Map<string, McpToolCatalog>();
+  const catalogsInFlight = new Map<string, Promise<McpToolCatalog>>();
   const sessions = new Map<string, BundleMcpSession>();
   const failIfDisposed = () => {
     if (disposed) {
@@ -306,16 +333,22 @@ export function createSessionMcpRuntime(params: {
     }
   };
 
-  const getCatalog = async (): Promise<McpToolCatalog> => {
+  const getCatalog = async (request?: McpCatalogRequest): Promise<McpToolCatalog> => {
     failIfDisposed();
-    if (catalog) {
-      return catalog;
+    const selection = normalizeMcpServerSelection(request?.selectedMcpServers);
+    const cachedCatalog = catalogs.get(selection.cacheKey);
+    if (cachedCatalog) {
+      return cachedCatalog;
     }
-    if (catalogInFlight) {
-      return catalogInFlight;
+    const inFlightCatalog = catalogsInFlight.get(selection.cacheKey);
+    if (inFlightCatalog) {
+      return inFlightCatalog;
     }
-    catalogInFlight = (async () => {
-      if (Object.keys(loaded.mcpServers).length === 0) {
+    const catalogInFlight = (async () => {
+      const selectedEntries = Object.entries(loaded.mcpServers).filter(([serverName]) =>
+        shouldCatalogMcpServer(serverName, selection.selectedNames),
+      );
+      if (selectedEntries.length === 0) {
         return {
           version: 1,
           generatedAt: Date.now(),
@@ -330,7 +363,7 @@ export function createSessionMcpRuntime(params: {
       const usedServerNames = new Set<string>();
 
       try {
-        for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
+        for (const [serverName, rawServer] of selectedEntries) {
           failIfDisposed();
           const resolved = resolveMcpTransport(serverName, rawServer);
           if (!resolved) {
@@ -343,29 +376,43 @@ export function createSessionMcpRuntime(params: {
             );
           }
 
-          const client = new Client(
-            {
-              name: "openclaw-bundle-mcp",
-              version: "0.0.0",
-            },
-            {
-              jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
-            },
-          );
-          const session: BundleMcpSession = {
-            serverName,
-            client,
-            transport: resolved.transport,
-            transportType: resolved.transportType,
-            detachStderr: resolved.detachStderr,
-          };
-          sessions.set(serverName, session);
+          let session = sessions.get(serverName);
+          let createdSession = false;
+          if (!session) {
+            const client = new Client(
+              {
+                name: "openclaw-bundle-mcp",
+                version: "0.0.0",
+              },
+              {
+                jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
+              },
+            );
+            session = {
+              serverName,
+              client,
+              transport: resolved.transport,
+              transportType: resolved.transportType,
+              detachStderr: resolved.detachStderr,
+            };
+            sessions.set(serverName, session);
+            createdSession = true;
+          }
 
           try {
             failIfDisposed();
-            await connectWithTimeout(client, resolved.transport, resolved.connectionTimeoutMs);
+            if (createdSession) {
+              await connectWithTimeout(
+                session.client,
+                resolved.transport,
+                resolved.connectionTimeoutMs,
+              );
+            }
             failIfDisposed();
-            const listedTools = await listAllTools(client, BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS);
+            const listedTools = await listAllTools(
+              session.client,
+              BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS,
+            );
             failIfDisposed();
             servers[serverName] = {
               serverName,
@@ -422,14 +469,15 @@ export function createSessionMcpRuntime(params: {
         throw error;
       }
     })();
+    catalogsInFlight.set(selection.cacheKey, catalogInFlight);
 
     try {
       const nextCatalog = await catalogInFlight;
       failIfDisposed();
-      catalog = nextCatalog;
+      catalogs.set(selection.cacheKey, nextCatalog);
       return nextCatalog;
     } finally {
-      catalogInFlight = undefined;
+      catalogsInFlight.delete(selection.cacheKey);
     }
   };
 
@@ -460,15 +508,18 @@ export function createSessionMcpRuntime(params: {
     getCatalog,
     /** Synchronous catalog snapshot only; must not connect transports or issue tools/list. */
     peekCatalog() {
-      return catalog;
+      return catalogs.get(FULL_MCP_CATALOG_CACHE_KEY) ?? null;
     },
     markUsed() {
       lastUsedAt = Date.now();
     },
     async callTool(serverName, toolName, input) {
       failIfDisposed();
-      await getCatalog();
-      const session = sessions.get(serverName);
+      let session = sessions.get(serverName);
+      if (!session) {
+        await getCatalog({ selectedMcpServers: [serverName] });
+        session = sessions.get(serverName);
+      }
       if (!session) {
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
@@ -482,8 +533,8 @@ export function createSessionMcpRuntime(params: {
         return;
       }
       disposed = true;
-      catalog = null;
-      catalogInFlight = undefined;
+      catalogs.clear();
+      catalogsInFlight.clear();
       const sessionsToClose = Array.from(sessions.values());
       sessions.clear();
       await Promise.allSettled(sessionsToClose.map((session) => disposeSession(session)));
