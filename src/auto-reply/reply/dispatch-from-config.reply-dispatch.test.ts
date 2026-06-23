@@ -303,6 +303,58 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryCreatedAt).toBe(1);
   });
 
+  it("backstops WhatsApp group message-tool turns when the model returns final text only", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: {
+        ...createHookCtx(),
+        ChatType: "group",
+        OriginatingChannel: "whatsapp",
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+      },
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+      replyResolver: async () => ({ text: "visible fallback reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "visible fallback reply" });
+  });
+
+  it("does not backstop WhatsApp group finals when send policy denies delivery", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: {
+        ...createHookCtx(),
+        ChatType: "group",
+        OriginatingChannel: "whatsapp",
+        Provider: "whatsapp",
+        Surface: "whatsapp",
+      },
+      cfg: {
+        ...emptyConfig,
+        session: {
+          sendPolicy: { default: "deny" },
+        },
+      },
+      dispatcher,
+      replyOptions: { sourceReplyDeliveryMode: "message_tool_only" },
+      replyResolver: async () => ({ text: "blocked final reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sendPolicyDenied).toBe(true);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("delivers a generated final reply before queued follow-up admission", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     const dispatcher = createDispatcher();

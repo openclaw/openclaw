@@ -3417,6 +3417,17 @@ export async function dispatchReplyFromConfig(
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
       (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+    const isWhatsAppGroupOrChannel =
+      (chatType === "group" || chatType === "channel") &&
+      (ctx.Provider === "whatsapp" ||
+        ctx.Surface === "whatsapp" ||
+        ctx.OriginatingChannel === "whatsapp");
+    const shouldDeliverMissedWhatsAppMessageToolFinal = (reply: ReplyPayload) =>
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      !observedReplyDelivery &&
+      !sendPolicyDenied &&
+      isWhatsAppGroupOrChannel &&
+      hasOutboundReplyContent(reply, { trimText: true });
     for (const [replyIndex, reply] of replies.entries()) {
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery — channels using this
@@ -3424,7 +3435,11 @@ export async function dispatchReplyFromConfig(
       if (reply.isReasoning === true) {
         continue;
       }
-      if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+      if (
+        suppressDelivery &&
+        !shouldDeliverDespiteSourceReplySuppression(reply) &&
+        !shouldDeliverMissedWhatsAppMessageToolFinal(reply)
+      ) {
         if (hasOutboundReplyContent(reply, { trimText: true })) {
           logVerbose(
             [
