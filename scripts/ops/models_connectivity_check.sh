@@ -2,7 +2,7 @@
 #
 # models_connectivity_check — probe every dashboard-active LLM model
 # ─────────────────────────────────────────────────────────────────────────────
-# Sends a 1-token completion ("hi", max_tokens=1) to every model the dashboard
+# Sends a tiny completion ("hi", max_tokens=16) to every model the dashboard
 # offers, and reports status + latency BY PROVIDER and BY MODEL. Total cost of
 # a full run is ~20 tokens across all models — effectively free.
 #
@@ -11,7 +11,7 @@
 # that machine. Nothing secret is printed or copied back — only statuses.
 #
 # Model list mirrors openclaw-dashboard
-#   app/api/public/chat/[agentName]/models/route.ts  (NVIDIA_MODELS/VENICE_MODELS)
+#   app/api/public/chat/[agentName]/models/route.ts  (OPENROUTER_MODELS/VENICE_MODELS)
 # — keep the two in sync when models are added or retired.
 #
 # Usage:
@@ -42,13 +42,12 @@ ISSUES_FILE="${ISSUES_FILE:-/var/tmp/agentglob-model-issues.txt}"
 
 # ── Active model catalog (sync with the dashboard models route) ──────────────
 OPENROUTER_MODELS="z-ai/glm-5.2 anthropic/claude-opus-4.8 anthropic/claude-sonnet-4.6 openai/gpt-5.5 deepseek/deepseek-v4-flash"
-NVIDIA_MODELS="z-ai/glm-5.1 deepseek-ai/deepseek-r1 qwen/qwen3.5-397b-a17b minimaxai/minimax-m2.7 nvidia/nemotron-3-super-120b-a12b"
 VENICE_MODELS="claude-opus-4-6 zai-org-glm-4.7 grok-41-fast qwen3-235b-a22b-instruct-2507 hermes-3-llama-3.1-405b"
 
 # ── Remote probe: runs on KEY_HOST; emits RESULT|provider|model|verdict|http|secs
 results="$(ssh -i "$SSH_KEY" -o ConnectTimeout=15 -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
   "root@${KEY_HOST}" \
-  "OPENROUTER_MODELS='${OPENROUTER_MODELS}' NVIDIA_MODELS='${NVIDIA_MODELS}' VENICE_MODELS='${VENICE_MODELS}' KEY_AGENT='${KEY_AGENT}' TIMEOUT_S='${TIMEOUT_S}' bash -s" 2>/dev/null <<'REMOTE'
+  "OPENROUTER_MODELS='${OPENROUTER_MODELS}' VENICE_MODELS='${VENICE_MODELS}' KEY_AGENT='${KEY_AGENT}' TIMEOUT_S='${TIMEOUT_S}' bash -s" 2>/dev/null <<'REMOTE'
 set -uo pipefail
 AGENTS_DIR="/root/.openclaw/agents"
 # getkey NAME [provider] — reads ONLY the designated donor agent (KEY_AGENT).
@@ -72,7 +71,7 @@ probe(){ # $1 provider  $2 base_url  $3 key  $4 model
   http=$(curl -sS -m "$TIMEOUT_S" -o /tmp/.probe.json -w '%{http_code}' \
     "$2/chat/completions" \
     -H "Authorization: Bearer $3" -H "Content-Type: application/json" \
-    -d "{\"model\":\"$4\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1,\"temperature\":0}" \
+    -d "{\"model\":\"$4\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":16,\"temperature\":0}" \
     2>/dev/null) || http="000"
   t1=$(date +%s.%N)
   dur=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')
@@ -95,13 +94,6 @@ else
   for m in $OPENROUTER_MODELS; do echo "RESULT|openrouter|$m|SKIP_NO_KEY|-|-"; done
 fi
 
-nvkey="$(getkey NVIDIA_API_KEY nvidia)"
-if [ -n "$nvkey" ]; then
-  for m in $NVIDIA_MODELS; do probe nvidia "https://integrate.api.nvidia.com/v1" "$nvkey" "$m"; done
-else
-  for m in $NVIDIA_MODELS; do echo "RESULT|nvidia|$m|SKIP_NO_KEY|-|-"; done
-fi
-
 vnkey="$(getkey VENICE_API_KEY venice)"; [ -z "$vnkey" ] && vnkey="$(getkey VENICE_KEY venice)"
 if [ -n "$vnkey" ]; then
   for m in $VENICE_MODELS; do probe venice "https://api.venice.ai/api/v1" "$vnkey" "$m"; done
@@ -122,7 +114,7 @@ report="$(
   echo "LLM model connectivity — ${now}"
   echo "probe: 1-token completion · timeout ${TIMEOUT_S}s · keys from ${KEY_AGENT}@${KEY_HOST}"
   ok_total=0; bad_total=0
-  for prov in openrouter nvidia venice; do
+  for prov in openrouter venice; do
     echo
     echo "── provider: ${prov} ──"
     ok=0; bad=0
