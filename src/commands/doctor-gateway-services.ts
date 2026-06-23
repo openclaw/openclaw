@@ -681,6 +681,7 @@ export async function maybeRepairGatewayServiceConfig(
     await (updateRepairMode ? service.stage : service.install)({
       env: serviceInstallEnv,
       stdout: process.stdout,
+      warn: (message) => note(message, "Gateway"),
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
       environment: updatedPlan.environment,

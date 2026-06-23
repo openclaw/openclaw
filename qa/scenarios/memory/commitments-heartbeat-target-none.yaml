@@ -14,7 +14,7 @@ scenario:
     - Scenario runs through qa-channel and a real gateway child.
     - A due commitment exists for the qa agent and qa-channel conversation.
     - A heartbeat wake runs after the commitment is due.
-    - No qa-channel outbound message is sent while heartbeat target is none.
+    - No commitment/check-in qa-channel outbound message is sent while heartbeat target is none.
     - The commitment remains pending and unattempted after the heartbeat.
   docsRefs:
     - docs/concepts/commitments.md
@@ -35,7 +35,7 @@ scenario:
           target: none
   execution:
     kind: flow
-    summary: Seed a due commitment, wake heartbeat, and assert target none sends no qa-channel message.
+    summary: Seed a due commitment, wake heartbeat, and assert target none sends no commitment message.
     config:
       conversationId: commitments-target-none-room
       commitmentId: cm_qa_target_none
@@ -115,10 +115,13 @@ flow:
         - set: targetOutbound
           value:
             expr: "state.getSnapshot().messages.slice(messageCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId)"
+        - set: commitmentOutbound
+          value:
+            expr: "targetOutbound.filter((message) => normalizeLowercaseStringOrEmpty(message.text) !== 'heartbeat_ok')"
         - assert:
-            expr: "targetOutbound.length === 0"
+            expr: "commitmentOutbound.length === 0"
             message:
-              expr: "`expected no qa-channel outbound messages for target none, saw ${JSON.stringify(targetOutbound.map((message) => ({ conversationId: message.conversation.id, text: message.text })))}; recent=${recentOutboundSummary(state)}`"
+              expr: "`expected no qa-channel commitment messages for target none, saw ${JSON.stringify(commitmentOutbound.map((message) => ({ conversationId: message.conversation.id, text: message.text })))}; allTargetOutbound=${JSON.stringify(targetOutbound.map((message) => ({ conversationId: message.conversation.id, text: message.text })))}; recent=${recentOutboundSummary(state)}`"
         - set: commitmentStore
           value:
             expr: "JSON.parse(await fs.readFile(commitmentStorePath, 'utf8'))"

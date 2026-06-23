@@ -10,7 +10,24 @@ default_platform(:ios)
 
 APP_STORE_APP_IDENTIFIER = "ai.openclawfoundation.app"
 DEFAULT_APP_STORE_CONNECT_KEYCHAIN_SERVICE = "openclaw-app-store-connect-key"
-DEFAULT_SNAPSHOT_DEVICES = ["iPhone 16 Pro Max", "iPad Pro 13-inch (M4)"].freeze
+DEFAULT_SNAPSHOT_DEVICE_FAMILIES = [
+  {
+    label: "iPhone",
+    patterns: [
+      /\AiPhone .* Pro Max\z/,
+      /\AiPhone .* Plus\z/,
+      /\AiPhone .*\z/
+    ]
+  },
+  {
+    label: "13-inch iPad",
+    patterns: [
+      /\AiPad Pro 13-inch/,
+      /\AiPad Air 13-inch/,
+      /\AiPad .*13-inch/
+    ]
+  }
+].freeze
 DEFAULT_WATCH_SNAPSHOT_DEVICE = "Apple Watch Ultra 3 (49mm)"
 WATCH_SCREENSHOT_MODE_DEFAULTS_KEY = "openclaw.watch.screenshotMode"
 WATCH_SNAPSHOT_STATUS_BAR_TIME = "09:41"
@@ -77,9 +94,21 @@ end
 
 def snapshot_devices
   raw = ENV["OPENCLAW_SNAPSHOT_DEVICES"].to_s.strip
-  return DEFAULT_SNAPSHOT_DEVICES if raw.empty?
+  return default_snapshot_devices if raw.empty?
 
   raw.split(",").map(&:strip).reject(&:empty?)
+end
+
+def default_snapshot_devices
+  names = available_simulator_devices.map { |device| device["name"].to_s }.reject(&:empty?).uniq
+
+  DEFAULT_SNAPSHOT_DEVICE_FAMILIES.map do |family|
+    match = family.fetch(:patterns).filter_map do |pattern|
+      names.find { |name| name.match?(pattern) }
+    end.first
+    UI.user_error!("No available #{family.fetch(:label)} simulator found for App Store screenshots.") if match.nil?
+    match
+  end
 end
 
 def watch_snapshot_device
@@ -111,6 +140,51 @@ def resolve_simulator_device(name)
 
   UI.important("Apple Watch simulator '#{name}' was not found; using '#{fallback.fetch("name")}'.")
   fallback
+end
+
+def install_ready_for_review_edit_state_lookup!
+  require "spaceship"
+
+  app_class = Spaceship::ConnectAPI::App
+  app_class.class_eval do
+    unless method_defined?(:openclaw_get_edit_app_store_version_without_ready_for_review)
+      alias_method :openclaw_get_edit_app_store_version_without_ready_for_review, :get_edit_app_store_version
+    end
+
+    unless method_defined?(:openclaw_fetch_edit_app_info_without_ready_for_review)
+      alias_method :openclaw_fetch_edit_app_info_without_ready_for_review, :fetch_edit_app_info
+    end
+
+    def get_edit_app_store_version(client: nil, platform: nil, includes: Spaceship::ConnectAPI::AppStoreVersion::ESSENTIAL_INCLUDES)
+      version = openclaw_get_edit_app_store_version_without_ready_for_review(client: client, platform: platform, includes: includes)
+      return version if version
+
+      # First public releases can leave the only version in READY_FOR_REVIEW.
+      # Fastlane 2.236.1 excludes that state and then tries to create an illegal
+      # second version; use the existing review-ready version as the edit target.
+      client ||= Spaceship::ConnectAPI
+      platform ||= Spaceship::ConnectAPI::Platform::IOS
+      filter = {
+        appVersionState: Spaceship::ConnectAPI::AppStoreVersion::AppVersionState::READY_FOR_REVIEW,
+        platform: platform
+      }
+
+      get_app_store_versions(client: client, filter: filter, includes: includes)
+        .sort_by { |candidate| Gem::Version.new(candidate.version_string) }
+        .last
+    end
+
+    def fetch_edit_app_info(client: nil, includes: Spaceship::ConnectAPI::AppInfo::ESSENTIAL_INCLUDES)
+      app_info = openclaw_fetch_edit_app_info_without_ready_for_review(client: client, includes: includes)
+      return app_info if app_info
+
+      client ||= Spaceship::ConnectAPI
+      client
+        .get_app_infos(app_id: id, includes: includes)
+        .to_models
+        .find { |candidate| candidate.state == Spaceship::ConnectAPI::AppInfo::State::READY_FOR_REVIEW }
+    end
+  end
 end
 
 def bundle_identifier_for_product(product_path)
@@ -961,6 +1035,7 @@ platform :ios do
 
   desc "Upload App Store metadata (and optionally screenshots)"
   lane :metadata do
+    install_ready_for_review_edit_state_lookup!
     sync_ios_versioning!
     version_metadata = read_ios_version_metadata
     api_key = app_store_connect_api_key_config
