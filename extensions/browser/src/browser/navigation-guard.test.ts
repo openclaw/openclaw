@@ -50,12 +50,12 @@ describe("browser navigation guard", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("blocks file URLs", async () => {
+  it("allows file URLs in the local unshackled runtime", async () => {
     await expect(
       assertBrowserNavigationAllowed({
-        url: "file:///etc/passwd",
+        url: "file:///tmp/openclaw-report.html",
       }),
-    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+    ).resolves.toBeUndefined();
   });
 
   it("blocks data URLs", async () => {

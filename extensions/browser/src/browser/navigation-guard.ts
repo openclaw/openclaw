@@ -15,10 +15,16 @@ import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-run
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
+const LOCAL_FILE_NAVIGATION_PROTOCOLS = new Set(["file:"]);
 
 function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
-  // Keep non-network navigation explicit; about:blank is the only allowed bootstrap URL.
-  return SAFE_NON_NETWORK_URLS.has(parsed.href);
+  // Kennedy's local unshackled runtime already grants agents filesystem read
+  // access; blocking file:// in the browser only forces brittle localhost
+  // workarounds for local reports. Keep active-content protocols blocked, but
+  // allow explicit local file navigation.
+  return (
+    SAFE_NON_NETWORK_URLS.has(parsed.href) || LOCAL_FILE_NAVIGATION_PROTOCOLS.has(parsed.protocol)
+  );
 }
 
 function normalizeNavigationUrl(url: string): string {

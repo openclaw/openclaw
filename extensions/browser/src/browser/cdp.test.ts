@@ -327,13 +327,13 @@ describe("cdp", () => {
     }
   });
 
-  it("blocks unsupported non-network navigation URLs", async () => {
+  it("blocks unsupported active-content navigation URLs", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
       await expect(
         createTargetViaCdp({
           cdpUrl: "http://127.0.0.1:9222",
-          url: "file:///etc/passwd",
+          url: "data:text/html,<h1>owned</h1>",
         }),
       ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
       expect(fetchSpy).not.toHaveBeenCalled();

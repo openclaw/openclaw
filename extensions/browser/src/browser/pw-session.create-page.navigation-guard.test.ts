@@ -195,17 +195,19 @@ afterEach(async () => {
 });
 
 describe("pw-session createPageViaPlaywright navigation guard", () => {
-  it("blocks unsupported non-network URLs", async () => {
+  it("allows local file URLs", async () => {
     const { pageGoto } = installBrowserMocks();
 
-    await expect(
-      createPageViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
-        url: "file:///etc/passwd",
-      }),
-    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+    const created = await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "file:///tmp/openclaw-report.html",
+    });
 
-    expect(pageGoto).not.toHaveBeenCalled();
+    expect(created.targetId).toBe("TARGET_1");
+    expect(pageGoto).toHaveBeenCalledWith(
+      "file:///tmp/openclaw-report.html",
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    );
   });
 
   it("allows about:blank without network navigation", async () => {
@@ -380,7 +382,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       pageGoto,
       getRouteHandler,
       mainFrame,
-      hopUrl: "file:///etc/passwd",
+      hopUrl: "data:text/html,<h1>owned</h1>",
     });
 
     await expect(
