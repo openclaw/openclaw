@@ -1848,7 +1848,7 @@ export async function readTranscriptTailLines(
   } catch {
     return null;
   }
-  return { lines: lines.reverse() };
+  return { lines: lines.toReversed() };
 }
 
 /**
