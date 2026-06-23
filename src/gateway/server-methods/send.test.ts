@@ -1266,22 +1266,43 @@ describe("gateway send mirroring", () => {
     expect(deliveryCall()?.mirror?.agentId).toBe("work");
   });
 
-  it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
-    mockDeliverySuccess("m-agent-precedence");
+  it("rejects explicit agentId when it conflicts with the sessionKey agent", async () => {
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      agentId: "work",
+      sessionKey: "agent:main:slack:channel:c1",
+      idempotencyKey: "idem-agent-mismatch",
+    });
+
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[1]).toBeUndefined();
+    expect(response?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: 'send agentId "work" does not match session key agent "main"',
+    });
+    expect(mocks.resolveOutboundSessionRoute).not.toHaveBeenCalled();
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit agentId when it matches a different sessionKey conversation", async () => {
+    mockDeliverySuccess("m-agent-match");
 
     await runSend({
       to: "channel:C1",
       message: "hello",
       channel: "slack",
       agentId: "work",
-      sessionKey: "agent:main:slack:channel:c1",
-      idempotencyKey: "idem-agent-precedence",
+      sessionKey: "agent:work:slack:channel:c1",
+      idempotencyKey: "idem-agent-match",
     });
 
-    expect(deliveryCall()?.session?.agentId).toBe("work");
-    expect(deliveryCall()?.session?.key).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:slack:channel:c1");
-    expect(deliveryCall()?.mirror?.agentId).toBe("work");
+    expectDeliverySessionMirror({
+      agentId: "work",
+      sessionKey: "agent:work:slack:channel:c1",
+    });
   });
 
   it("ignores blank explicit agentId and falls back to sessionKey agent", async () => {
@@ -1625,6 +1646,58 @@ describe("gateway send mirroring", () => {
         requesterAccountId: "default",
       }),
     );
+  });
+
+  it("rejects message.action agentId when it conflicts with the sessionKey agent", async () => {
+    const reactPlugin: ChannelPlugin = {
+      id: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp action mismatch test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"], reactions: true },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["react"] }),
+        supportsAction: ({ action }) => action === "react",
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
+      "send-test-message-action-agent-mismatch",
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "whatsapp",
+      action: "react",
+      params: {
+        chatJid: "+15551234567",
+        messageId: "wamid.1",
+        emoji: "✅",
+      },
+      sessionKey: "agent:main:whatsapp:direct:15551234567",
+      agentId: "work",
+      idempotencyKey: "idem-message-action-agent-mismatch",
+    });
+
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[1]).toBeUndefined();
+    expect(response?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: 'message.action agentId "work" does not match session key agent "main"',
+    });
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("mirrors successful source-conversation message.action sends into the assistant transcript", async () => {

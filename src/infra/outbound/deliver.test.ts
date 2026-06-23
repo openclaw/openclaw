@@ -374,6 +374,100 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
   });
 
+  it("rejects session agentId that contradicts session key before queueing", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        session: {
+          agentId: "work",
+          key: "agent:main:matrix:room:ops",
+        },
+      }),
+    ).rejects.toThrow(
+      'deliverOutboundPayloads agentId "work" does not match session key agent "main"',
+    );
+
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("rejects mirror agentId that contradicts mirror sessionKey before queueing", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        mirror: {
+          agentId: "work",
+          sessionKey: "agent:main:matrix:room:ops",
+        },
+      }),
+    ).rejects.toThrow(
+      'deliverOutboundPayloads agentId "work" does not match mirror session key agent "main"',
+    );
+
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("rejects session and mirror keys owned by different agents before queueing", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: matrixChunkConfig,
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        session: {
+          key: "agent:work:matrix:room:ops",
+        },
+        mirror: {
+          sessionKey: "agent:main:matrix:room:ops",
+        },
+      }),
+    ).rejects.toThrow(
+      'deliverOutboundPayloads session key agent "work" does not match mirror session key agent "main"',
+    );
+
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(sendMatrix).not.toHaveBeenCalled();
+  });
+
+  it("allows policy session keys owned by another agent", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        agentId: "claude",
+        key: "agent:claude:acp:spawned",
+        policyKey: "agent:main:main",
+      },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledWith("!room:example", "hello", {
+      cfg: matrixChunkConfig,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+  });
+
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {
     setActivePluginRegistry(
       createTestRegistry([

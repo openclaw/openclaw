@@ -39,6 +39,7 @@ import {
   projectOutboundPayloadPlanForMirror,
 } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { resolveAgentSessionOwnerMismatch } from "../../infra/outbound/session-owner.js";
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
@@ -396,6 +397,25 @@ function createGatewayInflightUnavailableFailure(params: {
   };
 }
 
+function createGatewayInflightInvalidRequestFailure(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  channel: string;
+  message: string;
+}): InflightResult {
+  const error = errorShape(ErrorCodes.INVALID_REQUEST, params.message);
+  cacheGatewayDedupeFailure({
+    context: params.context,
+    dedupeKey: params.dedupeKey,
+    error,
+  });
+  return {
+    ok: false,
+    error,
+    meta: { channel: params.channel },
+  };
+}
+
 async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   context: GatewayRequestContext;
   mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
@@ -519,8 +539,22 @@ export const sendHandlers: GatewayRequestHandlers = {
 
       try {
         const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+        const explicitAgentId = normalizeOptionalString(request.agentId);
+        const ownerMismatch = resolveAgentSessionOwnerMismatch({
+          ownerLabel: "message.action",
+          agentId: explicitAgentId,
+          sessionKey,
+        });
+        if (ownerMismatch) {
+          return createGatewayInflightInvalidRequestFailure({
+            context,
+            dedupeKey,
+            channel,
+            message: ownerMismatch.message,
+          });
+        }
         const agentId =
-          normalizeOptionalString(request.agentId) ??
+          explicitAgentId ??
           (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
         const accountId = normalizeOptionalString(request.accountId) ?? undefined;
         if (request.action === "send") {
@@ -695,6 +729,19 @@ export const sendHandlers: GatewayRequestHandlers = {
         const providedSessionKey =
           normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
         const explicitAgentId = normalizeOptionalString(request.agentId);
+        const ownerMismatch = resolveAgentSessionOwnerMismatch({
+          ownerLabel: "send",
+          agentId: explicitAgentId,
+          sessionKey: providedSessionKey,
+        });
+        if (ownerMismatch) {
+          return createGatewayInflightInvalidRequestFailure({
+            context,
+            dedupeKey,
+            channel,
+            message: ownerMismatch.message,
+          });
+        }
         const sessionAgentId = providedSessionKey
           ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
           : undefined;

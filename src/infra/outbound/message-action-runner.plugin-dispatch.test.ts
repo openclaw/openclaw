@@ -333,6 +333,30 @@ describe("runMessageAction plugin dispatch", () => {
       vi.unstubAllEnvs();
     });
 
+    it("rejects explicit agentId that contradicts sessionKey owner before plugin dispatch", async () => {
+      await expect(
+        runMessageAction({
+          cfg: {
+            channels: {
+              actionhub: {
+                enabled: true,
+              },
+            },
+          } as OpenClawConfig,
+          action: "pin",
+          params: {
+            channel: "actionhub",
+            messageId: "om_123",
+          },
+          sessionKey: "agent:main:actionhub:direct:oc_123",
+          agentId: "work",
+          dryRun: false,
+        }),
+      ).rejects.toThrow('message action agentId "work" does not match session key agent "main"');
+
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
     it("dispatches messageId/chatId-based plugin actions through the shared runner", async () => {
       await runMessageAction({
         cfg: {

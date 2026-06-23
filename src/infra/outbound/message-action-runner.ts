@@ -88,6 +88,7 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { assertAgentSessionOwnerMatch } from "./session-owner.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 
@@ -1393,8 +1394,14 @@ export async function runMessageAction(
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
   let params = { ...input.params };
+  const inputAgentId = normalizeOptionalString(input.agentId);
+  assertAgentSessionOwnerMatch({
+    ownerLabel: "message action",
+    agentId: inputAgentId,
+    sessionKey: input.sessionKey,
+  });
   const resolvedAgentId =
-    input.agentId ??
+    inputAgentId ??
     (input.sessionKey
       ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: cfg })
       : undefined);

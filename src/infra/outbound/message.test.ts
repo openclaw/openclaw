@@ -165,6 +165,96 @@ describe("sendMessage", () => {
     expectRecordFields(deliveryParams.session, { agentId: "work" }, "outbound session");
   });
 
+  it("rejects agentId that contradicts requesterSessionKey before delivery", async () => {
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+        agentId: "work",
+        requesterSessionKey: "agent:main:forum:group:ops",
+      }),
+    ).rejects.toThrow(
+      'sendMessage agentId "work" does not match requester session key agent "main"',
+    );
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("rejects agentId that contradicts mirror sessionKey before delivery", async () => {
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+        agentId: "work",
+        mirror: {
+          sessionKey: "agent:main:forum:dm:123456",
+        },
+      }),
+    ).rejects.toThrow('sendMessage agentId "work" does not match mirror session key agent "main"');
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("rejects mirror agentId that contradicts mirror sessionKey before delivery", async () => {
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+        mirror: {
+          agentId: "work",
+          sessionKey: "agent:main:forum:dm:123456",
+        },
+      }),
+    ).rejects.toThrow('sendMessage agentId "work" does not match mirror session key agent "main"');
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("rejects requester and mirror session keys owned by different agents", async () => {
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+        requesterSessionKey: "agent:work:directchat:group:ops",
+        mirror: {
+          sessionKey: "agent:main:forum:dm:123456",
+        },
+      }),
+    ).rejects.toThrow(
+      'sendMessage requester session key agent "work" does not match mirror session key agent "main"',
+    );
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit agentId with a legacy requester session key", async () => {
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+      agentId: "work",
+      requesterSessionKey: "legacy-session",
+    });
+
+    expectRecordFields(
+      expectDeliveryCallFields({}).session,
+      {
+        key: "legacy-session",
+        agentId: "work",
+      },
+      "outbound session",
+    );
+  });
+
   it("forwards requesterSenderId into the outbound delivery session", async () => {
     await sendMessage({
       cfg: {},
@@ -219,6 +309,7 @@ describe("sendMessage", () => {
       channel: "forum",
       to: "123456",
       content: "hi",
+      agentId: "main",
       requesterSessionKey: "agent:main:directchat:group:ops",
       requesterAccountId: "work",
       requesterSenderId: "attacker",
