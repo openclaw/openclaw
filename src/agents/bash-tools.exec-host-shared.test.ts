@@ -167,8 +167,26 @@ describe("sendExecApprovalFollowupResult", () => {
     );
   });
 
-  it("suppresses approval-not-found followup dispatch failures", async () => {
-    sendExecApprovalFollowup.mockRejectedValue(new Error("unknown or expired approval id"));
+  it.each([
+    {
+      name: "direct gateway code",
+      error: Object.assign(new Error("approval not found"), {
+        gatewayCode: "APPROVAL_NOT_FOUND",
+      }),
+    },
+    {
+      name: "structured invalid-request details",
+      error: Object.assign(new Error("approval not found"), {
+        gatewayCode: "INVALID_REQUEST",
+        details: { reason: "APPROVAL_NOT_FOUND" },
+      }),
+    },
+    {
+      name: "legacy message-only error",
+      error: new Error("unknown or expired approval id"),
+    },
+  ])("suppresses approval-not-found followup dispatch failures ($name)", async ({ error }) => {
+    sendExecApprovalFollowup.mockRejectedValue(error);
 
     await sendExecApprovalFollowupResult(
       {
