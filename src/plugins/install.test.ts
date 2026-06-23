@@ -2880,7 +2880,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(requests[0]?.request.kind).toBe("plugin-npm");
   });
 
-  it("reports install mode to policy when update-mode reactivates retained-only generations", async () => {
+  it("reports install mode to policy when update-mode reactivates retained generations", async () => {
     const root = suiteTempRootTracker.makeTempDir();
     const npmDir = path.join(root, "npm");
     const extensionsDir = path.join(root, "extensions");
@@ -2889,12 +2889,19 @@ describe("installPluginFromNpmSpec", () => {
     const generationProjectRoot = resolvePluginNpmGenerationProjectDir({
       npmDir,
       packageName,
+      generationKey: [packageName, "1.2.3", `${packageName}@1.2.3`, "sha512-test", "abc123"].join(
+        "\n",
+      ),
+    });
+    const activeGenerationProjectRoot = resolvePluginNpmGenerationProjectDir({
+      npmDir,
+      packageName,
       generationKey: [
         packageName,
-        "1.2.3",
-        `${packageName}@1.2.3`,
-        "sha512-plugin-test",
-        "pluginshasum",
+        "2.0.0",
+        `${packageName}@2.0.0`,
+        "sha512-active",
+        "active123",
       ].join("\n"),
     });
     const legacyPackageDir = path.join(
@@ -2907,6 +2914,11 @@ describe("installPluginFromNpmSpec", () => {
       "node_modules",
       ...packageName.split("/"),
     );
+    const activeGenerationPackageDir = path.join(
+      activeGenerationProjectRoot,
+      "node_modules",
+      ...packageName.split("/"),
+    );
     for (const packageDir of [legacyPackageDir, generationPackageDir]) {
       fs.mkdirSync(packageDir, { recursive: true });
       await markRetainedManagedNpmInstall({
@@ -2916,6 +2928,7 @@ describe("installPluginFromNpmSpec", () => {
         reason: "test-retained-generation",
       });
     }
+    fs.mkdirSync(activeGenerationPackageDir, { recursive: true });
     const { scriptPath, logPath } = writeInstallOnlyBlockingPolicyScript(root);
     mockNpmViewMetadata({
       name: packageName,

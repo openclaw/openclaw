@@ -1149,7 +1149,7 @@ function resolveManagedNpmInstallRoot(params: {
   });
   const npmRoot = resolveManagedNpmRootForInstall(params);
   const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
-  if (!params.useGeneration || !hasRetainedManagedNpmInstallMarker(installRoot)) {
+  if (!hasRetainedManagedNpmInstallMarker(installRoot)) {
     return npmRoot;
   }
   // Never mutate a retained tree: an older process may still hold lazy imports
@@ -1206,6 +1206,7 @@ async function resolveManagedNpmGenerationUseForInstall(params: {
   npmBaseDir: string;
   packageName: string;
   requestedMode: "install" | "update";
+  npmResolution?: NpmSpecResolution;
 }): Promise<"none" | "update" | "retained-install"> {
   const packageDirs = await listManagedNpmPackageDirsForPackage({
     runtime: params.runtime,
@@ -1217,6 +1218,20 @@ async function resolveManagedNpmGenerationUseForInstall(params: {
   );
   if (packageDirs.length > 0 && !hasNonRetainedPackageDir) {
     return "retained-install";
+  }
+  const generationUse =
+    params.requestedMode === "update" && hasNonRetainedPackageDir ? "update" : "none";
+  if (params.npmResolution) {
+    const candidateRoot = resolveManagedNpmRootForInstall({
+      npmBaseDir: params.npmBaseDir,
+      packageName: params.packageName,
+      npmResolution: params.npmResolution,
+      useGeneration: generationUse !== "none",
+    });
+    const candidatePackageDir = resolveManagedNpmRootPackageDir(candidateRoot, params.packageName);
+    if (hasRetainedManagedNpmInstallMarker(candidatePackageDir)) {
+      return "retained-install";
+    }
   }
   if (params.requestedMode === "update") {
     return hasNonRetainedPackageDir ? "update" : "none";
@@ -1332,6 +1347,7 @@ async function installPluginFromManagedNpmRoot(
     npmBaseDir,
     packageName: params.packageName,
     requestedMode: mode,
+    npmResolution: params.npmResolution,
   });
   const npmRoot = resolveManagedNpmInstallRoot({
     npmBaseDir,
@@ -3093,6 +3109,7 @@ export async function installPluginFromNpmSpec(
     npmBaseDir,
     packageName: parsedSpec.name,
     requestedMode: mode,
+    npmResolution,
   });
   const npmRoot = resolveManagedNpmRootForInstall({
     npmBaseDir,
@@ -3243,6 +3260,7 @@ export async function installPluginFromNpmPackArchive(
     npmBaseDir,
     packageName,
     requestedMode: mode,
+    npmResolution,
   });
   const npmProjectRoot = resolveManagedNpmRootForInstall({
     npmBaseDir,
