@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// Hoist mock classes before importing the module
 const {
   Agent,
   EnvHttpProxyAgent,
@@ -57,11 +58,44 @@ vi.mock("node:net", () => ({
   getDefaultAutoSelectFamily,
 }));
 
+// Now import the module under test
 import {
   DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
   ensureGlobalUndiciStreamTimeouts,
   resetGlobalUndiciStreamTimeoutsForTests,
+  expandNoProxyPatterns,
 } from "./undici-global-dispatcher.js";
+
+describe("expandNoProxyPatterns", () => {
+  it("expands leading dot patterns", () => {
+    const result = expandNoProxyPatterns(".example.com");
+    expect(result).toContain("example.com");
+    expect(result).toContain(".example.com");
+  });
+
+  it("auto-adds COS domains", () => {
+    const result = expandNoProxyPatterns("localhost");
+    expect(result).toContain("myqcloud.com");
+    expect(result).toContain(".myqcloud.com");
+  });
+
+  it("preserves existing entries", () => {
+    const result = expandNoProxyPatterns("example.com,test.org");
+    expect(result).toContain("example.com");
+    expect(result).toContain("test.org");
+  });
+
+  it("handles empty input", () => {
+    expect(expandNoProxyPatterns("")).toEqual([]);
+    expect(expandNoProxyPatterns("   ")).toEqual([]);
+  });
+
+  it("deduplicates entries", () => {
+    const result = expandNoProxyPatterns(".myqcloud.com,myqcloud.com");
+    expect(result.filter(x => x === "myqcloud.com").length).toBe(1);
+    expect(result.filter(x => x === ".myqcloud.com").length).toBe(1);
+  });
+});
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
   beforeEach(() => {
