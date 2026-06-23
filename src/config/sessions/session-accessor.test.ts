@@ -309,6 +309,41 @@ describe("session accessor file-backed seam", () => {
     expect(fs.existsSync(previousTranscript)).toBe(false);
   });
 
+  it("does not reuse the previous transcript file when initialization rotates session ids", async () => {
+    const sessionKey = "agent:main:main";
+    const previousTranscript = path.join(tempDir, "previous-rotation.jsonl");
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionFile: previousTranscript,
+        sessionId: "previous-rotation",
+        updatedAt: 10,
+      },
+    );
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      sessionEntry: {
+        ...(snapshot.currentEntry ?? {}),
+        sessionFile: snapshot.currentEntry?.sessionFile,
+        sessionId: "next-rotation",
+        updatedAt: 20,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(path.basename(committed.sessionEntry.sessionFile ?? "")).toBe("next-rotation.jsonl");
+  });
+
   it("rejects stale reply session initialization snapshots without writing", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry(

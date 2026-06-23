@@ -1,7 +1,5 @@
 // Manages reply session records, labels, ids, and route persistence.
 import crypto from "node:crypto";
-import fsp from "node:fs/promises";
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -55,7 +53,11 @@ import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenanc
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookSessionEndReason } from "../../plugins/hook-types.js";
-import { isAcpSessionKey, normalizeMainKey } from "../../routing/session-key.js";
+import {
+  buildAgentMainSessionKey,
+  isAcpSessionKey,
+  normalizeMainKey,
+} from "../../routing/session-key.js";
 import { isInterSessionInputProvenance } from "../../sessions/input-provenance.js";
 import {
   normalizeDeliveryChannelRoute,
@@ -75,8 +77,12 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
+import {
+  createReplySessionEntryHandle,
+  type ReplySessionEntryHandle,
+} from "./session-entry-handle.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
+import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
@@ -156,6 +162,7 @@ export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
   previousSessionEntry?: SessionEntry;
+  sessionEntryHandle: ReplySessionEntryHandle;
   sessionStore: Record<string, SessionEntry>;
   sessionKey: string;
   sessionId: string;
@@ -403,7 +410,6 @@ async function initSessionStateAttempt(
     storePath,
     sessionKey,
   });
-  const sessionEntries = initializationSnapshot.sessionEntries;
   if (ingressTimingEnabled) {
     log.info(
       `session-init store-load agent=${agentId} session=${sessionCtxForState.SessionKey ?? "(no-session)"} ` +
@@ -413,7 +419,12 @@ async function initSessionStateAttempt(
   const retiredLegacyMainDelivery = maybeRetireLegacyMainDeliveryRoute({
     sessionCfg,
     sessionKey,
-    sessionStore: sessionEntries,
+    legacyMain: initializationSnapshot.readEntry(
+      buildAgentMainSessionKey({
+        agentId,
+        mainKey,
+      }),
+    ),
     agentId,
     mainKey,
     isGroup,
@@ -762,51 +773,6 @@ async function initSessionStateAttempt(
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
-  let inheritedParentContext = false;
-  let preparedForkSessionFile: string | undefined;
-  if (parentSessionKey && parentSessionKey !== sessionKey && !alreadyForked) {
-    const parentEntry = sessionEntries[parentSessionKey];
-    if (parentEntry?.sessionId) {
-      const decision = await resolveParentForkDecision({
-        parentEntry,
-        agentId,
-        storePath,
-      });
-      if (decision.status === "skip") {
-        // The parent branch is too large to inherit usefully. Start fresh and
-        // mark as handled so the thread does not retry this decision every turn.
-        log.warn(
-          `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-            `parentTokens=${decision.parentTokens} maxTokens=${decision.maxTokens}`,
-        );
-        sessionEntry = { ...sessionEntry, forkedFromParent: true };
-      } else {
-        const fork = await forkSessionFromParent({
-          parentEntry,
-          agentId,
-          sessionsDir: path.dirname(storePath),
-        });
-        if (fork) {
-          log.warn(
-            `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-              `parentTokens=${decision.parentTokens ?? "unknown"}`,
-          );
-          sessionId = fork.sessionId;
-          preparedForkSessionFile = fork.sessionFile;
-          sessionEntry = {
-            ...sessionEntry,
-            sessionId: fork.sessionId,
-            sessionFile: fork.sessionFile,
-            forkedFromParent: true,
-            totalTokens: undefined,
-            totalTokensFresh: false,
-          };
-          inheritedParentContext = true;
-          log.warn(`forked session created: file=${fork.sessionFile}`);
-        }
-      }
-    }
-  }
   const threadIdFromSessionKey = parseSessionThreadInfoFast(
     sessionCtxForState.SessionKey ?? sessionKey,
   ).threadId;
@@ -839,8 +805,8 @@ async function initSessionStateAttempt(
     sessionEntry.status = undefined;
     // New empty transcripts have a known zero context. Parent-context forks
     // inherit history without a fresh count, so keep those explicitly unknown.
-    sessionEntry.totalTokens = inheritedParentContext ? undefined : 0;
-    sessionEntry.totalTokensFresh = !inheritedParentContext;
+    sessionEntry.totalTokens = 0;
+    sessionEntry.totalTokensFresh = true;
     sessionEntry.inputTokens = undefined;
     sessionEntry.outputTokens = undefined;
     sessionEntry.estimatedCostUsd = undefined;
@@ -873,6 +839,17 @@ async function initSessionStateAttempt(
         entry: sessionEntry,
         warning,
       }),
+    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) =>
+      await prepareReplySessionParentFork({
+        agentId,
+        alreadyForked,
+        parentSessionKey,
+        readEntry,
+        sessionEntry: entryToCommit,
+        sessionKey,
+        storePath,
+        warn: (message) => log.warn(message),
+      }),
     previousEntry: previousSessionEntry,
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,
@@ -880,20 +857,19 @@ async function initSessionStateAttempt(
     storePath,
   });
   if (!committed.ok) {
-    if (preparedForkSessionFile) {
-      try {
-        await fsp.unlink(preparedForkSessionFile);
-      } catch {
-        // Best-effort cleanup; retry below will choose the current session state.
-      }
-    }
     if (!staleSnapshotRetried) {
       return await initSessionStateAttempt(params, true);
     }
     throw new Error(`reply session initialization conflicted for ${sessionKey}`);
   }
   sessionEntry = committed.sessionEntry;
+  sessionId = sessionEntry.sessionId;
   const sessionStore = committed.sessionStoreView;
+  const sessionEntryHandle = createReplySessionEntryHandle({
+    sessionEntry,
+    sessionKey,
+    sessionStore,
+  });
   const previousSessionTranscript = committed.previousSessionTranscript;
 
   if (previousSessionEntry?.sessionId) {
@@ -990,6 +966,7 @@ async function initSessionStateAttempt(
   return {
     sessionCtx,
     sessionEntry,
+    sessionEntryHandle,
     previousSessionEntry,
     sessionStore,
     sessionKey,

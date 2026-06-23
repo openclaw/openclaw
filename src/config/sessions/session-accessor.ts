@@ -376,8 +376,14 @@ export type SessionLifecycleRolloverResult = {
 
 export type ReplySessionInitializationSnapshot = {
   currentEntry?: SessionEntry;
+  readEntry: (sessionKey: string) => SessionEntry | undefined;
   revision: string;
-  sessionEntries: Record<string, SessionEntry>;
+};
+
+export type ReplySessionInitializationCommitContext = {
+  currentEntry?: SessionEntry;
+  readEntry: (sessionKey: string) => SessionEntry | undefined;
+  sessionEntry: SessionEntry;
 };
 
 export type ReplySessionInitializationCommitResult =
@@ -883,15 +889,23 @@ function createReplySessionInitializationRevision(entry: SessionEntry | undefine
 
 function resolveInitializedReplySessionEntry(params: {
   agentId: string;
+  currentEntry?: SessionEntry;
   fallbackSessionFile?: string;
   sessionEntry: SessionEntry;
   storePath: string;
 }): SessionEntry {
   const fallbackSessionFile = params.fallbackSessionFile?.trim();
+  const currentSessionFile = params.currentEntry?.sessionFile;
+  const inheritedPreviousSessionFile =
+    Boolean(currentSessionFile) &&
+    params.currentEntry?.sessionId !== params.sessionEntry.sessionId &&
+    currentSessionFile === params.sessionEntry.sessionFile;
   const entryForResolve =
-    !params.sessionEntry.sessionFile && fallbackSessionFile
+    fallbackSessionFile && (inheritedPreviousSessionFile || !params.sessionEntry.sessionFile)
       ? { ...params.sessionEntry, sessionFile: fallbackSessionFile }
-      : params.sessionEntry;
+      : inheritedPreviousSessionFile
+        ? { ...params.sessionEntry, sessionFile: undefined }
+        : params.sessionEntry;
   const sessionFile = resolveSessionFilePath(params.sessionEntry.sessionId, entryForResolve, {
     agentId: params.agentId,
     sessionsDir: path.dirname(path.resolve(params.storePath)),
@@ -1281,10 +1295,14 @@ export function loadReplySessionInitializationSnapshot(params: {
   const store = loadSessionStore(params.storePath, { skipCache: true, clone: false });
   const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
+  const entries = cloneSessionEntries(store);
   return {
     ...(currentEntry ? { currentEntry } : {}),
+    readEntry: (sessionKey) => {
+      const entry = resolveSessionStoreEntry({ store: entries, sessionKey }).existing;
+      return entry ? { ...entry } : undefined;
+    },
     revision: createReplySessionInitializationRevision(currentEntry),
-    sessionEntries: cloneSessionEntries(store),
   };
 }
 
@@ -1301,6 +1319,9 @@ export async function commitReplySessionInitialization(params: {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   onArchiveError?: (error: unknown, sourcePath: string) => void;
   onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
+  prepareSessionEntry?: (
+    context: ReplySessionInitializationCommitContext,
+  ) => Promise<SessionEntry> | SessionEntry;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
@@ -1309,7 +1330,7 @@ export async function commitReplySessionInitialization(params: {
 }): Promise<ReplySessionInitializationCommitResult> {
   const committed = await updateSessionStore(
     params.storePath,
-    (store): ReplySessionInitializationCommitResult => {
+    async (store): Promise<ReplySessionInitializationCommitResult> => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
       const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
       const revision = createReplySessionInitializationRevision(currentEntry);
@@ -1322,10 +1343,22 @@ export async function commitReplySessionInitialization(params: {
         };
       }
 
+      const readEntry = (sessionKey: string) => {
+        const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+        return entry ? { ...entry } : undefined;
+      };
+      const preparedSessionEntry = params.prepareSessionEntry
+        ? await params.prepareSessionEntry({
+            ...(currentEntry ? { currentEntry } : {}),
+            readEntry,
+            sessionEntry: params.sessionEntry,
+          })
+        : params.sessionEntry;
       const sessionEntry = resolveInitializedReplySessionEntry({
         agentId: params.agentId,
+        ...(currentEntry ? { currentEntry } : {}),
         fallbackSessionFile: params.fallbackSessionFile,
-        sessionEntry: params.sessionEntry,
+        sessionEntry: preparedSessionEntry,
         storePath: params.storePath,
       });
       store[resolved.normalizedKey] = sessionEntry;
