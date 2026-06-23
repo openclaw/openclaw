@@ -8,10 +8,25 @@ export type SidebarFullMessageRequest = {
 
 export type MarkdownSidebarContent = {
   kind: "markdown";
+  title?: string;
   content: string;
   rawText?: string | null;
   fullMessageRequest?: SidebarFullMessageRequest;
   unavailableReason?: "not_found" | "oversized" | "not_visible" | null;
+  editableTextFile?: {
+    path: string;
+    sessionKey: string;
+    agentId?: string;
+    draft: string;
+    base: string;
+    dirty: boolean;
+    saving: boolean;
+    sizeLabel?: string;
+    updatedLabel?: string;
+    onDraftChange: (draft: string) => void;
+    onReset: () => void;
+    onSave: () => void;
+  };
 };
 
 export type CanvasSidebarContent = {

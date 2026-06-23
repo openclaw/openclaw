@@ -10,8 +10,10 @@ import {
   type SessionFileEntry,
   type SessionFileRelevance,
   type SessionsFilesGetParams,
+  type SessionsFilesSetParams,
   validateSessionsFilesGetParams,
   validateSessionsFilesListParams,
+  validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
@@ -41,6 +43,46 @@ const MAX_PREVIEW_BYTES = 256 * 1024;
 const MAX_BROWSER_ENTRIES = 250;
 const MAX_SEARCH_ENTRIES = 500;
 const MAX_SEARCH_VISITED_ENTRIES = 5_000;
+const TEXT_MIME_TYPES_BY_EXTENSION = new Map([
+  [".css", "text/css"],
+  [".csv", "text/csv"],
+  [".html", "text/html"],
+  [".js", "text/javascript"],
+  [".json", "application/json"],
+  [".jsonl", "application/x-ndjson"],
+  [".jsx", "text/javascript"],
+  [".log", "text/plain"],
+  [".md", "text/markdown"],
+  [".mdx", "text/markdown"],
+  [".mjs", "text/javascript"],
+  [".py", "text/x-python"],
+  [".rs", "text/x-rust"],
+  [".sh", "text/x-shellscript"],
+  [".svg", "image/svg+xml"],
+  [".toml", "application/toml"],
+  [".ts", "text/typescript"],
+  [".tsx", "text/typescript"],
+  [".txt", "text/plain"],
+  [".xml", "application/xml"],
+  [".yaml", "application/yaml"],
+  [".yml", "application/yaml"],
+]);
+const IMAGE_MIME_TYPES_BY_EXTENSION = new Map([
+  [".gif", "image/gif"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".png", "image/png"],
+  [".webp", "image/webp"],
+]);
+const EXTENSIONLESS_TEXT_FILENAMES = new Set([
+  "authors",
+  "copying",
+  "dockerfile",
+  "license",
+  "makefile",
+  "notice",
+  "readme",
+]);
 const SEARCH_SKIP_DIRS = new Set([
   ".git",
   ".hg",
@@ -363,6 +405,47 @@ function displayNameForPath(filePath: string): string {
   return base || filePath;
 }
 
+function mimeTypeForPath(filePath: string): string | undefined {
+  const extension = path.extname(filePath).toLowerCase();
+  return (
+    TEXT_MIME_TYPES_BY_EXTENSION.get(extension) ?? IMAGE_MIME_TYPES_BY_EXTENSION.get(extension)
+  );
+}
+
+function isKnownTextPath(filePath: string): boolean {
+  const base = path.basename(filePath).toLowerCase();
+  return EXTENSIONLESS_TEXT_FILENAMES.has(base) || base.startsWith("readme.");
+}
+
+function previewKindForPath(filePath: string): NonNullable<SessionFileEntry["previewKind"]> {
+  const extension = path.extname(filePath).toLowerCase();
+  if (IMAGE_MIME_TYPES_BY_EXTENSION.has(extension)) {
+    return "image";
+  }
+  if (TEXT_MIME_TYPES_BY_EXTENSION.has(extension) || isKnownTextPath(filePath)) {
+    return "text";
+  }
+  return "unsupported";
+}
+
+function looksLikeUtf8Text(buffer: Buffer): boolean {
+  if (buffer.length === 0) {
+    return true;
+  }
+  if (!Buffer.from(buffer.toString("utf8"), "utf8").equals(buffer)) {
+    return false;
+  }
+  let controlBytes = 0;
+  for (const byte of buffer) {
+    const allowedControl =
+      byte === 7 || byte === 8 || byte === 9 || byte === 10 || byte === 12 || byte === 13;
+    if (byte < 32 && !allowedControl) {
+      controlBytes += 1;
+    }
+  }
+  return controlBytes / buffer.length < 0.01;
+}
+
 function toUpdatedAtMs(mtimeMs: number): number {
   return Math.floor(mtimeMs);
 }
@@ -405,6 +488,8 @@ async function toSessionFileEntry(
     name: displayNameForPath(touched.path),
     kind: touched.kind,
   } satisfies Pick<SessionFileEntry, "path" | "name" | "kind">;
+  let previewKind = previewKindForPath(touched.path);
+  const mimeType = mimeTypeForPath(touched.path);
   if (!resolved) {
     return { ...base, missing: true };
   }
@@ -416,6 +501,9 @@ async function toSessionFileEntry(
   const entry: SessionFileEntry = {
     ...base,
     missing: false,
+    ...(mimeType ? { mimeType } : {}),
+    previewKind,
+    editable: previewKind === "text",
     size: stat.size,
     updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
   };
@@ -425,9 +513,20 @@ async function toSessionFileEntry(
       return { ...base, missing: true };
     }
     if (read !== "too-large") {
+      if (previewKind === "unsupported" && looksLikeUtf8Text(read.buffer)) {
+        previewKind = "text";
+        entry.previewKind = "text";
+        entry.editable = true;
+      }
       entry.size = read.stat.size;
       entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
-      entry.content = read.buffer.toString("utf8");
+      if (previewKind === "image") {
+        entry.contentEncoding = "base64";
+        entry.content = read.buffer.toString("base64");
+      } else if (previewKind === "text") {
+        entry.contentEncoding = "utf8";
+        entry.content = read.buffer.toString("utf8");
+      }
     }
   }
   return entry;
@@ -687,6 +786,70 @@ async function findSessionFile(
   };
 }
 
+async function writeSessionFile(
+  params: SessionsFilesSetParams,
+): Promise<{ root?: string; file?: SessionFileEntry; conflict?: SessionFileEntry }> {
+  const loaded = await loadSessionFiles(params);
+  const exactTouched = loaded.files.find((file) => file.path === params.path);
+  const resolved = exactTouched
+    ? resolveTouchedFilePath({
+        root: loaded.root,
+        fileRoot: loaded.fileRoot,
+        filePath: params.path,
+      })
+    : resolveWorkspacePath(loaded.root, params.path);
+  if (!resolved || !loaded.root) {
+    return loaded.root ? { root: loaded.root } : {};
+  }
+  const browserPath = toDisplayPath(loaded.root, resolved);
+  const responseFilePath = exactTouched ? params.path : browserPath;
+  const responseFileRoot = exactTouched ? loaded.fileRoot : loaded.root;
+  const before = await statWorkspacePath(loaded.root, browserPath);
+  if (previewKindForPath(browserPath) !== "text") {
+    if (!before || workspaceStatKind(before) !== "file" || before.size > MAX_PREVIEW_BYTES) {
+      return loaded.root ? { root: loaded.root } : {};
+    }
+    const read = await readWorkspaceFile(loaded.root, browserPath);
+    if (!read || read === "too-large" || !looksLikeUtf8Text(read.buffer)) {
+      return loaded.root ? { root: loaded.root } : {};
+    }
+  }
+  if (
+    params.baseUpdatedAtMs != null &&
+    (!before ||
+      workspaceStatKind(before) !== "file" ||
+      toUpdatedAtMs(before.mtimeMs) !== params.baseUpdatedAtMs)
+  ) {
+    return {
+      ...(loaded.root ? { root: loaded.root } : {}),
+      conflict: await toSessionFileEntry(
+        { path: responseFilePath, kind: "read" },
+        loaded.root,
+        responseFileRoot,
+        {
+          includeContent: true,
+        },
+      ),
+    };
+  }
+  const workspaceRoot = await openSessionWorkspaceRoot(loaded.root);
+  if (!workspaceRoot) {
+    return loaded.root ? { root: loaded.root } : {};
+  }
+  await workspaceRoot.write(browserPath, params.content, { encoding: "utf8", mkdir: true });
+  return {
+    ...(loaded.root ? { root: loaded.root } : {}),
+    file: await toSessionFileEntry(
+      { path: responseFilePath, kind: "modified" },
+      loaded.root,
+      responseFileRoot,
+      {
+        includeContent: true,
+      },
+    ),
+  };
+}
+
 function respondSessionFileNotFound(respond: RespondFn, filePath: string) {
   respond(
     false,
@@ -703,6 +866,27 @@ function respondSessionFileTooLarge(respond: RespondFn, file: SessionFileEntry, 
       maxPreviewBytes: MAX_PREVIEW_BYTES,
       path: file.path || filePath,
       size: file.size,
+    }),
+  );
+}
+
+function respondSessionFileUnsupported(respond: RespondFn, filePath: string) {
+  respond(
+    false,
+    undefined,
+    sessionFilesError("session_file_unsupported", "session file type is not editable", {
+      path: filePath,
+    }),
+  );
+}
+
+function respondSessionFileConflict(respond: RespondFn, file: SessionFileEntry, filePath: string) {
+  respond(
+    false,
+    undefined,
+    sessionFilesError("session_file_conflict", "session file changed before save", {
+      path: file.path || filePath,
+      updatedAtMs: file.updatedAtMs,
     }),
   );
 }
@@ -726,12 +910,34 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     const result = await findSessionFile(params);
-    if (typeof result.file?.content !== "string") {
-      if (result.file && !result.file.missing) {
+    if (!result.file || result.file.missing) {
+      respondSessionFileNotFound(respond, params.path);
+      return;
+    }
+    if (typeof result.file.content !== "string" && result.file.previewKind !== "unsupported") {
+      if (!result.file.missing) {
         respondSessionFileTooLarge(respond, result.file, params.path);
         return;
       }
       respondSessionFileNotFound(respond, params.path);
+      return;
+    }
+    respond(true, {
+      sessionKey: params.sessionKey,
+      ...result,
+    });
+  },
+  "sessions.files.set": async ({ params, respond }) => {
+    if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
+      return;
+    }
+    const result = await writeSessionFile(params);
+    if (result.conflict) {
+      respondSessionFileConflict(respond, result.conflict, params.path);
+      return;
+    }
+    if (!result.file) {
+      respondSessionFileUnsupported(respond, params.path);
       return;
     }
     respond(true, {

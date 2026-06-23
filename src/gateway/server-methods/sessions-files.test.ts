@@ -45,7 +45,7 @@ function createResponder() {
   };
 }
 
-type SessionFilesMethod = "sessions.files.list" | "sessions.files.get";
+type SessionFilesMethod = "sessions.files.list" | "sessions.files.get" | "sessions.files.set";
 
 async function invokeSessionFilesHandler(
   method: SessionFilesMethod,
@@ -92,6 +92,12 @@ function writeWorkspaceFile(root: string, filePath: string, content: string) {
   const resolved = path.join(root, filePath);
   fs.mkdirSync(path.dirname(resolved), { recursive: true });
   fs.writeFileSync(resolved, content, "utf8");
+}
+
+function writeWorkspaceBinaryFile(root: string, filePath: string, content: Buffer) {
+  const resolved = path.join(root, filePath);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+  fs.writeFileSync(resolved, content);
 }
 
 describe("sessions.files RPC handlers", () => {
@@ -309,6 +315,23 @@ describe("sessions.files RPC handlers", () => {
       }),
     );
     expect(parentRelativeBrowserPreview.file.content).toBe("export const shared = true;\n");
+
+    const saved = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "src/readme.md",
+        content: "# Saved nested read me\n",
+        baseUpdatedAtMs: preview.file.updatedAtMs,
+      }),
+    );
+    expect(saved.file).toMatchObject({
+      content: "# Saved nested read me\n",
+      path: "src/readme.md",
+    });
+    expect(fs.readFileSync(path.join(workspaceRoot, "packages/app/src/readme.md"), "utf8")).toBe(
+      "# Saved nested read me\n",
+    );
+    expect(fs.readFileSync(path.join(workspaceRoot, "src/readme.md"), "utf8")).toBe("# Read me\n");
   });
 
   it("falls back to the configured agent workspace for sessions without spawned metadata", async () => {
@@ -374,7 +397,7 @@ describe("sessions.files RPC handlers", () => {
     ]);
   });
 
-  it("browses and searches workspace files without previewing browser-only files", async () => {
+  it("browses and searches browser-only workspace files without previewing them", async () => {
     const folderPayload = expectOkPayload(
       await invokeSessionFilesHandler("sessions.files.list", {
         sessionKey: "agent:main:main",
@@ -406,17 +429,241 @@ describe("sessions.files RPC handlers", () => {
       searchPayload.browser.entries.map((entry: Record<string, unknown>) => entry.path),
     ).toEqual(["ui/vite.config.ts"]);
 
-    const error = expectError(
+    const browserOnlyError = expectError(
       await invokeSessionFilesHandler("sessions.files.get", {
         sessionKey: "agent:main:main",
         path: "ui/vite.config.ts",
       }),
     );
 
-    expect(error.details).toMatchObject({
+    expect(browserOnlyError.details).toMatchObject({
       path: "ui/vite.config.ts",
       type: "session_file_not_found",
     });
+
+    const preview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "ui/chat.ts",
+      }),
+    );
+
+    expect(preview.file).toMatchObject({
+      content: "export const chat = true;\n",
+      contentEncoding: "utf8",
+      editable: true,
+      mimeType: "text/typescript",
+      path: "ui/chat.ts",
+      previewKind: "text",
+    });
+  });
+
+  it("returns image previews as base64 content", async () => {
+    writeWorkspaceBinaryFile(
+      workspaceRoot,
+      "screenshots/result.png",
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    );
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "screenshots/result.png" }), 1);
+      return 1;
+    });
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "screenshots/result.png",
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      content: Buffer.from([0x89, 0x50, 0x4e, 0x47]).toString("base64"),
+      contentEncoding: "base64",
+      editable: false,
+      mimeType: "image/png",
+      path: "screenshots/result.png",
+      previewKind: "image",
+    });
+  });
+
+  it("returns unsupported file metadata without inline content", async () => {
+    writeWorkspaceBinaryFile(workspaceRoot, "build/app.bin", Buffer.from([0, 1, 2, 3]));
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "build/app.bin" }), 1);
+      return 1;
+    });
+
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "build/app.bin",
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      editable: false,
+      missing: false,
+      path: "build/app.bin",
+      previewKind: "unsupported",
+      size: 4,
+    });
+    expect(payload.file.content).toBeUndefined();
+    expect(payload.file.contentEncoding).toBeUndefined();
+  });
+
+  it("previews and edits extensionless session text files", async () => {
+    writeWorkspaceFile(workspaceRoot, "Dockerfile", "FROM node:24\n");
+    hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
+      visit(assistantToolCall("read", { path: "Dockerfile" }), 1);
+      return 1;
+    });
+
+    const preview = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "Dockerfile",
+      }),
+    );
+
+    expect(preview.file).toMatchObject({
+      content: "FROM node:24\n",
+      contentEncoding: "utf8",
+      editable: true,
+      path: "Dockerfile",
+      previewKind: "text",
+    });
+
+    const saved = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "Dockerfile",
+        content: "FROM node:24-alpine\n",
+      }),
+    );
+
+    expect(saved.file).toMatchObject({
+      content: "FROM node:24-alpine\n",
+      contentEncoding: "utf8",
+      editable: true,
+      path: "Dockerfile",
+      previewKind: "text",
+    });
+  });
+
+  it("writes text workspace files and returns the updated preview", async () => {
+    const payload = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "notes/todo.md",
+        content: "# Todo\n\n- Ship workspace editing\n",
+      }),
+    );
+
+    expect(payload.file).toMatchObject({
+      content: "# Todo\n\n- Ship workspace editing\n",
+      contentEncoding: "utf8",
+      editable: true,
+      kind: "modified",
+      mimeType: "text/markdown",
+      path: "notes/todo.md",
+      previewKind: "text",
+    });
+    expect(fs.readFileSync(path.join(workspaceRoot, "notes/todo.md"), "utf8")).toBe(
+      "# Todo\n\n- Ship workspace editing\n",
+    );
+  });
+
+  it("rejects writes to unsupported workspace file types", async () => {
+    writeWorkspaceBinaryFile(workspaceRoot, "screenshots/result.png", Buffer.from([1, 2, 3]));
+
+    const error = expectError(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "screenshots/result.png",
+        content: "not an image",
+      }),
+    );
+
+    expect(error.details).toMatchObject({
+      path: "screenshots/result.png",
+      type: "session_file_unsupported",
+    });
+  });
+
+  it("does not write absolute paths outside the configured workspace", async () => {
+    const outsidePath = path.join(os.tmpdir(), `openclaw-outside-write-${Date.now()}.txt`);
+    fs.writeFileSync(outsidePath, "outside\n", "utf8");
+
+    try {
+      const error = expectError(
+        await invokeSessionFilesHandler("sessions.files.set", {
+          sessionKey: "agent:main:main",
+          path: outsidePath,
+          content: "changed\n",
+        }),
+      );
+
+      expect(error.details).toMatchObject({
+        path: outsidePath,
+        type: "session_file_unsupported",
+      });
+      expect(fs.readFileSync(outsidePath, "utf8")).toBe("outside\n");
+    } finally {
+      fs.rmSync(outsidePath, { force: true });
+    }
+  });
+
+  it("reports save conflicts when a text file changed after preview", async () => {
+    const before = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "src/readme.md",
+      }),
+    );
+    writeWorkspaceFile(workspaceRoot, "src/readme.md", "# Changed elsewhere\n");
+    const changedPath = path.join(workspaceRoot, "src/readme.md");
+    const changedAt = ((before.file.updatedAtMs as number) + 5_000) / 1_000;
+    fs.utimesSync(changedPath, changedAt, changedAt);
+
+    const error = expectError(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "src/readme.md",
+        content: "# Local draft\n",
+        baseUpdatedAtMs: before.file.updatedAtMs,
+      }),
+    );
+
+    expect(error.details).toMatchObject({
+      path: "src/readme.md",
+      type: "session_file_conflict",
+    });
+  });
+
+  it("reports save conflicts when a previewed text file was deleted", async () => {
+    const before = expectOkPayload(
+      await invokeSessionFilesHandler("sessions.files.get", {
+        sessionKey: "agent:main:main",
+        path: "src/readme.md",
+      }),
+    );
+    const deletedPath = path.join(workspaceRoot, "src/readme.md");
+    fs.rmSync(deletedPath);
+
+    const error = expectError(
+      await invokeSessionFilesHandler("sessions.files.set", {
+        sessionKey: "agent:main:main",
+        path: "src/readme.md",
+        content: "# Local draft\n",
+        baseUpdatedAtMs: before.file.updatedAtMs,
+      }),
+    );
+
+    expect(error.details).toMatchObject({
+      path: "src/readme.md",
+      type: "session_file_conflict",
+    });
+    expect(fs.existsSync(deletedPath)).toBe(false);
   });
 
   it("truncates broad workspace searches by visited entries, not only by matches", async () => {

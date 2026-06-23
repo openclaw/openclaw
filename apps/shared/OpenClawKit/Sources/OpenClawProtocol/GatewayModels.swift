@@ -2164,6 +2164,10 @@ public struct SessionFileEntry: Codable, Sendable {
     public let missing: Bool
     public let size: Int?
     public let updatedatms: Int?
+    public let mimetype: String?
+    public let contentencoding: AnyCodable?
+    public let previewkind: AnyCodable?
+    public let editable: Bool?
     public let content: String?
 
     public init(
@@ -2173,6 +2177,10 @@ public struct SessionFileEntry: Codable, Sendable {
         missing: Bool,
         size: Int?,
         updatedatms: Int?,
+        mimetype: String? = nil,
+        contentencoding: AnyCodable? = nil,
+        previewkind: AnyCodable? = nil,
+        editable: Bool? = nil,
         content: String?)
     {
         self.path = path
@@ -2181,6 +2189,10 @@ public struct SessionFileEntry: Codable, Sendable {
         self.missing = missing
         self.size = size
         self.updatedatms = updatedatms
+        self.mimetype = mimetype
+        self.contentencoding = contentencoding
+        self.previewkind = previewkind
+        self.editable = editable
         self.content = content
     }
 
@@ -2191,6 +2203,10 @@ public struct SessionFileEntry: Codable, Sendable {
         case missing
         case size
         case updatedatms = "updatedAtMs"
+        case mimetype = "mimeType"
+        case contentencoding = "contentEncoding"
+        case previewkind = "previewKind"
+        case editable
         case content
     }
 }
@@ -2270,6 +2286,58 @@ public struct SessionsFilesGetParams: Codable, Sendable {
 }
 
 public struct SessionsFilesGetResult: Codable, Sendable {
+    public let sessionkey: String
+    public let root: String?
+    public let file: SessionFileEntry
+
+    public init(
+        sessionkey: String,
+        root: String?,
+        file: SessionFileEntry)
+    {
+        self.sessionkey = sessionkey
+        self.root = root
+        self.file = file
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case root
+        case file
+    }
+}
+
+public struct SessionsFilesSetParams: Codable, Sendable {
+    public let sessionkey: String
+    public let path: String
+    public let content: String
+    public let agentid: String?
+    public let baseupdatedatms: Int?
+
+    public init(
+        sessionkey: String,
+        path: String,
+        content: String,
+        agentid: String? = nil,
+        baseupdatedatms: Int?)
+    {
+        self.sessionkey = sessionkey
+        self.path = path
+        self.content = content
+        self.agentid = agentid
+        self.baseupdatedatms = baseupdatedatms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case path
+        case content
+        case agentid = "agentId"
+        case baseupdatedatms = "baseUpdatedAtMs"
+    }
+}
+
+public struct SessionsFilesSetResult: Codable, Sendable {
     public let sessionkey: String
     public let root: String?
     public let file: SessionFileEntry

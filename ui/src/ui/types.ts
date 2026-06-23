@@ -378,6 +378,10 @@ export type SessionWorkspaceFileEntry = {
   missing: boolean;
   size?: number;
   updatedAtMs?: number;
+  mimeType?: string;
+  contentEncoding?: "utf8" | "base64";
+  previewKind?: "text" | "image" | "unsupported";
+  editable?: boolean;
   content?: string;
 };
 
@@ -419,6 +423,12 @@ export type SessionWorkspaceListResult = {
 };
 
 export type SessionWorkspaceGetResult = {
+  sessionKey: string;
+  root?: string;
+  file: SessionWorkspaceFileEntry;
+};
+
+export type SessionWorkspaceSetResult = {
   sessionKey: string;
   root?: string;
   file: SessionWorkspaceFileEntry;

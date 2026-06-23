@@ -44,6 +44,7 @@ const STRICT_LITERAL_STRUCTS = new Set([
 const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]][] = [
   ["SendParams", ["buffer", "filename", "contentType"]],
   ["SessionOperationEvent", ["agentId"]],
+  ["SessionFileEntry", ["mimeType", "contentEncoding", "previewKind", "editable"]],
   ["SessionsCompactionListParams", ["agentId"]],
   ["SessionsCompactionGetParams", ["agentId"]],
   ["SessionsCompactionBranchParams", ["agentId"]],

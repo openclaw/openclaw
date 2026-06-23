@@ -189,11 +189,12 @@ import { normalizeOptionalString } from "./string-coerce.ts";
 import type {
   ArtifactDownloadResult,
   GatewaySessionRow,
+  SessionWorkspaceFileEntry,
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
+  SessionWorkspaceSetResult,
 } from "./types.ts";
-import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
-import { agentLogoUrl } from "./views/agents-utils.ts";
+import { agentLogoUrl, formatBytes, isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import {
   resolveAgentConfig,
   resolveConfiguredCronModelSuggestions,
@@ -694,11 +695,15 @@ type ChatWorkspaceFilesState = {
   browserSearch: string;
   browserSearchTimer: ReturnType<typeof globalThis.setTimeout> | null;
   collapsed: boolean;
+  editorBases: Record<string, string>;
+  editorBaseUpdatedAtMs: Record<string, number | undefined>;
+  editorDrafts: Record<string, string>;
   error: string | null;
   list: SessionWorkspaceListResult | null;
   loading: boolean;
   pendingReload: boolean;
   requestId: number;
+  savingPath: string | null;
   sessionKey: string;
 };
 
@@ -724,11 +729,15 @@ function getChatWorkspaceFilesState(
     browserSearch: "",
     browserSearchTimer: null,
     collapsed: true,
+    editorBases: {},
+    editorBaseUpdatedAtMs: {},
+    editorDrafts: {},
     error: null,
     list: null,
     loading: false,
     pendingReload: false,
     requestId: 0,
+    savingPath: null,
     sessionKey,
   };
   chatWorkspaceFilesStates.set(state, next);
@@ -1335,6 +1344,44 @@ function buildWorkspaceFileSidebarContent(name: string, content: string): string
   }
   const language = languageForWorkspaceFile(name);
   return `# ${name}\n\n\`\`\`${language}\n${content}\n\`\`\``;
+}
+
+function buildWorkspaceUnsupportedSidebarContent(file: SessionWorkspaceFileEntry): SidebarContent {
+  const lines = [
+    `# ${file.name || file.path}`,
+    "",
+    "This file type can be viewed as metadata but is not previewable inline.",
+    "",
+    `- Path: \`${file.path}\``,
+    file.mimeType ? `- Type: \`${file.mimeType}\`` : null,
+    typeof file.size === "number" ? `- Size: ${formatBytes(file.size)}` : null,
+    file.updatedAtMs ? `- Updated: ${formatRelativeTimestamp(file.updatedAtMs)}` : null,
+  ].filter((line): line is string => line != null);
+  const content = lines.join("\n");
+  return {
+    kind: "markdown",
+    title: file.name || file.path || "File",
+    content,
+    rawText: content,
+  };
+}
+
+function buildWorkspaceImageSidebarContent(file: SessionWorkspaceFileEntry): SidebarContent | null {
+  if (
+    file.previewKind !== "image" ||
+    file.contentEncoding !== "base64" ||
+    !file.content ||
+    !file.mimeType
+  ) {
+    return null;
+  }
+  return {
+    kind: "image",
+    title: file.name || file.path || "Image",
+    src: `data:${file.mimeType};base64,${file.content}`,
+    mimeType: file.mimeType,
+    rawText: file.path,
+  };
 }
 
 function buildArtifactSidebarContent(params: {
@@ -2249,6 +2296,158 @@ export function renderApp(state: AppViewState) {
   const copyChatWorkspacePath = (filePath: string) => {
     void globalThis.navigator?.clipboard?.writeText?.(filePath);
   };
+  const workspaceEditorKey = (sessionKey: string, filePath: string) =>
+    `${sessionKey}\u0000${filePath}`;
+  const upsertChatWorkspaceFileEntry = (
+    target: ChatWorkspaceFilesState,
+    file: SessionWorkspaceFileEntry,
+    sessionKey: string,
+  ) => {
+    if (!target.list || target.list.sessionKey !== sessionKey) {
+      return;
+    }
+    const files = target.list.files.some((entry) => entry.path === file.path)
+      ? target.list.files.map((entry) => (entry.path === file.path ? file : entry))
+      : [file, ...target.list.files];
+    target.list = {
+      ...target.list,
+      files,
+      browser: target.list.browser
+        ? {
+            ...target.list.browser,
+            entries: target.list.browser.entries.map((entry) =>
+              entry.path === file.path ? { ...entry, sessionKind: file.kind } : entry,
+            ),
+          }
+        : target.list.browser,
+    };
+  };
+  const openChatWorkspaceTextSidebar = (
+    file: SessionWorkspaceFileEntry,
+    opts?: { sessionKey?: string; agentId?: string },
+  ) => {
+    const editorSessionKey = opts?.sessionKey ?? currentSessionWorkspaceKey();
+    const editorAgentId = opts?.agentId ?? chatWorkspaceFiles.agentId;
+    const key = workspaceEditorKey(editorSessionKey, file.path);
+    const base = chatWorkspaceFiles.editorBases[key] ?? file.content ?? "";
+    const draft = chatWorkspaceFiles.editorDrafts[key] ?? base;
+    const baseUpdatedAtMs = chatWorkspaceFiles.editorBaseUpdatedAtMs[key] ?? file.updatedAtMs;
+    const saving = chatWorkspaceFiles.savingPath === key;
+    const title = file.name || file.path || "Workspace file";
+    state.handleOpenSidebar({
+      kind: "markdown",
+      title,
+      content: buildWorkspaceFileSidebarContent(title, draft),
+      rawText: draft,
+      editableTextFile: {
+        path: file.path,
+        sessionKey: editorSessionKey,
+        ...(editorAgentId ? { agentId: editorAgentId } : {}),
+        base,
+        draft,
+        dirty: draft !== base,
+        saving,
+        sizeLabel: formatBytes(new TextEncoder().encode(draft).length),
+        updatedLabel: baseUpdatedAtMs ? formatRelativeTimestamp(baseUpdatedAtMs) : undefined,
+        onDraftChange: (nextDraft) => {
+          chatWorkspaceFiles.editorDrafts = {
+            ...chatWorkspaceFiles.editorDrafts,
+            [key]: nextDraft,
+          };
+          openChatWorkspaceTextSidebar(file, {
+            sessionKey: editorSessionKey,
+            agentId: editorAgentId,
+          });
+          requestHostUpdate?.();
+        },
+        onReset: () => {
+          chatWorkspaceFiles.editorDrafts = {
+            ...chatWorkspaceFiles.editorDrafts,
+            [key]: base,
+          };
+          openChatWorkspaceTextSidebar(file, {
+            sessionKey: editorSessionKey,
+            agentId: editorAgentId,
+          });
+          requestHostUpdate?.();
+        },
+        onSave: () => {
+          void saveChatWorkspaceTextFile(file, {
+            sessionKey: editorSessionKey,
+            agentId: editorAgentId,
+          });
+        },
+      },
+    });
+  };
+  const saveChatWorkspaceTextFile = async (
+    file: SessionWorkspaceFileEntry,
+    opts: { sessionKey: string; agentId?: string },
+  ) => {
+    if (!state.client || !state.connected) {
+      return;
+    }
+    const key = workspaceEditorKey(opts.sessionKey, file.path);
+    const draft = chatWorkspaceFiles.editorDrafts[key] ?? chatWorkspaceFiles.editorBases[key] ?? "";
+    chatWorkspaceFiles.savingPath = key;
+    chatWorkspaceFiles.error = null;
+    openChatWorkspaceTextSidebar(file, opts);
+    requestHostUpdate?.();
+    const isActiveEditor = () =>
+      state.sidebarContent?.kind === "markdown" &&
+      state.sidebarContent.editableTextFile?.path === file.path &&
+      state.sidebarContent.editableTextFile.sessionKey === opts.sessionKey &&
+      state.sidebarContent.editableTextFile.agentId === opts.agentId;
+    try {
+      const res = await state.client.request<SessionWorkspaceSetResult | null>(
+        "sessions.files.set",
+        {
+          sessionKey: opts.sessionKey,
+          path: file.path,
+          content: draft,
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
+          ...(chatWorkspaceFiles.editorBaseUpdatedAtMs[key] != null
+            ? { baseUpdatedAtMs: chatWorkspaceFiles.editorBaseUpdatedAtMs[key] }
+            : {}),
+        },
+      );
+      if (!res?.file) {
+        chatWorkspaceFiles.error = `Failed to save ${file.path}`;
+        return;
+      }
+      const saved = res.file;
+      const savedContent = saved.content ?? draft;
+      const currentDraft = chatWorkspaceFiles.editorDrafts[key] ?? draft;
+      const nextDraft = currentDraft === draft ? savedContent : currentDraft;
+      chatWorkspaceFiles.savingPath = null;
+      chatWorkspaceFiles.editorBases = {
+        ...chatWorkspaceFiles.editorBases,
+        [key]: savedContent,
+      };
+      chatWorkspaceFiles.editorDrafts = {
+        ...chatWorkspaceFiles.editorDrafts,
+        [key]: nextDraft,
+      };
+      chatWorkspaceFiles.editorBaseUpdatedAtMs = {
+        ...chatWorkspaceFiles.editorBaseUpdatedAtMs,
+        [key]: saved.updatedAtMs,
+      };
+      upsertChatWorkspaceFileEntry(chatWorkspaceFiles, saved, opts.sessionKey);
+      if (isActiveEditor()) {
+        openChatWorkspaceTextSidebar(saved, opts);
+      }
+    } catch (err) {
+      chatWorkspaceFiles.error = String(err);
+    } finally {
+      if (chatWorkspaceFiles.savingPath === key) {
+        chatWorkspaceFiles.savingPath = null;
+      }
+      if (isActiveEditor()) {
+        openChatWorkspaceTextSidebar(file, opts);
+      }
+      requestHostUpdate?.();
+    }
+  };
   function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
     if (!state.client || !state.connected) {
       return;
@@ -2369,22 +2568,56 @@ export function renderApp(state: AppViewState) {
           },
         );
         const file = res?.file;
-        if (!file || typeof file.content !== "string") {
+        if (!file) {
           if (isCurrentOpenRequest()) {
             chatWorkspaceFiles.error = `Failed to load ${filePath}`;
             requestHostUpdate?.();
           }
           return;
         }
-        const content = file.content;
         if (!isCurrentOpenRequest()) {
           return;
         }
-        state.handleOpenSidebar({
-          kind: "markdown",
-          content: buildWorkspaceFileSidebarContent(file.name || filePath, content),
-          rawText: content,
-        });
+        if (typeof file.content !== "string") {
+          if (file.previewKind === "unsupported") {
+            state.handleOpenSidebar(buildWorkspaceUnsupportedSidebarContent(file));
+            requestHostUpdate?.();
+            return;
+          }
+          chatWorkspaceFiles.error = `Failed to load ${filePath}`;
+          requestHostUpdate?.();
+          return;
+        }
+        const imageContent = buildWorkspaceImageSidebarContent(file);
+        if (imageContent) {
+          state.handleOpenSidebar(imageContent);
+        } else if (file.previewKind === "text" || file.contentEncoding === "utf8") {
+          const key = workspaceEditorKey(openRequest.sessionKey, file.path);
+          const cachedBase = chatWorkspaceFiles.editorBases[key];
+          const cachedDraft = chatWorkspaceFiles.editorDrafts[key];
+          const shouldRefreshDraft =
+            cachedBase == null || cachedDraft == null || cachedDraft === cachedBase;
+          if (shouldRefreshDraft) {
+            chatWorkspaceFiles.editorBases = {
+              ...chatWorkspaceFiles.editorBases,
+              [key]: file.content,
+            };
+            chatWorkspaceFiles.editorDrafts = {
+              ...chatWorkspaceFiles.editorDrafts,
+              [key]: file.content,
+            };
+            chatWorkspaceFiles.editorBaseUpdatedAtMs = {
+              ...chatWorkspaceFiles.editorBaseUpdatedAtMs,
+              [key]: file.updatedAtMs,
+            };
+          }
+          openChatWorkspaceTextSidebar(file, {
+            sessionKey: openRequest.sessionKey,
+            agentId: openRequest.agentId,
+          });
+        } else {
+          state.handleOpenSidebar(buildWorkspaceUnsupportedSidebarContent(file));
+        }
       } catch (err) {
         if (isCurrentOpenRequest()) {
           chatWorkspaceFiles.error = String(err);
