@@ -3,10 +3,8 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { patchSessionEntry } from "../config/sessions/session-accessor.js";
-import { loadSessionStore } from "../config/sessions/store.js";
+import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
@@ -45,10 +43,12 @@ export function resolveLiveSessionModelSelection(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
-  const entry = loadSessionStore(storePath, {
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
     hydrateSkillPromptRefs: false,
-    skipCache: true,
-  })[sessionKey];
+    readConsistency: "latest",
+  });
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -151,11 +151,13 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionStore(storePath, {
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
     hydrateSkillPromptRefs: false,
-    skipCache: true,
     clone: false,
-  })[sessionKey];
+    readConsistency: "latest",
+  });
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }

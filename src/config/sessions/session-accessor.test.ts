@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -33,6 +33,7 @@ import {
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
+import * as sessionStore from "./store.js";
 import { loadSessionStore, saveSessionStore, updateSessionStoreEntry } from "./store.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
@@ -275,6 +276,47 @@ describe("session accessor file-backed seam", () => {
     expect(listSessionEntries({ clone: false, storePath })[0]?.entry).toBe(
       cachedStore["agent:main:main"],
     );
+  });
+
+  it("maps latest entry reads to the file backend cache bypass", () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "session-1",
+          model: "gpt-5.4",
+        },
+      }),
+      "utf8",
+    );
+    const loadSessionStoreSpy = vi.spyOn(sessionStore, "loadSessionStore");
+
+    try {
+      expect(
+        loadSessionEntry({
+          readConsistency: "latest",
+          sessionKey: "agent:main:main",
+          storePath,
+        })?.model,
+      ).toBe("gpt-5.4");
+      expect(loadSessionStoreSpy).toHaveBeenLastCalledWith(
+        storePath,
+        expect.objectContaining({ skipCache: true }),
+      );
+
+      loadSessionEntry({
+        clone: false,
+        readConsistency: "latest",
+        sessionKey: "agent:main:main",
+        storePath,
+      });
+      expect(loadSessionStoreSpy).toHaveBeenLastCalledWith(
+        storePath,
+        expect.objectContaining({ clone: false, skipCache: true }),
+      );
+    } finally {
+      loadSessionStoreSpy.mockRestore();
+    }
   });
 
   it("resolves canonical entry reads without requiring exact key casing", async () => {

@@ -125,6 +125,8 @@ export type SessionAccessScope = {
   env?: NodeJS.ProcessEnv;
   /** Set false for metadata-only reads that do not need hydrated prompt refs. */
   hydrateSkillPromptRefs?: boolean;
+  /** Use latest when the caller must bypass any in-process metadata snapshot. */
+  readConsistency?: "latest";
   /** Canonical or alias session key for the entry being read or written. */
   sessionKey: string;
   /** Explicit store path for callers that already resolved the owning store. */
@@ -689,9 +691,10 @@ export async function updateResolvedSessionEntry<T>(
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
-  if (scope.clone === false) {
+  if (scope.clone === false || scope.readConsistency === "latest") {
     const store = loadSessionStore(resolveAccessStorePath(scope), {
-      clone: false,
+      ...(scope.clone === false ? { clone: false } : {}),
+      ...(scope.readConsistency === "latest" ? { skipCache: true } : {}),
       ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
     });
     return resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey }).existing;

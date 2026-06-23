@@ -27,11 +27,6 @@ vi.mock("./model-selection.js", async () => {
   };
 });
 
-vi.mock("../config/sessions/store.js", () => ({
-  loadSessionStore: (...args: unknown[]) => state.loadSessionStoreMock(...args),
-  updateSessionStore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
-}));
-
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: (scope: { sessionKey: string }) => {
     const store = state.loadSessionStoreMock(scope) as Record<string, unknown> | undefined;
@@ -42,12 +37,6 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
-}));
-
-vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: (...args: unknown[]) => state.loadSessionStoreMock(...args),
-  resolveStorePath: (...args: unknown[]) => state.resolveStorePathMock(...args),
-  updateSessionStore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
 }));
 
 let mod: typeof import("./live-model-switch.js");
@@ -192,6 +181,12 @@ describe("live model switch", () => {
     });
     expect(state.resolveStorePathMock).toHaveBeenCalledWith("/tmp/custom-store.json", {
       agentId: "reply",
+    });
+    expect(state.loadSessionStoreMock).toHaveBeenCalledWith({
+      storePath: "/tmp/session-store.json",
+      sessionKey: "main",
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
     });
   });
 
@@ -468,10 +463,12 @@ describe("live model switch", () => {
       const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
-      expect(state.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/session-store.json", {
+      expect(state.loadSessionStoreMock).toHaveBeenCalledWith({
         hydrateSkillPromptRefs: false,
-        skipCache: true,
         clone: false,
+        readConsistency: "latest",
+        sessionKey: "main",
+        storePath: "/tmp/session-store.json",
       });
     });
 
