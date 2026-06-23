@@ -225,6 +225,8 @@ export type SessionConfig = {
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
   mainKey?: string;
+  /** Continue an aborted fresh main session across Gateway restarts. Default: false. */
+  restartContinuation?: boolean;
   sendPolicy?: SessionSendPolicyConfig;
   /** Session transcript write-lock acquisition policy. */
   writeLock?: SessionWriteLockConfig;

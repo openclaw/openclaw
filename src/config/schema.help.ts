@@ -1648,6 +1648,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
   "session.mainKey":
     'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
+  "session.restartContinuation":
+    "When enabled, a fresh main session that was marked aborted on the previous run can keep its existing session id across a Gateway restart even if the terminal transcript file is newer than the registry entry. Default: false.",
   "session.sendPolicy":
     "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
   "session.sendPolicy.default":

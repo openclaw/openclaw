@@ -11,6 +11,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
+  isRestartContinuationAllowed,
   resolveSessionLifecycleTimestamps,
 } from "../../config/sessions/lifecycle.js";
 import {
@@ -386,9 +387,8 @@ export function resolveSession(opts: {
           storePath,
         })
       : false;
-  const fresh = sessionEntry
-    ? !terminalMainTranscriptNewerThanRegistry &&
-      evaluateSessionFreshness({
+  const underlyingFresh = sessionEntry
+    ? evaluateSessionFreshness({
         updatedAt: sessionEntry.updatedAt,
         ...resolveSessionLifecycleTimestamps({
           entry: sessionEntry,
@@ -399,12 +399,23 @@ export function resolveSession(opts: {
         policy: resetPolicy,
       }).fresh
     : false;
+  // Honor the restart-continuation opt-in here too, or an enabled operator's
+  // aborted main session still rotates through the agent command path. (#94458)
+  const restartContinuationAllowed = isRestartContinuationAllowed({
+    restartContinuation: sessionCfg?.restartContinuation,
+    abortedLastRun: sessionEntry?.abortedLastRun,
+    reusableFresh: underlyingFresh,
+    terminalMainTranscriptNewerThanRegistry,
+  });
+  const fresh =
+    restartContinuationAllowed || (!terminalMainTranscriptNewerThanRegistry && underlyingFresh);
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
-  const resolvedSessionEntry = terminalMainTranscriptNewerThanRegistry
-    ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
-    : sessionEntry;
+  const resolvedSessionEntry =
+    terminalMainTranscriptNewerThanRegistry && !restartContinuationAllowed
+      ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
+      : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,

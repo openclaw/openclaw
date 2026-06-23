@@ -830,6 +830,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.typingIntervalSeconds": "Session Typing Interval (seconds)",
   "session.typingMode": "Session Typing Mode",
   "session.mainKey": "Session Main Key",
+  "session.restartContinuation": "Session Restart Continuation",
   "session.sendPolicy": "Session Send Policy",
   "session.sendPolicy.default": "Session Send Policy Default Action",
   "session.sendPolicy.rules": "Session Send Policy Rules",

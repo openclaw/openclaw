@@ -59,6 +59,7 @@ import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
+  isRestartContinuationAllowed,
   mergeSessionEntry,
   resolveTerminalMainSessionTranscriptRegistryCheck,
   resolveChannelResetConfig,
@@ -1876,11 +1877,21 @@ export const agentHandlers: GatewayRequestHandlers = {
               storePath,
             })
           : false;
-        const canReuseSession =
+        const reusableFreshSession =
           Boolean(entry?.sessionId) &&
           (freshness?.fresh ?? false) &&
-          !failedSessionTranscriptMissing &&
-          !terminalMainTranscriptNewerThanRegistry;
+          !failedSessionTranscriptMissing;
+        // Honor the restart-continuation opt-in so an enabled operator's aborted
+        // main session is not rotated by the Gateway agent path. (#94458)
+        const restartContinuationAllowed = isRestartContinuationAllowed({
+          restartContinuation: cfgLocal.session?.restartContinuation,
+          abortedLastRun: entry?.abortedLastRun,
+          reusableFresh: reusableFreshSession,
+          terminalMainTranscriptNewerThanRegistry,
+        });
+        const canReuseSession =
+          reusableFreshSession &&
+          (!terminalMainTranscriptNewerThanRegistry || restartContinuationAllowed);
         let usableRequestedSessionId =
           requestedSessionId && (!entry?.sessionId || canReuseSession)
             ? requestedSessionId
@@ -2029,11 +2040,21 @@ export const agentHandlers: GatewayRequestHandlers = {
                 });
           const freshFailedSessionTranscriptMissing =
             resolveFailedSessionTranscriptMissingForEntry(freshEntry);
-          const freshCanReuseSession =
+          const freshReusableFreshSession =
             Boolean(freshEntry?.sessionId) &&
             (freshFreshness?.fresh ?? false) &&
-            !freshFailedSessionTranscriptMissing &&
-            !freshTerminalMainTranscriptNewerThanRegistry;
+            !freshFailedSessionTranscriptMissing;
+          // Mirror the restart-continuation opt-in in the fresh-store
+          // reconciliation gate, or a post-load reload re-rotates the id. (#94458)
+          const freshRestartContinuationAllowed = isRestartContinuationAllowed({
+            restartContinuation: cfgLocal.session?.restartContinuation,
+            abortedLastRun: freshEntry?.abortedLastRun,
+            reusableFresh: freshReusableFreshSession,
+            terminalMainTranscriptNewerThanRegistry: freshTerminalMainTranscriptNewerThanRegistry,
+          });
+          const freshCanReuseSession =
+            freshReusableFreshSession &&
+            (!freshTerminalMainTranscriptNewerThanRegistry || freshRestartContinuationAllowed);
           const freshUsableRequestedSessionId =
             requestedSessionId && (!freshEntry?.sessionId || freshCanReuseSession)
               ? requestedSessionId

@@ -238,3 +238,26 @@ export async function hasTerminalMainSessionTranscriptNewerThanRegistry(
     return false;
   }
 }
+
+// Restart-continuation opt-in (#94458). When `session.restartContinuation` is
+// enabled, an aborted fresh main session keeps its existing session id across a
+// Gateway restart even though its terminal transcript is newer than the registry
+// entry — the condition that otherwise forces id rotation. Every session
+// resolver (auto-reply `initSessionState`, agent command `resolveSession`, and
+// the Gateway agent handler) must consult this shared predicate, or an enabled
+// operator gets inconsistent continuity depending on which resolver handles the
+// next turn. `reusableFresh` is each caller's "reuse the existing entry" gate
+// with the terminal-transcript rotation factored out.
+export function isRestartContinuationAllowed(params: {
+  restartContinuation: boolean | undefined;
+  abortedLastRun: boolean | undefined;
+  reusableFresh: boolean;
+  terminalMainTranscriptNewerThanRegistry: boolean;
+}): boolean {
+  return (
+    params.restartContinuation === true &&
+    params.abortedLastRun === true &&
+    params.reusableFresh &&
+    params.terminalMainTranscriptNewerThanRegistry
+  );
+}

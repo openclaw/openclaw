@@ -15,6 +15,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistry,
+  isRestartContinuationAllowed,
   resolveSessionLifecycleTimestamps,
 } from "../../config/sessions/lifecycle.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -559,8 +560,15 @@ async function initSessionStateAttemptLocked(
     !resetTriggered &&
     (entryFreshness?.fresh ?? false) &&
     isRecoverableTerminalSessionStatus(entry?.status);
+  const restartContinuationAllowed = isRestartContinuationAllowed({
+    restartContinuation: sessionCfg?.restartContinuation,
+    abortedLastRun: entry?.abortedLastRun,
+    reusableFresh: canReuseExistingEntry && (entryFreshness?.fresh ?? false),
+    terminalMainTranscriptNewerThanRegistry,
+  });
   const freshEntry =
     (isSystemEvent && canReuseExistingEntry) ||
+    restartContinuationAllowed ||
     (((reconnectResumeRequested && canReuseExistingEntry) ||
       recoverTerminalVisibleEntry ||
       (entryFreshness?.fresh ?? false) ||

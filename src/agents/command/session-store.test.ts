@@ -877,6 +877,89 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  async function writeAbortedTerminalMainStore(params: {
+    dir: string;
+    storePath: string;
+    sessionKey: string;
+    sessionId: string;
+  }): Promise<void> {
+    const now = Date.now();
+    const sessionFile = `${params.sessionId}.jsonl`;
+    const transcriptPath = path.join(params.dir, sessionFile);
+    await fs.writeFile(
+      transcriptPath,
+      `${JSON.stringify({ type: "session", id: params.sessionId })}\n`,
+      "utf8",
+    );
+    // Terminal transcript mtime newer than the registry row is what normally
+    // forces id rotation; restart continuation opts out of that rotation.
+    await fs.utimes(transcriptPath, now / 1000, now / 1000);
+    await fs.writeFile(
+      params.storePath,
+      JSON.stringify({
+        [params.sessionKey]: {
+          sessionId: params.sessionId,
+          sessionFile,
+          status: "done",
+          updatedAt: now - 10_000,
+          startedAt: now - 20_000,
+          endedAt: now - 11_000,
+          runtimeMs: 9_000,
+          abortedLastRun: true,
+        },
+      }),
+    );
+  }
+
+  it("reuses an aborted terminal main session when restart continuation is enabled", async () => {
+    await withTempSessionStore(async ({ dir, storePath }) => {
+      const sessionKey = "agent:main:main";
+      const existingSessionId = "restart-continuation-cli-on";
+      await writeAbortedTerminalMainStore({
+        dir,
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+      });
+
+      const result = resolveSession({
+        cfg: {
+          session: { store: storePath, mainKey: "main", restartContinuation: true },
+        } as OpenClawConfig,
+        sessionKey,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry?.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry?.abortedLastRun).toBe(true);
+      expect(result.sessionEntry?.status).toBe("done");
+    });
+  });
+
+  it("rotates an aborted terminal main session when restart continuation is disabled", async () => {
+    await withTempSessionStore(async ({ dir, storePath }) => {
+      const sessionKey = "agent:main:main";
+      const existingSessionId = "restart-continuation-cli-off";
+      await writeAbortedTerminalMainStore({
+        dir,
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+      });
+
+      const result = resolveSession({
+        cfg: {
+          session: { store: storePath, mainKey: "main" },
+        } as OpenClawConfig,
+        sessionKey,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.sessionId).not.toBe(existingSessionId);
+    });
+  });
+
   it("preserves previous totalTokens when provider returns no usage data (#67667)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
