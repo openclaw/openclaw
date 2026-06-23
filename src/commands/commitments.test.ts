@@ -109,6 +109,27 @@ describe("commitments command", () => {
     );
   });
 
+  it("keeps column alignment when id or scope is truncated", async () => {
+    mocks.listCommitments.mockResolvedValue([commitment({ id: "cm_abcdefghijklmnopqrstuvwxyz" })]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsListCommand({}, runtime);
+
+    const header = logs.map(stripAnsi).find((line) => line.startsWith("ID"));
+    const dataRow = logs.map(stripAnsi).find((line) => line.startsWith("cm_"));
+    expect(header).toBeDefined();
+    expect(dataRow).toBeDefined();
+    // The truncated id cell must be exactly 16 chars (padded),
+    // so Status column starts at the same offset in both lines.
+    const headerStatusIdx = header!.indexOf("Status");
+    const dataStatusIdx = dataRow!.indexOf("pending");
+    expect(dataStatusIdx).toBe(headerStatusIdx);
+    // The truncated id must end with the single-char ellipsis …
+    const idCell = dataRow!.slice(0, 16);
+    expect(idCell).toContain("…");
+    expect(idCell.length).toBe(16);
+  });
+
   it("writes list JSON to runtime stdout instead of log output", async () => {
     const { runtime, logs, stdout } = createRuntime();
 
