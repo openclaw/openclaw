@@ -316,6 +316,69 @@ Installed downloadable plugins store their package state under the mounted
 OpenClaw home, so plugin install records and package roots survive container
 replacement. Gateway startup does not generate bundled-plugin dependency trees.
 
+### Claude Code CLI persistence
+
+The Docker image does not preinstall Claude Code. If you want to use the
+Anthropic `claude-cli` backend from a Docker gateway, install Claude Code inside
+the container user environment and persist both the binary and Claude's user
+state:
+
+```bash
+# Persist /home/node so ~/.local/bin, ~/.claude, and Claude caches survive.
+export OPENCLAW_HOME_VOLUME="openclaw_home"
+./scripts/docker/setup.sh
+
+# Install Claude Code as the node user inside the persisted home.
+docker compose run --rm openclaw-cli sh -lc \
+  'curl -fsSL https://claude.ai/install.sh | bash'
+
+# Log in and verify credentials in the same persisted container home.
+docker compose run --rm openclaw-cli sh -lc \
+  '$HOME/.local/bin/claude auth login && $HOME/.local/bin/claude auth status --text'
+```
+
+If the installer asks to change shell startup files, skip that step and use the
+explicit `command` override below instead.
+
+Claude Code keeps user settings, auth, plugins, and project transcripts under
+`~/.claude`. Persisting `/home/node` with `OPENCLAW_HOME_VOLUME` is the simplest
+way to keep that directory together with the default native install location
+(`~/.local/bin/claude`). If you prefer bind mounts, mount both the installed
+binary location and `/home/node/.claude` with `OPENCLAW_EXTRA_MOUNTS`.
+
+If `claude` is not on the container `PATH`, point OpenClaw at the persisted
+binary:
+
+```json5
+{
+  agents: {
+    defaults: {
+      cliBackends: {
+        "claude-cli": {
+          command: "/home/node/.local/bin/claude",
+        },
+      },
+    },
+  },
+}
+```
+
+Verify the backend from the running Docker environment:
+
+```bash
+docker compose run --rm openclaw-cli sh -lc \
+  '$HOME/.local/bin/claude --version && $HOME/.local/bin/claude auth status --text'
+docker compose run --rm openclaw-cli models list --provider anthropic
+```
+
+If you do not want to persist Claude Code in Docker, or you need predictable
+production billing, use an Anthropic API key instead during onboarding. API-key
+auth uses OpenClaw's mounted config and auth-profile storage, so it does not
+require `~/.claude` persistence.
+
+See [CLI backends](/gateway/cli-backends#docker-gateways) and
+[Anthropic](/providers/anthropic#claude-cli) for Claude CLI runtime details.
+
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 

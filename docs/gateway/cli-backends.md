@@ -202,6 +202,17 @@ openclaw models auth login --provider anthropic --method cli --set-default
 Use `agents.defaults.cliBackends.claude-cli.command` only when the `claude`
 binary is not already on `PATH`.
 
+## Docker gateways
+
+The OpenClaw Docker image does not include Claude Code. For Docker installs,
+install Claude Code in the container as the `node` user, persist `/home/node` so
+`~/.local/bin/claude` and `~/.claude` survive container replacement, and set
+`agents.defaults.cliBackends.claude-cli.command` if that binary is not on the
+container `PATH`. See [Docker - Claude Code CLI persistence](/install/docker#claude-code-cli-persistence).
+
+If you do not want to manage Claude Code inside Docker, use Anthropic API-key
+auth instead; API keys persist through OpenClaw's Docker config/auth mounts.
+
 ## Sessions
 
 - If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`) or
