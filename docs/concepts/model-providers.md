@@ -395,6 +395,37 @@ Kimi K2 model IDs:
 }
 ```
 
+### MegaBrain Gateway
+
+MegaBrain is an OpenAI-compatible gateway that routes to 500+ models across 60+ providers through one endpoint, plus `mb-auto/*` auto-routing models that select the best provider dynamically.
+
+- Provider: `megabrain`
+- Auth: `MEGABRAIN_API_KEY` (create a key at [getmegabrain.com](https://getmegabrain.com))
+- Example models: `megabrain/mb-auto/balanced`, `megabrain/mb-auto/frontier`
+- Docs: [getmegabrain.com/docs/gateway](https://getmegabrain.com/docs/gateway)
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "megabrain/mb-auto/balanced" } },
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      megabrain: {
+        baseUrl: "https://getmegabrain.com/api/gateway/v1",
+        apiKey: "${MEGABRAIN_API_KEY}",
+        api: "openai-completions",
+        models: [
+          { id: "mb-auto/balanced", name: "MB Auto Balanced" },
+          { id: "mb-auto/frontier", name: "MB Auto Frontier" },
+        ],
+      },
+    },
+  },
+}
+```
+
 ### Kimi coding
 
 Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
