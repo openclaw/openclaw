@@ -686,17 +686,17 @@ If your MCP server genuinely needs one of the blocked variables, set it on the g
 
 Connects to a remote MCP server over HTTP Server-Sent Events.
 
-| Field                          | Description                                                      |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `url`                          | HTTP or HTTPS URL of the remote server (required)                |
-| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens) |
-| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                   |
-| `connectTimeout`               | Per-server connection timeout in seconds (optional)              |
-| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                  |
-| `auth: "oauth"`                | Use MCP OAuth token storage and `openclaw mcp login`             |
-| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints    |
-| `clientCert` / `clientKey`     | mTLS client certificate and key paths                            |
-| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server              |
+| Field                          | Description                                                                                    |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `url`                          | HTTP or HTTPS URL of the remote server (required)                                              |
+| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens)                               |
+| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                                                 |
+| `connectTimeout`               | Per-server connection timeout in seconds (optional)                                            |
+| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                                                |
+| `auth: "oauth"`                | Use MCP OAuth token storage, or an OAuth auth-profile bearer when `oauth.authProfileId` is set |
+| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints                                  |
+| `clientCert` / `clientKey`     | mTLS client certificate and key paths                                                          |
+| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server                                            |
 
 Example:
 
@@ -723,12 +723,20 @@ Sensitive values in `url` (userinfo) and `headers` are redacted in logs and stat
 
 OAuth is for HTTP MCP servers that advertise the MCP OAuth flow. Static `Authorization` headers are ignored for a server while `auth: "oauth"` is enabled.
 
+When a remote MCP service is already backed by an OpenClaw refresh-capable auth profile, set `oauth.authProfileId` instead of storing a static bearer header. OpenClaw refreshes that profile before runtime projection and passes only the current access token to the downstream MCP client.
+
 <Steps>
   <Step title="Save the server">
     Add or update the server with `auth: "oauth"` and any optional OAuth metadata.
 
     ```bash
     openclaw mcp set docs '{"url":"https://mcp.example.com/mcp","transport":"streamable-http","auth":"oauth","oauth":{"scope":"docs.read"}}'
+    ```
+
+    For an auth-profile-backed bearer, save the profile binding:
+
+    ```bash
+    openclaw mcp set docs '{"url":"https://mcp.example.com/mcp","transport":"streamable-http","auth":"oauth","oauth":{"authProfileId":"docs:mcp"}}'
     ```
 
   </Step>
@@ -775,18 +783,18 @@ If the provider rotates tokens or the authorization state gets stuck, run `openc
 
 `streamable-http` is an additional transport option alongside `sse` and `stdio`. It uses HTTP streaming for bidirectional communication with remote MCP servers.
 
-| Field                          | Description                                                                            |
-| ------------------------------ | -------------------------------------------------------------------------------------- |
-| `url`                          | HTTP or HTTPS URL of the remote server (required)                                      |
-| `transport`                    | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
-| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens)                       |
-| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                                         |
-| `connectTimeout`               | Per-server connection timeout in seconds (optional)                                    |
-| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                                        |
-| `auth: "oauth"`                | Use MCP OAuth token storage and `openclaw mcp login`                                   |
-| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints                          |
-| `clientCert` / `clientKey`     | mTLS client certificate and key paths                                                  |
-| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server                                    |
+| Field                          | Description                                                                                    |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `url`                          | HTTP or HTTPS URL of the remote server (required)                                              |
+| `transport`                    | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse`         |
+| `headers`                      | Optional key-value map of HTTP headers (for example auth tokens)                               |
+| `connectionTimeoutMs`          | Per-server connection timeout in ms (optional)                                                 |
+| `connectTimeout`               | Per-server connection timeout in seconds (optional)                                            |
+| `timeout` / `requestTimeoutMs` | Per-server MCP request timeout in seconds or ms                                                |
+| `auth: "oauth"`                | Use MCP OAuth token storage, or an OAuth auth-profile bearer when `oauth.authProfileId` is set |
+| `sslVerify`                    | Set false only for explicitly trusted private HTTPS endpoints                                  |
+| `clientCert` / `clientKey`     | mTLS client certificate and key paths                                                          |
+| `supportsParallelToolCalls`    | Hint that concurrent calls are safe for this server                                            |
 
 OpenClaw config uses `transport: "streamable-http"` as the canonical spelling. CLI-native MCP `type: "http"` values are accepted when saved through `openclaw mcp set` and repaired by `openclaw doctor --fix` in existing config, but `transport` is what embedded OpenClaw consumes directly.
 

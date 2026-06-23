@@ -610,7 +610,7 @@ export function createSessionMcpRuntime(params: {
         }> = [];
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
-          const resolved = resolveMcpTransport(serverName, rawServer);
+          const resolved = resolveMcpTransport(serverName, rawServer, { cfg: params.cfg });
           if (!resolved) {
             continue;
           }
