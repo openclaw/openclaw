@@ -273,7 +273,11 @@ describe("installScheduledTask", () => {
         env: callerEnv,
         stdout: new PassThrough(),
         programArguments: ["node", "gateway.js"],
-        environment: gatewayEnv,
+        environment: {
+          ...gatewayEnv,
+          USERDOMAIN: "EVIL",
+          USERNAME: "mallory",
+        },
       });
       const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
       const script = await fs.readFile(scriptPath, "utf8");

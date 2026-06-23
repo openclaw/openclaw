@@ -961,6 +961,33 @@ function resolveScheduledTaskScriptEnvironment(
   return Object.keys(scriptEnv).length > 0 ? scriptEnv : undefined;
 }
 
+const SCHEDULED_TASK_ACTIVATION_KEYS = [
+  "OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER",
+  "OPENCLAW_TASK_SCRIPT_NAME",
+  "OPENCLAW_TASK_SCRIPT",
+  "OPENCLAW_SERVICE_KIND",
+  "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_PROFILE",
+] as const;
+
+function resolveScheduledTaskActivationEnv(
+  env: GatewayServiceEnv,
+  environment: GatewayServiceEnv | undefined,
+): GatewayServiceEnv {
+  if (!environment) {
+    return env;
+  }
+  const activationEnv = { ...env };
+  for (const key of SCHEDULED_TASK_ACTIVATION_KEYS) {
+    const value = environment[key];
+    if (value !== undefined) {
+      activationEnv[key] = value;
+    }
+  }
+  return activationEnv;
+}
+
 async function writeScheduledTaskScript({
   env,
   programArguments,
@@ -1288,7 +1315,7 @@ export async function installScheduledTask(
 ): Promise<{ scriptPath: string }> {
   const staged = await writeScheduledTaskScript(args);
   await activateScheduledTask({
-    env: staged.taskEnv,
+    env: resolveScheduledTaskActivationEnv(args.env, args.environment),
     stdout: args.stdout,
     scriptPath: staged.scriptPath,
     taskLaunchPath: staged.taskLaunchPath,
