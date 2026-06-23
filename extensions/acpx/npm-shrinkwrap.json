@@ -10,7 +10,7 @@
       "dependencies": {
         "@agentclientprotocol/claude-agent-acp": "0.39.0",
         "@zed-industries/codex-acp": "0.15.0",
-        "acpx": "0.10.0",
+        "acpx": "0.11.1",
         "zod": "4.4.3"
       }
     },
@@ -831,15 +831,15 @@
       }
     },
     "node_modules/acpx": {
-      "version": "0.10.0",
-      "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.10.0.tgz",
-      "integrity": "sha512-hd48XV03gG3sd409T1lDrOKJTTz1ap4g0wrndXjxQ590tN85pBYlvfNLyerybvGRrtUGsZjNdt99r1jpIt6ukA==",
+      "version": "0.11.1",
+      "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.11.1.tgz",
+      "integrity": "sha512-AfjHUYnuxRpvb1JLjjIZILEbCskIENCTP9Mgc5w0BiaPLmsL2hTg5gbM7sG1EssOkceNLQwgeAuVtbukLz0KFw==",
       "license": "MIT",
       "dependencies": {
-        "@agentclientprotocol/sdk": "^0.22.1",
-        "commander": "^14.0.3",
-        "skillflag": "^0.1.4",
-        "tsx": "^4.22.0",
+        "@agentclientprotocol/sdk": "^0.28.1",
+        "commander": "^15.0.0",
+        "skillflag": "^0.2.0",
+        "tsx": "^4.22.4",
         "zod": "^4.4.3"
       },
       "bin": {
@@ -847,6 +847,24 @@
       },
       "engines": {
         "node": ">=22.13.0"
+      }
+    },
+    "node_modules/acpx/node_modules/@agentclientprotocol/sdk": {
+      "version": "0.28.1",
+      "resolved": "https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-0.28.1.tgz",
+      "integrity": "sha512-Z2Frs6YtPhnZZ+XwFXyQkRDXY0fn8FjCalEs0W4yUhQnY4TztmNq0/RnfzWdFN3vqT3h0jTz5klzYbZHGxCDyQ==",
+      "license": "Apache-2.0",
+      "peerDependencies": {
+        "zod": "^3.25.0 || ^4.0.0"
+      }
+    },
+    "node_modules/acpx/node_modules/commander": {
+      "version": "15.0.0",
+      "resolved": "https://registry.npmjs.org/commander/-/commander-15.0.0.tgz",
+      "integrity": "sha512-z67u4ZhzCL/Tydu1lJARtEZYWbWaN7oYLHbsuzocr6y4N6WZAagG3RQ4FW61V1/0+jImpj293XfrcYnd1qxtPg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=22.12.0"
       }
     },
     "node_modules/ajv": {
@@ -2052,9 +2070,9 @@
       "license": "MIT"
     },
     "node_modules/skillflag": {
-      "version": "0.1.4",
-      "resolved": "https://registry.npmjs.org/skillflag/-/skillflag-0.1.4.tgz",
-      "integrity": "sha512-egFg+XCF5sloOWdtzxZivTX7n4UDj5pxQoY33wbT8h+YSDjMQJ76MZUg2rXQIBXmIDtlZhLgirS1g/3R5/qaHA==",
+      "version": "0.2.0",
+      "resolved": "https://registry.npmjs.org/skillflag/-/skillflag-0.2.0.tgz",
+      "integrity": "sha512-7ZmEpBeEoPLc+hqZ/StAnCO/hulgEPANzPyZgOM/CZ5zc3b0ApSp3URavY5POM/OKyi5d9+UC/Q21OoiYC2kJw==",
       "license": "MIT",
       "dependencies": {
         "@clack/prompts": "^1.0.1",
