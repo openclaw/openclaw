@@ -874,6 +874,57 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(eventTypes.filter((type) => type === "thinking_end")).toHaveLength(1);
   });
 
+  it("attaches encrypted reasoning details to the matching streamed tool call", async () => {
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_1", "first", '{"value":1}'),
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 1,
+                  id: "call_2",
+                  function: { name: "second", arguments: '{"value":2}' },
+                  type: "function",
+                },
+              ],
+              reasoning_details: [
+                {
+                  type: "reasoning.encrypted",
+                  id: "call_1",
+                  data: "encrypted",
+                },
+              ],
+            } as OpenAICompatibleDelta & {
+              reasoning_details: Array<Record<string, string>>;
+            },
+          },
+        ],
+      },
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+    const toolCalls = result.content.filter((block) => block.type === "toolCall");
+
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_1",
+      thoughtSignature: JSON.stringify({
+        type: "reasoning.encrypted",
+        id: "call_1",
+        data: "encrypted",
+      }),
+    });
+    expect(toolCalls[1]).not.toHaveProperty("thoughtSignature");
+  });
+
   it("keeps one native reasoning block when content and reasoning co-occur", async () => {
     mockChunksRef.chunks = [
       {
