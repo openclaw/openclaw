@@ -141,7 +141,10 @@ describe("session accessor boundary guard", () => {
 
   it("ratchets only memory-host session corpus files migrated to accessor entries", () => {
     expect(migratedMemoryHostSessionCorpusFiles).toEqual(
-      new Set(["packages/memory-host-sdk/src/host/session-files.ts"]),
+      new Set([
+        "packages/memory-host-sdk/src/host/session-files.ts",
+        "packages/memory-host-sdk/src/host/session-transcript-corpus.ts",
+      ]),
     );
   });
 
@@ -282,6 +285,25 @@ describe("session accessor boundary guard", () => {
       },
       {
         line: 6,
+        reason:
+          'calls legacy memory-host session corpus helper "readSessionTranscriptClassificationStore"',
+      },
+    ]);
+  });
+
+  it("follows memory-host corpus helper calls when checking legacy access", () => {
+    expect(
+      findMemoryHostSessionCorpusBoundaryViolations(`
+        function loadViaHelper() {
+          return readSessionTranscriptClassificationStore("sessions.json");
+        }
+        function listSessionTranscriptCorpusEntriesForAgentSync(agentId) {
+          return loadViaHelper(agentId);
+        }
+      `),
+    ).toEqual([
+      {
+        line: 3,
         reason:
           'calls legacy memory-host session corpus helper "readSessionTranscriptClassificationStore"',
       },

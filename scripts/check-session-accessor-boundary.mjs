@@ -171,6 +171,7 @@ export const migratedSessionLifecycleCleanupFiles = new Set([
 
 export const migratedMemoryHostSessionCorpusFiles = new Set([
   "packages/memory-host-sdk/src/host/session-files.ts",
+  "packages/memory-host-sdk/src/host/session-transcript-corpus.ts",
 ]);
 
 const memoryHostSessionCorpusFunctionNames = new Set([
@@ -467,32 +468,55 @@ function functionBodyForDeclaration(node) {
   return null;
 }
 
+function collectTopLevelFunctionBodies(sourceFile) {
+  const bodies = new Map();
+  for (const statement of sourceFile.statements) {
+    const name = declarationName(statement);
+    const body = functionBodyForDeclaration(statement);
+    if (name && body) {
+      bodies.set(name, body);
+    }
+  }
+  return bodies;
+}
+
 export function findMemoryHostSessionCorpusBoundaryViolations(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
+  const functionBodies = collectTopLevelFunctionBodies(sourceFile);
+  const visitedFunctions = new Set();
+  const violationKeys = new Set();
   const violations = [];
 
   const visitCorpusBody = (node) => {
     if (ts.isCallExpression(node)) {
       const calleeName = propertyAccessName(node.expression);
       if (calleeName && legacyMemoryHostSessionCorpusNames.has(calleeName)) {
-        violations.push({
-          line: toLine(sourceFile, node.expression),
-          reason: `calls legacy memory-host session corpus helper "${calleeName}"`,
-        });
+        const line = toLine(sourceFile, node.expression);
+        const reason = `calls legacy memory-host session corpus helper "${calleeName}"`;
+        const key = `${line}:${reason}`;
+        if (!violationKeys.has(key)) {
+          violationKeys.add(key);
+          violations.push({ line, reason });
+        }
+      }
+      if (calleeName && ts.isIdentifier(unwrapExpression(node.expression))) {
+        const localBody = functionBodies.get(calleeName);
+        if (localBody && !visitedFunctions.has(calleeName)) {
+          visitedFunctions.add(calleeName);
+          visitCorpusBody(localBody);
+        }
       }
     }
     ts.forEachChild(node, visitCorpusBody);
   };
 
-  for (const statement of sourceFile.statements) {
-    const name = declarationName(statement);
-    if (!name || !memoryHostSessionCorpusFunctionNames.has(name)) {
+  for (const name of memoryHostSessionCorpusFunctionNames) {
+    const body = functionBodies.get(name);
+    if (!body || visitedFunctions.has(name)) {
       continue;
     }
-    const body = functionBodyForDeclaration(statement);
-    if (body) {
-      visitCorpusBody(body);
-    }
+    visitedFunctions.add(name);
+    visitCorpusBody(body);
   }
 
   return violations;
