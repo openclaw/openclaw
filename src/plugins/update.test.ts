@@ -1861,7 +1861,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
-  it("falls through to npm reinstall when metadata probing fails", async () => {
+  it("falls through to npm reinstall when metadata probing fails for valid specs", async () => {
     const warn = vi.fn();
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
@@ -1894,6 +1894,107 @@ describe("updateNpmInstalledPlugins", () => {
       "Could not check lossless-claw before update; falling back to installer path: npm view failed: registry timeout",
     );
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("records range metadata probing failures without falling through to npm reinstall", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "registry timeout",
+    });
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "lossless-claw",
+        spec: "@martian-engineering/lossless-claw@^0.9.0",
+        installPath,
+      }),
+      pluginIds: ["lossless-claw"],
+      logger: { warn },
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "lossless-claw",
+        status: "error",
+        message: "Failed to check lossless-claw: npm view failed: registry timeout",
+      },
+    ]);
+  });
+
+  it("uses failure cleanup when metadata probing fails and disableOnFailure is enabled", async () => {
+    const warn = vi.fn();
+    const installPath = createInstalledPackageDir({
+      name: "@martian-engineering/lossless-claw",
+      version: "0.9.0",
+    });
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "registry timeout",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          allow: ["lossless-claw", "keep"],
+          deny: ["lossless-claw", "blocked"],
+          slots: {
+            memory: "lossless-claw",
+            contextEngine: "lossless-claw",
+          },
+          entries: {
+            "lossless-claw": {
+              enabled: true,
+              config: { preserved: true },
+            },
+          },
+          installs: {
+            "lossless-claw": {
+              source: "npm",
+              spec: "@martian-engineering/lossless-claw@^0.9.0",
+              installPath,
+              resolvedName: "@martian-engineering/lossless-claw",
+              resolvedVersion: "0.9.0",
+              resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+            },
+          },
+        },
+      },
+      pluginIds: ["lossless-claw"],
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    const message =
+      'Disabled "lossless-claw" after plugin update failure; OpenClaw will continue without it. Failed to check lossless-claw: npm view failed: registry timeout';
+    expect(warn).toHaveBeenCalledWith(message);
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.["lossless-claw"]).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+    expect(result.config.plugins?.allow).toEqual(["keep"]);
+    expect(result.config.plugins?.deny).toEqual(["blocked"]);
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "lossless-claw",
+        status: "skipped",
+        message,
+      },
+    ]);
   });
 
   it.each([
@@ -3823,6 +3924,7 @@ describe("updateNpmInstalledPlugins", () => {
   it("reuses the recorded managed extensions root when updating external plugins", async () => {
     const installPath = "/var/openclaw/extensions/demo";
     const extensionsDir = "/var/openclaw/extensions";
+    const expectedExtensionsDir = path.resolve(extensionsDir);
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
         pluginId: "demo",
@@ -3906,10 +4008,10 @@ describe("updateNpmInstalledPlugins", () => {
       pluginIds: ["demo"],
     });
 
-    expect(npmInstallCall()?.extensionsDir).toBe(extensionsDir);
-    expect(clawHubInstallCall()?.extensionsDir).toBe(extensionsDir);
-    expect(marketplaceInstallCall()?.extensionsDir).toBe(extensionsDir);
-    expect(gitInstallCall()?.extensionsDir).toBe(extensionsDir);
+    expect(npmInstallCall()?.extensionsDir).toBe(expectedExtensionsDir);
+    expect(clawHubInstallCall()?.extensionsDir).toBe(expectedExtensionsDir);
+    expect(marketplaceInstallCall()?.extensionsDir).toBe(expectedExtensionsDir);
+    expect(gitInstallCall()?.extensionsDir).toBe(expectedExtensionsDir);
   });
 });
 

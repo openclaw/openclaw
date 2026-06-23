@@ -493,7 +493,7 @@ function resolveRecordedExtensionsDir(params: {
   const parentDir = path.dirname(params.installPath);
   try {
     const canonicalInstallPath = resolvePluginInstallDir(params.pluginId, parentDir);
-    return canonicalInstallPath === params.installPath ? parentDir : undefined;
+    return pathsEqual(canonicalInstallPath, params.installPath) ? parentDir : undefined;
   } catch {
     return undefined;
   }
@@ -1580,6 +1580,10 @@ export async function updateNpmInstalledPlugins(params: {
           continue;
         }
       } else {
+        if (!parseRegistryNpmSpec(effectiveSpec!)) {
+          recordFailure(pluginId, `Failed to check ${pluginId}: ${metadataResult.error}`);
+          continue;
+        }
         logger.warn?.(
           `Could not check ${pluginId} before update; falling back to installer path: ${metadataResult.error}`,
         );
