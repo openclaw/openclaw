@@ -778,8 +778,8 @@ jobs:
       ref: ${{ needs.resolve_target.outputs.ref }}
       expected_sha: ${{ needs.resolve_target.outputs.revision }}
       qa_profile: release
-      fail_on_qa_failure: true
-    secrets: inherit
+    secrets:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
 
   qa_lab_parity_lane_release_checks:
     name: Run QA Lab parity lane (${{ matrix.lane }})
