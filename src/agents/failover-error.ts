@@ -27,6 +27,7 @@ export class FailoverError extends Error {
   readonly provider?: string;
   readonly model?: string;
   readonly profileId?: string;
+  readonly authMode?: string;
   readonly status?: number;
   readonly code?: string;
   readonly rawError?: string;
@@ -48,6 +49,7 @@ export class FailoverError extends Error {
       provider?: string;
       model?: string;
       profileId?: string;
+      authMode?: string;
       status?: number;
       code?: string;
       rawError?: string;
@@ -65,6 +67,7 @@ export class FailoverError extends Error {
     this.provider = params.provider;
     this.model = params.model;
     this.profileId = params.profileId;
+    this.authMode = params.authMode;
     this.status = params.status;
     this.code = params.code;
     this.rawError = params.rawError;
@@ -402,6 +405,11 @@ export function isTimeoutError(err: unknown): boolean {
   return hasTimeoutHint(cause) || hasTimeoutHint(reason);
 }
 
+/** Return true when an abort-signal reason is an intentional timeout; plain AbortError is a cancellation, not a timeout. */
+export function isSignalTimeoutReason(reason: unknown): boolean {
+  return readErrorName(reason) === "TimeoutError";
+}
+
 function failoverReasonFromClassification(
   classification: FailoverClassification | null,
 ): FailoverReason | null {
@@ -640,6 +648,7 @@ export function describeFailoverError(err: unknown): {
   provider?: string;
   model?: string;
   profileId?: string;
+  authMode?: string;
   sessionId?: string;
   lane?: string;
 } {
@@ -653,6 +662,7 @@ export function describeFailoverError(err: unknown): {
       provider: err.provider,
       model: err.model,
       profileId: err.profileId,
+      authMode: err.authMode,
       sessionId: err.sessionId,
       lane: err.lane,
     };
@@ -701,11 +711,30 @@ export function coerceToFailoverError(
     provider?: string;
     model?: string;
     profileId?: string;
+    authMode?: string;
     sessionId?: string;
     lane?: string;
   },
 ): FailoverError | null {
   if (isFailoverError(err)) {
+    if (context?.authMode && !err.authMode) {
+      const message = typeof err.message === "string" ? err.message : String(err);
+      return new FailoverError(message, {
+        reason: err.reason,
+        provider: err.provider,
+        model: err.model,
+        profileId: err.profileId,
+        authMode: context.authMode,
+        status: err.status,
+        code: err.code,
+        rawError: err.rawError,
+        authProfileFailure: err.authProfileFailure,
+        sessionId: err.sessionId,
+        lane: err.lane,
+        cause: err.cause,
+        suspend: err.suspend,
+      });
+    }
     return err;
   }
   const reason = resolveFailoverReasonFromError(err, context?.provider);
@@ -734,6 +763,7 @@ export function coerceToFailoverError(
     provider: context?.provider ?? signal.provider,
     model: context?.model,
     profileId: context?.profileId,
+    authMode: context?.authMode,
     sessionId: context?.sessionId,
     lane: context?.lane,
     status,

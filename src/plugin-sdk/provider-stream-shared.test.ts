@@ -2,19 +2,44 @@
  * Tests provider stream shared helpers and stream hook capture.
  */
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createAnthropicThinkingPrefillPayloadWrapper,
+  createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
+  normalizeOpenAICompatibleReasoningPayload,
+  setQwenChatTemplateThinking,
   stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
 type StreamEvent = { type: string } & Record<string, unknown>;
+
+const lmstudioBinaryModel = {
+  api: "openai-completions",
+  provider: "lmstudio",
+  id: "google/gemma-4-26b-a4b-qat",
+  baseUrl: "http://127.0.0.1:1234/v1",
+  reasoning: true,
+  compat: {
+    supportsReasoningEffort: true,
+    supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+  },
+} as unknown as Model<"openai-completions">;
+
+const lmstudioBareModel = {
+  api: "openai-completions",
+  provider: "lmstudio",
+  id: "qwen3-8b-instruct",
+  baseUrl: "http://127.0.0.1:1234/v1",
+  reasoning: true,
+} as unknown as Model<"openai-completions">;
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -33,6 +58,20 @@ function createEventStream(events: unknown[]): ReturnType<StreamFn> {
     stream.end();
   });
   return output as ReturnType<StreamFn>;
+}
+
+function createPayloadCapture(initialReasoningEffort?: string) {
+  const payloads: Array<Record<string, unknown>> = [];
+  const baseStreamFn: StreamFn = (model, _context, options) => {
+    const payload: Record<string, unknown> = { model: model.id };
+    if (initialReasoningEffort !== undefined) {
+      payload.reasoning_effort = initialReasoningEffort;
+    }
+    options?.onPayload?.(payload, model);
+    payloads.push(structuredClone(payload));
+    return createAssistantMessageEventStream();
+  };
+  return { baseStreamFn, payloads };
 }
 
 function createControlledPlainTextToolCallCompatStream() {
@@ -123,6 +162,77 @@ describe("isOpenAICompatibleThinkingEnabled", () => {
   });
 });
 
+describe("setQwenChatTemplateThinking", () => {
+  it("preserves existing chat-template kwargs and enables thinking", () => {
+    const payload = {
+      chat_template_kwargs: {
+        custom_flag: "keep",
+        preserve_thinking: false,
+      },
+    };
+
+    setQwenChatTemplateThinking(payload, true);
+
+    expect(payload.chat_template_kwargs).toEqual({
+      custom_flag: "keep",
+      preserve_thinking: false,
+      enable_thinking: true,
+    });
+  });
+
+  it("creates the required chat-template kwargs when absent", () => {
+    const payload: Record<string, unknown> = {};
+
+    setQwenChatTemplateThinking(payload, false);
+
+    expect(payload).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: false,
+        preserve_thinking: true,
+      },
+    });
+  });
+});
+
+describe("normalizeOpenAICompatibleReasoningPayload", () => {
+  it("removes the legacy field and adds the selected reasoning effort", () => {
+    const payload: Record<string, unknown> = {
+      reasoning_effort: "high",
+    };
+
+    normalizeOpenAICompatibleReasoningPayload(payload, "adaptive");
+
+    expect(payload).toEqual({ reasoning: { effort: "medium" } });
+  });
+
+  it("preserves explicit reasoning controls", () => {
+    const withMaxTokens: Record<string, unknown> = {
+      reasoning_effort: "high",
+      reasoning: { max_tokens: 256 },
+    };
+    const withEffort: Record<string, unknown> = {
+      reasoning_effort: "high",
+      reasoning: { effort: "low", summary: "auto" },
+    };
+
+    normalizeOpenAICompatibleReasoningPayload(withMaxTokens, "high");
+    normalizeOpenAICompatibleReasoningPayload(withEffort, "high");
+
+    expect(withMaxTokens).toEqual({ reasoning: { max_tokens: 256 } });
+    expect(withEffort).toEqual({ reasoning: { effort: "low", summary: "auto" } });
+  });
+
+  it("removes only the legacy field when thinking is disabled", () => {
+    const payload: Record<string, unknown> = {
+      reasoning_effort: "high",
+    };
+
+    normalizeOpenAICompatibleReasoningPayload(payload, "off");
+
+    expect(payload).toEqual({});
+  });
+});
+
 describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
   it("backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
     const payload = {
@@ -195,6 +305,40 @@ describe("createPayloadPatchStreamWrapper", () => {
     void wrapped({ id: "model" } as never, { messages: [] } as never, {});
 
     expect(onPayloadWasInstalled).toBe(false);
+  });
+});
+
+describe("createOpenAICompatibleCompletionsThinkingOffWrapper", () => {
+  it("maps reasoning_effort to the model's disabled value when thinking is off", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture("high");
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe("none");
+  });
+
+  it("drops reasoning_effort when the model has no disabled effort", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture("high");
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBareModel, { messages: [] }, {});
+
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("does not add reasoning_effort when none was sent", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture();
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("leaves enabled thinking levels unchanged", () => {
+    const { baseStreamFn, payloads } = createPayloadCapture("high");
+    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "high");
+    void wrapped(lmstudioBinaryModel, { messages: [] }, {});
+
+    expect(payloads[0]?.reasoning_effort).toBe("high");
   });
 });
 

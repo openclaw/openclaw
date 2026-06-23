@@ -2,11 +2,13 @@
  * Owns shared and isolated Codex app-server client startup, auth application,
  * lease tracking, and teardown.
  */
-import { resolveDefaultAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveDefaultAgentDir, type AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import {
   applyCodexAppServerAuthProfile,
   bridgeCodexAppServerStartOptions,
+  refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthProfileIdForAgent,
+  resolveCodexAppServerAuthProfileStore,
   resolveCodexAppServerFallbackApiKeyCacheKey,
 } from "./auth-bridge.js";
 import { CodexAppServerClient } from "./client.js";
@@ -113,26 +115,41 @@ type CodexAppServerClientOptions = {
   abandonSignal?: AbortSignal;
 };
 
+type IsolatedCodexAppServerClientOptions = CodexAppServerClientOptions & {
+  authProfileStore?: AuthProfileStore;
+};
+
 type ResolvedCodexAppServerClientStartContext = {
   agentDir: string;
   usesNativeAuth: boolean;
   authProfileId: string | undefined;
+  authProfileStore: AuthProfileStore | undefined;
   startOptions: CodexAppServerStartOptions;
 };
 
 async function resolveCodexAppServerClientStartContext(
-  options?: CodexAppServerClientOptions,
+  options?: IsolatedCodexAppServerClientOptions,
 ): Promise<ResolvedCodexAppServerClientStartContext> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const usesNativeAuth = options?.authProfileId === null;
   const requestedAuthProfileId =
     options?.authProfileId === null ? undefined : options?.authProfileId;
+  const authProfileStore =
+    !usesNativeAuth && options?.authProfileStore
+      ? resolveCodexAppServerAuthProfileStore({
+          agentDir,
+          authProfileId: requestedAuthProfileId,
+          authProfileStore: options.authProfileStore,
+          config: options.config,
+        })
+      : options?.authProfileStore;
   const authProfileId = usesNativeAuth
     ? undefined
     : resolveCodexAppServerAuthProfileIdForAgent({
         authProfileId: requestedAuthProfileId,
         agentDir,
         config: options?.config,
+        ...(authProfileStore ? { authProfileStore } : {}),
       });
   const requestedStartOptions =
     options?.startOptions ?? resolveCodexAppServerRuntimeOptions().start;
@@ -142,8 +159,9 @@ async function resolveCodexAppServerClientStartContext(
     agentDir,
     authProfileId: usesNativeAuth ? null : authProfileId,
     config: options?.config,
+    ...(authProfileStore ? { authProfileStore } : {}),
   });
-  return { agentDir, usesNativeAuth, authProfileId, startOptions };
+  return { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions };
 }
 
 /** Gets or starts a shared Codex app-server client without retaining a lease. */
@@ -269,11 +287,26 @@ async function acquireSharedCodexAppServerClient(
 
 /** Starts a non-shared Codex app-server client owned entirely by the caller. */
 export async function createIsolatedCodexAppServerClient(
-  options?: CodexAppServerClientOptions,
+  options?: IsolatedCodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
-  const { agentDir, usesNativeAuth, authProfileId, startOptions } =
+  const { agentDir, usesNativeAuth, authProfileId, authProfileStore, startOptions } =
     await resolveCodexAppServerClientStartContext(options);
   const client = CodexAppServerClient.start(startOptions);
+  if (authProfileId) {
+    // Profile-backed Codex auth is ephemeral. Keep the host refresh callback
+    // available whether the profile came from a scoped store or persisted state.
+    client.addRequestHandler(async (request) => {
+      if (request.method !== "account/chatgptAuthTokens/refresh") {
+        return undefined;
+      }
+      return await refreshCodexAppServerAuthTokens({
+        agentDir,
+        authProfileId,
+        ...(authProfileStore ? { authProfileStore } : {}),
+        config: options?.config,
+      });
+    });
+  }
   const initialize = client.initialize();
   try {
     await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
@@ -283,6 +316,7 @@ export async function createIsolatedCodexAppServerClient(
       authProfileId: usesNativeAuth ? null : authProfileId,
       startOptions,
       config: options?.config,
+      ...(authProfileStore ? { authProfileStore } : {}),
     });
     return client;
   } catch (error) {

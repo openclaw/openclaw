@@ -5,6 +5,7 @@ import path from "node:path";
 import { bundledPluginRootAt } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { PluginNpmIntegrityDriftParams } from "./install.js";
 
 const APP_ROOT = "/app";
@@ -1774,7 +1775,6 @@ describe("updateNpmInstalledPlugins", () => {
       path.join(installPath, "package.json"),
       JSON.stringify({ name: "@martian-engineering/lossless-claw", version: "0.9.0" }),
     );
-    vi.stubEnv("HOME", home);
     mockNpmViewMetadata({
       name: "@martian-engineering/lossless-claw",
       version: "0.9.0",
@@ -1783,19 +1783,21 @@ describe("updateNpmInstalledPlugins", () => {
     });
     installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
 
-    const result = await updateNpmInstalledPlugins({
-      config: createNpmInstallConfig({
-        pluginId: "lossless-claw",
-        spec: "@martian-engineering/lossless-claw",
-        installPath: "~/.openclaw/extensions/lossless-claw",
-        resolvedName: "@martian-engineering/lossless-claw",
-        resolvedVersion: "0.9.0",
-        resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
-        integrity: "sha512-same",
-        shasum: "same",
+    const result = await withEnvAsync({ HOME: home }, () =>
+      updateNpmInstalledPlugins({
+        config: createNpmInstallConfig({
+          pluginId: "lossless-claw",
+          spec: "@martian-engineering/lossless-claw",
+          installPath: "~/.openclaw/extensions/lossless-claw",
+          resolvedName: "@martian-engineering/lossless-claw",
+          resolvedVersion: "0.9.0",
+          resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
+          integrity: "sha512-same",
+          shasum: "same",
+        }),
+        pluginIds: ["lossless-claw"],
       }),
-      pluginIds: ["lossless-claw"],
-    });
+    );
 
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(false);
@@ -3613,6 +3615,41 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.["voice-call"]).toBeUndefined();
   });
 
+  it("keeps authored plugin config shape when only the install key migrates", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "@openclaw/voice-call",
+      targetDir: "/tmp/openclaw-voice-call",
+      version: "0.0.2",
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call",
+              installPath: "/tmp/voice-call",
+            },
+          },
+        },
+      },
+      pluginIds: ["voice-call"],
+    });
+
+    expect(result.config.plugins).toEqual({
+      installs: {
+        "@openclaw/voice-call": expect.objectContaining({
+          source: "npm",
+          spec: "@openclaw/voice-call",
+          installPath: "/tmp/openclaw-voice-call",
+        }),
+      },
+    });
+  });
+
   it("migrates context engine slot when a plugin id changes during update", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: true,
@@ -3955,9 +3992,7 @@ describe("syncPluginsForUpdateChannel", () => {
       }),
     );
 
-    const previousHome = process.env.HOME;
-    process.env.HOME = "/tmp/process-home";
-    try {
+    await withEnvAsync({ HOME: "/tmp/process-home" }, async () => {
       const result = await syncPluginsForUpdateChannel({
         channel: "beta",
         env: {
@@ -3987,13 +4022,7 @@ describe("syncPluginsForUpdateChannel", () => {
         sourcePath: "~/plugins/feishu",
         installPath: "~/plugins/feishu",
       });
-    } finally {
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
-    }
+    });
   });
 
   it("installs an externalized bundled plugin and rewrites its old bundled path plugin index", async () => {

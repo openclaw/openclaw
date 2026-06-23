@@ -31,6 +31,11 @@ import {
 } from "../utils/usage-format.js";
 import { formatErrorMessage } from "./errors.js";
 import { replaceFileAtomic } from "./replace-file.js";
+import {
+  addCostUsageTotals as addTotals,
+  cloneCostUsageTotals as cloneTotals,
+  createEmptyCostUsageTotals as emptyTotals,
+} from "./session-cost-usage-totals.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -69,20 +74,6 @@ export type {
   UsageCacheStatus,
 } from "./session-cost-usage.types.js";
 
-const emptyTotals = (): CostUsageTotals => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-});
-
 // Bump when the *meaning* of cached totals changes (not just their inputs), so durable
 // caches written by older builds are rebuilt instead of served stale. Bumped to 4:
 // unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
@@ -90,6 +81,7 @@ const emptyTotals = (): CostUsageTotals => ({
 const USAGE_COST_CACHE_VERSION = 4;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
+const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
 const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
 // Checkpoint policy for refreshCostUsageCache: bound the cost of full cache
 // serialization when scanning thousands of session files. Smaller of the two
@@ -168,34 +160,6 @@ type UsageCostCacheLockReadResult =
   | { state: "missing" }
   | { state: "valid"; lock: UsageCostCacheLock }
   | { state: "malformed"; mtimeMs: number };
-
-const cloneTotals = (totals: CostUsageTotals): CostUsageTotals => ({
-  input: totals.input,
-  output: totals.output,
-  cacheRead: totals.cacheRead,
-  cacheWrite: totals.cacheWrite,
-  totalTokens: totals.totalTokens,
-  totalCost: totals.totalCost,
-  inputCost: totals.inputCost,
-  outputCost: totals.outputCost,
-  cacheReadCost: totals.cacheReadCost,
-  cacheWriteCost: totals.cacheWriteCost,
-  missingCostEntries: totals.missingCostEntries,
-});
-
-const addTotals = (target: CostUsageTotals, source: CostUsageTotals): void => {
-  target.input += source.input;
-  target.output += source.output;
-  target.cacheRead += source.cacheRead;
-  target.cacheWrite += source.cacheWrite;
-  target.totalTokens += source.totalTokens;
-  target.totalCost += source.totalCost;
-  target.inputCost += source.inputCost;
-  target.outputCost += source.outputCost;
-  target.cacheReadCost += source.cacheReadCost;
-  target.cacheWriteCost += source.cacheWriteCost;
-  target.missingCostEntries += source.missingCostEntries;
-};
 
 function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
   return resolveModelCostConfigFingerprint(config);
@@ -374,6 +338,32 @@ async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile)
     content: `${JSON.stringify(cache)}\n`,
     tempPrefix: ".usage-cost-cache",
   });
+}
+
+function isUsageCostCacheTempFileName(name: string): boolean {
+  if (!name.endsWith(".tmp") || name.startsWith(`${USAGE_COST_CACHE_FILE}.lock.`)) {
+    return false;
+  }
+  return name.startsWith(".usage-cost-cache.") || name.startsWith(`${USAGE_COST_CACHE_FILE}.`);
+}
+
+async function cleanupStaleUsageCostCacheTempFiles(cachePath: string): Promise<void> {
+  const dir = path.dirname(cachePath);
+  const cutoffMs = Date.now() - USAGE_COST_CACHE_TEMP_FILE_GRACE_MS;
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isFile() || !isUsageCostCacheTempFileName(entry.name)) {
+        return;
+      }
+      const tempPath = path.join(dir, entry.name);
+      const stats = await fs.promises.stat(tempPath).catch(() => null);
+      if (!stats || stats.mtimeMs > cutoffMs) {
+        return;
+      }
+      await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    }),
+  );
 }
 
 async function listUsageCountedTranscriptFileStats(
@@ -1518,6 +1508,7 @@ async function refreshCostUsageCacheForPath(params?: {
     return "busy";
   }
   try {
+    await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
     const cache = await readUsageCostCache(cachePath);
     const files = await listUsageCountedTranscriptFiles(params?.agentId, {
@@ -1792,6 +1783,96 @@ export async function loadSessionCostSummaryFromCache(params: {
       cachedFiles: stale ? 0 : 1,
       pendingFiles: stale ? 1 : 0,
       staleFiles: stale ? 1 : 0,
+      refreshedAt: cache.updatedAt || undefined,
+    },
+  };
+}
+
+export async function loadSessionCostSummariesFromCache(params: {
+  sessions: Array<{ sessionId?: string; sessionFile: string }>;
+  config?: OpenClawConfig;
+  agentId?: string;
+  startMs?: number;
+  endMs?: number;
+  requestRefresh?: boolean;
+}): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
+  const statTasks = params.sessions.map(
+    (session) => async () => await fs.promises.stat(session.sessionFile).catch(() => null),
+  );
+  const statsPromise = runTasksWithConcurrency({
+    tasks: statTasks,
+    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  }).then(({ results }) => results);
+  const [cache, stats, refreshRunning] = await Promise.all([
+    readUsageCostCache(cachePath),
+    statsPromise,
+    isUsageCostCacheRefreshRunning(cachePath),
+  ]);
+  const staleFiles = new Set<string>();
+  let cachedFiles = 0;
+  const summaries = params.sessions.map((session, index) => {
+    const stat = stats[index];
+    const file = stat
+      ? { filePath: session.sessionFile, size: stat.size, mtimeMs: stat.mtimeMs }
+      : undefined;
+    const entry = cache.files[session.sessionFile];
+    const stale =
+      !file ||
+      !isUsageCostCacheEntryFresh({
+        entry,
+        file,
+        pricingFingerprint,
+        requireSessionSummary: true,
+      });
+    if (stale) {
+      staleFiles.add(session.sessionFile);
+      return null;
+    }
+    cachedFiles += 1;
+    const summary = entry?.sessionSummary ?? null;
+    if (
+      summary &&
+      params.startMs !== undefined &&
+      params.endMs !== undefined &&
+      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+    ) {
+      return entry
+        ? buildSessionCostSummaryFromCacheEntry({
+            entry,
+            sessionId: session.sessionId,
+            sessionFile: session.sessionFile,
+            startMs: params.startMs,
+            endMs: params.endMs,
+          })
+        : null;
+    }
+    return summary;
+  });
+  const refreshRequested = params.requestRefresh !== false && staleFiles.size > 0;
+  if (refreshRequested) {
+    requestCostUsageCacheRefresh({
+      config: params.config,
+      agentId: params.agentId,
+      sessionFiles: [...staleFiles],
+    });
+  }
+  const staleFileCount = staleFiles.size;
+  return {
+    summaries,
+    cacheStatus: {
+      status:
+        staleFileCount === 0
+          ? "fresh"
+          : refreshRunning || refreshRequested
+            ? "refreshing"
+            : cachedFiles > 0
+              ? "partial"
+              : "stale",
+      cachedFiles,
+      pendingFiles: staleFileCount,
+      staleFiles: staleFileCount,
       refreshedAt: cache.updatedAt || undefined,
     },
   };
@@ -2444,6 +2525,8 @@ export async function loadSessionLogs(params: {
     }
   }
   const limit = params.limit ?? 50;
+  const boundedLimit = Number.isInteger(limit);
+  const retentionLimit = limit * 2;
   const resolveCost = createUsageCostResolver(params.config);
 
   for await (const parsed of readJsonlRecords(sessionFile)) {
@@ -2575,15 +2658,25 @@ export async function loadSessionLogs(params: {
         tokens,
         cost,
       });
+      // Timestamps can arrive out of order, so keep a bounded sorted window instead
+      // of relying on transcript append order or retaining the whole file.
+      if (boundedLimit && logs.length > retentionLimit) {
+        logs.sort((a, b) => a.timestamp - b.timestamp);
+        logs.splice(0, logs.length - limit);
+      }
     } catch {
       // Ignore malformed lines
     }
   }
 
   // Sort by timestamp and limit
-  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
+  if (boundedLimit) {
+    logs.sort((a, b) => a.timestamp - b.timestamp);
+    return logs.length > limit ? logs.slice(-limit) : logs;
+  }
 
   // Return most recent logs
+  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
   if (sortedLogs.length > limit) {
     return sortedLogs.slice(-limit);
   }

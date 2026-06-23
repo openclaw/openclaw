@@ -110,6 +110,10 @@ function resolveShortWindowRateLimitRetry(
   return retryAfterSeconds !== null ? { retryAfterSeconds } : {};
 }
 
+export function isShortWindowRateLimitMessage(message: string | undefined): boolean {
+  return resolveShortWindowRateLimitRetry(message) !== null;
+}
+
 /**
  * Applies an assistant-stage failover decision and returns the next run action.
  * It owns auth-profile rotation, overload/rate-limit escalation, same-model
@@ -139,6 +143,8 @@ export async function handleAssistantFailover(params: {
   authFailure: boolean;
   rateLimitFailure: boolean;
   billingFailure: boolean;
+  /** Credential auth mode (e.g. "oauth", "token", "api_key") for billing copy (#80877). */
+  authMode?: string;
   cloudCodeAssistFormatError: boolean;
   isProbeSession: boolean;
   overloadProfileRotations: number;
@@ -327,6 +333,7 @@ export async function handleAssistantFailover(params: {
         provider: params.activeErrorContext.provider,
         model: params.activeErrorContext.model,
         profileId: params.lastProfileId,
+        authMode: params.authMode,
         status,
         rawError: params.lastAssistant?.errorMessage?.trim(),
         suspend: shouldSuspend,
@@ -358,6 +365,7 @@ export async function handleAssistantFailover(params: {
           provider: params.activeErrorContext.provider,
           model: params.activeErrorContext.model,
           profileId: params.lastProfileId,
+          authMode: params.authMode,
           status,
           rawError: params.lastAssistant?.errorMessage?.trim(),
           suspend: shouldSuspend,
@@ -382,6 +390,8 @@ function resolveAssistantFailoverErrorMessage(params: {
   rateLimitFailure: boolean;
   billingFailure: boolean;
   authFailure: boolean;
+  /** Credential auth mode passed through to billing copy formatter (#80877). */
+  authMode?: string;
 }): string {
   const timeoutFailure = params.timedOut || params.idleTimedOut;
   return (
@@ -391,6 +401,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           sessionKey: params.sessionKey,
           provider: params.activeErrorContext.provider,
           model: params.activeErrorContext.model,
+          authMode: params.authMode,
         })
       : undefined) ||
     params.lastAssistant?.errorMessage?.trim() ||
@@ -402,6 +413,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           ? formatBillingErrorMessage(
               params.activeErrorContext.provider,
               params.activeErrorContext.model,
+              params.authMode,
             )
           : params.authFailure
             ? "LLM request unauthorized."

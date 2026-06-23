@@ -296,6 +296,16 @@ describe("splitSignalFormattedText", () => {
 });
 
 describe("markdownToSignalTextChunks", () => {
+  it("treats Infinity as unbounded for media captions", () => {
+    const markdown = "Here's **another** photo from today's walk.";
+
+    const chunks = markdownToSignalTextChunks(markdown, Number.POSITIVE_INFINITY);
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.text).toBe("Here's another photo from today's walk.");
+    expect(chunks[0]?.styles.map((style) => style.style)).toContain("BOLD");
+  });
+
   describe("link expansion chunk limit", () => {
     it("does not exceed chunk limit after link expansion", () => {
       // Create text that is close to limit, with a link that will expand

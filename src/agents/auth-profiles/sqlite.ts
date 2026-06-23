@@ -14,12 +14,13 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
 import { resolveDefaultAgentDir } from "../agent-scope-config.js";
@@ -66,8 +67,7 @@ export function resolveAuthProfileDatabasePath(agentDir?: string): string {
 
 /** Resolves the SQLite database and sidecar paths used by auth profiles. */
 export function resolveAuthProfileDatabaseFilePaths(agentDir?: string): string[] {
-  const databasePath = resolveAuthProfileDatabasePath(agentDir);
-  return [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+  return resolveSqliteDatabaseFilePaths(resolveAuthProfileDatabasePath(agentDir));
 }
 
 // Read-only probes must tolerate old/corrupt/missing rows. Coercion happens
@@ -87,15 +87,14 @@ function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
 }
 
-/** Opens the auth profile SQLite database for an agent dir. */
-export function openAuthProfileDatabase(agentDir?: string): OpenClawAgentDatabase {
-  return openOpenClawAgentDatabase(resolveAuthProfileDatabaseOptions(agentDir));
-}
-
 function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "state"): unknown {
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
   try {
+    // This short-lived reader bypasses the canonical agent DB bootstrap, but it
+    // must share its busy policy so brief rollback-journal locks do not look
+    // like missing credentials.
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const kysely = getAuthProfileKysely(db);
     if (target === "store") {
       const row = executeSqliteQueryTakeFirstSync(

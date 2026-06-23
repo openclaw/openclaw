@@ -25,6 +25,7 @@ import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
@@ -49,7 +50,7 @@ import { resolveOpenAICodexAccountId } from "../utils/oauth/openai-chatgpt-jwt.j
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   convertResponsesMessages,
-  convertResponsesTools,
+  convertResponsesToolPayload,
   processResponsesStream,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
@@ -488,7 +489,8 @@ function buildRequestBody(
     model: model.id,
     store: false,
     stream: true,
-    instructions: context.systemPrompt || "You are a helpful assistant.",
+    instructions:
+      stripSystemPromptCacheBoundary(context.systemPrompt ?? "") || "You are a helpful assistant.",
     input: messages,
     text: { verbosity: options?.textVerbosity || "low" },
     include: ["reasoning.encrypted_content"],
@@ -508,8 +510,16 @@ function buildRequestBody(
     body.service_tier = options.serviceTier;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    body.tools = convertResponsesTools(context.tools, { strict: null });
+  if (context.tools) {
+    const converted = convertResponsesToolPayload(context.tools, { strict: null });
+    if (converted.projection.inputToolCount > 0 || converted.projection.diagnostics.length > 0) {
+      body.tools = converted.tools;
+      if (body.tools.length === 0) {
+        delete body.tools;
+        delete body.tool_choice;
+        delete body.parallel_tool_calls;
+      }
+    }
   }
 
   if (options?.reasoningEffort !== undefined) {
@@ -827,13 +837,6 @@ function getOrCreateWebSocketDebugStats(sessionId: string): OpenAICodexWebSocket
     websocketDebugStats.set(sessionId, stats);
   }
   return stats;
-}
-
-export function getOpenAICodexWebSocketDebugStats(
-  sessionId: string,
-): OpenAICodexWebSocketDebugStats | undefined {
-  const stats = websocketDebugStats.get(sessionId);
-  return stats ? { ...stats } : undefined;
 }
 
 export function resetOpenAICodexWebSocketDebugStats(sessionId?: string): void {

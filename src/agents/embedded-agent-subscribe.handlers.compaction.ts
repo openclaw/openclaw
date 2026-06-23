@@ -5,9 +5,9 @@
  */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
-import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compaction_start" }>;
 type SessionCompactionEndEvent = Extract<AgentSessionEvent, { type: "compaction_end" }>;
@@ -180,33 +180,29 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
 }
 
 /** Lazily reconciles persisted compaction count after a successful compaction. */
-export async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
+async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   sessionKey?: string;
   agentId?: string;
   configStore?: string;
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {
-  const { reconcileSessionStoreCompactionCountAfterSuccess: reconcile } =
-    await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
+  const { default: reconcile } = await import(
+    "./embedded-agent-subscribe.handlers.compaction.runtime.js"
+  );
   return reconcile(params);
 }
 
-// Compaction rewrites history, so assistant usage snapshots can refer to the
-// old context. Keep the usage field shape but zero it for fresh accounting.
 function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedAgentSubscribeContext): void {
   const messages = ctx.params.session.messages;
   if (!Array.isArray(messages)) {
     return;
   }
-  for (const message of messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const candidate = message as { role?: unknown; usage?: unknown };
-    if (candidate.role !== "assistant") {
-      continue;
-    }
-    candidate.usage = makeZeroUsageSnapshot();
-  }
+  // Marker-free final compaction has no fresh boundary to compare against.
+  // Clear all assistant usage or stale pre-compaction totals keep driving the
+  // context counter after cleanup.
+  stripStaleAssistantUsageBeforeLatestCompaction(messages, {
+    mutate: true,
+    whenMissingCompactionSummary: "zeroAssistantUsage",
+  });
 }

@@ -5,10 +5,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
-  createTrajectoryRuntimeRecorder,
-  resolveTrajectoryPointerOpenFlags,
-  resolveTrajectoryPointerFilePath,
   resolveTrajectoryFilePath,
+  resolveTrajectoryPointerFilePath,
+  resolveTrajectoryPointerOpenFlags,
+} from "./paths.js";
+import {
+  createTrajectoryRuntimeRecorder,
   toTrajectoryToolDefinitions,
 } from "./runtime.js";
 

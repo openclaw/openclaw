@@ -116,6 +116,11 @@ function extractMetadata(fullPath) {
         } catch {
           // ignore malformed inline arrays
         }
+      } else if (
+        (inline.startsWith('"') && inline.endsWith('"')) ||
+        (inline.startsWith("'") && inline.endsWith("'"))
+      ) {
+        readWhen.push(...compactStrings([inline.slice(1, -1)]));
       }
       continue;
     }

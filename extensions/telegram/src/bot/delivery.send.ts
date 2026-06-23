@@ -1,5 +1,6 @@
 // Telegram plugin module implements delivery.send behavior.
 import { type Bot, GrammyError } from "grammy";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -11,6 +12,12 @@ import {
   getTelegramNativeQuoteReplyMessageId,
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
+import {
+  buildTelegramRichMessage,
+  getTelegramRichRawApi,
+  removeTelegramRichNativeQuoteParam,
+  toTelegramRichMessageContextParams,
+} from "../rich-message.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
@@ -42,6 +49,7 @@ export async function sendTelegramWithThreadFallback<T>(params: {
   thread?: TelegramThreadSpec | null;
   requestParams: Record<string, unknown>;
   send: (effectiveParams: Record<string, unknown>) => Promise<T>;
+  removeNativeQuoteParam?: (requestParams: Record<string, unknown>) => Record<string, unknown>;
   shouldLog?: (err: unknown) => boolean;
 }): Promise<T> {
   const hasNativeQuote = getTelegramNativeQuoteReplyMessageId(params.requestParams) != null;
@@ -73,7 +81,9 @@ export async function sendTelegramWithThreadFallback<T>(params: {
       return await sendTelegramWithThreadFallback({
         ...params,
         operation: `${params.operation} (legacy reply retry)`,
-        requestParams: removeTelegramNativeQuoteParam(params.requestParams),
+        requestParams: (params.removeNativeQuoteParam ?? removeTelegramNativeQuoteParam)(
+          params.requestParams,
+        ),
       });
     }
     throw err;
@@ -94,7 +104,9 @@ export async function sendTelegramText(
     thread?: TelegramThreadSpec | null;
     textMode?: "markdown" | "html";
     plainText?: string;
+    richMessages?: boolean;
     linkPreview?: boolean;
+    tableMode?: MarkdownTableMode;
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   },
@@ -108,10 +120,32 @@ export async function sendTelegramText(
     thread: opts?.thread,
     silent: opts?.silent,
   });
+  const textMode = opts?.textMode ?? "markdown";
+  if (opts?.richMessages === true) {
+    const richMessage = buildTelegramRichMessage(text, textMode, {
+      skipEntityDetection: opts.linkPreview === false,
+      tableMode: opts.tableMode,
+    });
+    const res = await sendTelegramWithThreadFallback({
+      operation: "sendRichMessage",
+      runtime,
+      thread: opts.thread,
+      requestParams: toTelegramRichMessageContextParams(baseParams),
+      removeNativeQuoteParam: removeTelegramRichNativeQuoteParam,
+      send: (effectiveParams) =>
+        getTelegramRichRawApi(bot.api).sendRichMessage({
+          chat_id: chatId,
+          rich_message: richMessage,
+          ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+          ...effectiveParams,
+        }),
+    });
+    runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+    return res.message_id;
+  }
   // Add link_preview_options when link preview is disabled.
   const linkPreviewEnabled = opts?.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
-  const textMode = opts?.textMode ?? "markdown";
   const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
   const fallbackText = opts?.plainText ?? text;
   const hasFallbackText = fallbackText.trim().length > 0;

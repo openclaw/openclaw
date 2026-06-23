@@ -4,8 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { createFormattedPromptSnapshotFiles } from "../../scripts/generate-prompt-snapshots.js";
 import { deleteStalePromptSnapshotFiles } from "../../scripts/prompt-snapshot-files.js";
 import {
+  CODEX_MODEL_PROMPT_FIXTURE_DIR as SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR,
   defaultCatalogPathCandidates,
   findDefaultCatalogPath,
   renderCodexModelInstructions,
@@ -104,6 +106,10 @@ function listFindCommittedPromptSnapshotFiles(): string[] | null {
 }
 
 describe("happy path prompt snapshots", () => {
+  it("loads the generator entrypoint used by the prompt snapshot check", () => {
+    expect(createFormattedPromptSnapshotFiles).toEqual(expect.any(Function));
+  });
+
   it("lists committed Codex prompt snapshot artifacts without scanning directories in-process", () => {
     expectNoReaddirSyncDuring(() => {
       const committed = listCommittedPromptSnapshotFiles();
@@ -213,6 +219,7 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("keeps the Codex model prompt fixture next to its source metadata", () => {
+    expect(SYNC_CODEX_MODEL_PROMPT_FIXTURE_DIR).toBe(CODEX_MODEL_PROMPT_FIXTURE_DIR);
     expect(
       fs.existsSync(path.join(CODEX_MODEL_PROMPT_FIXTURE_DIR, "gpt-5.5.pragmatic.instructions.md")),
     ).toBe(true);
@@ -291,6 +298,61 @@ describe("happy path prompt snapshots", () => {
 
       expect(result.status).toBe("skipped");
       expect(chunks.join("")).toContain("No Codex model catalog/cache found");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("writes Codex model prompt fixtures from an explicit catalog", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-catalog-write-"));
+    try {
+      const catalogPath = path.join(root, "models_cache.json");
+      const outputDir = path.join(root, "out");
+      fs.writeFileSync(
+        catalogPath,
+        JSON.stringify({
+          models: [
+            {
+              slug: "gpt-5.5",
+              model_messages: {
+                instructions_template: "System\n{{ personality }}\nEnd",
+                instructions_variables: {
+                  personality_pragmatic: "Use terse engineering judgement.",
+                },
+              },
+            },
+          ],
+        }),
+      );
+
+      const result = await runCodexModelPromptFixtureSync([
+        "--catalog",
+        catalogPath,
+        "--source-label",
+        "<test-catalog>",
+        "--catalog-git-head",
+        "abc123",
+        "--out-dir",
+        outputDir,
+      ]);
+
+      expect(result.status).toBe("written");
+      expect(
+        fs.readFileSync(path.join(outputDir, "gpt-5.5.pragmatic.instructions.md"), "utf8"),
+      ).toBe("System\nUse terse engineering judgement.\nEnd\n");
+      expect(
+        JSON.parse(fs.readFileSync(path.join(outputDir, "gpt-5.5.pragmatic.source.json"), "utf8")),
+      ).toEqual({
+        model: "gpt-5.5",
+        personality: "pragmatic",
+        source: {
+          catalogPath: "<test-catalog>",
+          catalogKind: "models_cache",
+          catalogGitHead: "abc123",
+          field:
+            "model_messages.instructions_template + model_messages.instructions_variables.personality_pragmatic",
+        },
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

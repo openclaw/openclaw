@@ -1097,15 +1097,6 @@ function ensureListener() {
       const livenessState =
         typeof evt.data?.livenessState === "string" ? evt.data.livenessState : undefined;
       const stopReason = typeof evt.data?.stopReason === "string" ? evt.data.stopReason : undefined;
-      if (phase === "error") {
-        schedulePendingLifecycleError({
-          runId: evt.runId,
-          endedAt,
-          startedAt,
-          error,
-        });
-        return;
-      }
       // sessions_yield ends the turn by aborting the run signal, so a yielded
       // terminal can also look aborted. An explicit yield is authoritative — pause,
       // don't kill — else the tracking task settles `cancelled` with a false notice (#92448).
@@ -1144,6 +1135,15 @@ function ensureListener() {
           },
           "lifecycle-killed-event",
         );
+        return;
+      }
+      if (phase === "error") {
+        schedulePendingLifecycleError({
+          runId: evt.runId,
+          endedAt,
+          startedAt,
+          error,
+        });
         return;
       }
       if (isBlockedLivenessState(livenessState)) {

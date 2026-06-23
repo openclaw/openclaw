@@ -1536,6 +1536,8 @@ export async function runMatrixQaE2eeBootstrapSuccessScenario(
 ): Promise<MatrixQaScenarioExecution> {
   requireMatrixQaPassword(context, "driver");
   return await withMatrixQaE2eeDriver(context, "matrix-e2ee-bootstrap-success", async (client) => {
+    const initial = await client.bootstrapOwnDeviceVerification();
+    assertMatrixQaBootstrapSucceeded("driver initial", initial);
     const result = await client.bootstrapOwnDeviceVerification({
       forceResetCrossSigning: true,
     });
@@ -1550,7 +1552,7 @@ export async function runMatrixQaE2eeBootstrapSuccessScenario(
         recoveryKeyStored: result.verification.recoveryKeyStored,
       },
       details: [
-        "driver bootstrap succeeded through real Matrix crypto bootstrap",
+        "driver bootstrap and guarded cross-signing reset succeeded through real Matrix crypto bootstrap",
         `device verified: ${result.verification.verified ? "yes" : "no"}`,
         `cross-signing verified: ${result.verification.crossSigningVerified ? "yes" : "no"}`,
         `signed by owner: ${result.verification.signedByOwner ? "yes" : "no"}`,

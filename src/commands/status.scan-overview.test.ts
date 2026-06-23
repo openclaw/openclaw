@@ -3,10 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 
 const mocks = vi.hoisted(() => ({
-  hasPotentialConfiguredChannels: vi.fn(),
+  hasConfiguredChannelsForReadOnlyScope: vi.fn(),
   resolveCommandConfigWithSecrets: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(),
-  readBestEffortConfig: vi.fn(),
+  readBestEffortConfigSnapshot: vi.fn(),
   resolveOsSummary: vi.fn(),
   createStatusScanCoreBootstrap: vi.fn(),
   callGateway: vi.fn(),
@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  hasConfiguredChannelsForReadOnlyScope: mocks.hasPotentialConfiguredChannels,
+  hasConfiguredChannelsForReadOnlyScope: mocks.hasConfiguredChannelsForReadOnlyScope,
 }));
 
 vi.mock("../cli/command-config-resolution.js", () => ({
@@ -27,7 +27,7 @@ vi.mock("../cli/command-secret-targets.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  readBestEffortConfig: mocks.readBestEffortConfig,
+  readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
 }));
 
 vi.mock("../infra/os-summary.js", () => ({
@@ -78,9 +78,12 @@ describe("collectStatusScanOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
-    mocks.readBestEffortConfig.mockResolvedValue({ session: {} });
+    mocks.readBestEffortConfigSnapshot.mockResolvedValue({
+      config: { session: {} },
+      sourceConfig: { session: { raw: true } },
+    });
     mocks.resolveCommandConfigWithSecrets.mockResolvedValue({
       resolvedConfig: { session: {} },
       diagnostics: ["secret warning"],
@@ -139,7 +142,7 @@ describe("collectStatusScanOverview", () => {
     expect(typeof channelTableCall?.[0]).toBe("object");
     expect(channelTableCall?.[1]?.includeSetupFallbackPlugins).toBe(true);
     expect(channelTableCall?.[1]?.showSecrets).toBe(false);
-    expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: {} });
+    expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: { raw: true } });
     expect(result.channelIssues).toEqual([{ channel: "quietchat", message: "boom" }]);
   });
 
@@ -158,7 +161,7 @@ describe("collectStatusScanOverview", () => {
     expect(typeof channelTableCall?.[0]).toBe("object");
     expect(channelTableCall?.[1]?.includeSetupFallbackPlugins).toBe(false);
     expect(channelTableCall?.[1]?.showSecrets).toBe(false);
-    expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: {} });
+    expect(channelTableCall?.[1]?.sourceConfig).toStrictEqual({ session: { raw: true } });
     expect(result.channelIssues).toStrictEqual([]);
   });
 

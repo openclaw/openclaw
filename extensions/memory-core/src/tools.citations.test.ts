@@ -7,7 +7,9 @@ import {
 import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
+  getMemorySearchManagerMockParams,
   getReadAgentMemoryFileMockCalls,
   resetMemoryToolMockState,
   setMemoryBackend,
@@ -15,7 +17,7 @@ import {
   setMemorySearchImpl,
   setMemoryWorkspaceDir,
   type MemoryReadParams,
-} from "./memory-tool-manager-mock.js";
+} from "./memory-tool-manager.test-mocks.js";
 import { testing as shortTermPromotionTesting } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 import { testing as memoryToolsTesting } from "./tools.js";
@@ -160,6 +162,47 @@ describe("memory tools", () => {
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
     });
+  });
+
+  it("uses default memory manager mode for shared memory_search", async () => {
+    setMemoryBackend("qmd");
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        memory: { backend: "qmd", qmd: { command: "qmd" } },
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+    });
+
+    await tool.execute("call_default_purpose", { query: "contact phrase" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        purpose: undefined,
+      }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(0);
+  });
+
+  it("uses one-shot CLI memory manager mode for explicit local CLI memory_search", async () => {
+    setMemoryBackend("qmd");
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        memory: { backend: "qmd", qmd: { command: "qmd" } },
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      oneShotCliRun: true,
+    });
+
+    await tool.execute("call_cli_purpose", { query: "contact phrase" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        purpose: "cli",
+      }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
   it("returns disabled details when memory_get fails", async () => {

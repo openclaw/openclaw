@@ -1,9 +1,11 @@
 // Update method tests cover update.run/status, restart sentinel metadata,
 // managed-service handoff, restart scheduling, and delivery context preservation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 // Capture the sentinel payload written during update.run
 let capturedPayload: RestartSentinelPayload | undefined;
@@ -24,6 +26,7 @@ const isRestartEnabledMock = vi.fn(() => true);
 const readPackageVersionMock = vi.fn(async () => "1.0.0");
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>(() => null);
 const normalizeUpdateChannelMock = vi.fn((): "stable" | "beta" | "dev" | null => null);
+const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
 const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
   status: "started" as const,
   pid: 12345,
@@ -33,16 +36,26 @@ const startManagedServiceUpdateHandoffMock = vi.fn(async () => ({
 
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 
+type PostCoreFinalizeOutcome = Awaited<
+  ReturnType<
+    typeof import("../../infra/update-post-core-finalize.js").runPostCoreFinalizeAfterGatewayUpdate
+  >
+>;
+const runPostCoreFinalizeAfterGatewayUpdateMock = vi.fn<() => Promise<PostCoreFinalizeOutcome>>(
+  async () => ({ status: "skipped", reason: "not-git-update" }),
+);
+
 type UpdateRunPayload = {
   ok: boolean;
   result?: { status?: string; reason?: string; mode?: string };
   handoff?: { status?: string; command?: string; message?: string };
-  sentinel?: { path?: string | null };
+  sentinel?: { persisted?: boolean };
   restart?: unknown;
 };
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => ({ update: {} }),
+  readConfigFileSnapshot: readConfigFileSnapshotMock,
 }));
 
 vi.mock("../../config/commands.flags.js", () => ({
@@ -84,7 +97,6 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
     ...(actual as Record<string, unknown>),
     writeRestartSentinel: async (payload: RestartSentinelPayload) => {
       capturedPayload = payload;
-      return "/tmp/sentinel.json";
     },
   };
 });
@@ -109,6 +121,18 @@ vi.mock("../../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: resolveUpdateInstallSurfaceMock,
   runGatewayUpdate: runGatewayUpdateMock,
 }));
+
+// Keep the real `foldPostCoreFinalizeIntoResult` so the restart-gate behavior on
+// finalize failure is exercised; only stub the subprocess-spawning finalizer.
+vi.mock("../../infra/update-post-core-finalize.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/update-post-core-finalize.js")>(
+    "../../infra/update-post-core-finalize.js",
+  );
+  return {
+    ...actual,
+    runPostCoreFinalizeAfterGatewayUpdate: runPostCoreFinalizeAfterGatewayUpdateMock,
+  };
+});
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
   validateUpdateStatusParams: () => true,
@@ -158,6 +182,21 @@ beforeEach(() => {
   readPackageVersionMock.mockResolvedValue("1.0.0");
   normalizeUpdateChannelMock.mockReset();
   normalizeUpdateChannelMock.mockReturnValue(null);
+  readConfigFileSnapshotMock.mockReset();
+  readConfigFileSnapshotMock.mockResolvedValue({
+    path: "/tmp/openclaw.json",
+    exists: true,
+    raw: "{}",
+    parsed: {},
+    resolved: {} as OpenClawConfig,
+    sourceConfig: {} as OpenClawConfig,
+    valid: true,
+    config: {} as OpenClawConfig,
+    runtimeConfig: {} as OpenClawConfig,
+    issues: [],
+    warnings: [],
+    legacyIssues: [],
+  });
   detectRespawnSupervisorMock.mockReset();
   detectRespawnSupervisorMock.mockReturnValue(null);
   runGatewayUpdateMock.mockClear();
@@ -182,6 +221,11 @@ beforeEach(() => {
   startManagedServiceUpdateHandoffMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
+  runPostCoreFinalizeAfterGatewayUpdateMock.mockClear();
+  runPostCoreFinalizeAfterGatewayUpdateMock.mockResolvedValue({
+    status: "skipped",
+    reason: "not-git-update",
+  });
 });
 
 async function invokeUpdateRun(
@@ -229,27 +273,7 @@ async function withProcessEnv<T>(
   updates: Record<string, string | undefined>,
   run: () => Promise<T>,
 ): Promise<T> {
-  const previous = new Map<string, string | undefined>();
-  for (const key of Object.keys(updates)) {
-    previous.set(key, process.env[key]);
-    const value = updates[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  return await withEnvAsync(updates, run);
 }
 
 function mockGlobalInstallSurface() {
@@ -437,7 +461,7 @@ describe("update.run restart scheduling", () => {
       pid: 12345,
       command: "openclaw update --yes --timeout 1800",
     });
-    expect(payload?.sentinel?.path).toBe("/tmp/sentinel.json");
+    expect(payload?.sentinel?.persisted).toBe(true);
     const sentinel = readCapturedPayload();
     expect(sentinel.kind).toBe("update");
     expect(sentinel.status).toBe("skipped");
@@ -660,6 +684,115 @@ describe("update.run restart scheduling", () => {
     expect(payload?.result?.status).toBe("skipped");
     expect(payload?.result?.reason).toBe("restart-unavailable");
     expect(payload?.result?.mode).toBe("npm");
+  });
+});
+
+describe("update.run post-core plugin finalize", () => {
+  function mockGitOkUpdate(root: string) {
+    runGatewayUpdateMock.mockResolvedValueOnce({
+      status: "ok",
+      mode: "git",
+      root,
+      after: { version: "2026.6.1" },
+      steps: [],
+      durationMs: 100,
+    });
+    mockGitInstallSurface(root);
+  }
+
+  it("resumes official plugin convergence after a git/source core update", async () => {
+    runPostCoreFinalizeAfterGatewayUpdateMock.mockResolvedValueOnce({
+      status: "ok",
+      entrypoint: "/tmp/openclaw-git/dist/index.mjs",
+    });
+    mockGitOkUpdate("/tmp/openclaw-git");
+
+    const payload = await captureUpdateRunPayload();
+
+    expect(runPostCoreFinalizeAfterGatewayUpdateMock).toHaveBeenCalledTimes(1);
+    const [finalizeParams] = firstMockCall(
+      runPostCoreFinalizeAfterGatewayUpdateMock,
+      "post-core finalize",
+    ) as [{ result?: UpdateRunResult }];
+    expect(finalizeParams.result?.mode).toBe("git");
+    expect(finalizeParams.result?.status).toBe("ok");
+    // Convergence succeeded, so the gateway is allowed to restart onto the new core.
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(payload?.ok).toBe(true);
+    expect(payload?.result?.status).toBe("ok");
+  });
+
+  it("carries the pre-doctor source config into the git finalizer", async () => {
+    const preUpdateConfig = {
+      channels: {
+        whatsapp: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      path: "/tmp/openclaw.json",
+      exists: true,
+      raw: JSON.stringify(preUpdateConfig),
+      parsed: preUpdateConfig,
+      resolved: preUpdateConfig,
+      sourceConfig: preUpdateConfig,
+      valid: true,
+      config: preUpdateConfig,
+      runtimeConfig: preUpdateConfig,
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+    runPostCoreFinalizeAfterGatewayUpdateMock.mockResolvedValueOnce({
+      status: "ok",
+      entrypoint: "/tmp/openclaw-git/dist/index.mjs",
+    });
+    mockGitOkUpdate("/tmp/openclaw-git");
+
+    await captureUpdateRunPayload();
+
+    const [finalizeParams] = firstMockCall(
+      runPostCoreFinalizeAfterGatewayUpdateMock,
+      "post-core finalize",
+    ) as [{ preUpdateConfig?: { sourceConfig?: OpenClawConfig; authoredConfig?: OpenClawConfig } }];
+    expect(finalizeParams.preUpdateConfig).toEqual({
+      sourceConfig: preUpdateConfig,
+      authoredConfig: preUpdateConfig,
+    });
+  });
+
+  it("blocks the restart when post-core plugin finalize fails", async () => {
+    runPostCoreFinalizeAfterGatewayUpdateMock.mockResolvedValueOnce({
+      status: "error",
+      reason: "nonzero-exit",
+      entrypoint: "/tmp/openclaw-git/dist/index.mjs",
+      exitCode: 1,
+      message: "convergence failed",
+    });
+    mockGitOkUpdate("/tmp/openclaw-git");
+
+    const payload = await captureUpdateRunPayload();
+
+    // Restarting onto the new core with unreconciled plugins is the bug we avoid.
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(payload?.ok).toBe(false);
+    expect(payload?.result?.status).toBe("error");
+    expect(payload?.result?.reason).toBe("post-core-plugin-finalize-failed");
+    expect(readCapturedPayload().status).toBe("error");
+  });
+
+  it("does not run finalize on the managed-service handoff path", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    mockGlobalInstallSurface();
+
+    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      captureUpdateRunPayload(),
+    );
+
+    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(runPostCoreFinalizeAfterGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
   });
 });
 

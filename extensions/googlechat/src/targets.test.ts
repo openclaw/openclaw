@@ -99,10 +99,15 @@ const account = {
   config: {},
 } as ResolvedGoogleChatAccount;
 
-function stubSuccessfulSend(name: string) {
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValue(new Response(JSON.stringify({ name }), { status: 200 }));
+function stubSuccessfulSend(name: string, threadName?: string) {
+  const fetchMock = vi.fn().mockResolvedValue(
+    new Response(
+      JSON.stringify({ name, ...(threadName ? { thread: { name: threadName } } : {}) }),
+      {
+        status: 200,
+      },
+    ),
+  );
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -239,9 +244,9 @@ describe("sendGoogleChatMessage", () => {
   });
 
   it("adds messageReplyOption when sending to an existing thread", async () => {
-    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123");
+    const fetchMock = stubSuccessfulSend("spaces/AAA/messages/123", "spaces/AAA/threads/xyz");
 
-    await sendGoogleChatMessage({
+    const result = await sendGoogleChatMessage({
       account,
       space: "spaces/AAA",
       text: "hello",
@@ -260,6 +265,10 @@ describe("sendGoogleChatMessage", () => {
     };
     expect(body.text).toBe("hello");
     expect(body.thread?.name).toBe("spaces/AAA/threads/xyz");
+    expect(result).toEqual({
+      messageName: "spaces/AAA/messages/123",
+      threadName: "spaces/AAA/threads/xyz",
+    });
   });
 
   it("does not set messageReplyOption for non-thread sends", async () => {

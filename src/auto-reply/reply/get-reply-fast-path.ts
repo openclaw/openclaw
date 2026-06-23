@@ -178,6 +178,7 @@ export function buildFastReplyCommandContext(params: {
     surface,
     channel,
     channelId: normalizeAnyChannelId(channel) ?? normalizeAnyChannelId(surface) ?? undefined,
+    accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: [],
     senderIsOwner: false,
     isAuthorizedSender: commandAuthorized,
@@ -257,7 +258,7 @@ export function initFastReplySessionState(params: {
     verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
     reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,
     ttsAuto: resetTriggered ? existingEntry?.ttsAuto : existingEntry?.ttsAuto,
-    responseUsage: !resetTriggered ? existingEntry?.responseUsage : undefined,
+    responseUsage: existingEntry?.responseUsage,
     modelOverride: resetTriggered ? existingEntry?.modelOverride : existingEntry?.modelOverride,
     providerOverride: resetTriggered
       ? existingEntry?.providerOverride

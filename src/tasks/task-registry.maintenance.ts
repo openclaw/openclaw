@@ -35,14 +35,15 @@ import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
-import {
-  CODEX_NATIVE_SUBAGENT_STALE_ERROR,
-  isChildlessCodexNativeSubagentTask,
-} from "./codex-native-subagent-task.js";
+import { CODEX_NATIVE_SUBAGENT_STALE_ERROR } from "./codex-native-subagent-task.js";
 import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
+import {
+  isChildlessNativeSubagentTask,
+  resolveChildlessNativeSubagentTaskDefinition,
+} from "./native-subagent-task.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -71,7 +72,7 @@ import {
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
-const CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS = 30 * 60_000;
+const CHILDLESS_NATIVE_SUBAGENT_RECONCILE_GRACE_MS = 30 * 60_000;
 const TASK_STALE_RUNNING_MS = 30 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -326,8 +327,8 @@ function isTerminalTask(task: TaskRecord): boolean {
 
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
-  const graceMs = isChildlessCodexNativeSubagentTask(task)
-    ? CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS
+  const graceMs = isChildlessNativeSubagentTask(task)
+    ? CHILDLESS_NATIVE_SUBAGENT_RECONCILE_GRACE_MS
     : TASK_RECONCILE_GRACE_MS;
   return now - referenceAt >= graceMs;
 }
@@ -498,7 +499,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
-    return !isChildlessCodexNativeSubagentTask(task);
+    return !isChildlessNativeSubagentTask(task);
   }
   if (task.runtime === "acp") {
     // The live-turn map is process-local; only the gateway owns it. A standalone CLI
@@ -527,8 +528,11 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
-  if (isChildlessCodexNativeSubagentTask(task)) {
-    return CODEX_NATIVE_SUBAGENT_STALE_ERROR;
+  const nativeDefinition = resolveChildlessNativeSubagentTaskDefinition(task);
+  if (nativeDefinition) {
+    return nativeDefinition.taskKind === "codex-native"
+      ? CODEX_NATIVE_SUBAGENT_STALE_ERROR
+      : "Native subagent stopped reporting progress";
   }
   if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
@@ -946,16 +950,19 @@ export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBloc
   return blockers;
 }
 
-export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
-  return summarizeTaskRecords(reconcileInspectableTasks());
+export function getInspectableTaskRegistrySummary(
+  tasks: TaskRecord[] = reconcileInspectableTasks(),
+): TaskRegistrySummary {
+  return summarizeTaskRecords(tasks);
 }
 
 export function getInspectableTaskAuditSummary(): TaskAuditSummary {
   return summarizeTaskAuditFindings(getInspectableTaskAuditFindings());
 }
 
-export function getInspectableTaskAuditFindings(): TaskAuditFinding[] {
-  const tasks = reconcileInspectableTasks();
+export function getInspectableTaskAuditFindings(
+  tasks: TaskRecord[] = reconcileInspectableTasks(),
+): TaskAuditFinding[] {
   return listTaskAuditFindings({ tasks });
 }
 
@@ -1227,8 +1234,6 @@ export function stopTaskRegistryMaintenance() {
   sweepInProgress = false;
 }
 
-export const stopTaskRegistryMaintenanceForTests = stopTaskRegistryMaintenance;
-
 export function setTaskRegistryMaintenanceRuntimeForTests(
   runtime: TaskRegistryMaintenanceRuntime,
 ): void {
@@ -1249,9 +1254,4 @@ export function configureTaskRegistryMaintenance(options: {
   if (options.runtimeAuthoritative !== undefined) {
     configuredRuntimeAuthoritative = options.runtimeAuthoritative;
   }
-}
-
-export function getReconciledTaskById(taskId: string): TaskRecord | undefined {
-  const task = getTaskById(taskId);
-  return task ? reconcileTaskRecordForOperatorInspection(task) : undefined;
 }

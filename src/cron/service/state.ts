@@ -134,6 +134,7 @@ export type CronServiceDeps = {
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+    onLaneWait?: (info?: { waiting?: boolean }) => void;
   }) => Promise<
     {
       summary?: string;
@@ -166,6 +167,11 @@ export type CronServiceDeps = {
     timeoutMs: number;
     execution?: CronAgentExecutionStarted;
   }) => Promise<void>;
+  onIsolatedAgentSetupTimeout?: (params: {
+    job: CronJob;
+    error: string;
+    timeoutMs: number;
+  }) => void | Promise<void>;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;
@@ -188,6 +194,10 @@ export type CronServiceState = {
   store: CronStoreFile | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  stopped: boolean;
+  restartRecoveryPending: boolean;
+  activeManualRunJobIds: Set<string>;
+  manualSetupTimeoutRestartNotified: boolean;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -208,6 +218,10 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     store: null,
     timer: null,
     running: false,
+    stopped: false,
+    restartRecoveryPending: false,
+    activeManualRunJobIds: new Set<string>(),
+    manualSetupTimeoutRestartNotified: false,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
@@ -242,6 +256,9 @@ export type CronRunResult =
   | { ok: true; enqueued: true; runId: string }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
+  | { ok: true; ran: false; reason: "restart-recovery-pending" }
+  | { ok: true; ran: false; reason: "invalid-spec" }
+  | { ok: true; ran: false; reason: "stopped" }
   | { ok: false };
 
 /** Remove result that distinguishes missing jobs from failed removal. */

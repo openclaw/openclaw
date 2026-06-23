@@ -209,7 +209,6 @@ const LANGUAGE_STOP_WORDS = {
     "할",
     "해",
     "했다",
-    "했다",
   ],
   pathNoise: [
     "cjs",

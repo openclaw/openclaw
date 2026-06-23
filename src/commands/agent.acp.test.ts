@@ -17,17 +17,21 @@ const agentEventMocks = vi.hoisted(() => {
   type AgentEvent = { stream: string; data?: Record<string, unknown>; runId?: string };
   const handlers = new Set<(event: AgentEvent) => void>();
   return {
+    assertAgentRunLifecycleGenerationCurrent: vi.fn(),
+    captureAgentRunLifecycleGeneration: vi.fn(() => "test-generation"),
     clearAgentRunContext: vi.fn(),
     emitAgentEvent: vi.fn((event: AgentEvent) => {
       for (const handler of handlers) {
         handler(event);
       }
     }),
+    getAgentEventLifecycleGeneration: vi.fn(() => "test-generation"),
     onAgentEvent: vi.fn((handler: (event: AgentEvent) => void) => {
       handlers.add(handler);
       return () => handlers.delete(handler);
     }),
     registerAgentRunContext: vi.fn(),
+    withAgentRunLifecycleGeneration: vi.fn((_generation: string, run: () => unknown) => run()),
   };
 });
 
@@ -37,9 +41,10 @@ const attemptExecutionMocks = vi.hoisted(() => ({
   emitAcpLifecycleError: vi.fn(),
   emitAcpPromptSubmitted: vi.fn(),
   emitAcpRuntimeEvent: vi.fn(),
-  persistAcpTurnTranscript: vi.fn(
-    async ({ sessionEntry }: { sessionEntry?: unknown }) => sessionEntry,
-  ),
+  persistAcpTurnTranscript: vi.fn(async ({ sessionEntry }: { sessionEntry?: unknown }) => ({
+    kind: "persisted",
+    sessionEntry,
+  })),
 }));
 
 vi.mock("../infra/agent-events.js", () => agentEventMocks);

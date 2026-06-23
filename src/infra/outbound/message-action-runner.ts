@@ -36,6 +36,7 @@ import {
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
@@ -44,7 +45,6 @@ import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reas
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
-  normalizeMessageChannel,
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../utils/message-channel.js";
@@ -52,11 +52,11 @@ import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
-  isConfiguredChannel,
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
 import type { OutboundSendDeps } from "./deliver.js";
+import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import {
   collectActionMediaSourceHints,
@@ -90,7 +90,6 @@ import { executePollAction, executeSendAction } from "./outbound-send-service.js
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
-import { extractToolPayload } from "./tool-payload.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -160,6 +159,8 @@ export type MessageActionRunResult =
           to: string;
           ok: boolean;
           error?: string;
+          sentBeforeError?: true;
+          payload?: unknown;
           result?: MessageSendResult;
         }>;
       };
@@ -524,17 +525,6 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
   return mediaUrls;
 }
 
-function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
-  for (const key of ["channel", "target", "to", "channelId"]) {
-    if (normalizeOptionalString(params[key])) {
-      return true;
-    }
-  }
-  return (
-    Array.isArray(params.targets) && params.targets.some((value) => normalizeOptionalString(value))
-  );
-}
-
 function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
   for (const key of ["target", "to", "channelId"]) {
     if (normalizeOptionalString(params[key])) {
@@ -551,7 +541,8 @@ function isCurrentSourceTargetParam(
   params: Record<string, unknown>,
 ): boolean {
   const currentChannelId = normalizeOptionalString(input.toolContext?.currentChannelId);
-  if (!currentChannelId) {
+  const currentMessagingTarget = normalizeOptionalString(input.toolContext?.currentMessagingTarget);
+  if (!currentChannelId && !currentMessagingTarget) {
     return false;
   }
   const currentChannelProvider = normalizeOptionalLowercaseString(
@@ -572,12 +563,17 @@ function isCurrentSourceTargetParam(
 
   const provider = explicitChannel ?? currentChannelProvider;
   const currentCandidates = new Set<string>();
-  addCandidateAndUnprefixedAlias(currentCandidates, currentChannelId);
-  if (provider) {
-    addCandidateAndUnprefixedAlias(
-      currentCandidates,
-      normalizeTargetForAccountBinding(provider, currentChannelId),
-    );
+  for (const currentTarget of [currentMessagingTarget, currentChannelId]) {
+    if (!currentTarget) {
+      continue;
+    }
+    addCandidateAndUnprefixedAlias(currentCandidates, currentTarget);
+    if (provider) {
+      addCandidateAndUnprefixedAlias(
+        currentCandidates,
+        normalizeTargetForAccountBinding(provider, currentTarget),
+      );
+    }
   }
 
   const explicitCandidates = new Set<string>();
@@ -621,61 +617,6 @@ function applyImplicitSourceReplySendPolicy(
   params.bestEffort = true;
 }
 
-function hasCurrentSourceReplyContext(input: RunMessageActionParams): boolean {
-  const provider = normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
-  if (!provider) {
-    return false;
-  }
-  if (provider === INTERNAL_MESSAGE_CHANNEL) {
-    return true;
-  }
-  const currentMessageId = input.toolContext?.currentMessageId;
-  return Boolean(
-    normalizeOptionalString(input.toolContext?.currentChannelId) ||
-    normalizeOptionalString(input.toolContext?.currentThreadTs) ||
-    (typeof currentMessageId === "number" && Number.isFinite(currentMessageId)) ||
-    normalizeOptionalString(currentMessageId),
-  );
-}
-
-async function hasConfiguredCurrentSourceChannel(input: RunMessageActionParams): Promise<boolean> {
-  const provider =
-    normalizeMessageChannel(input.toolContext?.currentChannelProvider) ??
-    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider);
-  if (!provider || provider === INTERNAL_MESSAGE_CHANNEL) {
-    return false;
-  }
-  if (!isConfiguredChannel(input.cfg, provider)) {
-    return false;
-  }
-  if (!resolveOutboundChannelPlugin({ channel: provider, cfg: input.cfg, allowBootstrap: true })) {
-    return false;
-  }
-  const configuredChannels = await listConfiguredMessageChannels(input.cfg);
-  return configuredChannels.some((channel) => channel === provider);
-}
-
-async function shouldUseInternalSourceReplySink(
-  input: RunMessageActionParams,
-  params: Record<string, unknown>,
-) {
-  const hasImplicitCurrentSourceRoute =
-    input.action === "send" &&
-    input.sourceReplyDeliveryMode === "message_tool_only" &&
-    hasCurrentSourceReplyContext(input) &&
-    Boolean(input.sessionKey?.trim()) &&
-    !hasExplicitRouteParam(params);
-  if (!hasImplicitCurrentSourceRoute) {
-    return false;
-  }
-  if (!normalizeOptionalString(input.toolContext?.currentChannelId)) {
-    return true;
-  }
-  // Configured current-source channels can infer the target and deliver through
-  // the normal plugin path; the sink is only the private fallback.
-  return !(await hasConfiguredCurrentSourceChannel(input));
-}
-
 async function runGatewayPluginMessageActionOrNull(params: {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
@@ -706,6 +647,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       action: params.action,
       params: params.params,
       accountId: params.accountId ?? undefined,
+      requesterAccountId: params.input.requesterAccountId ?? undefined,
       requesterSenderId: params.input.requesterSenderId ?? undefined,
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
@@ -766,6 +708,8 @@ async function handleBroadcastAction(
     to: string;
     ok: boolean;
     error?: string;
+    sentBeforeError?: true;
+    payload?: unknown;
     result?: MessageSendResult;
   }> = [];
   const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
@@ -792,6 +736,7 @@ async function handleBroadcastAction(
           channel: targetChannel,
           to: resolved.to,
           ok: true,
+          payload: sendResult.kind === "send" ? sendResult.payload : undefined,
           result: sendResult.kind === "send" ? sendResult.sendResult : undefined,
         });
       } catch (err) {
@@ -803,6 +748,11 @@ async function handleBroadcastAction(
           to: target,
           ok: false,
           error: formatErrorMessage(err),
+          ...(err &&
+          typeof err === "object" &&
+          (err as { sentBeforeError?: unknown }).sentBeforeError === true
+            ? { sentBeforeError: true as const }
+            : {}),
         });
       }
     }
@@ -1100,9 +1050,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     agentId,
   });
 
-  const replyToId = resolveAndApplyOutboundReplyToId(params, {
+  const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
+  resolveAndApplyOutboundReplyToId(params, {
     channel,
     toolContext: input.toolContext,
+    matchesToolContextTarget: getChannelPlugin(channel)?.threading?.matchesToolContextTarget,
   });
   const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
     cfg,
@@ -1116,9 +1068,12 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     dryRun,
     resolvedTarget,
     resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
+    resolveReplyTransport: getChannelPlugin(channel)?.threading?.resolveReplyTransport,
+    replyToIsExplicit,
     resolveOutboundSessionRoute,
     ensureOutboundSessionEntry,
   });
+  const resolvedReplyToId = readStringParam(params, "replyTo");
   throwIfAborted(abortSignal);
 
   const ttsPayload = await maybeApplyTtsToMessageActionSendPayload({
@@ -1221,7 +1176,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     gifPlayback: sendPayload.gifPlayback,
     forceDocument: sendPayload.forceDocument,
     bestEffort: sendPayload.bestEffort,
-    replyToId: replyToId ?? undefined,
+    replyToId: resolvedReplyToId ?? undefined,
     threadId: resolvedThreadId ?? undefined,
   });
 
@@ -1298,6 +1253,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       params,
       accountId: accountId ?? undefined,
       agentId,
+      requesterAccountId: input.requesterAccountId ?? undefined,
       requesterSenderId: input.requesterSenderId ?? undefined,
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
@@ -1407,6 +1363,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     mediaLocalRoots: mediaAccess.localRoots,
     mediaReadFile: mediaAccess.readFile,
     accountId: accountId ?? undefined,
+    requesterAccountId: input.requesterAccountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
     senderIsOwner: input.senderIsOwner,
     sessionKey: input.sessionKey,

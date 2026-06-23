@@ -13,6 +13,7 @@ function createPage(params: {
     relativePath: params.relativePath,
     kind: "entity",
     title: params.title,
+    hasFrontmatter: true,
     aliases: [],
     sourceIds: [],
     linkTargets: [],

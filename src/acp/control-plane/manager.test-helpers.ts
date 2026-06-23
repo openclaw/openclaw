@@ -5,6 +5,7 @@ import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-mana
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resetAcpActiveTurnsForTests } from "./active-turns.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
@@ -52,7 +53,7 @@ export const baseCfg = {
     dispatch: { enabled: true },
   },
 } as const;
-export const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 export async function flushMicrotasks(rounds = 3): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
@@ -107,11 +108,11 @@ export function mockCallArg(
   return call[0] as Record<string, unknown>;
 }
 
-export function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
+function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
   return mock.mock.calls.map((call) => call[0] as Record<string, unknown>);
 }
 
-export function findMockCallFields(
+function findMockCallFields(
   mock: ReturnType<typeof vi.fn>,
   expected: Record<string, unknown>,
 ) {
@@ -304,9 +305,9 @@ export function installAcpSessionManagerTestLifecycle(): void {
 
   afterEach(() => {
     if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
+      deleteTestEnvValue("OPENCLAW_STATE_DIR");
     } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+      setTestEnvValue("OPENCLAW_STATE_DIR", ORIGINAL_STATE_DIR);
     }
     resetHeartbeatWakeStateForTests();
     resetAcpManagerTaskStateForTests();

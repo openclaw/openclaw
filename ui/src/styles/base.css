@@ -120,6 +120,9 @@
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
 
+  /* Layering */
+  --z-dropdown: 100;
+
   color-scheme: dark;
 }
 

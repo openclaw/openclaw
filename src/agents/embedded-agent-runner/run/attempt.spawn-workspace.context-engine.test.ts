@@ -291,6 +291,42 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(toolSearchControlsCase.toolSearchCatalogRef).toEqual({});
   });
 
+  it("keeps client tool names out of context engine capability guidance", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+
+    await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: {
+          tools: {
+            toolSearch: { enabled: true, mode: "directory" },
+          },
+        } as OpenClawConfig,
+        clientTools: [
+          {
+            type: "function",
+            function: {
+              name: "memory_search",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      },
+    });
+
+    const assembleParams = mockParams(
+      contextEngine.assemble as MockCallSource,
+      0,
+      "assemble params",
+    );
+    const availableTools = assembleParams.availableTools;
+    expect(availableTools).toBeInstanceOf(Set);
+    expect((availableTools as Set<string>).has("memory_search")).toBe(false);
+  });
+
   it("defaults local-model lean embedded runs to Tool Search controls", async () => {
     await createContextEngineAttemptRunner({
       contextEngine: {
@@ -2804,7 +2840,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     ).toBe(1_000_000);
   });
 
-  it("bounds aggregate tool-result prompt history without rewriting append results", async () => {
+  it("preserves the cacheable prefix while bounding current prompt results", async () => {
     const toolText = "process output ".repeat(70);
     const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
     for (let index = 0; index < 8; index += 1) {
@@ -2844,7 +2880,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
           agents: {
             defaults: {
               contextLimits: {
-                toolResultMaxChars: 1_000,
+                toolResultMaxChars: 2_000,
               },
             },
             list: [{ id: "main" }],
@@ -2866,6 +2902,18 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
           };
         };
         session.prompt = async (_prompt, options) => {
+          for (let index = 0; index < 8; index += 1) {
+            session.messages.push({
+              role: "toolResult",
+              toolCallId: `current_call_${index}`,
+              toolName: "process",
+              content: [
+                { type: "text", text: `current ${index}: ${"current output ".repeat(300)}` },
+              ],
+              isError: false,
+              timestamp: 100 + index,
+            } as AgentMessage);
+          }
           promptHandlerMessages = session.messages.map((message) => message as AgentMessage);
           options?.preflightResult?.(true);
           await session.agent.streamFn?.({} as never, { messages: session.messages } as never, {});
@@ -2877,8 +2925,13 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
 
     expect(sumToolResultTextChars(sessionMessages)).toBeGreaterThan(4_000);
     expect(sumToolResultTextChars(promptHandlerMessages)).toBeGreaterThan(4_000);
-    expect(sumToolResultTextChars(submittedMessages)).toBeLessThanOrEqual(4_000);
-    expect(JSON.stringify(submittedMessages)).toContain("truncated");
+    const submittedCurrentPromptMessages = submittedMessages.slice(sessionMessages.length);
+    expect(
+      submittedMessages
+        .filter((message) => message.role === "toolResult")
+        .every((message) => sumToolResultTextChars([message]) <= 2_000),
+    ).toBe(true);
+    expect(JSON.stringify(submittedCurrentPromptMessages)).toContain("truncated");
     expect(afterTurn).toHaveBeenCalledTimes(1);
     expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
     expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");

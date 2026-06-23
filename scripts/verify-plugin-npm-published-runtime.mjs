@@ -198,7 +198,13 @@ export function resolveNpmPackFilename(output) {
     .split(/\r?\n/u)
     .findLast((line) => line.trim().length > 0)
     ?.trim();
-  if (typeof filename !== "string" || !filename.endsWith(".tgz")) {
+  if (
+    typeof filename !== "string" ||
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
     throw new Error(`npm pack did not report a tarball filename`);
   }
   return filename;
@@ -352,6 +358,28 @@ function readPackedPackageReadme(packageDir, files) {
   return fs.readFileSync(path.join(packageDir, readmePath), "utf8").trim();
 }
 
+export function usage() {
+  return "Usage: node scripts/verify-plugin-npm-published-runtime.mjs <package-spec>";
+}
+
+export function parseVerifyPublishedPluginRuntimeArgs(argv) {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const first = args[0]?.trim();
+  if (first === "--help" || first === "-h") {
+    return { help: true, spec: "" };
+  }
+  if (!first) {
+    throw new Error(usage());
+  }
+  if (first.startsWith("-")) {
+    throw new Error(`Unknown plugin npm verifier option: ${first}`);
+  }
+  if (args.length > 1) {
+    throw new Error(`Unexpected plugin npm verifier argument: ${args[1]}`);
+  }
+  return { help: false, spec: first };
+}
+
 export async function verifyPublishedPluginRuntime(spec) {
   const workingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-npm-runtime."));
   try {
@@ -390,11 +418,12 @@ export async function verifyPublishedPluginRuntime(spec) {
 }
 
 async function main(argv) {
-  const spec = argv[0]?.trim();
-  if (!spec) {
-    throw new Error("Usage: node scripts/verify-plugin-npm-published-runtime.mjs <package-spec>");
+  const args = parseVerifyPublishedPluginRuntimeArgs(argv);
+  if (args.help) {
+    console.log(usage());
+    return;
   }
-  const result = await verifyPublishedPluginRuntime(spec);
+  const result = await verifyPublishedPluginRuntime(args.spec);
   console.log(
     `plugin-npm-published-runtime-check: ${result.packageName}@${result.version} OK (${result.fileCount} files, ${result.readmeLength} readme chars)`,
   );

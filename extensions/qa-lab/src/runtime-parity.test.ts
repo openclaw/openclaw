@@ -114,6 +114,28 @@ describe("runtime parity", () => {
     expect(isRuntimeParityResultPass(result)).toBe(true);
   });
 
+  it("does not mask runtime cell scenario failures behind drift", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "failed-cell-with-drift",
+      runCell: async (runtime) => ({
+        scenarioStatus: runtime === "codex" ? "fail" : "pass",
+        cell: makeRuntimeParityCell(runtime, [
+          {
+            tool: "web_search",
+            argsHash: "same-args",
+            resultHash: runtime === "codex" ? "failed-result" : "ok-result",
+          },
+        ]),
+      }),
+    });
+
+    expect(result).toMatchObject({
+      drift: "failure-mode",
+      driftDetails: "scenario status differs (pass vs fail)",
+    });
+    expect(isRuntimeParityResultPass(result)).toBe(false);
+  });
+
   it("prefers transcript tool results when mock debug rows are incomplete", () => {
     const resolved = __testing.resolveRuntimeParityToolCalls({
       mockToolCalls: [

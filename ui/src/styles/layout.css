@@ -32,15 +32,7 @@
 }
 
 .shell--chat {
-  min-height: 100vh;
-  height: 100vh;
   overflow: hidden;
-}
-
-@supports (height: 100dvh) {
-  .shell--chat {
-    height: 100dvh;
-  }
 }
 
 .shell--nav-collapsed {
@@ -383,17 +375,13 @@
 }
 
 .topbar-theme-mode__btn[data-tooltip]::before {
-  content: "";
-  top: calc(100% + 4px);
-  border-width: 6px;
-  border-style: solid;
-  border-color: transparent transparent color-mix(in srgb, var(--card) 94%, black 6%) transparent;
-  transform: translate(-50%, -3px);
+  content: none;
 }
 
 .topbar-theme-mode__btn[data-tooltip]::after {
   content: attr(data-tooltip);
-  top: calc(100% + 10px);
+  top: calc(100% + 6px);
+  min-width: max-content;
   max-width: min(220px, 60vw);
   padding: 7px 9px;
   border: 1px solid color-mix(in srgb, var(--border-strong) 84%, transparent);
@@ -407,23 +395,8 @@
   font-weight: 500;
   line-height: 1.35;
   text-align: center;
-  white-space: normal;
-  transform: translate(-50%, -4px);
-}
-
-.topbar-theme-mode__btn:last-child[data-tooltip]::before,
-.topbar-theme-mode__btn:last-child[data-tooltip]::after {
-  left: auto;
-}
-
-.topbar-theme-mode__btn:last-child[data-tooltip]::before {
-  right: 9px;
+  white-space: nowrap;
   transform: translateY(-3px);
-}
-
-.topbar-theme-mode__btn:last-child[data-tooltip]::after {
-  right: 0;
-  transform: translateY(-4px);
 }
 
 @media (hover: hover) {
@@ -434,11 +407,6 @@
 
   .topbar-theme-mode__btn[data-tooltip]:hover::before,
   .topbar-theme-mode__btn[data-tooltip]:hover::after {
-    transform: translate(-50%, 0);
-  }
-
-  .topbar-theme-mode__btn:last-child[data-tooltip]:hover::before,
-  .topbar-theme-mode__btn:last-child[data-tooltip]:hover::after {
     transform: translateY(0);
   }
 }
@@ -446,12 +414,13 @@
 .topbar-theme-mode__btn[data-tooltip]:focus-visible::before,
 .topbar-theme-mode__btn[data-tooltip]:focus-visible::after {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: translateY(0);
 }
 
-.topbar-theme-mode__btn:last-child[data-tooltip]:focus-visible::before,
-.topbar-theme-mode__btn:last-child[data-tooltip]:focus-visible::after {
-  transform: translateY(0);
+.topbar-theme-mode__btn[data-tooltip]::before,
+.topbar-theme-mode__btn[data-tooltip]::after {
+  content: none !important;
+  display: none !important;
 }
 
 /* ===========================================
@@ -460,9 +429,11 @@
 
 .shell-nav {
   grid-area: nav;
+  position: relative;
+  z-index: 10;
   display: flex;
   min-height: 100%;
-  overflow: hidden;
+  overflow: visible;
   border-right: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   transition: width var(--shell-focus-duration) var(--shell-focus-ease);
 }
@@ -1490,7 +1461,8 @@
 }
 
 .dreaming-header-controls__mode:hover:not(:disabled) .dreaming-header-controls__mode-detail,
-.dreaming-header-controls__mode:focus-visible:not(:disabled) .dreaming-header-controls__mode-detail {
+.dreaming-header-controls__mode:focus-visible:not(:disabled)
+  .dreaming-header-controls__mode-detail {
   max-width: 220px;
   margin-left: 6px;
   opacity: 0.95;
