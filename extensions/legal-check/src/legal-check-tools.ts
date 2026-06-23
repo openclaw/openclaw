@@ -1,3 +1,4 @@
+
 import { Type } from "@sinclair/typebox";
 import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import { extractUrl } from "./extract-url.js";
@@ -8,6 +9,7 @@ import type { LegalApiConfig } from "./types.js";
 
 /** Chat agents are named `rabbitmq-<userId>`; that userId is the trusted identity. */
 const RABBITMQ_AGENT_PATTERN = /^rabbitmq-(.+)$/;
+
 
 function extractUserId(agentId: string | undefined): string | null {
   const match = RABBITMQ_AGENT_PATTERN.exec(agentId ?? "");
@@ -179,11 +181,13 @@ export function createLegalCheckCreateToolFactory(
         store.remember(userId, { jobId, label, mode });
         return jsonResult({
           success: true,
+          submitted: true,
           duplicated: Boolean(res.duplicated),
           label,
-          status: asString(job?.status) ?? "Pending",
           mode,
           detailPath: `/business/content/${jobId}`,
+          agentInstruction:
+            "内容检测任务已提交成功，后台正在检测中，通常需要数分钟。请立刻告知用户任务已提交，稍后可询问检测结果。不要现在就调用 legal_check_status——等用户主动询问时再查。",
         });
       },
     };
@@ -207,9 +211,9 @@ export function createLegalCheckStatusToolFactory(
       name: "legal_check_status",
       label: "Legal Check Status",
       description:
-        "Get the status and result of the most recent 违规/不实信息检测 created with legal_check_create. " +
-        "Call it with no arguments — it polls the latest check for this account on its own. " +
-        "Returns the job stage, the verdict/result when done, and which complaint letters are ready.",
+        "Get the status and result of the most recent 违规/不实信息检测. Call with no arguments. " +
+        "⚠️ SINGLE-USE PER TURN: call EXACTLY ONCE per user request, then immediately reply to the user — " +
+        "regardless of whether the check is done. NEVER call this tool a second time in the same turn.",
       parameters: StatusSchema,
       async execute(_toolCallId: string, rawParams: Record<string, unknown>) {
         let apiKey: string;
@@ -270,13 +274,16 @@ function summarizeJob(jobId: number, res: Record<string, unknown>): Record<strin
       ? Object.keys(tableData).length
       : 0;
 
+  const done = status === "Done";
+  const failed = status === "Fail";
+  const stopped = status === "Stop";
+  const terminal = done || failed || stopped;
+
   return {
     success: true,
     status,
     statusLabel: STATUS_LABELS[status] ?? status ?? "未知",
-    done: status === "Done",
-    failed: status === "Fail",
-    stopped: status === "Stop",
+    ...(terminal ? { done, failed, stopped } : {}),
     label: asString(job.label) ?? null,
     mode: Number(job.rumor) === 1 ? "rumor" : "violation",
     target: asString(job.target) ?? null,
@@ -284,6 +291,9 @@ function summarizeJob(jobId: number, res: Record<string, unknown>): Record<strin
     paragraphCount,
     letters: Object.keys(letterMap),
     detailPath: `/business/content/${jobId}`,
+    agentInstruction: terminal
+      ? "检测已完成，请向用户展示检测结果。如有违规且用户希望维权，可用 letter_generate 生成文书。"
+      : "⚠️ 检测仍在进行中。请立刻向用户报告当前进度并结束本轮对话。禁止再次调用此工具或任何其他工具。",
   };
 }
 
