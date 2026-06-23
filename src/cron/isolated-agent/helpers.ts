@@ -10,7 +10,11 @@ import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 type DeliveryPayload = Pick<
   ReplyPayload,
   "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData" | "isError"
->;
+> & {
+  name?: string;
+  toolName?: string;
+  details?: unknown;
+};
 
 /** Normalized cron run payload state used for summaries, delivery, and failure classification. */
 export type CronPayloadOutcome = {
@@ -217,6 +221,46 @@ function isCronToolWarning(text: string | undefined): boolean {
   return normalizeOptionalString(text)?.startsWith("⚠️ 🛠️ ") === true;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function normalizeToolName(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function hasFailedToolDetails(details: unknown): boolean {
+  if (!isRecord(details)) {
+    return false;
+  }
+  const status = typeof details.status === "string" ? details.status : undefined;
+  const exitCode = typeof details.exitCode === "number" ? details.exitCode : undefined;
+  return status === "failed" || (exitCode !== undefined && exitCode !== 0);
+}
+
+function hasFailedToolResultText(text: string | undefined): boolean {
+  const normalized = normalizeOptionalString(text);
+  if (!normalized) {
+    return false;
+  }
+  try {
+    return hasFailedToolDetails(JSON.parse(normalized));
+  } catch {
+    return false;
+  }
+}
+
+function isFailedToolResultPayload(payload: DeliveryPayload | undefined): boolean {
+  if (!payload || payload.isError !== true) {
+    return false;
+  }
+  const toolName = normalizeToolName(payload.toolName) ?? normalizeToolName(payload.name);
+  if (!toolName) {
+    return false;
+  }
+  return hasFailedToolDetails(payload.details) || hasFailedToolResultText(payload.text);
+}
+
 function isNonTerminalToolErrorWarning(payload: object | undefined): boolean {
   return Boolean(payload && getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning);
 }
@@ -293,7 +337,9 @@ export function resolveCronPayloadOutcome(params: {
     normalizedFinalAssistantVisibleText !== undefined &&
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
-    errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+    errorPayloads.every(
+      (payload) => isCronToolWarning(payload?.text) || isFailedToolResultPayload(payload),
+    );
   // Structured error payloads are fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =

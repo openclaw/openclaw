@@ -50,6 +50,40 @@ describe("resolveCronPayloadOutcome", () => {
     ]);
   });
 
+  it("lets preferred final assistant text recover a failed bash tool result", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          name: "bash",
+          toolName: "bash",
+          text: '{\n  "status": "failed",\n  "exitCode": 1,\n  "durationMs": 0\n}',
+          isError: true,
+          details: {
+            status: "failed",
+            exitCode: 1,
+            aggregated:
+              'pgrep -af "project_data_quality|check_hygiene|create_task.py|audit_projects|check_mountain_quality" failed',
+          },
+        },
+      ],
+      finalAssistantVisibleText:
+        "Daily data-quality sweep completed. Findings existed, so not `HEARTBEAT_OK`.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe(
+      "Daily data-quality sweep completed. Findings existed, so not `HEARTBEAT_OK`.",
+    );
+    expect(result.outputText).toBe(
+      "Daily data-quality sweep completed. Findings existed, so not `HEARTBEAT_OK`.",
+    );
+    expect(result.deliveryPayloads).toEqual([
+      { text: "Daily data-quality sweep completed. Findings existed, so not `HEARTBEAT_OK`." },
+    ]);
+  });
+
   it("treats transient error payloads as non-fatal when a later success exists", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
