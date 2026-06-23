@@ -15,6 +15,7 @@ import {
   type QaEvidenceSummaryEntry,
   type QaEvidenceSummaryJson,
 } from "../../extensions/qa-lab/src/evidence-summary.js";
+import { resolveSystemChromiumExecutablePath } from "../ensure-playwright-chromium.mjs";
 
 const execFileAsync = promisify(execFile);
 const SCENARIO_ID = "ux-matrix-evidence-dashboard";
@@ -31,6 +32,8 @@ type MatrixCell = {
   title: string;
   wallMs: number;
 };
+
+type ChromiumLauncher = Awaited<typeof import("playwright")>["chromium"];
 
 export type ProducerOptions = {
   artifactBase: string;
@@ -289,6 +292,34 @@ async function writePreflight(artifactBase: string) {
   );
 }
 
+function isMissingManagedPlaywrightBrowser(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    message.includes("Executable doesn't exist") &&
+    message.includes(".cache/ms-playwright") &&
+    message.includes("playwright install")
+  );
+}
+
+export async function launchUxMatrixChromium(params?: {
+  chromium?: Pick<ChromiumLauncher, "launch">;
+  systemExecutablePath?: string;
+}) {
+  const chromium = params?.chromium ?? (await import("playwright")).chromium;
+  try {
+    return await chromium.launch();
+  } catch (error) {
+    if (!isMissingManagedPlaywrightBrowser(error)) {
+      throw error;
+    }
+    const executablePath = params?.systemExecutablePath ?? resolveSystemChromiumExecutablePath();
+    if (!executablePath) {
+      throw error;
+    }
+    return await chromium.launch({ executablePath });
+  }
+}
+
 async function captureControlUiScreenshot(params: {
   artifactBase: string;
   htmlPath: string;
@@ -298,8 +329,7 @@ async function captureControlUiScreenshot(params: {
 }) {
   const startedAt = Date.now();
   try {
-    const { chromium } = await import("playwright");
-    const browser = await chromium.launch();
+    const browser = await launchUxMatrixChromium();
     try {
       const page = await browser.newPage({ viewport: { width: 1024, height: 720 } });
       await page.goto(pathToFileURL(params.htmlPath).href);
@@ -436,10 +466,9 @@ async function captureProducerArtifactFixtureProof(params: {
     };
   }
   try {
-    const { chromium } = await import("playwright");
     const videoDir = path.join(path.dirname(params.videoPath), "recording");
     await fs.mkdir(videoDir, { recursive: true });
-    const browser = await chromium.launch();
+    const browser = await launchUxMatrixChromium();
     let recordedVideo: string | undefined;
     try {
       const context = await browser.newContext({

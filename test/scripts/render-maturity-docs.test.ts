@@ -1,5 +1,6 @@
-// Maturity docs renderer tests cover evidence-backed generated-doc checks.
 import { spawnSync } from "node:child_process";
+// Maturity docs renderer tests cover evidence-backed generated-doc checks.
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -22,6 +23,56 @@ function runCli(...args: string[]) {
   );
 }
 
+function writeQaEvidence(params: {
+  dir: string;
+  entries: Array<{ id: string; status: "pass" | "fail" | "blocked" | "skipped" }>;
+}) {
+  fs.mkdirSync(params.dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(params.dir, "qa-evidence.json"),
+    `${JSON.stringify(
+      {
+        kind: "openclaw.qa.evidence-summary",
+        schemaVersion: 2,
+        generatedAt: "2026-06-23T00:00:00.000Z",
+        evidenceMode: "full",
+        profile: "all",
+        entries: params.entries.map((entry) => ({
+          test: {
+            kind: "qa-scenario",
+            id: entry.id,
+            title: entry.id,
+            source: { path: `qa/scenarios/${entry.id}.yaml` },
+          },
+          coverage: [{ id: "tools.evidence", role: "primary" }],
+          result: { status: entry.status },
+        })),
+        scorecard: {
+          filters: { surface: null, category: null },
+          run: { evidenceEntryCount: params.entries.length },
+          categories: {
+            total: 0,
+            fulfilled: 0,
+            partial: 0,
+            missing: 0,
+            fulfillmentPercent: 0,
+          },
+          features: {
+            total: 0,
+            fulfilled: 0,
+            missing: 0,
+            fulfillmentPercent: 0,
+          },
+          categoryReports: [],
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
 describe("maturity docs renderer CLI", () => {
   it("checks maturity inputs without requiring QA evidence artifacts", () => {
     const result = runCli("--check");
@@ -41,5 +92,26 @@ describe("maturity docs renderer CLI", () => {
     expect(result.stderr).toContain(
       "maturity scorecard rendering requires all or release profile qa-evidence.json",
     );
+  });
+
+  it("rejects scorecard evidence with failed or blocked entries", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [
+        { id: "passing-scenario", status: "pass" },
+        { id: "failing-scenario", status: "fail" },
+        { id: "blocked-scenario", status: "blocked" },
+      ],
+    });
+
+    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("maturity docs require passing QA evidence");
+    expect(result.stderr).toContain("failing-scenario (fail)");
+    expect(result.stderr).toContain("blocked-scenario (blocked)");
   });
 });
