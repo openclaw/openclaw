@@ -72,6 +72,7 @@ describe("session accessor boundary guard", () => {
       new Set([
         "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
         "extensions/discord/src/monitor/thread-session-close.ts",
+        "extensions/memory-core/src/dreaming-narrative.ts",
         "extensions/telegram/src/bot-handlers.runtime.ts",
       ]),
     );

@@ -118,6 +118,7 @@ export const migratedSessionAccessorFiles = new Set([
 export const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
   "extensions/discord/src/monitor/thread-session-close.ts",
+  "extensions/memory-core/src/dreaming-narrative.ts",
   "extensions/telegram/src/bot-handlers.runtime.ts",
 ]);
 
@@ -530,6 +531,7 @@ export async function main() {
   const readSourceRoots = resolveSourceRoots(repoRoot, [
     "packages/memory-host-sdk/src/host",
     "extensions/discord/src/monitor",
+    "extensions/memory-core/src",
     "extensions/telegram/src",
     "src/agents",
     "src/auto-reply",

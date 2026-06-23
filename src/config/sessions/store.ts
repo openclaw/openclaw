@@ -24,6 +24,7 @@ import {
   pruneUnreferencedSessionArtifacts,
   type SessionUnreferencedArtifactSweepResult,
 } from "./disk-budget.js";
+import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import { resolveSessionFilePath, resolveStorePath } from "./paths.js";
 import {
@@ -220,6 +221,8 @@ type SessionEntryWorkflowOptions = {
 export type SessionLifecycleArtifactCleanupParams = {
   /** Session store to clean. */
   storePath: string;
+  /** Archive exact transcripts referenced by removed entries before the orphan marker scan. */
+  archiveRemovedEntryTranscripts?: boolean;
   /** Matches the persisted session-key segment after `agent:<id>:`. */
   sessionKeySegmentPrefix: string;
   /** Marker that identifies transcript artifacts owned by this lifecycle. */
@@ -754,11 +757,18 @@ function resolveLifecycleTranscriptPath(params: {
   sessionsDir: string;
 }): string | null {
   const sessionId = params.entry?.sessionId?.trim();
+  const sessionFile = params.entry?.sessionFile?.trim();
+  const generatedSessionId = extractGeneratedTranscriptSessionId(sessionFile);
+  if (sessionFile && (!sessionId || !generatedSessionId || generatedSessionId === sessionId)) {
+    return resolveSessionFilePath("session-file-reference", { sessionFile }, {
+      sessionsDir: params.sessionsDir,
+    });
+  }
   if (!sessionId) {
     return null;
   }
   try {
-    return resolveSessionFilePath(sessionId, params.entry, { sessionsDir: params.sessionsDir });
+    return resolveSessionFilePath(sessionId, undefined, { sessionsDir: params.sessionsDir });
   } catch {
     return null;
   }
@@ -1512,6 +1522,7 @@ export async function cleanupSessionLifecycleArtifacts(
   const sessionsDir = path.dirname(storePath);
   const removedSessionFiles = new Map<string, string | undefined>();
   const removedTranscriptPaths: Array<{ sessionId: string; transcriptPath: string }> = [];
+  const archiveRemovedEntryTranscripts = params.archiveRemovedEntryTranscripts !== false;
   let removedEntries = 0;
   let archivedTranscriptArtifacts = 0;
 
@@ -1530,9 +1541,11 @@ export async function cleanupSessionLifecycleArtifacts(
           orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
         })
       ) {
-        rememberRemovedSessionFile(removedSessionFiles, entry);
-        if (entry.sessionId && transcriptPath && fs.existsSync(transcriptPath)) {
-          removedTranscriptPaths.push({ sessionId: entry.sessionId, transcriptPath });
+        if (archiveRemovedEntryTranscripts) {
+          rememberRemovedSessionFile(removedSessionFiles, entry);
+          if (entry.sessionId && transcriptPath && fs.existsSync(transcriptPath)) {
+            removedTranscriptPaths.push({ sessionId: entry.sessionId, transcriptPath });
+          }
         }
         delete store[sessionKey];
         removedEntries += 1;

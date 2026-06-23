@@ -32,7 +32,7 @@ import {
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
-import { loadSessionStore, updateSessionStoreEntry } from "./store.js";
+import { loadSessionStore, saveSessionStore, updateSessionStoreEntry } from "./store.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
@@ -678,6 +678,82 @@ describe("session accessor file-backed seam", () => {
     expect(files).toContain("referenced.jsonl");
     expect(fs.existsSync(siblingTranscriptPath)).toBe(true);
     expect(fs.readdirSync(siblingDir)).toEqual(["sibling-lifecycle.jsonl"]);
+  });
+
+  it("preserves fresh lifecycle entries that only have explicit sessionFile metadata", async () => {
+    const nowMs = Date.now();
+    const lifecycleSessionsDir = path.join(tempDir, "state", "agents", "main", "sessions");
+    const lifecycleStorePath = path.join(lifecycleSessionsDir, "sessions.json");
+    const freshTranscriptPath = path.join(lifecycleSessionsDir, "session-file-only.jsonl");
+    fs.mkdirSync(lifecycleSessionsDir, { recursive: true });
+    saveSessionStore(
+      lifecycleStorePath,
+      {
+        "agent:main:lifecycle-cleanup-file-only": {
+          sessionFile: freshTranscriptPath,
+          updatedAt: nowMs,
+        } as SessionEntry,
+      },
+      { skipMaintenance: true },
+    );
+    fs.writeFileSync(freshTranscriptPath, '{"runId":"lifecycle-marker-file-only"}\n', "utf-8");
+
+    const result = await cleanupSessionLifecycleArtifacts({
+      storePath: lifecycleStorePath,
+      sessionKeySegmentPrefix: "lifecycle-cleanup-",
+      transcriptContentMarker: "lifecycle-marker-",
+      orphanTranscriptMinAgeMs: 300_000,
+      nowMs,
+    });
+
+    expect(result).toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+    expect(loadSessionStore(lifecycleStorePath, { skipCache: true })).toHaveProperty(
+      "agent:main:lifecycle-cleanup-file-only",
+    );
+    expect(fs.existsSync(freshTranscriptPath)).toBe(true);
+  });
+
+  it("prefers current generated lifecycle transcripts over stale generated sessionFile metadata", async () => {
+    const nowMs = Date.now();
+    const oldDate = new Date(nowMs - 600_000);
+    const currentSessionId = "11111111-1111-4111-8111-111111111111";
+    const staleSessionId = "22222222-2222-4222-8222-222222222222";
+    const lifecycleSessionsDir = path.join(tempDir, "state", "agents", "main", "sessions");
+    const lifecycleStorePath = path.join(lifecycleSessionsDir, "sessions.json");
+    const currentTranscriptPath = path.join(lifecycleSessionsDir, `${currentSessionId}.jsonl`);
+    const staleTranscriptPath = path.join(lifecycleSessionsDir, `${staleSessionId}.jsonl`);
+    fs.mkdirSync(lifecycleSessionsDir, { recursive: true });
+    saveSessionStore(
+      lifecycleStorePath,
+      {
+        "agent:main:lifecycle-cleanup-current": {
+          sessionFile: staleTranscriptPath,
+          sessionId: currentSessionId,
+          updatedAt: nowMs,
+        },
+      },
+      { skipMaintenance: true },
+    );
+    fs.writeFileSync(currentTranscriptPath, '{"runId":"lifecycle-marker-current"}\n', "utf-8");
+    fs.writeFileSync(staleTranscriptPath, '{"runId":"lifecycle-marker-stale"}\n', "utf-8");
+    fs.utimesSync(staleTranscriptPath, oldDate, oldDate);
+
+    const result = await cleanupSessionLifecycleArtifacts({
+      storePath: lifecycleStorePath,
+      sessionKeySegmentPrefix: "lifecycle-cleanup-",
+      transcriptContentMarker: "lifecycle-marker-",
+      orphanTranscriptMinAgeMs: 300_000,
+      nowMs,
+    });
+
+    expect(result).toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 1 });
+    expect(loadSessionStore(lifecycleStorePath, { skipCache: true })).toHaveProperty(
+      "agent:main:lifecycle-cleanup-current",
+    );
+    expect(fs.existsSync(currentTranscriptPath)).toBe(true);
+    expect(
+      fs.readdirSync(lifecycleSessionsDir).filter((file) => file.startsWith(`${staleSessionId}.jsonl.deleted.`)),
+    ).toHaveLength(1);
   });
 
   it("persists reset lifecycle entry changes with transcript replay and cleanup", async () => {
