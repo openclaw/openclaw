@@ -392,6 +392,93 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     }
   });
 
+  it("removes earlier retained markers when a later marker creation fails", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
+    const firstPreviousInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v1",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    const firstNextInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "codex-v2",
+      "node_modules",
+      "@openclaw",
+      "codex",
+    );
+    const secondPreviousInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "voice-call-v1",
+      "node_modules",
+      "@openclaw",
+      "voice-call",
+    );
+    const secondNextInstallPath = path.join(
+      stateDir,
+      "npm",
+      "projects",
+      "voice-call-v2",
+      "node_modules",
+      "@openclaw",
+      "voice-call",
+    );
+    fs.mkdirSync(firstPreviousInstallPath, { recursive: true });
+    fs.mkdirSync(firstNextInstallPath, { recursive: true });
+    fs.mkdirSync(secondPreviousInstallPath, { recursive: true });
+    fs.mkdirSync(secondNextInstallPath, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "npm", "projects", "voice-call-v1", ".openclaw-retained-npm-installs"),
+      "not a directory",
+      "utf8",
+    );
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expect(
+          commitPluginInstallRecordsWithConfig({
+            previousInstallRecords: {
+              codex: {
+                source: "npm",
+                spec: "@openclaw/codex@1.0.0",
+                installPath: firstPreviousInstallPath,
+              },
+              "voice-call": {
+                source: "npm",
+                spec: "@openclaw/voice-call@1.0.0",
+                installPath: secondPreviousInstallPath,
+              },
+            },
+            nextInstallRecords: {
+              codex: {
+                source: "npm",
+                spec: "@openclaw/codex@2.0.0",
+                installPath: firstNextInstallPath,
+              },
+              "voice-call": {
+                source: "npm",
+                spec: "@openclaw/voice-call@2.0.0",
+                installPath: secondNextInstallPath,
+              },
+            },
+            nextConfig: {},
+          }),
+        ).rejects.toThrow();
+      });
+
+      expect(hasRetainedManagedNpmInstallMarker(firstPreviousInstallPath)).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears retained npm markers for active committed install records", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-record-commit-"));
     const installPath = path.join(

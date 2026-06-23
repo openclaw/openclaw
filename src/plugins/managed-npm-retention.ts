@@ -2,6 +2,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
+import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
+import { listManagedPluginNpmProjectRootsSync } from "./npm-project-roots.js";
 
 export const RETAINED_MANAGED_NPM_INSTALL_MARKER = ".openclaw-retained-npm-install.json";
 const RETAINED_MANAGED_NPM_INSTALL_MARKER_DIR = ".openclaw-retained-npm-installs";
@@ -108,4 +110,56 @@ export async function markRetainedManagedNpmInstall(params: {
     "utf8",
   );
   return true;
+}
+
+function isPathEqualOrInside(parentPath: string, childPath: string): boolean {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`));
+}
+
+export async function cleanupRetainedManagedNpmInstallGenerations(
+  params: {
+    activeInstallPaths?: Iterable<string>;
+    env?: NodeJS.ProcessEnv;
+    npmDir?: string;
+    onError?: (error: unknown, projectRoot: string) => void;
+  } = {},
+): Promise<number> {
+  // Callers run this after the previous gateway server has closed and before
+  // the next one loads plugins, so retired module graphs no longer need these trees.
+  const npmDir = params.npmDir ?? resolveDefaultPluginNpmDir(params.env);
+  const projectsDir = resolvePluginNpmProjectsDir(npmDir);
+  const activeInstallPaths = Array.from(params.activeInstallPaths ?? [], (installPath) =>
+    path.resolve(installPath),
+  );
+  let removed = 0;
+  for (const projectRoot of listManagedPluginNpmProjectRootsSync(npmDir)) {
+    const markerDir = path.join(projectRoot, RETAINED_MANAGED_NPM_INSTALL_MARKER_DIR);
+    let markerEntries: fs.Dirent[];
+    try {
+      markerEntries = fs
+        .readdirSync(markerDir, { withFileTypes: true })
+        .filter((entry) => entry.isFile());
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      params.onError?.(error, projectRoot);
+      continue;
+    }
+    if (
+      markerEntries.length === 0 ||
+      !isPathEqualOrInside(projectsDir, projectRoot) ||
+      activeInstallPaths.some((installPath) => isPathEqualOrInside(projectRoot, installPath))
+    ) {
+      continue;
+    }
+    try {
+      await fs.promises.rm(projectRoot, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      params.onError?.(error, projectRoot);
+    }
+  }
+  return removed;
 }

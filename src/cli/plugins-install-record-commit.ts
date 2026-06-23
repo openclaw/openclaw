@@ -177,8 +177,8 @@ function findReplacementNpmRecordForRemovedRecord(params: {
 async function markRetainedReplacedManagedNpmInstallRecords(params: {
   previousInstallRecords: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
-}): Promise<string[]> {
-  const createdMarkerPaths: string[] = [];
+  createdMarkerPaths: string[];
+}): Promise<void> {
   const markedPreviousPluginIds = new Set<string>();
   const markReplacement = async (
     pluginId: string,
@@ -201,7 +201,8 @@ async function markRetainedReplacedManagedNpmInstallRecords(params: {
       reason: "replaced-by-managed-npm-generation-update",
     });
     if (marked && !markerAlreadyExisted) {
-      createdMarkerPaths.push(markerPath);
+      // Record each marker immediately so a later filesystem failure can roll it back.
+      params.createdMarkerPaths.push(markerPath);
     }
     markedPreviousPluginIds.add(pluginId);
   };
@@ -222,7 +223,6 @@ async function markRetainedReplacedManagedNpmInstallRecords(params: {
       }) ?? undefined,
     );
   }
-  return createdMarkerPaths;
 }
 
 async function removeCreatedRetainedManagedNpmInstallMarkers(markerPaths: string[]): Promise<void> {
@@ -285,12 +285,12 @@ async function commitPluginInstallRecordsWithWriter(params: {
   try {
     await writePersistedInstalledPluginIndexInstallRecords(params.nextInstallRecords);
     try {
-      retainedMarkerPaths.push(
-        ...(await markRetainedReplacedManagedNpmInstallRecords({
-          previousInstallRecords,
-          nextInstallRecords: params.nextInstallRecords,
-        })),
-      );
+      await markRetainedReplacedManagedNpmInstallRecords({
+        previousInstallRecords,
+        nextInstallRecords: params.nextInstallRecords,
+        // Keep partial progress visible to the outer rollback path.
+        createdMarkerPaths: retainedMarkerPaths,
+      });
       clearedMarkerSnapshots.push(
         ...(await clearActiveRetainedManagedNpmInstallMarkers(params.nextInstallRecords)),
       );
