@@ -1,5 +1,5 @@
 // Installs plugins from package specs, local paths, and catalogs.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -1137,6 +1137,30 @@ function resolveManagedNpmRootForInstall(params: {
   });
 }
 
+function resolveManagedNpmInstallRoot(params: {
+  npmBaseDir: string;
+  packageName: string;
+  npmResolution: NpmSpecResolution;
+  useGeneration: boolean;
+}): string {
+  const generationKey = resolveManagedNpmRootGenerationKey({
+    packageName: params.packageName,
+    npmResolution: params.npmResolution,
+  });
+  const npmRoot = resolveManagedNpmRootForInstall(params);
+  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
+  if (!params.useGeneration || !hasRetainedManagedNpmInstallMarker(installRoot)) {
+    return npmRoot;
+  }
+  // Never mutate a retained tree: an older process may still hold lazy imports
+  // rooted there. A fresh activation root keeps that module graph importable.
+  return resolvePluginNpmGenerationProjectDir({
+    npmDir: params.npmBaseDir,
+    packageName: params.packageName,
+    generationKey: `${generationKey}\nactivation\n${randomUUID()}`,
+  });
+}
+
 async function listManagedNpmPackageDirsForPackage(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   npmBaseDir: string;
@@ -1309,7 +1333,7 @@ async function installPluginFromManagedNpmRoot(
     packageName: params.packageName,
     requestedMode: mode,
   });
-  const npmRoot = resolveManagedNpmRootForInstall({
+  const npmRoot = resolveManagedNpmInstallRoot({
     npmBaseDir,
     packageName: params.packageName,
     npmResolution: params.npmResolution,

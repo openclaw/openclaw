@@ -999,6 +999,89 @@ describe("installPluginFromNpmSpec", () => {
     await expect(newModule.default.runAttempt()).resolves.toEqual({ chunk: "new" });
   });
 
+  it("does not mutate a retained generation when an exact rollback reuses its artifact key", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const packageName = "@openclaw/codex";
+    const install = async (version: string, options: { mode?: "update" }) =>
+      installPluginFromNpmSpec({
+        spec: `${packageName}@${version}`,
+        npmDir: npmRoot,
+        mode: options.mode,
+        logger: { info: () => {}, warn: () => {} },
+      });
+
+    mockNpmViewAndInstall({
+      spec: `${packageName}@2.0.0`,
+      packageName,
+      version: "2.0.0",
+      pluginId: "codex",
+      npmRoot,
+      integrity: "sha512-codex-v2",
+      shasum: "codexv2sha",
+      indexJs: `module.exports = {
+  version: "v2",
+  runAttempt: async () => (await import("./run-attempt-v2.js")).default,
+};\n`,
+      extraDistFiles: {
+        "run-attempt-v2.js": "module.exports = { chunk: 'v2' };\n",
+      },
+      expectedDependencySpec: "2.0.0",
+    });
+    const first = await install("2.0.0", {});
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      return;
+    }
+    const retainedModule = await import(
+      pathToFileURL(path.join(first.targetDir, "dist", "index.js")).href
+    );
+    const retainedPackageDir = first.targetDir;
+
+    mockNpmViewAndInstall({
+      spec: `${packageName}@3.0.0`,
+      packageName,
+      version: "3.0.0",
+      pluginId: "codex",
+      npmRoot,
+      integrity: "sha512-codex-v3",
+      shasum: "codexv3sha",
+      indexJs: "module.exports = { version: 'v3' };\n",
+      replaceExisting: true,
+      expectedDependencySpec: "3.0.0",
+    });
+    const update = await install("3.0.0", { mode: "update" });
+    expect(update.ok).toBe(true);
+    if (!update.ok) {
+      return;
+    }
+    await markRetainedManagedNpmInstall({
+      packageDir: retainedPackageDir,
+      pluginId: "codex",
+      reason: "test-rollback-retention",
+    });
+
+    mockNpmViewAndInstall({
+      spec: `${packageName}@2.0.0`,
+      packageName,
+      version: "2.0.0",
+      pluginId: "codex",
+      npmRoot,
+      integrity: "sha512-codex-v2",
+      shasum: "codexv2sha",
+      indexJs: "module.exports = { version: 'v2-rollback' };\n",
+      replaceExisting: true,
+      expectedDependencySpec: "2.0.0",
+    });
+    const rollback = await install("2.0.0", { mode: "update" });
+    expect(rollback.ok).toBe(true);
+    if (!rollback.ok) {
+      return;
+    }
+    expect(rollback.targetDir).not.toBe(retainedPackageDir);
+    await expect(retainedModule.default.runAttempt()).resolves.toEqual({ chunk: "v2" });
+    expect(fs.existsSync(path.join(retainedPackageDir, "dist", "run-attempt-v2.js"))).toBe(true);
+  });
+
   it("installs into a fresh generation when the legacy npm target is retained", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "@openclaw/codex";
@@ -1044,7 +1127,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(legacyPackageDir)).toBe(true);
   });
 
-  it("allows plain installs to reactivate an existing retained generation", async () => {
+  it("allocates a fresh generation when a plain install selects a retained artifact", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "@openclaw/codex";
     const legacyPackageDir = resolveTestPluginPackageDir(npmRoot, packageName);
@@ -1086,7 +1169,8 @@ describe("installPluginFromNpmSpec", () => {
     if (!result.ok) {
       return;
     }
-    expect(result.targetDir).toBe(retainedGenerationPackageDir);
+    expect(result.targetDir).not.toBe(retainedGenerationPackageDir);
+    expect(hasRetainedManagedNpmInstallMarker(result.targetDir)).toBe(false);
     expect(hasRetainedManagedNpmInstallMarker(retainedGenerationPackageDir)).toBe(true);
     expect(hasRetainedManagedNpmInstallMarker(legacyPackageDir)).toBe(true);
   });
