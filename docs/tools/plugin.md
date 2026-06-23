@@ -213,10 +213,12 @@ the workspace or global plugin roots, startup logs
 The warning includes discovered plugin ids and, for short lists, a minimal
 `plugins.allow` snippet. Run
 [`openclaw plugins list --enabled --verbose`](/cli/plugins#list) or
-[`openclaw plugins inspect <id>`](/cli/plugins#inspect) to confirm the ids
+[`openclaw plugins inspect --all`](/cli/plugins#inspect) to confirm the ids
 before copying trusted plugins into `openclaw.json`. The same trust-pinning
 guidance applies when diagnostics say a plugin loaded
-`without install/load-path provenance`.
+`without install/load-path provenance`: inspect the full plugin list, then pin
+the trusted id in `plugins.allow` or reinstall from a trusted source so
+OpenClaw records install provenance.
 
 Run `openclaw doctor` or `openclaw doctor --fix` when config validation reports
 stale plugin ids, allowlist/tool mismatches, or legacy bundled plugin paths.

@@ -248,12 +248,12 @@ export function warnWhenAllowlistIsOpen(params: {
   const extra = truncated ? ` (+${autoDiscoverable.length - 6} more)` : "";
   // Skip the snippet when truncated: a previewed-only allowlist would silently disable the rest
   const remediation = truncated
-    ? "Run 'openclaw plugins list --enabled --verbose' to enumerate every discovered plugin id and add the ones you trust to plugins.allow in openclaw.json. Use 'openclaw plugins inspect <id>' for per-plugin details."
+    ? "Run 'openclaw plugins list --enabled --verbose' to enumerate every discovered plugin id and add the ones you trust to plugins.allow in openclaw.json. Run 'openclaw plugins inspect --all' for per-plugin details."
     : `To trust them explicitly, set plugins.allow in openclaw.json (e.g. "plugins": { "allow": [${autoDiscoverable
         .map((entry) => JSON.stringify(entry.id))
         .join(
           ", ",
-        )}] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect <id>' to confirm plugin ids.`;
+        )}] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect --all' to confirm plugin ids.`;
   params.warningCache.recordOpenAllowlistWarning(params.warningCacheKey);
   if (!hasConfiguredAllowlist) {
     params.logger.warn(
@@ -300,8 +300,7 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     ) {
       continue;
     }
-    // Inspect command keeps `<id>` placeholder; manifest ids are not shell-safe
-    const message = `loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }) or install records. Run 'openclaw plugins inspect <id>' to verify`;
+    const message = `loaded without install/load-path provenance; treat as untracked local code. Verify source with 'openclaw plugins inspect --all', then pin trust via plugins.allow (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }) or reinstall from a trusted source so OpenClaw records install provenance.`;
     params.registry.diagnostics.push({
       level: "warn",
       pluginId: plugin.id,
