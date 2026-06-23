@@ -154,6 +154,33 @@ const TelegramCustomCommandConfig = {
   pattern: TelegramCommandNamePattern,
   patternDescription: "use a-z, 0-9, underscore; max 32 chars",
 } as const;
+const normalizeTelegramBotUsername = (value: string): string =>
+  value
+    .trim()
+    .replace(/^@+/u, "")
+    .toLowerCase();
+const TelegramBotToBotUsernameSchema = z
+  .string()
+  .overwrite(normalizeTelegramBotUsername)
+  .pipe(z.string().min(1).regex(/^[a-z0-9_]{1,32}$/u));
+const TelegramBotToBotRateLimitSchema = z
+  .object({
+    windowMs: z.number().int().positive().optional(),
+    maxMessages: z.number().int().positive().optional(),
+  })
+  .strict();
+const TelegramBotToBotSchema = z
+  .object({
+    enabled: z.boolean().optional().default(false),
+    killSwitch: z.boolean().optional().default(false),
+    allowUsernames: z.array(TelegramBotToBotUsernameSchema).optional().default([]),
+    maxDepth: z.number().int().nonnegative().optional(),
+    maxHops: z.number().int().nonnegative().optional(),
+    rateLimit: TelegramBotToBotRateLimitSchema.optional(),
+  })
+  .strict()
+  .optional()
+  .default({});
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -264,6 +291,7 @@ export const TelegramAccountSchemaBase = z
     enabled: z.boolean().optional(),
     commands: ProviderCommandsSchema,
     customCommands: z.array(TelegramCustomCommandSchema).optional(),
+    botToBot: TelegramBotToBotSchema,
     configWrites: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     botToken: SecretInputSchema.optional().register(sensitive),

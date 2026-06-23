@@ -38,7 +38,69 @@ describe("telegram custom commands schema", () => {
     if (res.success) {
       expect(res.data.dmPolicy).toBe("pairing");
       expect(res.data.groupPolicy).toBe("allowlist");
+      expect(res.data.botToBot).toEqual({
+        enabled: false,
+        killSwitch: false,
+        allowUsernames: [],
+      });
     }
+  });
+
+  it("normalizes Telegram bot-to-bot allow usernames", () => {
+    const res = TelegramConfigSchema.safeParse({
+      botToBot: {
+        enabled: true,
+        allowUsernames: [" @HelperBot ", "OPS_BOT"],
+      },
+      accounts: {
+        ops: {
+          botToBot: {
+            allowUsernames: ["@NestedBot"],
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      return;
+    }
+
+    expect(res.data.botToBot?.allowUsernames).toEqual(["helperbot", "ops_bot"]);
+    expect(res.data.accounts?.ops?.botToBot).toEqual({
+      enabled: false,
+      killSwitch: false,
+      allowUsernames: ["nestedbot"],
+    });
+  });
+
+  it("rejects malformed Telegram bot-to-bot config", () => {
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          allowUsernames: ["bad-name"],
+        },
+      },
+      "botToBot.allowUsernames.0",
+    );
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          maxDepth: -1,
+        },
+      },
+      "botToBot.maxDepth",
+    );
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          rateLimit: {
+            windowMs: 0,
+          },
+        },
+      },
+      "botToBot.rateLimit.windowMs",
+    );
   });
 
   it("accepts historyLimit overrides per account", () => {
