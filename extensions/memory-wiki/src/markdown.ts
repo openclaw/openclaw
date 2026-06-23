@@ -178,15 +178,19 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const parsed = YAML.parse(match[1]) as unknown;
-  return {
-    hasFrontmatter: true,
-    frontmatter:
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {},
-    body: content.slice(match[0].length),
-  };
+  try {
+    const parsed = YAML.parse(match[1]) as unknown;
+    return {
+      hasFrontmatter: true,
+      frontmatter:
+        parsed && typeof parsed === "object" && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : {},
+      body: content.slice(match[0].length),
+    };
+  } catch {
+    return { hasFrontmatter: true, frontmatter: {}, body: content.slice(match[0].length) };
+  }
 }
 
 export function renderWikiMarkdown(params: {

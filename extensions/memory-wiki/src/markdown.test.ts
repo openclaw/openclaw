@@ -421,4 +421,16 @@ describe("toWikiPageSummary", () => {
       },
     ]);
   });
+
+  it("tolerates frontmatter with YAML parse errors instead of crashing", () => {
+    const page = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/bad-yaml.md",
+      relativePath: "sources/bad-yaml.md",
+      raw: '---\npageType: source\nid: source.bad-yaml\ntitle: Bad YAML\nsourceIds:\n  - **MEMORY.md 第 235 行**:"加特契纳 1783 年才赐予保罗,1770 年保罗才 16 岁"\n---\n\nBody text.\n',
+    });
+    expect(page).not.toBeNull();
+    expect(page?.hasFrontmatter).toBe(true);
+    expect(page?.title).toBe("bad-yaml"); // title falls back to filename when frontmatter is empty
+    expect(page?.sourceIds).toEqual([]);
+  });
 });
