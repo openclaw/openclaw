@@ -1639,7 +1639,20 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
-        return undefined;
+        // A retained session write is in progress. Cleanup must wait for it to
+        // complete before acquiring the held lock, otherwise acquireLock() below
+        // fails with EEXIST (the lock file is still held) and the cleanup
+        // path receives a noopLock that leaks the underlying file lock.
+        //
+        // This fixes a leak scenario where abort fires during a session write:
+        // releaseHeldLockWithFence() bails out (scope active), leaving heldLock
+        // set. acquireCleanupLock() then tries acquireLock() which fails, returns
+        // noopLock, and the held lock is never released.
+        if (retainedLockUseCount > 0) {
+          await new Promise<void>((resolve) => {
+            retainedLockIdleWaiters.add(resolve);
+          });
+        }
       }
       if (!heldLock) {
         return undefined;
@@ -1660,7 +1673,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
-        return;
+        // A retained session write is in progress. Wait for it to complete
+        // before releasing the held lock, otherwise the session write lock
+        // file is never released and leaks until the watchdog timer fires.
+        if (retainedLockUseCount > 0) {
+          await new Promise<void>((resolve) => {
+            retainedLockIdleWaiters.add(resolve);
+          });
+        }
       }
       if (!heldLock) {
         return;
