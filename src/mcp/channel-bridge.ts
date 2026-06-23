@@ -177,13 +177,20 @@ export class OpenClawChannelBridge {
         this.retryingInitialConnect = false;
       },
     });
-    const readiness = await startGatewayClientWhenEventLoopReady(this.gateway, {
-      clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
-    });
-    if (!readiness.ready) {
-      this.rejectReadyOnce(new Error("gateway event loop readiness timeout"));
+    try {
+      const readiness = await startGatewayClientWhenEventLoopReady(this.gateway, {
+        clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+      });
+      if (!readiness.ready) {
+        this.rejectReadyOnce(new Error("gateway event loop readiness timeout"));
+      }
+      await this.readyPromise;
+    } catch (error) {
+      const gateway = this.gateway;
+      this.gateway = null;
+      await gateway?.stopAndWait().catch(() => undefined);
+      throw error;
     }
-    await this.readyPromise;
   }
 
   /** Wait until the bridge has subscribed to Gateway session events. */

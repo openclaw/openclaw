@@ -13,6 +13,13 @@ const gatewayClientState = vi.hoisted(() => ({
   stopAndWait: vi.fn(async () => undefined),
   sshTunnelStop: vi.fn(async () => undefined),
   bootstrapPromise: null as Promise<Record<string, unknown>> | null,
+  readinessResult: {
+    ready: true,
+    elapsedMs: 0,
+    maxDriftMs: 0,
+    checks: 1,
+    aborted: false,
+  },
 }));
 
 vi.mock("../gateway/client-bootstrap.js", () => ({
@@ -60,14 +67,10 @@ vi.mock("../gateway/client.js", () => ({
 
 vi.mock("../gateway/client-start-readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: vi.fn(async (client: { start: () => void }) => {
-    client.start();
-    return {
-      ready: true,
-      elapsedMs: 0,
-      maxDriftMs: 0,
-      checks: 1,
-      aborted: false,
-    };
+    if (gatewayClientState.readinessResult.ready) {
+      client.start();
+    }
+    return gatewayClientState.readinessResult;
   }),
 }));
 
@@ -130,6 +133,13 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
     gatewayClientState.stopAndWait.mockReset().mockResolvedValue(undefined);
     gatewayClientState.sshTunnelStop.mockReset().mockResolvedValue(undefined);
     gatewayClientState.bootstrapPromise = null;
+    gatewayClientState.readinessResult = {
+      ready: true,
+      elapsedMs: 0,
+      maxDriftMs: 0,
+      checks: 1,
+      aborted: false,
+    };
   });
 
   afterEach(async () => {
@@ -295,6 +305,23 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
 
     expect(gatewayClientState.options).toBeNull();
     expect(gatewayClientState.stopAndWait).not.toHaveBeenCalled();
+    expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("start() stops the bootstrap SSH tunnel when Gateway readiness fails", async () => {
+    gatewayClientState.readinessResult = {
+      ready: false,
+      elapsedMs: 250,
+      maxDriftMs: 250,
+      checks: 1,
+      aborted: false,
+    };
+    const bridge = makeBridge();
+
+    await expect(bridge.start()).rejects.toThrow("gateway event loop readiness timeout");
+
+    expect(gatewayClientState.options).not.toBeNull();
+    expect(gatewayClientState.stopAndWait).toHaveBeenCalledTimes(1);
     expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
   });
 
