@@ -11,7 +11,6 @@ import {
   registerMemoryPromptSection,
 } from "../plugins/memory-state.js";
 import * as memoryCoreAlias from "./memory-core.js";
-import * as memoryCoreAlias from "./memory-core.js";
 import {
   buildActiveMemoryPromptSection,
   listMemoryHostPublicArtifacts,
