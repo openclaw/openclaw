@@ -56,10 +56,14 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^[a-z][a-z0-9-]*:/i, "").trim();
   const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
+  const bare = digits.startsWith("+") ? digits.slice(1) : digits;
+  if (!bare) {
+    // No digits to normalize (e.g. an "Anonymous" caller id or a bare "sms://"
+    // scheme). Return "" rather than a stray "+", which is not a valid E.164 and
+    // silently defeats caller fallbacks like `from || "unknown"`.
+    return "";
   }
-  return `+${digits}`;
+  return `+${bare}`;
 }
 
 /** Promise-based sleep that clamps timer inputs through the shared timeout resolver. */

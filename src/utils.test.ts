@@ -8,6 +8,7 @@ import { withEnv } from "./test-utils/env.js";
 import {
   CONFIG_DIR,
   ensureDir,
+  normalizeE164,
   pinConfigDir,
   resolveConfigDir,
   resolveHomeDir,
@@ -16,6 +17,25 @@ import {
   shortenHomePath,
   sleep,
 } from "./utils.js";
+
+describe("normalizeE164", () => {
+  it("normalizes phone-like input into loose E.164", () => {
+    expect(normalizeE164("+1 (555) 234-5678")).toBe("+15552345678");
+    expect(normalizeE164("15552345678")).toBe("+15552345678");
+    expect(normalizeE164("tel:+1-555-234-5678")).toBe("+15552345678");
+  });
+
+  it("returns an empty string when there are no digits to normalize", () => {
+    // Carriers report blocked caller id as a literal like "Anonymous", and a
+    // bare scheme such as "sms://" carries no number. These must not collapse to
+    // a stray "+" (not a valid E.164); returning "" lets callers fall back to
+    // their own sentinel (e.g. `from || "unknown"`).
+    expect(normalizeE164("Anonymous")).toBe("");
+    expect(normalizeE164("sms://")).toBe("");
+    expect(normalizeE164("")).toBe("");
+    expect(normalizeE164("+")).toBe("");
+  });
+});
 
 describe("ensureDir", () => {
   it("creates nested directory", async () => {
