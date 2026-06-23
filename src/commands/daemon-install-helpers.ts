@@ -66,6 +66,12 @@ const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
   "gateway.auth.password",
   "gateway.auth.token",
 ]);
+const GOOGLE_GEMINI_SERVICE_FILE_ENV_KEYS = new Set([
+  "GEMINI_API_KEY",
+  "GEMINI_API_KEYS",
+  "GEMINI_API_KEY_0",
+  "GOOGLE_API_KEY",
+]);
 const EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS = new Set(["HOME"]);
 
 function configContainsSecretRef(config: OpenClawConfig | undefined): boolean {
@@ -142,6 +148,15 @@ function collectAuthProfileSecretRefs(authStore: AuthProfileStore | undefined): 
     }
   }
   return refs;
+}
+
+function googleGeminiServiceEnvValueSource({
+  normalizedKey,
+}: {
+  rawKey: string;
+  normalizedKey: string;
+}): GatewayServiceEnvironmentValueSource | undefined {
+  return GOOGLE_GEMINI_SERVICE_FILE_ENV_KEYS.has(normalizedKey) ? "file" : undefined;
 }
 
 function collectAuthProfileServiceEnvVars(params: {
@@ -662,7 +677,9 @@ async function buildGatewayInstallEnvironment(params: {
   addServiceEnvPlanEntries(plan, configEnvironment, {});
   addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {});
   addServiceEnvPlanEntries(plan, execSecretRefPassEnvEnvironment, {});
-  addServiceEnvPlanEntries(plan, authProfileEnvironment, {});
+  addServiceEnvPlanEntries(plan, authProfileEnvironment, {
+    valueSource: googleGeminiServiceEnvValueSource,
+  });
   const configSecretRefKeyEnvironment = Object.fromEntries(
     configSecretRefKeys.map((key) => [key, "1"]),
   );
