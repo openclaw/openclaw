@@ -254,7 +254,12 @@ function matchesHeartbeatPromptText(text: string, prompt: string | undefined): b
   return Boolean(normalized) && (text === normalized || text.startsWith(`${normalized}\n`));
 }
 
-function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
+const REASONING_BLOCK_TYPES = new Set(["reasoning", "thinking"]);
+
+function resolveMessageText(
+  content: unknown,
+  options?: { allowReasoningBlocks?: boolean },
+): { text: string; hasNonTextContent: boolean } {
   if (typeof content === "string") {
     return { text: content, hasNonTextContent: false };
   }
@@ -269,6 +274,9 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
       continue;
     }
     if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {
+      if (options?.allowReasoningBlocks && REASONING_BLOCK_TYPES.has(block.type as string)) {
+        continue;
+      }
       hasNonTextContent = true;
       continue;
     }
@@ -336,7 +344,9 @@ export function isHeartbeatOkResponse(
   if (hasAssistantToolCall(message)) {
     return false;
   }
-  const { text, hasNonTextContent } = resolveMessageText(message.content);
+  const { text, hasNonTextContent } = resolveMessageText(message.content, {
+    allowReasoningBlocks: true,
+  });
   if (hasNonTextContent) {
     return false;
   }
