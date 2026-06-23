@@ -802,7 +802,7 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
     return { categories, coverageIds };
   }
 
-  for (const surface of taxonomy.surfaces) {
+  for (const surface of activeQaMaturityTaxonomySurfaces(taxonomy)) {
     for (const category of surface.categories) {
       const categoryId = `${surface.id}.${category.id}`;
       const features = category.features.map((feature) => ({

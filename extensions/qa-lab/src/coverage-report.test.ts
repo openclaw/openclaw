@@ -21,6 +21,7 @@ function testMaturityTaxonomy(params?: {
   coverageIds?: readonly string[];
   featureCoverageIds?: readonly (readonly string[])[];
   includeAllCategories?: boolean;
+  includeArchivedSurface?: boolean;
   profileCategoryIds?: readonly string[];
 }): QaMaturityTaxonomy {
   const categoryId = params?.categoryId ?? TEST_EXECUTABLE_CATEGORY_ID;
@@ -74,6 +75,27 @@ function testMaturityTaxonomy(params?: {
           },
         ],
       },
+      ...(params?.includeArchivedSurface
+        ? [
+            {
+              id: "archived-surface",
+              name: "Archived surface",
+              family: "test",
+              level: "experimental",
+              archived: true,
+              categories: [
+                {
+                  id: "legacy-category",
+                  name: "Legacy category",
+                  category_note: "legacy-category.md",
+                  docs: [],
+                  search_anchors: [],
+                  features: [{ name: "legacy.feature", coverageIds: ["legacy.feature"] }],
+                },
+              ],
+            },
+          ]
+        : []),
     ],
   };
 }
@@ -445,6 +467,7 @@ describe("qa coverage report", () => {
     const report = buildQaScorecardTaxonomyReport({
       taxonomy: testMaturityTaxonomy({
         includeAllCategories: true,
+        includeArchivedSurface: true,
       }),
       repoRoot: process.cwd(),
       scenarios: [],
@@ -454,6 +477,10 @@ describe("qa coverage report", () => {
       TEST_EXECUTABLE_CATEGORY_ID,
     ]);
     expect(report.requiredCategoryCount).toBe(1);
+    expect(report.categoryCount).toBe(1);
+    expect(report.profiles.find((profile) => profile.id === "release")?.categoryIds).not.toContain(
+      "archived-surface.legacy-category",
+    );
   });
 
   it("reports profile categories missing primary coverage evidence", () => {

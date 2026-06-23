@@ -1548,7 +1548,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
-  it("accepts session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
+  it("accepts non-subagent session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {
         payloads: [{ text: "NO_REPLY" }],
@@ -1572,11 +1572,53 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-silent",
+      sourceTool: "agent_harness_task",
     });
 
     expectRecordFields(result, {
       delivered: true,
       path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      bestEffortDeliver: true,
+    });
+  });
+
+  it("rejects session-only subagent completion handoff when the parent only replies NO_REPLY", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-subagent-silent",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "completion agent did not produce a visible reply",
     });
     expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
       deliver: false,
