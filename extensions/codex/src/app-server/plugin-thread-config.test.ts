@@ -254,7 +254,7 @@ describe("Codex plugin thread config", () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "app/list") {
         appListParams.push(params as v2.AppsListParams);
-        return { data: [appInfo("google-calendar-app", true)], nextCursor: null };
+        return { data: [appInfo("google-calendar-app", true, false)], nextCursor: null };
       }
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
@@ -375,7 +375,7 @@ describe("Codex plugin thread config", () => {
           allowDestructiveActions: true,
           destructiveApprovalMode: "allow",
         },
-        message: "google-calendar-app is not accessible or enabled for google-calendar.",
+        message: "google-calendar-app is not accessible for google-calendar.",
       },
     ]);
   });
@@ -572,9 +572,7 @@ describe("Codex plugin thread config", () => {
     let installed = false;
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "plugin/list") {
-        return pluginList([
-          pluginSummary("google-calendar", { installed, enabled: installed }),
-        ]);
+        return pluginList([pluginSummary("google-calendar", { installed, enabled: installed })]);
       }
       if (method === "plugin/read") {
         return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);

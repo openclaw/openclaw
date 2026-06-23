@@ -232,11 +232,11 @@ export async function buildCodexPluginThreadConfig(
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of resolveThreadConfigAppsForRecord({ record, inventory })) {
-      if (!app.accessible || !app.enabled) {
+      if (!app.accessible) {
         diagnostics.push({
           code: "app_not_ready",
           plugin: record.policy,
-          message: `${app.id} is not accessible or enabled for ${record.policy.pluginName}.`,
+          message: `${app.id} is not accessible for ${record.policy.pluginName}.`,
         });
         continue;
       }
@@ -434,7 +434,7 @@ function shouldForceRefreshForNotReadyPluginApps(
     (record) =>
       record.appOwnership === "proven" &&
       record.ownedAppIds.length > 0 &&
-      (record.apps.length === 0 || record.apps.some((app) => !app.accessible || !app.enabled)),
+      (record.apps.length === 0 || record.apps.some((app) => !app.accessible)),
   );
 }
 
