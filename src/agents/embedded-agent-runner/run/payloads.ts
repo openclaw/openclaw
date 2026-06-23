@@ -41,6 +41,8 @@ import {
   extractAssistantThinking,
   extractAssistantVisibleText,
 } from "../../embedded-agent-utils.js";
+import { guardMessageDeliveryReceiptText } from "../../message-delivery-receipt-guard.js";
+import type { MessageDeliveryEvidence } from "../../message-delivery-receipts.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
@@ -245,6 +247,7 @@ export function buildEmbeddedRunPayloads(params: {
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
+  messageDeliveryEvidence?: readonly MessageDeliveryEvidence[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   agentId?: string;
@@ -516,6 +519,23 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
+    const receiptGuard = guardMessageDeliveryReceiptText({
+      text: cleanedText || text,
+      evidence: params.messageDeliveryEvidence,
+    });
+    if (!receiptGuard.allowed) {
+      replyItems.push({
+        text: receiptGuard.replacementText,
+        media: mediaUrls,
+        audioAsVoice,
+        replyToId,
+        replyToTag,
+        replyToCurrent,
+        isError: true,
+      });
+      hasUserFacingAssistantReply = true;
+      continue;
+    }
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }

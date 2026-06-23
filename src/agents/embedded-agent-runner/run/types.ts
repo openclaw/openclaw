@@ -19,6 +19,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
+import type { MessageDeliveryEvidence } from "../../message-delivery-receipts.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -86,6 +87,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptTimeoutArmed?: () => void;
   /** Signals that this attempt's timeout has fired and must unwind promptly. */
   onAttemptTimeout?: (reason: Error) => void;
+  /** Current-turn message delivery evidence inherited from earlier retry attempts. */
+  initialMessageDeliveryEvidence?: readonly MessageDeliveryEvidence[];
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
@@ -201,6 +204,7 @@ export type EmbeddedRunAttemptResult = {
     asyncTaskRunId?: string;
     asyncTaskId?: string;
   }>;
+  messageDeliveryEvidence?: MessageDeliveryEvidence[];
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
   currentAttemptAssistant?: AssistantMessage | undefined;

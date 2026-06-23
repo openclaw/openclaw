@@ -77,6 +77,7 @@ import {
 } from "./embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./embedded-agent-utils.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
+import { normalizeMessageToolDeliveryEvidence } from "./message-delivery-receipts.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -365,6 +366,13 @@ function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unkno
       toolSend,
     },
   };
+}
+
+function readToolSendReceiptDeliveryResult(receiptResult: unknown): unknown {
+  if (receiptResult === undefined) {
+    return undefined;
+  }
+  return readToolResultDetailsRecord(receiptResult)?.toolSend ?? receiptResult;
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
@@ -1185,6 +1193,11 @@ export async function handleToolExecutionEnd(
   if (acceptedSessionSpawn) {
     ctx.state.acceptedSessionSpawns.push(acceptedSessionSpawn);
   }
+  const actionName = normalizeOptionalLowercaseString(startArgs.action);
+  const canRecordMessageDeliveryEvidence =
+    toolName === "message" &&
+    executionStarted &&
+    (isMessagingToolSendAction(toolName, startArgs) || actionName === "broadcast");
   ctx.state.toolMetaById.delete(toolCallId);
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
@@ -1234,15 +1247,30 @@ export async function handleToolExecutionEnd(
   const isMessagingSend = isMessagingInvocation && isMessagingToolSendAction(toolName, startArgs);
   const hasMessagingTargetEvidence =
     isMessagingInvocation && isMessagingToolTargetEvidenceAction(toolName, startArgs);
+  const privateReceiptResult = readToolSendReceiptDeliveryResult(toolSendReceiptResult);
   const didDeliverMessagingResult =
     isMessagingInvocation &&
     isDeliveredMessagingToolResult({
       toolName,
       args: startArgs,
       result,
-      hookResult: toolSendReceiptResult,
+      hookResult: privateReceiptResult,
       isError: isToolError,
     });
+  if (canRecordMessageDeliveryEvidence && didDeliverMessagingResult) {
+    const publicEvidence = normalizeMessageToolDeliveryEvidence({
+      toolName,
+      result: sanitizedResult,
+    });
+    const privateEvidence =
+      toolSendReceiptResult === undefined
+        ? []
+        : normalizeMessageToolDeliveryEvidence({
+            toolName,
+            result: privateReceiptResult,
+          });
+    ctx.state.messageDeliveryEvidence.push(...publicEvidence, ...privateEvidence);
+  }
   const messageText = isMessagingSend ? readMessagingText(startArgs) : undefined;
   const argumentMediaUrls = isMessagingSend ? collectMessagingMediaUrlsFromRecord(startArgs) : [];
   const messageTarget = hasMessagingTargetEvidence

@@ -24,6 +24,7 @@ import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import { guardMessageDeliveryReceiptText } from "./message-delivery-receipt-guard.js";
 
 type ToolExecutionStartEvent = Extract<AgentEvent, { type: "tool_execution_start" }>;
 type ToolExecutionEndEvent = Extract<AgentEvent, { type: "tool_execution_end" }>;
@@ -68,6 +69,7 @@ function createTestContext(): {
     state: {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
+      messageDeliveryEvidence: [],
       acceptedSessionSpawns: [],
       toolSummaryById: new Set<string>(),
       itemActiveIds: new Set<string>(),
@@ -708,6 +710,236 @@ describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () =
     );
 
     expect(ctx.state.acceptedSessionSpawns).toEqual([]);
+  });
+});
+
+describe("handleToolExecutionEnd message delivery evidence", () => {
+  it("records built-in message tool SMS receipt evidence", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "hello",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-sms",
+      isError: false,
+      result: {
+        channel: "sms",
+        messageId: "SM-default",
+        chatId: "+15551234567",
+        receipt: {
+          raw: [
+            {
+              channel: "sms",
+              messageId: "SM-default",
+              chatId: "+15551234567",
+              toJid: "+15551234567",
+              meta: {
+                from: "+15557654321",
+                status: "queued",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-default",
+        status: "queued",
+        sender: "+15557654321",
+        recipient: "+15551234567",
+      }),
+    ]);
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "I sent the SMS. Status: accepted/queued. Message ID: SM-default",
+        evidence: ctx.state.messageDeliveryEvidence,
+      }),
+    ).toEqual({ allowed: true });
+  });
+
+  it("does not record historical SMS receipts from non-send message actions", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-read",
+      args: {
+        action: "read",
+        channel: "sms",
+        target: "+15551234567",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-read",
+      isError: false,
+      result: {
+        channel: "sms",
+        messageId: "SM-historical",
+        chatId: "+15551234567",
+        status: "queued",
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([]);
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "I sent the SMS. Status: accepted/queued. Message ID: SM-historical",
+        evidence: ctx.state.messageDeliveryEvidence,
+      }),
+    ).toMatchObject({ allowed: false });
+  });
+
+  it("does not record SMS receipt evidence for dry-run message sends", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-dry-run",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "hello",
+        dryRun: true,
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-dry-run",
+      isError: false,
+      result: {
+        channel: "sms",
+        messageId: "SM-dry-run",
+        chatId: "+15551234567",
+        deliveryStatus: "sent",
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([]);
+    expect(
+      guardMessageDeliveryReceiptText({
+        text: "I sent the SMS. Status: sent. Message ID: SM-dry-run",
+        evidence: ctx.state.messageDeliveryEvidence,
+      }),
+    ).toMatchObject({ allowed: false });
+  });
+
+  it("records SMS receipt evidence from private tool-send receipts", async () => {
+    const { ctx } = createTestContext();
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        toolSend: {
+          channel: "sms",
+          messageId: "SM-private-receipt",
+          toJid: "+15551234567",
+          status: "queued",
+        },
+      },
+    });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-private-receipt",
+      args: {
+        action: "send",
+        channel: "sms",
+        to: "+15551234567",
+        message: "hello",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-private-receipt",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Sent." }],
+        details: { redacted: true },
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        providerId: "SM-private-receipt",
+        status: "queued",
+        recipient: "+15551234567",
+      }),
+    ]);
+  });
+
+  it("records built-in message tool SMS broadcast receipt evidence", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-broadcast-sms",
+      args: {
+        action: "broadcast",
+        channel: "sms",
+        targets: ["+15551234567"],
+        message: "hello",
+      },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-broadcast-sms",
+      isError: false,
+      result: {
+        details: {
+          action: "broadcast",
+          channel: "sms",
+          payload: {
+            results: [
+              {
+                channel: "sms",
+                to: "+15551234567",
+                ok: true,
+                result: {
+                  channel: "sms",
+                  messageId: "SM-broadcast",
+                  toJid: "+15551234567",
+                  status: "sent",
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.messageDeliveryEvidence).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toolName: "message",
+        providerId: "SM-broadcast",
+        status: "sent",
+        recipient: "+15551234567",
+      }),
+    ]);
   });
 });
 

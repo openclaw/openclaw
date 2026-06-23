@@ -123,6 +123,71 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("replaces unsupported SMS receipt claims before payload delivery", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        `Sent to Jiva. To: +13522815065
+From: +14155201316
+Status: accepted/queued
+Message ID: 6655442331193344`,
+      ],
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+      isError: true,
+    });
+  });
+
+  it("preserves reply routing when replacing unsupported SMS receipt claims", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        `[[reply_to_current]]
+Sent to Jiva. To: +13522815065
+From: +14155201316
+Status: accepted/queued
+Message ID: 6655442331193344`,
+      ],
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "I cannot verify that this SMS was sent. I do not have matching current-turn delivery evidence, so please check the messaging provider history or use the verified send flow before reporting it as sent.",
+      isError: true,
+    });
+    expect(payloads[0]?.replyToCurrent).toBe(true);
+    expect(payloads[0]?.replyToTag).toBe(true);
+  });
+
+  it("keeps SMS receipt claims with matching current-turn evidence", () => {
+    const text = `Sent to Jiva. To: +13522815065
+From: +14155201316
+Status: accepted/queued
+Message ID: 4797682962735104`;
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      messageDeliveryEvidence: [
+        {
+          channel: "sms",
+          providerId: "4797682962735104",
+          status: "accepted/queued",
+          recipient: "+13522815065",
+          sender: "+14155201316",
+        },
+      ],
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
+  it("does not replace generic non-SMS message confirmations", () => {
+    const text = "The Telegram message was sent.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
   it("suppresses pretty-printed error JSON that differs from the errorMessage", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
