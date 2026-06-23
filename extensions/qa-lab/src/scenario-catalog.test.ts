@@ -24,6 +24,20 @@ function listScenarioMarkdownPaths(dir = "qa/scenarios"): string[] {
     .toSorted();
 }
 
+function flowContainsCall(value: unknown, callName: string): boolean {
+  if (Array.isArray(value)) {
+    return value.some((entry) => flowContainsCall(entry, callName));
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    record.call === callName ||
+    Object.values(record).some((entry) => flowContainsCall(entry, callName))
+  );
+}
+
 describe("qa scenario catalog", () => {
   const dottedCoverageIdPattern = /^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/;
 
@@ -142,6 +156,34 @@ describe("qa scenario catalog", () => {
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-1: ok");
     expect(fanoutConfig?.expectedReplyGroups?.flat()).toContain("subagent-2: ok");
+  });
+
+  it("loads explicit suite isolation metadata from per-scenario YAML", () => {
+    const staleLinks = readQaScenarioById("subagent-stale-child-links");
+    const kitchenSink = readQaScenarioById("kitchen-sink-live-openai");
+
+    expect(staleLinks.execution.suiteIsolation).toBe("isolated");
+    expect(staleLinks.execution.isolationReason).toContain("gateway session");
+    expect(kitchenSink.execution.suiteIsolation).toBe("isolated");
+    expect(kitchenSink.execution.isolationReason).toContain("plugin/channel/tool config");
+  });
+
+  it("requires explicit suite isolation for gateway state restart scenarios", () => {
+    const scenarios = readQaScenarioPack().scenarios.filter(
+      (scenario) =>
+        scenario.execution.kind === "flow" &&
+        flowContainsCall(scenario.execution.flow, "env.gateway.restartAfterStateMutation"),
+    );
+
+    expect(scenarios.map((scenario) => scenario.id).toSorted()).toEqual([
+      "kitchen-sink-live-openai",
+      "subagent-stale-child-links",
+    ]);
+    expect(
+      scenarios
+        .filter((scenario) => scenario.execution.suiteIsolation !== "isolated")
+        .map((scenario) => scenario.id),
+    ).toEqual([]);
   });
 
   it("loads scenario-declared gateway runtime options from YAML", () => {

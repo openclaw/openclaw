@@ -12,9 +12,8 @@ import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js"
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
-const QA_SHARED_STATE_MUTATION_FLOW_CALLS = new Set([
+const QA_IMPLICIT_ISOLATION_FLOW_CALLS = new Set([
   "ensureImageGenerationConfigured",
-  "env.gateway.restartAfterStateMutation",
   "forceMemoryIndex",
   "patchConfig",
   "writeWorkspaceSkill",
@@ -218,27 +217,28 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
 
 function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
   return (
+    scenario.execution.suiteIsolation === "isolated" ||
     isQaMergePatchObject(scenario.gatewayConfigPatch) ||
     scenario.gatewayRuntime !== undefined ||
     (Array.isArray(scenario.plugins) && scenario.plugins.length > 0) ||
     normalizeLowercaseStringOrEmpty(scenario.surface) === "memory" ||
     scenario.execution.config?.ensureImageGeneration === true ||
-    flowContainsSharedStateMutation(scenario.execution.flow)
+    flowContainsImplicitIsolationCall(scenario.execution.flow)
   );
 }
 
-function flowContainsSharedStateMutation(value: unknown): boolean {
+function flowContainsImplicitIsolationCall(value: unknown): boolean {
   if (Array.isArray(value)) {
-    return value.some(flowContainsSharedStateMutation);
+    return value.some(flowContainsImplicitIsolationCall);
   }
   if (!value || typeof value !== "object") {
     return false;
   }
   const record = value as Record<string, unknown>;
-  if (typeof record.call === "string" && QA_SHARED_STATE_MUTATION_FLOW_CALLS.has(record.call)) {
+  if (typeof record.call === "string" && QA_IMPLICIT_ISOLATION_FLOW_CALLS.has(record.call)) {
     return true;
   }
-  return Object.values(record).some(flowContainsSharedStateMutation);
+  return Object.values(record).some(flowContainsImplicitIsolationCall);
 }
 
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {

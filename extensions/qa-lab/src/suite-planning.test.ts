@@ -14,6 +14,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
+  scenarioRequiresIsolatedQaSuiteWorker,
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
@@ -291,6 +292,15 @@ describe("qa suite planning helpers", () => {
         ],
       }),
     ).toThrow("Selected QA scenarios require multiple channels");
+  });
+
+  it("isolates flow scenarios with explicit suite isolation metadata", () => {
+    expect(
+      scenarioRequiresIsolatedQaSuiteWorker(
+        makeQaSuiteTestScenario("explicit-isolated", { suiteIsolation: "isolated" }),
+      ),
+    ).toBe(true);
+    expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
   });
 
   it("collects unique scenario-declared bundled plugins in encounter order", () => {

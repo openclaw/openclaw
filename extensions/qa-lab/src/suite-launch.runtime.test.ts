@@ -333,6 +333,42 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps multiple isolated flow scenarios in separate serial partitions", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-serial-isolated-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/serial-isolated",
+      concurrency: 1,
+      scenarioIds: [
+        "group-visible-reply-tool",
+        "runtime-tool-image-generate",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "serial-isolated");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated-1"),
+        concurrency: 1,
+        workerStartStaggerMs: 0,
+        scenarioIds: ["group-visible-reply-tool"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated-2"),
+        concurrency: 1,
+        workerStartStaggerMs: 0,
+        scenarioIds: ["runtime-tool-image-generate"],
+      }),
+    );
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+  });
+
   it("accounts for isolated flow worker weight in unified suite concurrency", async () => {
     const repoRoot = await makeTempRepo("qa-suite-weighted-");
     let releaseShared!: () => void;

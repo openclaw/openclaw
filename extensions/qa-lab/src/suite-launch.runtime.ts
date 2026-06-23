@@ -440,24 +440,37 @@ async function runUnifiedQaSuite(params: {
       scenarioRequiresIsolatedQaSuiteWorker,
     );
     const sharedFlowPartitions = partitionSharedFlowScenarios(sharedFlowScenarios, concurrency);
+    const isolatedFlowConcurrency = Math.min(
+      concurrency,
+      MAX_ISOLATED_FLOW_CONCURRENCY,
+      isolatedFlowScenarios.length,
+    );
+    const isolatedFlowPartitions =
+      isolatedFlowConcurrency === 1 && isolatedFlowScenarios.length > 1
+        ? isolatedFlowScenarios.map((scenario, index) => ({
+            kind: `isolated-${index + 1}`,
+            scenarios: [scenario],
+            concurrency: 1,
+          }))
+        : [
+            {
+              kind: "isolated",
+              scenarios: isolatedFlowScenarios,
+              concurrency: isolatedFlowConcurrency,
+            },
+          ];
     const flowPartitions = [
       ...sharedFlowPartitions.map((scenarios, index) => ({
         kind: sharedFlowPartitions.length === 1 ? "shared" : `shared-${index + 1}`,
         scenarios,
         concurrency: 1,
       })),
-      {
-        kind: "isolated",
-        scenarios: isolatedFlowScenarios,
-        concurrency: Math.min(
-          concurrency,
-          MAX_ISOLATED_FLOW_CONCURRENCY,
-          isolatedFlowScenarios.length,
-        ),
-      },
+      ...isolatedFlowPartitions,
     ].filter((partition) => partition.scenarios.length > 0);
     const runFlowSuite = await loadQaFlowSuiteRuntime();
     for (const partition of flowPartitions) {
+      const isolatedPartition =
+        partition.kind === "isolated" || partition.kind.startsWith("isolated-");
       partitionTasks.push({
         weight: partition.concurrency,
         run: async () => {
@@ -473,7 +486,7 @@ async function runUnifiedQaSuite(params: {
             fastMode,
             concurrency: partition.concurrency,
             workerStartStaggerMs:
-              partition.kind === "isolated"
+              isolatedPartition
                 ? (params.runParams?.workerStartStaggerMs ??
                   resolveQaSuiteWorkerStartStaggerMs(
                     partition.concurrency,
