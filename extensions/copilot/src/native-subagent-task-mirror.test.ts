@@ -129,6 +129,50 @@ describe("CopilotNativeSubagentTaskMirror", () => {
     );
   });
 
+  it("keeps parallel subagents distinct when they share a parent tool call", () => {
+    const runtime = createRuntime();
+    const mirror = new CopilotNativeSubagentTaskMirror({ now: () => 250 }, runtime);
+
+    for (const agentId of ["child-1", "child-2"]) {
+      mirror.handleEvent(
+        makeEvent(
+          "subagent.started",
+          {
+            agentDescription: `inspect ${agentId}`,
+            agentDisplayName: "Researcher",
+            agentName: "researcher",
+            toolCallId: "call-shared",
+          },
+          agentId,
+        ),
+      );
+    }
+    for (const agentId of ["child-1", "child-2"]) {
+      mirror.handleEvent(
+        makeEvent(
+          "subagent.completed",
+          {
+            agentDisplayName: "Researcher",
+            agentName: "researcher",
+            toolCallId: "call-shared",
+          },
+          agentId,
+        ),
+      );
+    }
+
+    expect(runtime.tryCreateRunningTaskRun).toHaveBeenCalledTimes(2);
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(2);
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ runId: "copilot-agent:child-1" }),
+    );
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ runId: "copilot-agent:child-2" }),
+    );
+  });
+
   it("finalizes active tasks when the parent attempt tears down", () => {
     const runtime = createRuntime();
     const mirror = new CopilotNativeSubagentTaskMirror({ now: () => 300 }, runtime);

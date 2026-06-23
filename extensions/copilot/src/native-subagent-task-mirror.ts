@@ -93,7 +93,11 @@ export class CopilotNativeSubagentTaskMirror {
     runId: string,
     toolCallId: string,
   ): void {
-    if (this.runIdByToolCallId.has(toolCallId)) {
+    const agentId = event.agentId?.trim();
+    const existingRunId = agentId
+      ? this.runIdByAgentId.get(agentId)
+      : this.runIdByToolCallId.get(toolCallId);
+    if (existingRunId) {
       return;
     }
     const eventAt = this.now();
@@ -115,10 +119,10 @@ export class CopilotNativeSubagentTaskMirror {
     if (!taskRecord) {
       return;
     }
-    this.runIdByToolCallId.set(toolCallId, runId);
-    const agentId = event.agentId?.trim();
     if (agentId) {
       this.runIdByAgentId.set(agentId, runId);
+    } else {
+      this.runIdByToolCallId.set(toolCallId, runId);
     }
     this.terminalRunIds.delete(runId);
     this.activeRunIds.add(runId);
