@@ -247,6 +247,36 @@ function getBindingChannelPlugin(channel: ChannelId) {
   return getLoadedChannelPlugin(channel) ?? getBundledChannelSetupPlugin(channel);
 }
 
+function resolveFeishuConversationBindingPeer(
+  raw: string,
+): { kind: "direct" | "group"; id: string } | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  if (
+    lowered.startsWith("user:") ||
+    lowered.startsWith("dm:") ||
+    lowered.startsWith("open_id:") ||
+    lowered.startsWith("ou_") ||
+    lowered.startsWith("on_")
+  ) {
+    const id = trimmed.replace(/^(user|dm|open_id):/i, "").trim();
+    return id ? { kind: "direct", id } : undefined;
+  }
+  if (
+    lowered.startsWith("chat:") ||
+    lowered.startsWith("group:") ||
+    lowered.startsWith("channel:") ||
+    lowered.startsWith("oc_")
+  ) {
+    const id = trimmed.replace(/^(chat|group|channel):/i, "").trim();
+    return id ? { kind: "group", id } : undefined;
+  }
+  return undefined;
+}
+
 function resolveBindingAccountId(params: {
   channel: ChannelId;
   config: OpenClawConfig;
@@ -316,7 +346,9 @@ export function parseBindingSpecs(params: {
     if (!trimmed) {
       continue;
     }
-    const [channelRaw, accountRaw] = trimmed.split(":", 2);
+    const separatorIndex = trimmed.indexOf(":");
+    const channelRaw = separatorIndex >= 0 ? trimmed.slice(0, separatorIndex) : trimmed;
+    const accountRaw = separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1) : undefined;
     const channel = normalizeBindingChannelId(channelRaw, params.config);
     if (!channel) {
       errors.push(formatUnknownChannelMessage({ channel: channelRaw }));
@@ -329,15 +361,22 @@ export function parseBindingSpecs(params: {
       );
       continue;
     }
+    const feishuPeer =
+      channel === "feishu" && accountId
+        ? resolveFeishuConversationBindingPeer(accountId)
+        : undefined;
     accountId = resolveBindingAccountId({
       channel,
       config: params.config,
       agentId,
-      explicitAccountId: accountId,
+      explicitAccountId: feishuPeer ? undefined : accountId,
     });
     const match: AgentRouteBinding["match"] = { channel };
     if (accountId) {
       match.accountId = accountId;
+    }
+    if (feishuPeer) {
+      match.peer = feishuPeer;
     }
     bindings.push({ type: "route", agentId, match });
   }
