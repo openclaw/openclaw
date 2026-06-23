@@ -44,6 +44,7 @@ import {
   type SessionLike,
 } from "./event-bridge.js";
 import { createHooksBridge, type CopilotHooksConfig } from "./hooks-bridge.js";
+import { createCopilotNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import {
   createPermissionBridge,
   rejectAllPolicy,
@@ -228,6 +229,7 @@ function deferBackgroundCompactionCleanup(params: {
   handle: PooledClient;
   pool: CopilotClientPool;
   cleanupToolBridge?: () => void;
+  finalizeNativeSubagents?: () => void;
   sdkSessionId?: string;
   session: SessionLike;
   timeoutMs: number;
@@ -250,6 +252,7 @@ function deferBackgroundCompactionCleanup(params: {
         await cancelBackgroundCompactionBeforeTeardown(params.session);
         params.bridge.settleCompactionWait();
       }
+      params.finalizeNativeSubagents?.();
       params.bridge.detach();
       try {
         await params.session.disconnect();
@@ -410,6 +413,11 @@ export async function runCopilotAttempt(
   let handle: PooledClient | undefined;
   let session: SessionLike | undefined;
   let bridge: ReturnType<typeof attachEventBridge> | undefined;
+  const nativeSubagentTaskMirror = createCopilotNativeSubagentTaskMirror({
+    agentId: sessionAgentId,
+    now,
+    scope: input.agentHarnessTaskRuntimeScope,
+  });
   let activeRunHandleRef: Parameters<typeof clearActiveEmbeddedRun>[1] | undefined;
   let userInputBridgeRef: ReturnType<typeof createCopilotUserInputBridge> | undefined;
   let cleanupToolBridge: (() => void) | undefined;
@@ -748,6 +756,8 @@ export async function runCopilotAttempt(
     }
     bridge = attachEventBridge(session, {
       onAssistantDelta: input.onAssistantDelta,
+      onAgentEvent: input.onAgentEvent,
+      onNativeSubagentEvent: (event) => nativeSubagentTaskMirror?.handleEvent(event),
       onCompactionStart: async () => {
         const sessionFile = readString(input.sessionFile);
         if (!sessionFile) {
@@ -813,6 +823,7 @@ export async function runCopilotAttempt(
       }
       const result = await session.sendAndWait(messageOptions, input.timeoutMs);
       await bridge.awaitDeltaChain();
+      await bridge.awaitAgentEventChain();
       if (!bridge.recordSendResult(result) && !aborted) {
         // SDK sendAndWait returning undefined is treated as a timeout by the
         // capability inventory. Do not call session.abort() here: OpenClaw may
@@ -848,6 +859,7 @@ export async function runCopilotAttempt(
         } catch {
           // delta-flush failure must not mask the timeout state
         }
+        await bridge?.awaitAgentEventChain();
       } else {
         promptError = toError(error);
       }
@@ -878,6 +890,7 @@ export async function runCopilotAttempt(
         awaitSessionIdle: !bridge.hasObservedSessionIdle(),
         bridge,
         cleanupToolBridge,
+        finalizeNativeSubagents: () => nativeSubagentTaskMirror?.finalizeActiveRuns(),
         handle,
         pool: deps.pool,
         sdkSessionId,
@@ -906,6 +919,8 @@ export async function runCopilotAttempt(
       // defines as no background agents in flight. Timeouts retain the bridge
       // until that event so compaction that starts after the timer still completes.
       await bridge?.awaitCompactionChain();
+      await bridge?.awaitAgentEventChain();
+      nativeSubagentTaskMirror?.finalizeActiveRuns();
       cleanupToolBridge?.();
       bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);

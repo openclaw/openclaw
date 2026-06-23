@@ -190,6 +190,8 @@ export function parseArgs(argv) {
   if (options.qaScenarios.length === 0) {
     options.qaScenarios = [...DEFAULT_QA_SCENARIOS];
   }
+  assertNoDuplicateValues(options.pluginIds, "--plugin");
+  assertNoDuplicateValues(options.qaScenarios, "--qa-scenario");
   return options;
 }
 
@@ -242,6 +244,20 @@ function normalizeCsv(raw) {
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0)
     : [];
+}
+
+function assertNoDuplicateValues(values, label) {
+  const seen = new Set();
+  for (const value of values) {
+    const normalized = value.trim();
+    if (!normalized) {
+      continue;
+    }
+    if (seen.has(normalized)) {
+      throw new Error(`Duplicate ${label} value: ${normalized}`);
+    }
+    seen.add(normalized);
+  }
 }
 
 function readOptionalPositiveIntEnv(name) {
