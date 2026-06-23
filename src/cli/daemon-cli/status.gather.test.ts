@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import type { PortConnections } from "../../infra/ports.js";
+import type { PortConnections, PortListener, PortUsageStatus } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
@@ -36,19 +36,30 @@ const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) =
 const findStaleOpenClawUpdateLaunchdJobs = vi.fn<
   (env?: NodeJS.ProcessEnv) => Promise<StaleOpenClawUpdateLaunchdJob[]>
 >(async () => []);
-const inspectPortUsage = vi.fn(async (port: number) => ({
-  port,
-  status: "free" as const,
-  listeners: [],
-  hints: [],
-}));
+type PortUsageTestSummary = {
+  port: number;
+  status: PortUsageStatus;
+  listeners: PortListener[];
+  hints: string[];
+};
+
+const inspectPortUsage = vi.fn<(port: number) => Promise<PortUsageTestSummary>>(
+  async (port: number) => ({
+    port,
+    status: "free",
+    listeners: [],
+    hints: [],
+  }),
+);
 const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>(
   async (port: number) => ({
     port,
     connections: [],
   }),
 );
-const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
+const readLastGatewayErrorLine = vi.fn<(_env?: NodeJS.ProcessEnv) => Promise<string | null>>(
+  async (_env?: NodeJS.ProcessEnv) => null,
+);
 const loadInstalledPluginIndexInstallRecords = vi.fn<
   (params?: {
     env?: NodeJS.ProcessEnv;
@@ -267,7 +278,16 @@ describe("gatherDaemonStatus", () => {
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
+    inspectPortUsage.mockReset();
+    inspectPortUsage.mockImplementation(async (port: number) => ({
+      port,
+      status: "free" as const,
+      listeners: [],
+      hints: [],
+    }));
     inspectPortConnections.mockClear();
+    readLastGatewayErrorLine.mockReset();
+    readLastGatewayErrorLine.mockResolvedValue(null);
     readGatewayRestartHandoffSync.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
@@ -1064,6 +1084,41 @@ describe("gatherDaemonStatus", () => {
       healthy: false,
       staleGatewayPids: [9000],
     });
+  });
+
+  it("includes the last gateway error when the service is listening but the RPC probe fails", async () => {
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19001,
+      status: "busy",
+      listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
+      hints: [],
+    });
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "wss://127.0.0.1:19001",
+      error: "gateway closed (1000): ",
+    });
+    readLastGatewayErrorLine.mockResolvedValueOnce(
+      "parse/handle error: Error: ENOSPC: no space left on device, write",
+    );
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: true,
+      deep: false,
+    });
+
+    expect(readLastGatewayErrorLine).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
+      }),
+    );
+    expect(status.port?.status).toBe("busy");
+    expect(status.rpc?.ok).toBe(false);
+    expect(status.lastError).toBe(
+      "parse/handle error: Error: ENOSPC: no space left on device, write",
+    );
   });
 
   it("compares plugin drift against the running gateway version from the probe, not the CLI VERSION", async () => {

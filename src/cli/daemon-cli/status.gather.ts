@@ -705,7 +705,11 @@ export async function gatherDaemonStatus(
     : undefined;
 
   let lastError: string | undefined;
-  if (loaded && runtime?.status === "running" && portStatus && portStatus.status !== "busy") {
+  if (
+    loaded &&
+    runtime?.status === "running" &&
+    ((portStatus && portStatus.status !== "busy") || rpc?.ok === false)
+  ) {
     lastError = (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ?? undefined;
   }
 

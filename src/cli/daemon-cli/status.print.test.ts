@@ -363,6 +363,50 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "Capability: write-capable");
   });
 
+  it("prints the last gateway error when a running service fails the RPC probe", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "systemd user",
+          loaded: true,
+          loadedText: "enabled",
+          notLoadedText: "disabled",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "lan",
+          bindHost: "0.0.0.0",
+          port: 2345,
+          portSource: "service args",
+          probeUrl: "ws://127.0.0.1:2345",
+        },
+        port: {
+          port: 2345,
+          status: "busy",
+          listeners: [{ pid: 8000, ppid: 1, address: "*:2345" }],
+          hints: [],
+        },
+        rpc: {
+          ok: false,
+          kind: "connect",
+          capability: "unknown",
+          error: "gateway closed (1000): ",
+          url: "ws://127.0.0.1:2345",
+        },
+        lastError: "parse/handle error: Error: ENOSPC: no space left on device, write",
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.error, "Connectivity probe: failed");
+    expectMockLineContains(runtime.error, "gateway closed (1000):");
+    expectMockLineContains(
+      runtime.error,
+      "Last gateway error: parse/handle error: Error: ENOSPC: no space left on device, write",
+    );
+  });
+
   it("prints CLI and gateway versions with readable guidance when they differ", () => {
     printDaemonStatus(
       {

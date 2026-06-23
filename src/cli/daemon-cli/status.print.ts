@@ -274,6 +274,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }
+      if (status.lastError) {
+        defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
+      }
     }
     const capability = formatCapabilityLabel(rpc.capability);
     if (capability) {
@@ -327,9 +330,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
     const serviceEnv = service.command?.environment ?? process.env;
-    const container = Boolean(
-      resolveDaemonContainerContext(serviceEnv),
-    );
+    const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
       wsl: isWSLEnv(serviceEnv),
