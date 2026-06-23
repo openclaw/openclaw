@@ -490,14 +490,19 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
-  const hasDirectLocalBackendAuth =
-    Boolean(params.token || params.password) || params.allowAuthNone === true;
-  return (
+  const hasSharedSecretAuth = Boolean(params.token || params.password);
+  const isLoopback = isLoopbackGatewayUrl(params.url);
+  const isLocalBackendSharedAuth =
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
     clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
-    hasDirectLocalBackendAuth &&
-    isLoopbackGatewayUrl(params.url)
-  );
+    (hasSharedSecretAuth || params.allowAuthNone === true) &&
+    isLoopback;
+  const isLocalCliSharedAuth =
+    mode === GATEWAY_CLIENT_MODES.CLI &&
+    clientName === GATEWAY_CLIENT_NAMES.CLI &&
+    hasSharedSecretAuth &&
+    isLoopback;
+  return isLocalBackendSharedAuth || isLocalCliSharedAuth;
 }
 
 function resolveDeviceIdentityForGatewayCall(params: {
