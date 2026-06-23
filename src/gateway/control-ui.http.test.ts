@@ -1425,12 +1425,15 @@ describe("handleControlUiHttpRequest", () => {
         await fs.writeFile(path.join(tmp, "manifest.webmanifest"), "{}");
         await fs.writeFile(path.join(tmp, "apple-touch-icon.png"), "png-bytes");
         await fs.writeFile(path.join(tmp, "sw.js"), "self.addEventListener('push', () => {});");
+        await fs.mkdir(path.join(tmp, "assets"), { recursive: true });
+        await fs.writeFile(path.join(tmp, "assets", "mathjax-tex-svg.js"), "window.MathJax={};");
 
         for (const [url, expectedType] of [
           ["/__openclaw__/favicon.svg", "image/svg+xml"],
           ["/__openclaw__/manifest.webmanifest", "application/manifest+json; charset=utf-8"],
           ["/__openclaw__/apple-touch-icon.png", "image/png"],
           ["/__openclaw__/sw.js", "application/javascript; charset=utf-8"],
+          ["/__openclaw__/assets/mathjax-tex-svg.js", "application/javascript; charset=utf-8"],
         ] as const) {
           const { res, end, handled } = await runControlUiRequest({
             url,
