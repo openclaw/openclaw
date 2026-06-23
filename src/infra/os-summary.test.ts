@@ -11,7 +11,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-import { resolveOsSummary } from "./os-summary.js";
+import { _resetCachedDarwinProductVersion, resolveOsSummary } from "./os-summary.js";
 
 type OsSummaryCase = {
   name: string;
@@ -25,6 +25,7 @@ type OsSummaryCase = {
 describe("resolveOsSummary", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    _resetCachedDarwinProductVersion();
   });
 
   it.each<OsSummaryCase>([
