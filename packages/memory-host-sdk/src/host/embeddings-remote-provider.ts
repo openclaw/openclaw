@@ -16,7 +16,7 @@ export type RemoteEmbeddingClient = {
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   model: string;
-  dispatcherPolicy?: { mode: string; proxyUrl: string; allowPrivateProxy?: boolean };
+  dispatcherPolicy?: { mode: "explicit-proxy"; proxyUrl: string; allowPrivateProxy?: boolean };
 };
 
 /** Create an EmbeddingProvider backed by a remote embeddings endpoint. */

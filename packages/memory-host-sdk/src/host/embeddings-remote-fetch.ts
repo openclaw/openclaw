@@ -44,7 +44,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
   signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
-  dispatcherPolicy?: { mode: string; proxyUrl: string; allowPrivateProxy?: boolean };
+  dispatcherPolicy?: { mode: "explicit-proxy"; proxyUrl: string; allowPrivateProxy?: boolean };
 }): Promise<number[][]> {
   return await postJson({
     url: params.url,

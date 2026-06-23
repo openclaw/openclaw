@@ -42,7 +42,7 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   baseUrl: string;
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
-  dispatcherPolicy?: { mode: string; proxyUrl: string; allowPrivateProxy?: boolean };
+  dispatcherPolicy?: { mode: "explicit-proxy"; proxyUrl: string; allowPrivateProxy?: boolean };
 }> {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({

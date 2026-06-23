@@ -25,7 +25,7 @@ export async function withRemoteHttpResponse<T>(params: {
   fetchWithSsrFGuardImpl?: typeof fetchWithSsrFGuard;
   shouldUseEnvHttpProxyForUrlImpl?: typeof shouldUseEnvHttpProxyForUrl;
   auditContext?: string;
-  dispatcherPolicy?: { mode: string; proxyUrl: string; allowPrivateProxy?: boolean };
+  dispatcherPolicy?: { mode: "explicit-proxy"; proxyUrl: string; allowPrivateProxy?: boolean };
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
   const guardedFetch = params.fetchWithSsrFGuardImpl ?? fetchWithSsrFGuard;
