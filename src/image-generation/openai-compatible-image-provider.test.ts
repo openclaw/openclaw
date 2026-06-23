@@ -11,6 +11,7 @@ const {
   isProviderApiKeyConfiguredMock,
   postJsonRequestMock,
   postMultipartRequestMock,
+  readProviderJsonResponseMock,
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
   resolveProviderOperationTimeoutMsMock,
@@ -24,6 +25,7 @@ const {
   isProviderApiKeyConfiguredMock: vi.fn(() => true),
   postJsonRequestMock: vi.fn(),
   postMultipartRequestMock: vi.fn(),
+  readProviderJsonResponseMock: vi.fn(),
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
   resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
     const request =
@@ -56,6 +58,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   createProviderOperationDeadline: createProviderOperationDeadlineMock,
   postJsonRequest: postJsonRequestMock,
   postMultipartRequest: postMultipartRequestMock,
+  readProviderJsonResponse: readProviderJsonResponseMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
   resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
   sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
@@ -138,8 +141,10 @@ function mockGeneratedResponse() {
       },
     ],
   };
-  postJsonRequestMock.mockResolvedValue({ response: { json: async () => payload }, release });
-  postMultipartRequestMock.mockResolvedValue({ response: { json: async () => payload }, release });
+  const response = {} as Response;
+  postJsonRequestMock.mockResolvedValue({ response, release });
+  postMultipartRequestMock.mockResolvedValue({ response, release });
+  readProviderJsonResponseMock.mockResolvedValue(payload);
   return release;
 }
 
@@ -150,6 +155,7 @@ describe("OpenAI-compatible image provider helper", () => {
     isProviderApiKeyConfiguredMock.mockClear();
     postJsonRequestMock.mockReset();
     postMultipartRequestMock.mockReset();
+    readProviderJsonResponseMock.mockReset();
     resolveApiKeyForProviderMock.mockReset();
     resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "provider-key" });
     resolveProviderHttpRequestConfigMock.mockClear();
@@ -250,9 +256,10 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("honors default operation timeouts and empty-response errors", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: { json: async () => ({ data: [] }) },
+      response: {} as Response,
       release: vi.fn(async () => {}),
     });
+    readProviderJsonResponseMock.mockResolvedValueOnce({ data: [] });
     const provider = createProvider({
       defaultTimeoutMs: 60_000,
       emptyResponseError: "Sample response missing image data",
@@ -282,9 +289,10 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("wraps malformed successful image responses with provider-owned errors", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      response: {} as Response,
       release: vi.fn(async () => {}),
     });
+    readProviderJsonResponseMock.mockResolvedValueOnce({ data: { b64_json: "not-an-array" } });
     const provider = createProvider();
 
     await expect(
@@ -295,5 +303,91 @@ describe("OpenAI-compatible image provider helper", () => {
         cfg: {} as never,
       }),
     ).rejects.toThrow("Sample image generation response malformed");
+  });
+
+  it("routes the success body through the bounded provider-json reader", async () => {
+    const release = mockGeneratedResponse();
+    const provider = createProvider();
+
+    await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "draw a square",
+      cfg: {} as never,
+    } as never);
+
+    expect(readProviderJsonResponseMock).toHaveBeenCalledTimes(1);
+    const [responseArg, labelArg] = readProviderJsonResponseMock.mock.calls[0] as [
+      Response,
+      string,
+    ];
+    expect(responseArg).toBeDefined();
+    expect(labelArg).toBe("Sample image generation failed");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces the bounded-reader error verbatim when the body exceeds the cap", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {} as Response,
+      release,
+    });
+    readProviderJsonResponseMock.mockRejectedValueOnce(
+      new Error("Sample image generation failed: JSON response exceeds 16777216 bytes"),
+    );
+    const provider = createProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "sample",
+        model: "sample-image",
+        prompt: "oversized",
+        cfg: {} as never,
+      } as never),
+    ).rejects.toThrow(/JSON response exceeds 16777216 bytes/);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a valid multi-image response under the cap (4x 1024x1024 b64_json ≈ 5.5 MB)", async () => {
+    // Lock the contract: the canonical 16 MiB cap is the generic OpenClaw
+    // provider-response cap (same as #95218). For the supported
+    // OpenAI-compatible image response envelope (maxCount: 4 at 1024x1024
+    // PNG b64_json), the serialized JSON body is well under the cap, so
+    // the bounded reader accepts it and the runtime returns the images.
+    //
+    // PNG raw ~ 1 MB per 1024x1024 image (compressed); b64 inflates by
+    // 4/3, so 4 images ≈ 5.4 MB serialized b64. Wrapped in the OpenAI
+    // response envelope ({"data":[...]} + per-image metadata), the total
+    // is comfortably under 16 MiB. See scripts/repro/issue-96136-image-cap
+    // .mjs for the end-to-end proof with a real streaming harness.
+    const ONE_1024_PNG_B64_BYTES = Math.ceil((1024 * 1024) / 3) * 4;
+    const FOUR_1024_PNG_B64_BYTES = ONE_1024_PNG_B64_BYTES * 4;
+    expect(FOUR_1024_PNG_B64_BYTES).toBeLessThan(16 * 1024 * 1024);
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {} as Response,
+      release,
+    });
+    readProviderJsonResponseMock.mockResolvedValueOnce({
+      data: [
+        { b64_json: "a".repeat(ONE_1024_PNG_B64_BYTES) },
+        { b64_json: "b".repeat(ONE_1024_PNG_B64_BYTES) },
+        { b64_json: "c".repeat(ONE_1024_PNG_B64_BYTES) },
+        { b64_json: "d".repeat(ONE_1024_PNG_B64_BYTES) },
+      ],
+    });
+    const provider = createProvider();
+
+    const result = await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "draw a square",
+      count: 4,
+      size: "1024x1024",
+      cfg: {} as never,
+    } as never);
+
+    expect(result.images).toHaveLength(4);
+    expect(release).toHaveBeenCalledOnce();
   });
 });
