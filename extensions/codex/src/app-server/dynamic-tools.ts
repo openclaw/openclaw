@@ -166,12 +166,52 @@ function routeProviderMatchesSource(
 }
 
 function routeTokenMatchesCurrentMessage(
-  token: string | undefined,
+  token: string | number | undefined,
   hookContext: CodexDynamicToolHookContext | undefined,
 ): boolean {
   const normalized = normalizeRouteToken(token);
   return (
     normalized !== undefined && normalized === normalizeRouteToken(hookContext?.currentMessageId)
+  );
+}
+
+function readRouteToken(record: Record<string, unknown>, key: string): string | number | undefined {
+  const value = record[key];
+  return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function explicitRouteTokensMismatchCurrent(
+  args: Record<string, unknown>,
+  keys: readonly string[],
+  currentToken: string | number | undefined,
+): boolean {
+  const normalizedCurrent = normalizeRouteToken(currentToken);
+  if (!normalizedCurrent) {
+    return false;
+  }
+  return keys.some((key) => {
+    const normalized = normalizeRouteToken(readRouteToken(args, key));
+    return normalized !== undefined && normalized !== normalizedCurrent;
+  });
+}
+
+function explicitThreadRouteTargetsNonSource(
+  args: Record<string, unknown>,
+  hookContext: CodexDynamicToolHookContext | undefined,
+  messagingTarget: MessagingToolSend | undefined,
+): boolean {
+  const normalizedCurrentThread = normalizeRouteToken(hookContext?.currentThreadId);
+  const explicitThreadTokens = [
+    ...EXPLICIT_MESSAGE_THREAD_KEYS.map((key) => normalizeRouteToken(readRouteToken(args, key))),
+    normalizeRouteToken(messagingTarget?.threadId),
+  ].filter((value): value is string => value !== undefined);
+
+  if (explicitThreadTokens.length === 0) {
+    return false;
+  }
+  return (
+    normalizedCurrentThread === undefined ||
+    explicitThreadTokens.some((value) => value !== normalizedCurrentThread)
   );
 }
 
@@ -252,6 +292,18 @@ function hasExplicitNonSourceMessageRoute(
       ? args.targets.map((value) => (typeof value === "string" ? value : undefined))
       : []),
   ].filter((value): value is string => normalizeRouteToken(value) !== undefined);
+  if (explicitThreadRouteTargetsNonSource(args, hookContext, messagingTarget)) {
+    return true;
+  }
+  if (
+    explicitRouteTokensMismatchCurrent(
+      args,
+      EXPLICIT_MESSAGE_REPLY_KEYS,
+      hookContext?.currentMessageId,
+    )
+  ) {
+    return true;
+  }
   if (targetValues.length === 0) {
     return false;
   }
@@ -298,6 +350,8 @@ export const CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE = "openclaw";
 const ALWAYS_DIRECT_DYNAMIC_TOOL_NAMES = new Set(["sessions_yield"]);
 const EXPLICIT_MESSAGE_PROVIDER_KEYS = ["channel", "provider"];
 const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
+const EXPLICIT_MESSAGE_THREAD_KEYS = ["threadId", "thread_id", "messageThreadId", "topicId"];
+const EXPLICIT_MESSAGE_REPLY_KEYS = ["replyTo", "replyToId", "replyToIdFull"];
 const DEFAULT_CODEX_DYNAMIC_TOOL_RESULT_MAX_CHARS = 16_000;
 
 /**

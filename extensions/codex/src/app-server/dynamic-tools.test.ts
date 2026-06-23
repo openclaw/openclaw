@@ -1429,6 +1429,70 @@ describe("createCodexDynamicToolBridge", () => {
     expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
   });
 
+  it("does not mark same-target sibling-thread replies as terminal source replies", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "slack",
+      currentChannelId: "slack:C123",
+      currentMessagingTarget: "C123",
+      currentThreadId: "171.222",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "slack",
+      target: "C123",
+      threadId: "171.333",
+      message: "sibling thread reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not mark implicit-target sibling-thread replies as terminal source replies", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "slack",
+      currentChannelId: "slack:C123",
+      currentMessagingTarget: "C123",
+      currentThreadId: "171.222",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "slack",
+      threadId: "171.333",
+      message: "sibling thread reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not mark top-level source replies with explicit thread routes as terminal", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "slack",
+      currentChannelId: "slack:C123",
+      currentMessagingTarget: "C123",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "slack",
+      target: "C123",
+      threadId: "171.333",
+      message: "thread reply from top-level source",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
   it("does not let matching reply receipts override explicit non-source routes", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
