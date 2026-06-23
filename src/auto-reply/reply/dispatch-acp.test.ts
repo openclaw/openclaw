@@ -820,24 +820,36 @@ describe("tryDispatchAcpReply", () => {
         contentType: "image/png",
         sender: "Recent 2",
         messageId: "recent-2",
+        timestampMs: now - 3_000,
+        historyPosition: 6,
+        historyTotal: 9,
       },
       {
         path: "/tmp/recent-3.png",
         contentType: "image/png",
         sender: "Recent 3",
         messageId: "recent-3",
+        timestampMs: now - 2_000,
+        historyPosition: 7,
+        historyTotal: 9,
       },
       {
         path: "/tmp/recent-4.png",
         contentType: "image/png",
         sender: "Recent 4",
         messageId: "recent-4",
+        timestampMs: now - 1_000,
+        historyPosition: 8,
+        historyTotal: 9,
       },
       {
         path: "C:\\Users\\Alice\\Pictures\\recent.png",
         contentType: "image/png",
         sender: "Windows",
         messageId: "windows",
+        timestampMs: now - 500,
+        historyPosition: 9,
+        historyTotal: 9,
       },
     ]);
   });
@@ -851,12 +863,17 @@ describe("tryDispatchAcpReply", () => {
           contentType: "image/png",
           sender: "@alice",
           messageId: "msg-1",
+          timestampMs: 1_700_000_000_000,
+          historyPosition: 2,
+          historyTotal: 4,
         },
       ],
     });
 
     expect(text).toContain("what is this?");
     expect(text).toContain("Recent image 1 from @alice, message msg-1");
+    expect(text).toContain("sent 2023-11-14T22:13:20.000Z");
+    expect(text).toContain("message 2 of 4 in thread");
     expect(text).not.toContain("/tmp/secret.png");
   });
 
@@ -913,6 +930,9 @@ describe("tryDispatchAcpReply", () => {
           contentType: "image/png",
           sender: "@alice",
           messageId: "msg-1",
+          timestampMs: 1_700_000_000_000,
+          historyPosition: 1,
+          historyTotal: 1,
         },
       ]);
     } finally {
@@ -1157,6 +1177,9 @@ describe("tryDispatchAcpReply", () => {
           contentType: "image/png",
           sender: "@alice",
           messageId: "msg-history",
+          timestampMs: 1_700_000_000_000,
+          historyPosition: 1,
+          historyTotal: 1,
         },
       ]);
     } finally {
