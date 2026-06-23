@@ -744,15 +744,22 @@ class OpenShellSandboxBackendImpl {
         });
         const result = await runOpenShellCli({
           context: this.params.execContext,
+          // OpenShell >= 0.0.37 nests `upload <named-dir> <dest>` under
+          // `<dest>/<basename>/` and keeps flat extraction only for the
+          // basename-less `.`/`/` paths and file uploads (NVIDIA/OpenShell
+          // #952, #1028). Upload the staged tree as "." from its own directory
+          // so its contents land flat in <dest>; uploading the absolute tmp dir
+          // would nest the workspace under the staged dir name, and the
+          // download-back step would then compound that nesting every sync.
           args: [
             "sandbox",
             "upload",
             "--no-git-ignore",
             this.params.execContext.sandboxName,
-            tmpDir,
+            ".",
             remotePath,
           ],
-          cwd: this.params.createParams.workspaceDir,
+          cwd: tmpDir,
         });
         if (result.code !== 0) {
           throw new Error(result.stderr.trim() || "openshell sandbox upload failed");
