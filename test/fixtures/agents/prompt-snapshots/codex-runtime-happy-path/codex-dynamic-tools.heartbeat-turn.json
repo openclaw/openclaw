@@ -1039,7 +1039,7 @@
       },
       {
         "deferLoading": true,
-        "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
+        "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`; includes configured names and descriptions when present.",
         "inputSchema": {
           "properties": {},
           "type": "object"
