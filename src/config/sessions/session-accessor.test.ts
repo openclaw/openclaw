@@ -686,7 +686,7 @@ describe("session accessor file-backed seam", () => {
     const lifecycleStorePath = path.join(lifecycleSessionsDir, "sessions.json");
     const freshTranscriptPath = path.join(lifecycleSessionsDir, "session-file-only.jsonl");
     fs.mkdirSync(lifecycleSessionsDir, { recursive: true });
-    saveSessionStore(
+    await saveSessionStore(
       lifecycleStorePath,
       {
         "agent:main:lifecycle-cleanup-file-only": {
@@ -723,7 +723,7 @@ describe("session accessor file-backed seam", () => {
     const currentTranscriptPath = path.join(lifecycleSessionsDir, `${currentSessionId}.jsonl`);
     const staleTranscriptPath = path.join(lifecycleSessionsDir, `${staleSessionId}.jsonl`);
     fs.mkdirSync(lifecycleSessionsDir, { recursive: true });
-    saveSessionStore(
+    await saveSessionStore(
       lifecycleStorePath,
       {
         "agent:main:lifecycle-cleanup-current": {
