@@ -418,8 +418,16 @@ function ensureDir(filePath: string) {
   const dir = path.dirname(filePath);
   assertNoExecApprovalsSymlinkParents(dir, resolveRequiredHomeDir());
   fs.mkdirSync(dir, { recursive: true });
-  const dirStat = fs.lstatSync(dir);
-  if (!dirStat.isDirectory() || dirStat.isSymbolicLink()) {
+  // Resolve symlinks at the terminal directory: deployments often mount the
+  // state directory via a top-level symlink (e.g. `/opt/openclaw` →
+  // `/mnt/efs/openclaw` for EFS-backed hosts). `assertNoExecApprovalsSymlinkParents`
+  // walks segments BETWEEN the trusted root and the terminal target — when
+  // the terminal equals the trusted root, no segments are walked and a
+  // symlink at the terminal is missed. Use `statSync` (follows symlinks) so
+  // a terminal symlink that resolves to a real directory is accepted while
+  // intermediate symlinks remain rejected by the parents check above.
+  const dirStat = fs.statSync(dir);
+  if (!dirStat.isDirectory()) {
     throw new Error(`Refusing to use unsafe exec approvals directory: ${dir}`);
   }
   try {
