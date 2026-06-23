@@ -72,7 +72,7 @@ export type ExecToolDefaults = {
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
-  /** Channel-owned sender/chat metadata exposed to subprocesses as OPENCLAW_CHANNEL_CONTEXT. */
+  /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
   channelContext?: PluginHookChannelContext;
   accountId?: string;
   approvalReviewerDeviceId?: string;

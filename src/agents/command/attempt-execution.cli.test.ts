@@ -1636,6 +1636,11 @@ describe("CLI attempt execution", () => {
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {
         currentChannelId: "channel:voice-room",
+        chatId: "voice-room",
+        channelContext: {
+          sender: { id: "sender-voice", unionId: "sender-union" },
+          chat: { id: "voice-room" },
+        },
         senderId: "sender-voice",
       } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
@@ -1656,6 +1661,11 @@ describe("CLI attempt execution", () => {
       messageChannel: "discord",
       messageProvider: "discord-voice",
       currentChannelId: "channel:voice-room",
+      chatId: "voice-room",
+      channelContext: {
+        sender: { id: "sender-voice", unionId: "sender-union" },
+        chat: { id: "voice-room" },
+      },
       senderId: "sender-voice",
     });
   });
@@ -2080,7 +2090,14 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-canonical-codex-cli",
       opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      runContext: {
+        chatId: "chat-embedded",
+        channelContext: {
+          sender: { id: "sender-embedded", unionId: "embedded-union" },
+          chat: { id: "chat-embedded" },
+        },
+        senderId: "sender-embedded",
+      } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "telegram",
       skillsSnapshot: undefined,
@@ -2097,6 +2114,12 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
+      chatId: "chat-embedded",
+      channelContext: {
+        sender: { id: "sender-embedded", unionId: "embedded-union" },
+        chat: { id: "chat-embedded" },
+      },
+      senderId: "sender-embedded",
     });
   });
 

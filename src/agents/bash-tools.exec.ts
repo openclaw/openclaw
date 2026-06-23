@@ -42,6 +42,7 @@ import {
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -110,11 +111,26 @@ type ExecToolArgs = Record<string, unknown> & {
 
 const CHANNEL_CONTEXT_ENV_KEY = "OPENCLAW_CHANNEL_CONTEXT";
 
-function buildChannelContextEnv(channelContext: unknown): Record<string, string> | undefined {
-  if (!channelContext) {
+function buildSubprocessChannelContext(
+  channelContext: PluginHookChannelContext | undefined,
+): PluginHookChannelContext | undefined {
+  const senderId = normalizeOptionalString(channelContext?.sender?.id);
+  const chatId = normalizeOptionalString(channelContext?.chat?.id);
+  const subprocessContext: PluginHookChannelContext = {
+    ...(senderId ? { sender: { id: senderId } } : {}),
+    ...(chatId ? { chat: { id: chatId } } : {}),
+  };
+  return subprocessContext.sender || subprocessContext.chat ? subprocessContext : undefined;
+}
+
+function buildChannelContextEnv(
+  channelContext: PluginHookChannelContext | undefined,
+): Record<string, string> | undefined {
+  const subprocessContext = buildSubprocessChannelContext(channelContext);
+  if (!subprocessContext) {
     return undefined;
   }
-  const serialized = safeJsonStringify(channelContext);
+  const serialized = safeJsonStringify(subprocessContext);
   return serialized ? { [CHANNEL_CONTEXT_ENV_KEY]: serialized } : undefined;
 }
 type ResolvedExecEnvPreparedState = {
@@ -1642,7 +1658,6 @@ export function createExecTool(
               containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
             })
           : (hostEnvResult?.env ?? inheritedBaseEnv);
-      Object.assign(env, channelContextEnv);
 
       if (!sandbox && host === "gateway" && !requestedEnv?.PATH) {
         const shellPath = getShellPathFromLoginShell({

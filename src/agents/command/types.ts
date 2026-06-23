@@ -8,6 +8,7 @@ import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
@@ -42,6 +43,8 @@ export type AgentRunContext = {
   currentChannelId?: string;
   /** Transport-native chat/conversation ID for plugin hook identity context. */
   chatId?: string;
+  /** Channel-specific sender/chat metadata for plugin hook identity context. */
+  channelContext?: PluginHookChannelContext;
   currentThreadTs?: string;
   currentInboundAudio?: boolean;
   senderId?: string | null;
