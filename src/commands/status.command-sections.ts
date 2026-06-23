@@ -370,7 +370,7 @@ export function buildStatusModelSelectionLines(params: {
   muted: (value: string) => string;
 }) {
   const mismatches = params.recent.filter((sess) => {
-    if (!sess.configuredModel || !sess.selectedModel || !sess.modelSelectionReason) {
+    if (!sess.configuredModel || !sess.selectedModel) {
       return false;
     }
     return (
