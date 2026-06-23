@@ -22,6 +22,7 @@ const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
 const CI_CHECK_TESTBOX_WORKFLOW = ".github/workflows/ci-check-testbox.yml";
 const CI_CHECK_ARM_TESTBOX_WORKFLOW = ".github/workflows/ci-check-arm-testbox.yml";
 const CI_BUILD_ARTIFACTS_TESTBOX_WORKFLOW = ".github/workflows/ci-build-artifacts-testbox.yml";
+const WINDOWS_BLACKSMITH_TESTBOX_WORKFLOW = ".github/workflows/windows-blacksmith-testbox.yml";
 const CRABBOX_HYDRATE_WORKFLOW = ".github/workflows/crabbox-hydrate.yml";
 const CRABBOX_CONFIG = ".crabbox.yaml";
 const SCHEDULED_LIVE_CHECKS_WORKFLOW = ".github/workflows/openclaw-scheduled-live-checks.yml";
@@ -1254,17 +1255,35 @@ describe("package artifact reuse", () => {
     ).toHaveLength(2);
   });
 
-  it("fails Testbox changed-check delegation when the remote command fails", () => {
+  it("finalizes Testbox delegation even when setup or the remote command fails", () => {
     const workflow = readFileSync(CI_CHECK_TESTBOX_WORKFLOW, "utf8");
-    const runTestboxStep = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check").steps?.find(
-      (step) => step.name === "Run Testbox",
+    const checkTestboxJob = workflowJob(CI_CHECK_TESTBOX_WORKFLOW, "check");
+    const runTestboxStep = workflowStep(checkTestboxJob, "Run Testbox");
+    const runArmTestboxStep = workflowStep(
+      workflowJob(CI_CHECK_ARM_TESTBOX_WORKFLOW, "check-arm"),
+      "Run Testbox",
+    );
+    const runBuildArtifactsTestboxStep = workflowStep(
+      workflowJob(CI_BUILD_ARTIFACTS_TESTBOX_WORKFLOW, "build-artifacts"),
+      "Run Testbox",
+    );
+    const runWindowsTestboxStep = workflowStep(
+      workflowJob(WINDOWS_BLACKSMITH_TESTBOX_WORKFLOW, "windows"),
+      "Run Testbox",
     );
 
     expect(workflow).toContain('PNPM_CONFIG_STORE_DIR: "/tmp/openclaw-pnpm-store"');
     expect(workflow).not.toContain("PNPM_CONFIG_MODULES_DIR");
     expect(workflow).not.toContain("PNPM_CONFIG_VIRTUAL_STORE_DIR");
-    expect(runTestboxStep?.uses).toContain("useblacksmith/run-testbox@");
-    expect(runTestboxStep?.["continue-on-error"]).toBeUndefined();
+    expect(checkTestboxJob["timeout-minutes"]).toBe(
+      "${{ fromJSON(inputs.timeout_minutes || '120') }}",
+    );
+    expect(runTestboxStep.uses).toContain("useblacksmith/run-testbox@");
+    expect(runTestboxStep.if).toBe("always()");
+    expect(runArmTestboxStep.if).toBe("always()");
+    expect(runBuildArtifactsTestboxStep.if).toBe("always()");
+    expect(runWindowsTestboxStep.if).toBe("always()");
+    expect(runTestboxStep["continue-on-error"]).toBeUndefined();
   });
 
   it("allows the Telegram lane to run from reusable package acceptance artifacts", () => {
@@ -1397,6 +1416,26 @@ describe("package artifact reuse", () => {
         `vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED == 'true'`,
       );
       expect(qaWorkflow).not.toContain(`OPENCLAW_QA_${channel}_LIVE_CI_ENABLED`);
+    }
+  });
+
+  it("requires QA live evidence artifacts when lanes run", () => {
+    const cases = [
+      ["run_mock_parity", "Upload parity artifacts"],
+      ["run_live_runtime_token_efficiency", "Upload live runtime token-efficiency artifacts"],
+      ["run_live_matrix", "Upload Matrix QA artifacts"],
+      ["run_live_matrix_sharded", "Upload Matrix QA shard artifacts"],
+      ["run_live_telegram", "Upload Telegram QA artifacts"],
+      ["run_live_discord", "Upload Discord QA artifacts"],
+      ["run_live_whatsapp", "Upload WhatsApp QA artifacts"],
+      ["run_live_slack", "Upload Slack QA artifacts"],
+    ];
+
+    for (const [jobName, stepName] of cases) {
+      const uploadStep = workflowStep(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, jobName), stepName);
+
+      expect(uploadStep.if, jobName).toBe("always()");
+      expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
     }
   });
 

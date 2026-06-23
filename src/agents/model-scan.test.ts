@@ -147,7 +147,7 @@ describe("scanOpenRouterModels", () => {
     // cancelled the upstream body once the byte cap was crossed.
     expect(cancel).toHaveBeenCalledOnce();
     expect(pullCount).toBeGreaterThan(0);
-    expect(pullCount).toBeLessThan(4 * 1024 * 1024); // nowhere near draining forever
+    expect(pullCount).toBeLessThan(16 * 1024 * 1024); // nowhere near draining forever
   });
 
   it("rejects a malformed catalog success body", async () => {

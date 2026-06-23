@@ -1102,13 +1102,15 @@ export function createFollowupRunner(params: {
                       provider: run.messageProvider,
                     }),
                     currentChannelId: queued.originatingTo,
+                    senderId: run.senderId,
+                    chatId: queued.originatingChatId,
+                    channelContext: run.channelContext,
                     currentThreadTs:
                       queued.originatingThreadId != null
                         ? String(queued.originatingThreadId)
                         : undefined,
                     currentMessageId: followupCurrentMessageId,
                     agentAccountId: run.agentAccountId,
-                    senderId: run.senderId,
                     senderIsOwner: run.senderIsOwner,
                     disableTools: opts?.disableTools,
                     abortSignal: runAbortSignal,
@@ -1152,6 +1154,7 @@ export function createFollowupRunner(params: {
                 messageTo: queued.originatingTo,
                 messageThreadId: queued.originatingThreadId,
                 currentChannelId: queued.originatingTo,
+                chatId: queued.originatingChatId,
                 currentThreadTs:
                   queued.originatingThreadId != null
                     ? String(queued.originatingThreadId)
@@ -1164,6 +1167,7 @@ export function createFollowupRunner(params: {
                 senderName: run.senderName,
                 senderUsername: run.senderUsername,
                 senderE164: run.senderE164,
+                channelContext: run.channelContext,
                 sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,

@@ -76,6 +76,15 @@ flow:
                               - ref: env
                               - 120000
                           - call: reset
+                          - set: alphaLabel
+                            value:
+                              expr: "env.providerMode === 'mock-openai' ? config.expectedChildLabels[0] : `${config.expectedChildLabels[0]}-${attempt}`"
+                          - set: betaLabel
+                            value:
+                              expr: "env.providerMode === 'mock-openai' ? config.expectedChildLabels[1] : `${config.expectedChildLabels[1]}-${attempt}`"
+                          - set: prompt
+                            value:
+                              expr: "`Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.\nFirst spawn exactly one child with label ${alphaLabel} and task: verify that \\`HEARTBEAT.md\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nThen spawn exactly one child with label ${betaLabel} and task: verify that \\`repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nDo not spawn any more children after ${betaLabel} finishes.\nThen reply with exactly these two lines and nothing else:\nsubagent-1: ok\nsubagent-2: ok`"
                           - set: sessionKey
                             value:
                               expr: "`agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`"
@@ -85,7 +94,7 @@ flow:
                               - sessionKey:
                                   ref: sessionKey
                                 message:
-                                  expr: config.prompt
+                                  ref: prompt
                                 timeoutMs:
                                   expr: liveTurnTimeoutMs(env, 90000)
                           - call: waitForAgentHistoryReply
@@ -110,10 +119,10 @@ flow:
                                     expr: "Object.values(store).filter((entry) => entry.spawnedBy === sessionKey)"
                                 - set: sawAlpha
                                   value:
-                                    expr: "childRows.some((entry) => entry.label === config.expectedChildLabels[0])"
+                                    expr: "childRows.some((entry) => entry.label === alphaLabel)"
                                 - set: sawBeta
                                   value:
-                                    expr: "childRows.some((entry) => entry.label === config.expectedChildLabels[1])"
+                                    expr: "childRows.some((entry) => entry.label === betaLabel)"
                                 - assert:
                                     expr: "sawAlpha && sawBeta"
                                     message:
@@ -159,10 +168,10 @@ flow:
                                     expr: "Object.values(timeoutStore).filter((entry) => entry.spawnedBy === sessionKey)"
                                 - set: timeoutSawAlpha
                                   value:
-                                    expr: "timeoutChildRows.some((entry) => entry.label === config.expectedChildLabels[0])"
+                                    expr: "timeoutChildRows.some((entry) => entry.label === alphaLabel)"
                                 - set: timeoutSawBeta
                                   value:
-                                    expr: "timeoutChildRows.some((entry) => entry.label === config.expectedChildLabels[1])"
+                                    expr: "timeoutChildRows.some((entry) => entry.label === betaLabel)"
                                 - set: timeoutSpawnRequests
                                   value:
                                     expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(String(request.allInputText ?? '')))"

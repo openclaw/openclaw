@@ -29,8 +29,9 @@ const DEFAULT_CONCURRENCY = 3;
 // The OpenRouter /models catalog is a provider-controlled, runtime-fetched body
 // (already >100 KB and growing). Read it under a byte cap before JSON.parse so a
 // faulty or hostile provider cannot stream an unbounded document and exhaust
-// process memory. 4 MiB matches the cap used for the same endpoint elsewhere.
-const OPENROUTER_MODELS_BODY_MAX_BYTES = 4 * 1024 * 1024;
+// process memory. Keep this aligned with the runtime capability cache for the
+// same endpoint so scan and runtime discovery fail at the same boundary.
+const OPENROUTER_MODELS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";

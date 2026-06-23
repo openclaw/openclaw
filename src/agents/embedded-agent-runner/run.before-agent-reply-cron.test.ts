@@ -87,6 +87,9 @@ describe("runEmbeddedAgent cron before_agent_reply seam", () => {
     expect(hookContext?.sessionKey).toBe("test-key");
     expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
     expect(hookContext?.trigger).toBe("cron");
+    expect(hookContext?.senderId).toBeUndefined();
+    expect(hookContext?.chatId).toBeUndefined();
+    expect(hookContext?.channel).toBeUndefined();
     expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.text).toBe("dreaming claimed");
   });

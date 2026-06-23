@@ -668,6 +668,46 @@ function hasVisibleGatewayAgentPayload(response: unknown): boolean {
   );
 }
 
+function hasVisibleNonSilentGatewayAgentPayload(response: unknown): boolean {
+  const result = getGatewayAgentResult(response);
+  if (!result) {
+    return false;
+  }
+  if (hasMessagingToolDeliveryEvidence(result)) {
+    return true;
+  }
+  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  return payloads.some(isVisibleNonSilentGatewayAgentPayload);
+}
+
+function isVisibleNonSilentGatewayAgentPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as {
+    text?: unknown;
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    presentation?: unknown;
+    interactive?: unknown;
+    channelData?: unknown;
+  };
+  if (
+    record.mediaUrl ||
+    (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
+    record.presentation ||
+    record.interactive ||
+    record.channelData
+  ) {
+    return true;
+  }
+  return (
+    typeof record.text === "string" &&
+    record.text.trim() !== "" &&
+    !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
+  );
+}
+
 function hasGatewayAgentMessagingToolDeliveryEvidence(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   return Boolean(result && hasMessagingToolDeliveryEvidence(result));
@@ -1618,13 +1658,21 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
+    const hasVisibleCompletionReply =
+      hasVisibleNonSilentGatewayAgentPayload(directAnnounceResponse);
+    const hasCompletionSideEffect =
+      hasGatewayAgentCompletionSideEffectEvidence(directAnnounceResponse);
+    const hasIntentionalSilentCompletionReply =
+      hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse);
+    const acceptsIntentionalSilentCompletion =
+      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
       params.expectsCompletionMessage &&
       !shouldDeliverAgentFinal &&
       !requiresMessageToolDelivery &&
-      !hasVisibleGatewayAgentPayload(directAnnounceResponse) &&
-      !hasGatewayAgentCompletionSideEffectEvidence(directAnnounceResponse) &&
-      !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
+      !hasVisibleCompletionReply &&
+      !hasCompletionSideEffect &&
+      !acceptsIntentionalSilentCompletion
     ) {
       return {
         delivered: false,
