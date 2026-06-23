@@ -61,8 +61,18 @@ type ReplyPayloadRunState = {
   runId?: string;
 };
 
+type MessageSendingDeliveryDispatcherOptions = {
+  runsMessageSendingAtDelivery?: boolean;
+};
+
 const foregroundReplyFenceByKey = new Map<string, ForegroundReplyFenceState>();
 const replyPayloadSendingDispatchers = new WeakSet<ReplyDispatcher>();
+
+function runsMessageSendingAtDelivery(
+  options: ReplyDispatcherOptions | ReplyDispatcherWithTypingOptions,
+): boolean {
+  return (options as MessageSendingDeliveryDispatcherOptions).runsMessageSendingAtDelivery === true;
+}
 
 function applyRuntimeToolsAllow(
   replyOptions: InternalDispatchReplyOptions | undefined,
@@ -577,12 +587,22 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     finalized,
     replyPayloadRunState,
   );
+  // A channel-supplied beforeDeliver must compose WITH the canonical message_sending
+  // gate, not replace it. Internal durable delivery paths that run message_sending
+  // at send time opt out so the hook stays exactly-once and per-message.
+  const messageSendingBeforeDeliver = runsMessageSendingAtDelivery(params.dispatcherOptions)
+    ? undefined
+    : buildMessageSendingBeforeDeliver(finalized);
   const globalBeforeDeliver = combineBeforeDeliverHooks(
     replyPayloadBeforeDeliver,
-    buildMessageSendingBeforeDeliver(finalized),
+    messageSendingBeforeDeliver,
   );
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(
+        params.dispatcherOptions.beforeDeliver,
+        replyPayloadBeforeDeliver,
+        messageSendingBeforeDeliver,
+      )
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
@@ -676,12 +696,22 @@ export async function dispatchInboundMessageWithDispatcher(params: {
     params.ctx,
     replyPayloadRunState,
   );
+  // See dispatchInboundMessageWithBufferedDispatcher: compose the channel-supplied
+  // beforeDeliver WITH the canonical message_sending gate, unless the channel runs
+  // message_sending itself at delivery time.
+  const messageSendingBeforeDeliver = runsMessageSendingAtDelivery(params.dispatcherOptions)
+    ? undefined
+    : buildMessageSendingBeforeDeliver(params.ctx);
   const globalBeforeDeliver = combineBeforeDeliverHooks(
     replyPayloadBeforeDeliver,
-    buildMessageSendingBeforeDeliver(params.ctx),
+    messageSendingBeforeDeliver,
   );
   const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
-    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    ? combineBeforeDeliverHooks(
+        params.dispatcherOptions.beforeDeliver,
+        replyPayloadBeforeDeliver,
+        messageSendingBeforeDeliver,
+      )
     : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,

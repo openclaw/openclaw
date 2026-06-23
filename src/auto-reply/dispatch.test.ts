@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
-import type { ReplyDispatchBeforeDeliver, ReplyDispatcher } from "./reply/reply-dispatcher.js";
+import type {
+  ReplyDispatchBeforeDeliver,
+  ReplyDispatcher,
+  ReplyDispatcherWithTypingOptions,
+} from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
 type DispatchReplyFromConfigFn =
@@ -15,6 +19,9 @@ type GetGlobalHookRunnerFn = typeof import("../plugins/hook-runner-global.js").g
 type CreateReplyDispatcherFn = typeof import("./reply/reply-dispatcher.js").createReplyDispatcher;
 type CreateReplyDispatcherWithTypingFn =
   typeof import("./reply/reply-dispatcher.js").createReplyDispatcherWithTyping;
+type InternalMessageSendingDeliveryOptions = ReplyDispatcherWithTypingOptions & {
+  runsMessageSendingAtDelivery: true;
+};
 
 const hoisted = vi.hoisted(() => ({
   dispatchReplyFromConfigMock: vi.fn(),
@@ -764,7 +771,7 @@ describe("withReplyDispatcher", () => {
     expect(dispatcherOptions.silentReplyContext?.conversationType).toBe("direct");
   });
 
-  it("composes custom beforeDeliver with reply_payload_sending hooks", async () => {
+  it("composes custom beforeDeliver with reply_payload_sending and message_sending hooks", async () => {
     const customBeforeDeliver = vi.fn(async (payload: { text?: string }) => ({
       text: `${payload.text ?? ""} [custom]`,
     }));
@@ -809,7 +816,17 @@ describe("withReplyDispatcher", () => {
 
     expect(customBeforeDeliver).toHaveBeenCalledTimes(2);
     expect(customBeforeDeliver).toHaveBeenCalledWith({ text: "original" }, { kind: "final" });
-    expect(runMessageSending).not.toHaveBeenCalled();
+    // Regression for #92374: a channel-supplied beforeDeliver must NOT shadow the
+    // message_sending gate. It now runs last, after the channel hook + reply_payload_sending.
+    expect(runMessageSending).toHaveBeenCalledTimes(2);
+    expect(runMessageSending).toHaveBeenCalledWith(
+      { content: "original [custom] [plugin]", to: "conv-1" },
+      {
+        accountId: "acct-1",
+        channelId: "threads",
+        conversationId: "conv-1",
+      },
+    );
     expect(runReplyPayloadSending).toHaveBeenCalledTimes(2);
     expect(runReplyPayloadSending).toHaveBeenCalledWith(
       {
@@ -826,10 +843,98 @@ describe("withReplyDispatcher", () => {
         runId: undefined,
       },
     );
-    expect(payload).toEqual({ text: "original [custom] [plugin]" });
+    expect(payload).toEqual({ text: "message hook" });
     expect(payloadWithMetadata ? getReplyPayloadMetadata(payloadWithMetadata) : undefined).toEqual({
       assistantMessageIndex: 5,
     });
+  });
+
+  it("does not compose message_sending when the channel runs it at delivery (runsMessageSendingAtDelivery)", async () => {
+    // Telegram runs message_sending itself (deliverReplies + streaming finalizer), so the
+    // dispatcher must not also compose it — otherwise the hook double-runs and at
+    // per-block instead of per-message granularity. See issue #92374.
+    const customBeforeDeliver = vi.fn(async (payload: { text?: string }) => ({
+      text: `${payload.text ?? ""} [custom]`,
+    }));
+    const runMessageSending = vi.fn(async () => ({ content: "message hook" }));
+    const runReplyPayloadSending = vi.fn(async ({ payload }: { payload: { text?: string } }) => ({
+      payload: {
+        ...payload,
+        text: `${payload.text ?? ""} [plugin]`,
+      },
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn(
+        (hookName?: string) =>
+          hookName === "message_sending" || hookName === "reply_payload_sending",
+      ),
+      runMessageSending,
+      runReplyPayloadSending,
+    });
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx({ Surface: "telegram", SessionKey: "agent:test:session" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+        beforeDeliver: customBeforeDeliver,
+        runsMessageSendingAtDelivery: true,
+      } as InternalMessageSendingDeliveryOptions,
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = lastTypingDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+    const payload = await dispatcherOptions.beforeDeliver({ text: "original" }, { kind: "final" });
+
+    expect(customBeforeDeliver).toHaveBeenCalledTimes(1);
+    expect(runReplyPayloadSending).toHaveBeenCalledTimes(1);
+    // Channel owns the message_sending gate, so the dispatcher must not invoke it.
+    expect(runMessageSending).not.toHaveBeenCalled();
+    expect(payload).toEqual({ text: "original [custom] [plugin]" });
+  });
+
+  it("cancels delivery when message_sending vetoes a reply behind a custom beforeDeliver", async () => {
+    const customBeforeDeliver = vi.fn(async (payload: { text?: string }) => ({
+      text: `${payload.text ?? ""} [custom]`,
+    }));
+    const runMessageSending = vi.fn(async () => ({ cancel: true }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName?: string) => hookName === "message_sending"),
+      runMessageSending,
+    });
+    hoisted.createReplyDispatcherMock.mockReturnValueOnce(createDispatcher([]));
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithDispatcher({
+      ctx: buildTestCtx({ Surface: "discord", SessionKey: "agent:test:session" }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+        beforeDeliver: customBeforeDeliver,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    const dispatcherOptions = requireReplyDispatcherOptions();
+    if (!dispatcherOptions?.beforeDeliver) {
+      throw new Error("expected beforeDeliver hook");
+    }
+    const payload = await dispatcherOptions.beforeDeliver({ text: "original" }, { kind: "final" });
+
+    // The message_sending veto cancels delivery even though the channel hook ran first.
+    expect(customBeforeDeliver).toHaveBeenCalledTimes(1);
+    expect(runMessageSending).toHaveBeenCalledTimes(1);
+    expect(payload).toBeNull();
   });
 
   it("does not copy source conversation type onto cross-session native silent-reply targets", async () => {

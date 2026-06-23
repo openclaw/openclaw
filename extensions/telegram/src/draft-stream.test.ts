@@ -393,6 +393,7 @@ describe("createTelegramDraftStream", () => {
       textSnapshot: "Message A partial",
       visibleSinceMs: supersededPreview.visibleSinceMs,
       retain: true,
+      reason: "late-send",
     });
     expect(typeof supersededPreview.visibleSinceMs).toBe("number");
     expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);
@@ -824,6 +825,7 @@ describe("createTelegramDraftStream", () => {
       expect.objectContaining({
         messageId: 17,
         retain: true,
+        reason: "final-overflow",
       }),
     );
   });
@@ -870,6 +872,7 @@ describe("createTelegramDraftStream", () => {
       textSnapshot: "Hello world",
       visibleSinceMs: supersededPreview.visibleSinceMs,
       retain: true,
+      reason: "final-overflow",
     });
     expect(typeof supersededPreview.visibleSinceMs).toBe("number");
     expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);
