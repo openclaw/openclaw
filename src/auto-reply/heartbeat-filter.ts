@@ -282,6 +282,28 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
   return { text, hasNonTextContent };
 }
 
+function hasOnlyIgnorableHeartbeatAckBlocks(content: unknown): boolean {
+  if (!Array.isArray(content) || content.length === 0) {
+    return false;
+  }
+  let sawTextBlock = false;
+  for (const block of content) {
+    if (!isRecord(block)) {
+      return false;
+    }
+    const type = readString(block.type) ?? "";
+    if (type === "text" || type === "input_text" || type === "output_text") {
+      sawTextBlock = true;
+      continue;
+    }
+    if (type === "reasoning" || type === "thinking") {
+      continue;
+    }
+    return false;
+  }
+  return sawTextBlock;
+}
+
 /** Return whether a user message is an internal heartbeat prompt. */
 export function isHeartbeatUserMessage(
   message: { role: string; content?: unknown },
@@ -337,7 +359,7 @@ export function isHeartbeatOkResponse(
     return false;
   }
   const { text, hasNonTextContent } = resolveMessageText(message.content);
-  if (hasNonTextContent) {
+  if (hasNonTextContent && !hasOnlyIgnorableHeartbeatAckBlocks(message.content)) {
     return false;
   }
   return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;

@@ -108,6 +108,27 @@ describe("isHeartbeatOkResponse", () => {
       }),
     ).toBe(false);
 
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "internal draft" },
+          { type: "output_text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "internal draft" },
+          { type: "output_text", text: "HEARTBEAT_OK" },
+          { type: "image", image_url: "https://example.com/a.png" },
+        ],
+      }),
+    ).toBe(false);
+
     const toolCallOnlyMessage = {
       role: "assistant",
       content: null,
@@ -187,6 +208,24 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         },
       ]);
     }
+  });
+
+  it("removes heartbeat pairs when the ack also contains reasoning blocks", () => {
+    const messages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT },
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "thinking..." },
+          { type: "output_text", text: "HEARTBEAT_OK" },
+        ],
+      },
+      { role: "user", content: "what model are you" },
+    ];
+
+    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+      { role: "user", content: "what model are you" },
+    ]);
   });
 
   it("removes prompt-only interrupted heartbeat spans", () => {
