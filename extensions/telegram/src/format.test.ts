@@ -119,16 +119,32 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
-  it("preserves structural newlines that only separate block tags", () => {
+  it("preserves structural newlines that only separate block tags with text content", () => {
     // Block tags already break; a stray <br> would add a blank line or land as an
     // invalid container child. Mixed text hugging a block keeps its boundary \n too.
-    const blocks = "<h2>Plan</h2>\n<table><tbody><tr><td>A</td></tr></tbody></table>";
-    expect(materializeTelegramRichHtmlLineBreaks(blocks)).toBe(blocks);
     expect(
       materializeTelegramRichHtmlLineBreaks(
         'A\n\n<figure><img src="https://x/a.jpg"/></figure>\n\nB',
       ),
     ).toBe('A\n\n<figure><img src="https://x/a.jpg"/></figure>\n\nB');
+  });
+
+  it("materializes pure-whitespace newlines between block tags outside containers", () => {
+    // Bot API 10.1 rich messages collapse bare newlines between block elements.
+    // When a segment between two block tags is purely whitespace newlines (no text),
+    // they must become <br> so block boundaries are visible (#95538).
+    expect(materializeTelegramRichHtmlLineBreaks("<h2>Plan</h2>\n<p>Details</p>")).toBe(
+      "<h2>Plan</h2><br><p>Details</p>",
+    );
+    expect(materializeTelegramRichHtmlLineBreaks("<h2>Plan</h2>\n\n<p>Details</p>")).toBe(
+      "<h2>Plan</h2><br><br><p>Details</p>",
+    );
+    // Newlines before a container tag (table/figure/details) are also materialized
+    // when the segment is purely whitespace, but container internals are preserved.
+    const beforeTable = "<h2>Plan</h2>\n<table><tbody><tr><td>A</td></tr></tbody></table>";
+    expect(materializeTelegramRichHtmlLineBreaks(beforeTable)).toBe(
+      "<h2>Plan</h2><br><table><tbody><tr><td>A</td></tr></tbody></table>",
+    );
   });
 
   it("does not let a self-closing literal tag swallow later line breaks", () => {
@@ -147,6 +163,12 @@ describe("markdownToTelegramHtml", () => {
     expect(materializeTelegramRichHtmlLineBreaks(figure)).toBe(figure);
     const details = "<details>\n<summary>\nMore\n</summary>\nBody\n</details>";
     expect(materializeTelegramRichHtmlLineBreaks(details)).toBe(details);
+    // Pretty-printed lists: newlines inside <ul>/<ol> stay literal so <br> is
+    // not injected as an invalid child or unwanted spacing between items.
+    const ul = "<ul>\n<li>One</li>\n<li>Two</li>\n</ul>";
+    expect(materializeTelegramRichHtmlLineBreaks(ul)).toBe(ul);
+    const ol = "<ol>\n<li>First</li>\n<li>Second</li>\n</ol>";
+    expect(materializeTelegramRichHtmlLineBreaks(ol)).toBe(ol);
   });
 
   it("keeps existing <br> tags intact without doubling adjacent newlines", () => {

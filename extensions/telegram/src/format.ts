@@ -1020,6 +1020,7 @@ function convertTelegramRichSegmentNewlines(
   segment: string,
   prevStructural: boolean,
   nextStructural: boolean,
+  insideRichContainer: boolean,
 ): string {
   if (!segment.includes("\n")) {
     return segment;
@@ -1027,10 +1028,20 @@ function convertTelegramRichSegmentNewlines(
   // Keep newline runs that hug a structural tag: Telegram already starts a new
   // line there, so a stray <br> would add a blank line or land as an invalid
   // child inside a container (table/figure/details/list).
+  // However, Bot API 10.1 rich messages do not reliably render bare newlines
+  // between block-level elements — they collapse as insignificant whitespace.
+  // When the segment is purely whitespace newlines (no text content) and not
+  // inside a rich container (table/figure/details), the run must still be
+  // materialized as <br> so that block boundaries are visible (#95538: /status
+  // card loses field-per-line layout under richMessages).
+  const segmentIsPureNewlines = segment.trim() === "";
   return segment.replace(/\n+/g, (run: string, offset: number) => {
     const hugsPrev = offset === 0 && prevStructural;
     const hugsNext = offset + run.length === segment.length && nextStructural;
-    return hugsPrev || hugsNext ? run : "<br>".repeat(run.length);
+    if ((hugsPrev || hugsNext) && (!segmentIsPureNewlines || insideRichContainer)) {
+      return run;
+    }
+    return "<br>".repeat(run.length);
   });
 }
 
@@ -1064,6 +1075,20 @@ function isTelegramRichLineBreakStructuralTag(rawTag: string, tagName: string): 
   );
 }
 
+// Rich containers whose pretty-printed internal newlines must stay literal:
+// a <br> inside <table>/<figure>/<details>/<ul>/<ol> is either an invalid
+// child or an unwanted blank line between layout elements. Lists are included
+// because pretty-printed <ul>/<ol> HTML (e.g. <ul>\n<li>…</li>\n</ul>) would
+// otherwise have its internal newlines materialized as <br>, producing visible
+// extra spacing or invalid markup inside the list container.
+const TELEGRAM_RICH_LINE_BREAK_CONTAINER_TAGS: ReadonlySet<string> = new Set([
+  "table",
+  "figure",
+  "details",
+  "ol",
+  "ul",
+]);
+
 // Bot API 10.1 rich messages parse structured HTML, so literal newlines are
 // insignificant whitespace — unlike the legacy HTML parse mode that renders them
 // as line breaks. Materialize inline newlines as <br> so multi-line prose and
@@ -1076,6 +1101,7 @@ export function materializeTelegramRichHtmlLineBreaks(html: string): string {
   let result = "";
   let lastIndex = 0;
   let literalDepth = 0;
+  let containerDepth = 0;
   let prevStructural = false;
 
   HTML_TAG_PATTERN.lastIndex = 0;
@@ -1091,15 +1117,24 @@ export function materializeTelegramRichHtmlLineBreaks(html: string): string {
     const tagIsStructural =
       tagName === "br" || isTelegramRichLineBreakStructuralTag(rawTag, tagName);
     const segment = html.slice(lastIndex, tagStart);
+    const insideRichContainer = containerDepth > 0;
     result +=
       literalDepth > 0
         ? segment
-        : convertTelegramRichSegmentNewlines(segment, prevStructural, tagIsStructural);
+        : convertTelegramRichSegmentNewlines(
+            segment,
+            prevStructural,
+            tagIsStructural,
+            insideRichContainer,
+          );
 
     // Self-closing literal tags (e.g. a stray <pre/>) must not open a region that
     // never closes and swallows every later line break.
     if (TELEGRAM_RICH_LITERAL_WHITESPACE_TAGS.has(tagName) && !rawTag.trimEnd().endsWith("/>")) {
       literalDepth = isClosing ? Math.max(0, literalDepth - 1) : literalDepth + 1;
+    }
+    if (TELEGRAM_RICH_LINE_BREAK_CONTAINER_TAGS.has(tagName) && !rawTag.trimEnd().endsWith("/>")) {
+      containerDepth = isClosing ? Math.max(0, containerDepth - 1) : containerDepth + 1;
     }
     result += rawTag;
     lastIndex = tagEnd;
@@ -1108,7 +1143,9 @@ export function materializeTelegramRichHtmlLineBreaks(html: string): string {
 
   const tail = html.slice(lastIndex);
   result +=
-    literalDepth > 0 ? tail : convertTelegramRichSegmentNewlines(tail, prevStructural, false);
+    literalDepth > 0
+      ? tail
+      : convertTelegramRichSegmentNewlines(tail, prevStructural, false, containerDepth > 0);
   return result;
 }
 
