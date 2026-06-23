@@ -18,8 +18,15 @@ function expectInlineEvalDescription(hit: InterpreterInlineEvalHit | null, expec
 describe("exec inline eval detection", () => {
   it.each([
     { argv: ["python3", "-c", "print('hi')"], expected: "python3 -c" },
+    { argv: ["python3.13", "-c", "print('hi')"], expected: "python3.13 -c" },
+    { argv: ["/usr/bin/pypy3.10", "-c", "print('hi')"], expected: "pypy3.10 -c" },
     { argv: ["/usr/bin/node", "--eval", "console.log('hi')"], expected: "node --eval" },
     { argv: ["perl", "-E", "say 1"], expected: "perl -e" },
+    { argv: ["php", "-B", "system('id');"], expected: "php -B" },
+    { argv: ["php", "-E", "system('id');"], expected: "php -E" },
+    { argv: ["php", "-R", "system('id');"], expected: "php -R" },
+    { argv: ["Rscript", "-e", "system('id')"], expected: "rscript -e" },
+    { argv: ["R", "--exec", "system('id')"], expected: "r --exec" },
     { argv: ["osascript", "-e", "beep"], expected: "osascript -e" },
     { argv: ["awk", "BEGIN { print 1 }"], expected: "awk inline program" },
     { argv: ["gawk", "-F", ",", "{print $1}", "data.csv"], expected: "gawk inline program" },
@@ -60,7 +67,10 @@ describe("exec inline eval detection", () => {
 
   it("ignores normal script execution", () => {
     expect(detectInterpreterInlineEvalArgv(["python3", "script.py"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["python3.13", "script.py"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["node", "script.js"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["php", "-F", "filter.php"])).toBeNull();
+    expect(detectInterpreterInlineEvalArgv(["Rscript", "script.R"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["awk", "-f", "script.awk", "data.csv"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["find", ".", "-name", "*.ts"])).toBeNull();
     expect(detectInterpreterInlineEvalArgv(["xargs", "-0"])).toBeNull();
@@ -76,7 +86,11 @@ describe("exec inline eval detection", () => {
 
   it("matches interpreter-like allowlist patterns", () => {
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/python3")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("/usr/bin/python3.13")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("python3.*")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("pypy3.10")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/node")).toBe(true);
+    expect(isInterpreterLikeAllowlistPattern("Rscript")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/awk")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("**/gawk")).toBe(true);
     expect(isInterpreterLikeAllowlistPattern("/usr/bin/mawk")).toBe(true);
