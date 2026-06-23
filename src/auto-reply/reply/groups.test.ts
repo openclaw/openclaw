@@ -164,6 +164,25 @@ describe("group runtime loading", () => {
     });
     expect(channelContext).toContain("You are in a Mattermost channel.");
     expect(channelContext).not.toContain("You are in a Mattermost group chat.");
+    expect(channelContext).toContain("sent to this channel.");
+    expect(channelContext).toContain("send to this same channel;");
+    expect(channelContext).toContain("Be a good channel participant");
+    expect(channelContext).toContain("a directly requested channel task");
+    expect(channelContext).toContain("channel-visible updates");
+    expect(channelContext).not.toContain("this group chat");
+    expect(channelContext).not.toContain("same group");
+    expect(channelContext).not.toContain("group-chat task");
+    expect(channelContext).not.toContain("group-visible updates");
+
+    const toolOnlyChannelContext = groups.buildGroupChatContext({
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(toolOnlyChannelContext).toContain("not automatically sent to this channel");
+    expect(toolOnlyChannelContext).toContain("target defaults to this channel");
+    expect(toolOnlyChannelContext).toContain("If no visible channel response is needed");
+    expect(toolOnlyChannelContext).not.toContain("group response");
+    expect(toolOnlyChannelContext).not.toContain("this group chat");
 
     const groupContext = groups.buildGroupChatContext({
       sessionCtx: { ChatType: "group", Provider: "mattermost" },
@@ -171,6 +190,8 @@ describe("group runtime loading", () => {
       silentToken: "NO_REPLY",
     });
     expect(groupContext).toContain("You are in a Mattermost group chat.");
+    expect(groupContext).toContain("sent to this group chat.");
+    expect(groupContext).toContain("Be a good group participant");
   });
 
   it("marks non-visible assistant replies silent for groups with silence allowed", () => {

@@ -239,7 +239,12 @@ export function buildGroupChatContext(params: {
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const botUsername = normalizeOptionalString(params.sessionCtx.BotUsername);
 
-  const chatTypeLabel = params.sessionCtx.ChatType === "channel" ? "channel" : "group chat";
+  const isChannelChat = params.sessionCtx.ChatType === "channel";
+  const chatTypeLabel = isChannelChat ? "channel" : "group chat";
+  const destinationLabel = isChannelChat ? "channel" : "group chat";
+  const participantLabel = isChannelChat ? "channel" : "group";
+  const sameDestinationLabel = isChannelChat ? "same channel" : "same group";
+  const taskLabel = isChannelChat ? "channel task" : "group-chat task";
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} ${chatTypeLabel}.`);
   if (params.sessionCtx.ExplicitlyMentionedBot === true && botUsername) {
@@ -249,15 +254,15 @@ export function buildGroupChatContext(params: {
   }
   if (messageToolOnly) {
     lines.push(
-      "Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat.",
+      `Normal final replies are private and are not automatically sent to this ${destinationLabel}. To post visible output here, use the message tool with action=send; the target defaults to this ${destinationLabel}.`,
     );
   } else {
     lines.push(
-      "Your text replies are automatically sent to this group chat. For ordinary text, do not use the message tool to send to this same group; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
+      `Your text replies are automatically sent to this ${destinationLabel}. For ordinary text, do not use the message tool to send to this ${sameDestinationLabel}; just reply normally. Use message(action=send) only when you need to send files, images, or other attachments to this ${sameDestinationLabel}/topic.`,
     );
   }
   lines.push(
-    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.",
+    `Be a good ${participantLabel} participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.`,
   );
   const tableGuidance = provider === "telegram" ? "" : " Avoid Markdown tables.";
   lines.push(
@@ -268,13 +273,13 @@ export function buildGroupChatContext(params: {
     lines.push("Discord: wrap bare URLs like <https://example.com> to suppress embeds.");
   }
   lines.push(
-    "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
+    `When subagent or session-spawn tools are available and a directly requested ${taskLabel} will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise ${participantLabel}-visible updates when they add value.`,
   );
   const canUseSilentReply =
     !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
   if (messageToolOnly) {
     lines.push(
-      "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
+      `If no visible ${participantLabel} response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the ${participantLabel}.`,
     );
   }
   if (canUseSilentReply) {
