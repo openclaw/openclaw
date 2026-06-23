@@ -2201,8 +2201,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("This conversation is too large to continue cleanly");
+    expect(payload.text).toContain("The conversation history is still available");
+    expect(payload.text).not.toContain("reserveTokensFloor");
+    expect(payload.text).not.toContain("agents.defaults.compaction");
     expect(payload.text).toContain("/new");
   });
 
@@ -2224,8 +2226,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("Auto-compaction could not recover this turn");
-    expect(payload.text).toContain("reserveTokensFloor");
+    expect(payload.text).toContain("This conversation is too large to continue cleanly");
+    expect(payload.text).toContain("The conversation history is still available");
+    expect(payload.text).not.toContain("reserveTokensFloor");
+    expect(payload.text).not.toContain("agents.defaults.compaction");
     expect(payload.text).toContain("/new");
   });
 

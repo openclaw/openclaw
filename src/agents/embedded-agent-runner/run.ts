@@ -223,6 +223,43 @@ function isNoRealConversationCompactionNoop(params: {
   );
 }
 
+function resolvePostRecoveryBudgetOverflow(params: {
+  contextBudgetStatus?: EmbeddedAgentMeta["contextBudgetStatus"];
+  tokensAfter?: number;
+  recoveryAction: string;
+  provider: string;
+  modelId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  sessionFile?: string;
+}): { message: string } | undefined {
+  const { contextBudgetStatus } = params;
+  if (
+    !contextBudgetStatus ||
+    typeof params.tokensAfter !== "number" ||
+    !Number.isFinite(params.tokensAfter)
+  ) {
+    return undefined;
+  }
+  const tokensAfter = Math.max(0, Math.ceil(params.tokensAfter));
+  const promptBudgetBeforeReserve = Math.max(
+    1,
+    Math.floor(contextBudgetStatus.promptBudgetBeforeReserve),
+  );
+  if (tokensAfter <= promptBudgetBeforeReserve) {
+    return undefined;
+  }
+  const overflowTokens = Math.max(1, tokensAfter - promptBudgetBeforeReserve);
+  return {
+    message:
+      `${params.recoveryAction} left context over budget; ` +
+      `tokensAfter=${tokensAfter} promptBudgetBeforeReserve=${promptBudgetBeforeReserve} ` +
+      `overflowTokens=${overflowTokens} provider=${params.provider}/${params.modelId} ` +
+      `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"} ` +
+      `sessionFile=${params.sessionFile ?? "unknown"}`,
+  };
+}
+
 async function resetNoRealConversationTokenSnapshot(params: {
   config?: RunEmbeddedAgentParams["config"];
   sessionKey?: string;
@@ -2041,6 +2078,49 @@ export async function runEmbeddedAgent(
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
             const hadAttemptLevelCompaction = attemptCompactionCount > 0;
+            const returnBlockedOverflowResult = (params: {
+              kind: "compaction_failure" | "context_overflow";
+              errorMessage: string;
+              logMessage: string;
+            }): EmbeddedAgentRunResult => {
+              const overflowRecoveryText =
+                "Context overflow: prompt too large for the model. " +
+                "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
+              log.warn(params.logMessage);
+              attempt.setTerminalLifecycleMeta?.({
+                replayInvalid: resolveReplayInvalidForAttempt(),
+                livenessState: "blocked",
+              });
+              return {
+                payloads: [
+                  {
+                    text: overflowRecoveryText,
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: buildErrorAgentMeta({
+                    sessionId: sessionIdUsed,
+                    sessionFile: activeSessionFile,
+                    provider,
+                    model: model.id,
+                    contextTokens: ctxInfo.tokens,
+                    usageAccumulator,
+                    lastRunPromptUsage,
+                    lastAssistant: sessionLastAssistant,
+                    lastTurnTotal,
+                  }),
+                  systemPromptReport: attempt.systemPromptReport,
+                  finalAssistantVisibleText: overflowRecoveryText,
+                  finalAssistantRawText: overflowRecoveryText,
+                  finalPromptText: attempt.finalPromptText,
+                  replayInvalid: resolveReplayInvalidForAttempt(),
+                  livenessState: "blocked",
+                  error: { kind: params.kind, message: params.errorMessage },
+                },
+              };
+            };
             // If this attempt already compacted (SDK auto-compaction), avoid immediately
             // running another explicit compaction for the same overflow trigger.
             if (
@@ -2222,6 +2302,45 @@ export async function runEmbeddedAgent(
                       `[context-overflow-precheck] post-compaction tool-result truncation did not help for ` +
                         `${provider}/${modelId}: ${truncResult.reason ?? "unknown"}`,
                     );
+                    const postRecoveryOverflow = resolvePostRecoveryBudgetOverflow({
+                      contextBudgetStatus: attempt.contextBudgetStatus ?? lastContextBudgetStatus,
+                      tokensAfter: compactResult.result?.tokensAfter,
+                      recoveryAction: "post-compaction recovery",
+                      provider,
+                      modelId,
+                      sessionKey: params.sessionKey,
+                      sessionId: params.sessionId,
+                      sessionFile: activeSessionFile,
+                    });
+                    if (postRecoveryOverflow) {
+                      return returnBlockedOverflowResult({
+                        kind: "context_overflow",
+                        errorMessage: `${errorText}; ${postRecoveryOverflow.message}`,
+                        logMessage:
+                          `[context-overflow-recovery] post-compaction budget check failed; ` +
+                          postRecoveryOverflow.message,
+                      });
+                    }
+                  }
+                } else {
+                  const postRecoveryOverflow = resolvePostRecoveryBudgetOverflow({
+                    contextBudgetStatus: attempt.contextBudgetStatus ?? lastContextBudgetStatus,
+                    tokensAfter: compactResult.result?.tokensAfter,
+                    recoveryAction: "auto-compaction recovery",
+                    provider,
+                    modelId,
+                    sessionKey: params.sessionKey,
+                    sessionId: params.sessionId,
+                    sessionFile: activeSessionFile,
+                  });
+                  if (postRecoveryOverflow) {
+                    return returnBlockedOverflowResult({
+                      kind: "context_overflow",
+                      errorMessage: `${errorText}; ${postRecoveryOverflow.message}`,
+                      logMessage:
+                        `[context-overflow-recovery] post-compaction budget check failed; ` +
+                        postRecoveryOverflow.message,
+                    });
                   }
                 }
                 autoCompactionCount += 1;
@@ -2300,46 +2419,13 @@ export async function runEmbeddedAgent(
               );
             }
             const kind = isCompactionFailure ? "compaction_failure" : "context_overflow";
-            const overflowRecoveryText =
-              "Context overflow: prompt too large for the model. " +
-              "Try /reset (or /new) to start a fresh session, or use a larger-context model.";
-            log.warn(
-              `[context-overflow-recovery] exhausted provider overflow recovery for ${provider}/${modelId}; ` +
+            return returnBlockedOverflowResult({
+              kind,
+              errorMessage: errorText,
+              logMessage:
+                `[context-overflow-recovery] exhausted provider overflow recovery for ${provider}/${modelId}; ` +
                 `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,
-            );
-            attempt.setTerminalLifecycleMeta?.({
-              replayInvalid: resolveReplayInvalidForAttempt(),
-              livenessState: "blocked",
             });
-            return {
-              payloads: [
-                {
-                  text: overflowRecoveryText,
-                  isError: true,
-                },
-              ],
-              meta: {
-                durationMs: Date.now() - started,
-                agentMeta: buildErrorAgentMeta({
-                  sessionId: sessionIdUsed,
-                  sessionFile: activeSessionFile,
-                  provider,
-                  model: model.id,
-                  contextTokens: ctxInfo.tokens,
-                  usageAccumulator,
-                  lastRunPromptUsage,
-                  lastAssistant: sessionLastAssistant,
-                  lastTurnTotal,
-                }),
-                systemPromptReport: attempt.systemPromptReport,
-                finalAssistantVisibleText: overflowRecoveryText,
-                finalAssistantRawText: overflowRecoveryText,
-                finalPromptText: attempt.finalPromptText,
-                replayInvalid: resolveReplayInvalidForAttempt(),
-                livenessState: "blocked",
-                error: { kind, message: errorText },
-              },
-            };
           }
 
           if (promptErrorSource === "hook:before_agent_run" && !aborted) {

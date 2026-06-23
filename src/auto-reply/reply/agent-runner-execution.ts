@@ -955,6 +955,13 @@ function buildContextOverflowResetHint(contextWindowTokens: number | undefined):
   );
 }
 
+function buildContextOverflowExternalHint(): string {
+  return (
+    "\n\nThe conversation history is still available. If this keeps happening, start a new " +
+    "session after saving any important context."
+  );
+}
+
 type ModelRefLike = {
   provider: string;
   model: string;
@@ -1133,6 +1140,7 @@ function resolveHeartbeatBleedHint(params: {
 export function buildContextOverflowRecoveryText(params: {
   duringCompaction?: boolean;
   preserveSessionMapping?: boolean;
+  includeOperatorHint?: boolean;
   cfg: FollowupRun["run"]["config"];
   agentId?: string;
   primaryProvider?: string;
@@ -1142,10 +1150,13 @@ export function buildContextOverflowRecoveryText(params: {
   activeSessionEntry?: SessionEntry;
 }): string {
   const prefix = params.preserveSessionMapping
-    ? "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session."
+    ? "⚠️ This conversation is too large to continue cleanly. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session."
     : params.duringCompaction
       ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
       : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
+  if (params.includeOperatorHint === false) {
+    return prefix + buildContextOverflowExternalHint();
+  }
   const primaryContextWindow = resolveContextWindowForCompactionHint({
     cfg: params.cfg,
     primaryProvider: params.primaryProvider,
@@ -2603,6 +2614,7 @@ export async function runAgentTurnWithFallback(params: {
           payload: markAgentRunFailureReplyPayload({
             text: buildContextOverflowRecoveryText({
               preserveSessionMapping: true,
+              includeOperatorHint: false,
               cfg: runtimeConfig,
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
@@ -2742,6 +2754,7 @@ export async function runAgentTurnWithFallback(params: {
             text: buildContextOverflowRecoveryText({
               duringCompaction: true,
               preserveSessionMapping: true,
+              includeOperatorHint: false,
               cfg: runtimeConfig,
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
