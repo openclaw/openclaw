@@ -251,8 +251,12 @@ function openChatSessionPicker(state: AppViewState, surface: ChatSessionSelectSu
   state.chatSessionPickerOpen = true;
   state.chatSessionPickerSurface = surface;
   state.chatSessionPickerError = null;
-  if (!state.chatSessionPickerResult && !state.chatSessionPickerAppliedQuery) {
-    void loadChatSessionPickerPage(state);
+  if (!state.chatSessionPickerResult) {
+    void loadChatSessionPickerPage(state, {
+      query:
+        normalizeOptionalString(state.chatSessionPickerQuery) ??
+        state.chatSessionPickerAppliedQuery,
+    });
   }
   requestHostUpdate(state);
   focusChatSessionPickerSearch(state);
@@ -518,6 +522,10 @@ function resolveChatSessionPickerReloadLimit(result: SessionsListResult | null):
   return Math.max(CHAT_SESSIONS_REFRESH_LIMIT, result?.sessions.length ?? 0);
 }
 
+function resolveChatSessionPickerReloadQuery(state: AppViewState): string {
+  return normalizeOptionalString(state.chatSessionPickerQuery) ?? "";
+}
+
 function resolveChatSessionRow(
   state: AppViewState,
   sessionKey: string,
@@ -709,17 +717,21 @@ async function commitChatSessionRename(state: AppViewState, key: string) {
     return;
   }
   if (!requestIsCurrent) {
-    invalidateChatSessionPickerSearchRequests(state);
-    state.chatSessionPickerResult = null;
-    state.chatSessionPickerLoading = false;
+    if (!state.chatSessionPickerOpen) {
+      invalidateChatSessionPickerSearchRequests(state);
+      state.chatSessionPickerResult = null;
+      state.chatSessionPickerLoading = false;
+    }
     requestHostUpdate(state);
     return;
   }
   if (state.chatSessionPickerOpen) {
     const reloadLimit = resolveChatSessionPickerReloadLimit(state.chatSessionPickerResult);
+    const reloadQuery = resolveChatSessionPickerReloadQuery(state);
+    clearChatSessionPickerSearchTimer(state);
     invalidateChatSessionPickerSearchRequests(state);
     await loadChatSessionPickerPage(state, {
-      query: state.chatSessionPickerAppliedQuery,
+      query: reloadQuery,
       limit: reloadLimit,
     });
   } else {
