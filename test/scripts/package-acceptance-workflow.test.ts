@@ -1448,6 +1448,38 @@ describe("package artifact reuse", () => {
     }
   });
 
+  it("requires release-check QA evidence artifacts when lanes run", () => {
+    const cases = [
+      ["qa_lab_parity_lane_release_checks", "Upload parity lane artifacts"],
+      ["qa_lab_parity_report_release_checks", "Upload parity artifacts"],
+      ["qa_lab_runtime_parity_release_checks", "Upload runtime parity artifacts"],
+      ["qa_live_matrix_release_checks", "Upload Matrix QA artifacts"],
+      ["qa_live_telegram_release_checks", "Upload Telegram QA artifacts"],
+      ["qa_live_discord_release_checks", "Upload Discord QA artifacts"],
+      ["qa_live_whatsapp_release_checks", "Upload WhatsApp QA artifacts"],
+      ["qa_live_slack_release_checks", "Upload Slack QA artifacts"],
+    ];
+
+    for (const [jobName, stepName] of cases) {
+      const uploadStep = workflowStep(workflowJob(RELEASE_CHECKS_WORKFLOW, jobName), stepName);
+
+      expect(uploadStep.if, jobName).toBe("always()");
+      expect(uploadStep.uses, jobName).toBe(UPLOAD_ARTIFACT_V7);
+      expect(uploadStep.with?.["if-no-files-found"], jobName).toBe("error");
+    }
+
+    const runtimeCoverageUpload = workflowStep(
+      workflowJob(RELEASE_CHECKS_WORKFLOW, "runtime_tool_coverage_release_checks"),
+      "Upload runtime tool coverage artifacts",
+    );
+    expect(runtimeCoverageUpload.if).toContain("always()");
+    expect(runtimeCoverageUpload.if).toContain(
+      "steps.verify_runtime_parity_status.outputs.ready == 'true'",
+    );
+    expect(runtimeCoverageUpload.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(runtimeCoverageUpload.with?.["if-no-files-found"]).toBe("error");
+  });
+
   it("requires live proof evidence artifacts when proof jobs run", () => {
     const cases = [
       {

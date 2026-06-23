@@ -853,7 +853,7 @@ jobs:
           name: release-qa-parity-${{ matrix.lane }}-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Record advisory status
         if: always()
@@ -959,7 +959,7 @@ jobs:
           name: release-qa-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Record advisory status
         if: always()
@@ -1131,7 +1131,7 @@ jobs:
           name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Record advisory status
         if: always()
@@ -1241,13 +1241,13 @@ jobs:
             --output .artifacts/qa-e2e/runtime-parity-standard-report/qa-runtime-tool-coverage-report.md
 
       - name: Upload runtime tool coverage artifacts
-        if: always()
+        if: ${{ always() && steps.verify_runtime_parity_status.outputs.ready == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-qa-runtime-tool-coverage-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/runtime-parity-standard-report/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   qa_live_matrix_release_checks:
     name: Run QA Lab live Matrix lane
@@ -1327,7 +1327,7 @@ jobs:
           name: release-qa-live-matrix-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Record advisory status
         if: always()
@@ -1467,7 +1467,7 @@ jobs:
           name: release-qa-live-telegram-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Record advisory status
         if: always()
@@ -1607,7 +1607,7 @@ jobs:
           name: release-qa-live-discord-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Record advisory status
         if: always()
@@ -1750,7 +1750,7 @@ jobs:
           name: release-qa-live-whatsapp-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Record advisory status
         if: always()
@@ -1890,7 +1890,7 @@ jobs:
           name: release-qa-live-slack-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Record advisory status
         if: always()
