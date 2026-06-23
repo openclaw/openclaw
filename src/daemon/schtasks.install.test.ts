@@ -4,7 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installScheduledTask, readScheduledTaskCommand } from "./schtasks.js";
+import {
+  installScheduledTask,
+  readScheduledTaskCommand,
+  resolveTaskScriptPath,
+  uninstallScheduledTask,
+} from "./schtasks.js";
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
 
@@ -285,6 +290,32 @@ describe("installScheduledTask", () => {
       expect(launcher).toContain("WScript.Shell");
       expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
       expectTaskRunCall(3, "OpenClaw Custom Gateway");
+    });
+  });
+
+  it("removes a generated hidden launcher when the caller env lacks its marker", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
+      const scriptPath = resolveTaskScriptPath(env);
+      const parsedScriptPath = path.parse(scriptPath);
+      const launcherPath = path.join(parsedScriptPath.dir, `${parsedScriptPath.name}.vbs`);
+      await fs.mkdir(parsedScriptPath.dir, { recursive: true });
+      await fs.writeFile(scriptPath, "@echo off\n", "utf8");
+      await fs.writeFile(launcherPath, 'CreateObject("WScript.Shell")\n', "utf8");
+
+      await uninstallScheduledTask({
+        env,
+        stdout: new PassThrough(),
+      });
+
+      const remaining: string[] = [];
+      for (const candidate of [scriptPath, launcherPath]) {
+        try {
+          await fs.access(candidate);
+          remaining.push(candidate);
+        } catch {}
+      }
+      expect(remaining).toEqual([]);
     });
   });
 

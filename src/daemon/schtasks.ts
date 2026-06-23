@@ -1300,8 +1300,15 @@ export async function uninstallScheduledTask({
   }
 
   const scriptPath = resolveTaskScriptPath(env);
-  const launcherPath = resolveTaskLauncherScriptPath(env, scriptPath);
-  if (launcherPath !== scriptPath) {
+  const parsedScriptPath = path.parse(scriptPath);
+  const launcherPaths = uniqueStrings([
+    resolveTaskLauncherScriptPath(env, scriptPath),
+    path.join(parsedScriptPath.dir, `${parsedScriptPath.name}.vbs`),
+  ]);
+  for (const launcherPath of launcherPaths) {
+    if (launcherPath === scriptPath) {
+      continue;
+    }
     try {
       await fs.unlink(launcherPath);
       stdout.write(`${formatLine("Removed task launcher", launcherPath)}\n`);
