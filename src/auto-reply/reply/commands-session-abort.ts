@@ -1,6 +1,6 @@
 // Implements session abort commands and active-run stop targeting.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
@@ -16,7 +16,10 @@ import {
   stopSubagentsForRequester,
 } from "./abort.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
-import { persistAbortTargetEntry } from "./commands-session-store.js";
+import {
+  persistAbortTargetEntry,
+  resolveCommandSessionEntryForKey,
+} from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
@@ -27,23 +30,6 @@ type AbortTarget = {
   sessionId?: string;
 };
 
-function resolveSessionEntryForKey(
-  store: Record<string, SessionEntry> | undefined,
-  sessionKey: string | undefined,
-): { entry?: SessionEntry; key?: string } {
-  if (!store || !sessionKey) {
-    return {};
-  }
-  const resolved = resolveSessionStoreEntry({ store, sessionKey });
-  if (!resolved.existing) {
-    return {};
-  }
-  return {
-    entry: resolved.existing,
-    key: resolved.normalizedKey,
-  };
-}
-
 function resolveAbortTarget(params: {
   ctx: { CommandTargetSessionKey?: string | null };
   sessionKey?: string;
@@ -52,7 +38,7 @@ function resolveAbortTarget(params: {
 }): AbortTarget {
   const targetSessionKey =
     normalizeOptionalString(params.ctx.CommandTargetSessionKey) || params.sessionKey;
-  const { entry, key } = resolveSessionEntryForKey(params.sessionStore, targetSessionKey);
+  const { entry, key } = resolveCommandSessionEntryForKey(params.sessionStore, targetSessionKey);
   if (entry && key) {
     return {
       entry,

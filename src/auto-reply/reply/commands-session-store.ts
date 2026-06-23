@@ -1,10 +1,28 @@
 // Shared session-store helpers for command handlers that mutate sessions.
-import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
 import { updateSessionStore } from "../../config/sessions.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type CommandParams = Parameters<CommandHandler>[0];
+
+/** Resolves a command target entry through canonical and legacy session keys. */
+export function resolveCommandSessionEntryForKey(
+  store: Record<string, SessionEntry> | undefined,
+  sessionKey: string | undefined,
+): { entry?: SessionEntry; key?: string } {
+  if (!store || !sessionKey) {
+    return {};
+  }
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  if (!resolved.existing) {
+    return {};
+  }
+  return {
+    entry: resolved.existing,
+    key: resolved.normalizedKey,
+  };
+}
 
 export async function persistSessionEntry(params: CommandParams): Promise<boolean> {
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
