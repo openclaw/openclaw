@@ -1,6 +1,6 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveGatewayPort } from "../config/paths.js";
+import { DEFAULT_GATEWAY_PORT, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startSshPortForward, type SshTunnel } from "../infra/ssh-tunnel.js";
 import type { GatewayConnectionDetails } from "./connection-details.js";
@@ -23,11 +23,11 @@ function parseExplicitUrlPort(rawUrl: string): number | undefined {
   }
 }
 
-function resolveRemoteSshPort(config: OpenClawConfig, fallbackPort: number): number {
+function resolveRemoteSshPort(config: OpenClawConfig): number {
   const remotePort = config.gateway?.remote?.remotePort;
   return typeof remotePort === "number" && Number.isInteger(remotePort) && remotePort > 0
     ? remotePort
-    : fallbackPort;
+    : DEFAULT_GATEWAY_PORT;
 }
 
 function rewriteGatewayUrlToLocalTunnel(rawUrl: string, localPort: number): string {
@@ -70,7 +70,7 @@ export async function startGatewayRemoteSshTunnel(params: {
   }
 
   const localPortPreferred = parseExplicitUrlPort(params.url) ?? resolveGatewayPort(params.config);
-  const remotePort = resolveRemoteSshPort(params.config, localPortPreferred);
+  const remotePort = resolveRemoteSshPort(params.config);
   const tunnel = await startSshPortForward({
     target,
     identity: normalizeOptionalString(remote?.sshIdentity),
