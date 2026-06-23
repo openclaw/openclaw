@@ -64,7 +64,7 @@ type CodexDynamicToolHookContext = {
   currentChannelProvider?: string;
   currentChannelId?: string;
   currentMessagingTarget?: string;
-  currentMessageId?: string;
+  currentMessageId?: string | number;
   currentThreadId?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
@@ -103,7 +103,10 @@ function applyCurrentMessageProvider(
   return { ...args, provider };
 }
 
-function normalizeRouteToken(value: string | undefined): string | undefined {
+function normalizeRouteToken(value: string | number | undefined): string | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
   const normalized = value?.trim().toLowerCase();
   return normalized ? normalized : undefined;
 }
