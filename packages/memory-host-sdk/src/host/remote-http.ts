@@ -25,6 +25,7 @@ export async function withRemoteHttpResponse<T>(params: {
   fetchWithSsrFGuardImpl?: typeof fetchWithSsrFGuard;
   shouldUseEnvHttpProxyForUrlImpl?: typeof shouldUseEnvHttpProxyForUrl;
   auditContext?: string;
+  dispatcherPolicy?: { mode: string; proxyUrl: string; allowPrivateProxy?: boolean };
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
   const guardedFetch = params.fetchWithSsrFGuardImpl ?? fetchWithSsrFGuard;
@@ -36,6 +37,7 @@ export async function withRemoteHttpResponse<T>(params: {
     signal: params.signal,
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
+    dispatcherPolicy: params.dispatcherPolicy,
     ...(shouldUseEnvProxy(params.url) ? { mode: MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE } : {}),
   });
   try {

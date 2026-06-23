@@ -16,6 +16,7 @@ export type RemoteEmbeddingClient = {
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   model: string;
+  dispatcherPolicy?: { mode: string; proxyUrl: string; allowPrivateProxy?: boolean };
 };
 
 /** Create an EmbeddingProvider backed by a remote embeddings endpoint. */
@@ -40,6 +41,7 @@ export function createRemoteEmbeddingProvider(params: {
       signal,
       body: { model: client.model, input },
       errorPrefix: params.errorPrefix,
+      dispatcherPolicy: client.dispatcherPolicy,
     });
   };
 
@@ -62,11 +64,11 @@ export async function resolveRemoteEmbeddingClient(params: {
   defaultBaseUrl: string;
   normalizeModel: (model: string) => string;
 }): Promise<RemoteEmbeddingClient> {
-  const { baseUrl, headers, ssrfPolicy } = await resolveRemoteEmbeddingBearerClient({
+  const { baseUrl, headers, ssrfPolicy, dispatcherPolicy } = await resolveRemoteEmbeddingBearerClient({
     provider: params.provider,
     options: params.options,
     defaultBaseUrl: params.defaultBaseUrl,
   });
   const model = params.normalizeModel(params.options.model);
-  return { baseUrl, headers, ssrfPolicy, model };
+  return { baseUrl, headers, ssrfPolicy, model, dispatcherPolicy };
 }

@@ -44,6 +44,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
   signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
+  dispatcherPolicy?: { mode: string; proxyUrl: string; allowPrivateProxy?: boolean };
 }): Promise<number[][]> {
   return await postJson({
     url: params.url,
@@ -53,6 +54,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
     signal: params.signal,
     body: params.body,
     errorPrefix: params.errorPrefix,
+    dispatcherPolicy: params.dispatcherPolicy,
     parse: (payload) => {
       const root = asRecord(payload);
       if (!root || !Array.isArray(root.data)) {

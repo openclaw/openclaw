@@ -16,6 +16,7 @@ export async function postJson<T>(params: {
   errorPrefix: string;
   attachStatus?: boolean;
   maxResponseBytes?: number;
+  dispatcherPolicy?: { mode: string; proxyUrl: string; allowPrivateProxy?: boolean };
   parse: (payload: unknown) => T | Promise<T>;
 }): Promise<T> {
   return await withRemoteHttpResponse({
@@ -23,6 +24,7 @@ export async function postJson<T>(params: {
     ssrfPolicy: params.ssrfPolicy,
     fetchImpl: params.fetchImpl,
     signal: params.signal,
+    dispatcherPolicy: params.dispatcherPolicy,
     init: {
       method: "POST",
       headers: params.headers,

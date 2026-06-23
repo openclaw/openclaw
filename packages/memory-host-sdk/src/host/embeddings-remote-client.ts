@@ -38,7 +38,12 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   provider: RemoteEmbeddingProviderId;
   options: EmbeddingProviderOptions;
   defaultBaseUrl: string;
-}): Promise<{ baseUrl: string; headers: Record<string, string>; ssrfPolicy?: SsrFPolicy }> {
+}): Promise<{
+  baseUrl: string;
+  headers: Record<string, string>;
+  ssrfPolicy?: SsrFPolicy;
+  dispatcherPolicy?: { mode: string; proxyUrl: string; allowPrivateProxy?: boolean };
+}> {
   const remote = params.options.remote;
   const remoteApiKey = resolveMemorySecretInputString({
     value: remote?.apiKey,
@@ -67,5 +72,12 @@ export async function resolveRemoteEmbeddingBearerClient(params: {
   if (isNativeOpenAIEmbeddingRoute(params.provider, baseUrl)) {
     Object.assign(headers, resolveOpenClawAttributionHeaders());
   }
-  return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl) };
+
+  const proxyConfig = providerConfig?.request?.proxy;
+  const dispatcherPolicy =
+    proxyConfig?.mode === "explicit-proxy" && proxyConfig.url
+      ? { mode: "explicit-proxy", proxyUrl: proxyConfig.url, allowPrivateProxy: true }
+      : undefined;
+
+  return { baseUrl, headers, ssrfPolicy: buildRemoteBaseUrlPolicy(baseUrl), dispatcherPolicy };
 }
