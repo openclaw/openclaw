@@ -65,7 +65,9 @@ export function hasEnvHttpProxyConfigured(
   protocol: "http" | "https" = "https",
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
+  return (
+    resolveEnvHttpProxyUrl(protocol, env) !== undefined || resolveEnvAllProxyUrl(env) !== undefined
+  );
 }
 
 function resolveEnvAllProxyUrl(env: NodeJS.ProcessEnv): string | undefined {
