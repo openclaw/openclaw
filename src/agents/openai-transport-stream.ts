@@ -3290,8 +3290,21 @@ const DEEPSEEK_DSML_TOOL_MAX_OPEN_TOKEN_LEN = Math.max(
   ...DEEPSEEK_DSML_TOOL_OPEN_TOKENS.map((token) => token.length),
 );
 
+const MAX_DSML_RECOVERY_BUFFER_BYTES = 256_000;
+
 function createDeepSeekDsmlToolCallRecoverer() {
   let buffer = "";
+  let bufferBytes = 0;
+
+  const emitAndSlice = (text: string): void => {
+    buffer = buffer.slice(text.length);
+    bufferBytes -= Buffer.byteLength(text, "utf8");
+  };
+
+  const clearBuffer = (): void => {
+    buffer = "";
+    bufferBytes = 0;
+  };
 
   const consume = (final: boolean): DeepSeekDsmlRecoveredPart[] => {
     const output: DeepSeekDsmlRecoveredPart[] = [];
@@ -3300,42 +3313,44 @@ function createDeepSeekDsmlToolCallRecoverer() {
       if (!open) {
         if (final) {
           output.push({ kind: "text", text: buffer });
-          buffer = "";
+          clearBuffer();
           return output;
         }
         const keep = longestDeepSeekDsmlToolOpenPrefixSuffixLength(buffer);
         const emitLength = buffer.length - keep;
         if (emitLength > 0) {
-          output.push({ kind: "text", text: buffer.slice(0, emitLength) });
-          buffer = buffer.slice(emitLength);
+          const emitted = buffer.slice(0, emitLength);
+          output.push({ kind: "text", text: emitted });
+          emitAndSlice(emitted);
         }
         return output;
       }
 
       if (open.index > 0) {
-        output.push({ kind: "text", text: buffer.slice(0, open.index) });
-        buffer = buffer.slice(open.index);
+        const prefix = buffer.slice(0, open.index);
+        output.push({ kind: "text", text: prefix });
+        emitAndSlice(prefix);
       }
 
       const afterOpen = buffer.slice(open.token.length);
       const close = findEarliestStringToken(afterOpen, DEEPSEEK_DSML_TOOL_CLOSE_TOKENS);
       if (!close) {
-        if (final) {
+        if (final || bufferBytes > MAX_DSML_RECOVERY_BUFFER_BYTES) {
           output.push({ kind: "text", text: buffer });
-          buffer = "";
+          clearBuffer();
         }
         return output;
       }
 
       const body = afterOpen.slice(0, close.index);
-      const blockLength = open.token.length + close.index + close.token.length;
+      const blockText = buffer.slice(0, open.token.length + close.index + close.token.length);
       const recoveredToolCalls = parseDeepSeekDsmlToolCallBlock(body);
       if (recoveredToolCalls.length > 0) {
         output.push(...recoveredToolCalls);
       } else {
-        output.push({ kind: "text", text: buffer.slice(0, blockLength) });
+        output.push({ kind: "text", text: blockText });
       }
-      buffer = buffer.slice(blockLength);
+      emitAndSlice(blockText);
     }
     return output;
   };
@@ -3343,6 +3358,7 @@ function createDeepSeekDsmlToolCallRecoverer() {
   return {
     push(chunk: string) {
       buffer += chunk;
+      bufferBytes += Buffer.byteLength(chunk, "utf8");
       return consume(false);
     },
     flush() {
