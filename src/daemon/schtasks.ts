@@ -947,6 +947,20 @@ function resolveScheduledTaskRenderEnv(
   return merged;
 }
 
+function resolveScheduledTaskScriptEnvironment(
+  taskEnv: GatewayServiceEnv,
+  environment: GatewayServiceEnv | undefined,
+): GatewayServiceEnv | undefined {
+  const scriptEnv = environment ? { ...environment } : {};
+  for (const key of CALLER_OWNED_SERVICE_IDENTITY_KEYS) {
+    const value = taskEnv[key]?.trim();
+    if (value) {
+      scriptEnv[key] = value;
+    }
+  }
+  return Object.keys(scriptEnv).length > 0 ? scriptEnv : undefined;
+}
+
 async function writeScheduledTaskScript({
   env,
   programArguments,
@@ -969,11 +983,12 @@ async function writeScheduledTaskScript({
     environment,
     description,
   });
+  const scriptEnvironment = resolveScheduledTaskScriptEnvironment(taskEnv, environment);
   const script = buildTaskScript({
     description: taskDescription,
     programArguments,
     workingDirectory,
-    environment,
+    environment: scriptEnvironment,
   });
   await fs.writeFile(scriptPath, script, "utf8");
   if (taskLaunchPath !== scriptPath) {

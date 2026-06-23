@@ -228,6 +228,7 @@ describe("installScheduledTask", () => {
         OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
       });
       const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+      const script = await fs.readFile(scriptPath, "utf8");
       const launcher = await fs.readFile(launcherPath, "utf8");
 
       expectInitialTaskQueries();
@@ -275,6 +276,7 @@ describe("installScheduledTask", () => {
         environment: gatewayEnv,
       });
       const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+      const script = await fs.readFile(scriptPath, "utf8");
       const launcher = await fs.readFile(launcherPath, "utf8");
 
       expect(schtasksCalls[2]?.slice(0, 5)).toEqual([
@@ -287,6 +289,7 @@ describe("installScheduledTask", () => {
       expect(schtasksCalls[2]?.slice(6)).toEqual(["/RU", "WORKSTATION\\alice", "/NP"]);
       const captured = xmlPayloadCaptures.find((entry) => entry.index === 2);
       expect(captured?.xml).toContain("gateway.vbs</Command>");
+      expect(script).toContain('set "OPENCLAW_WINDOWS_TASK_NAME=OpenClaw Custom Gateway"');
       expect(launcher).toContain("WScript.Shell");
       expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
       expectTaskRunCall(3, "OpenClaw Custom Gateway");
