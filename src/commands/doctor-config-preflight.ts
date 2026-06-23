@@ -14,15 +14,10 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveHomeDir } from "../utils.js";
 import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
-import { migrateLegacyConfig } from "./doctor/shared/legacy-config-migrate.js";
+import { resolveStateMigrationConfigInput } from "./doctor/shared/legacy-config-state-migration-input.js";
 
 type DoctorStateMigrationsModule = typeof import("./doctor-state-migrations.js");
 type DoctorCronModule = typeof import("./doctor/cron/index.js");
-
-type StateMigrationConfigInput = {
-  cfg: OpenClawConfig;
-  pluginDoctorConfig?: OpenClawConfig;
-};
 
 let doctorStateMigrationsPromise: Promise<DoctorStateMigrationsModule> | null = null;
 let doctorCronPromise: Promise<DoctorCronModule> | null = null;
@@ -104,32 +99,6 @@ function addDoctorLegacyIssues(
     return snapshot;
   }
   return { ...snapshot, legacyIssues };
-}
-
-function resolveStateMigrationConfigInput(params: {
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
-  baseConfig: OpenClawConfig;
-}): StateMigrationConfigInput | null {
-  const pluginDoctorConfig = (params.snapshot.sourceConfig ??
-    params.snapshot.config ??
-    params.snapshot.parsed) as OpenClawConfig | undefined;
-  if (params.snapshot.valid) {
-    return params.snapshot.legacyIssues.length > 0 && pluginDoctorConfig !== undefined
-      ? { cfg: params.baseConfig, pluginDoctorConfig }
-      : { cfg: params.baseConfig };
-  }
-  const migrationSource = pluginDoctorConfig ?? params.snapshot.parsed;
-  if (params.snapshot.legacyIssues.length === 0 || migrationSource === undefined) {
-    return null;
-  }
-  const migrated = migrateLegacyConfig(migrationSource);
-  if (!migrated.config || migrated.partiallyValid) {
-    return null;
-  }
-  return {
-    cfg: migrated.config,
-    ...(pluginDoctorConfig ? { pluginDoctorConfig } : {}),
-  };
 }
 
 /** Returns true during updater-managed config rewrites where plugin validation may be stale. */
