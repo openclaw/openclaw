@@ -46,6 +46,7 @@ describe("redactSensitiveStatusSummary", () => {
           timed_out: 0,
           cancelled: 0,
           lost: 0,
+          delivering: 0,
         },
         byRuntime: {
           subagent: 0,
