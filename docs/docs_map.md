@@ -910,11 +910,11 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
 
 `channels/pairing.md`
 
-- 1. DM pairing (inbound chat access)
+- 1) DM pairing (inbound chat access)
   - Approve a sender
   - Reusable sender groups
   - Where the state lives
-- 2. Node device pairing (iOS/Android/macOS/headless nodes)
+- 2) Node device pairing (iOS/Android/macOS/headless nodes)
   - Pair via Telegram (recommended for iOS)
   - Approve a node device
   - Optional trusted-CIDR node auto-approve
@@ -1228,8 +1228,8 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
 - Quick setup (beginner)
 - What it is
 - Setup (fast path)
-  - 1. Create a bot token (Zalo Bot Platform)
-  - 2. Configure the token (env or config)
+  - 1) Create a bot token (Zalo Bot Platform)
+  - 2) Configure the token (env or config)
 - How it works (behavior)
 - Limits
 - Access control (DMs)
@@ -2700,8 +2700,8 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
   - OpenAI Codex (ChatGPT OAuth)
 - Refresh + expiry
 - Multiple accounts (profiles) + routing
-  - 1. Preferred: separate agents
-  - 2. Advanced: multiple profiles in one agent
+  - 1) Preferred: separate agents
+  - 2) Advanced: multiple profiles in one agent
 - Related
 
 ### Parallel specialist lanes
@@ -2730,11 +2730,11 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
 
 - Presence fields (what shows up)
 - Producers (where presence comes from)
-  - 1. Gateway self entry
-  - 2. WebSocket connect
+  - 1) Gateway self entry
+  - 2) WebSocket connect
     - Why one-off CLI commands do not show up
-  - 3. `system-event` beacons
-  - 4. Node connects (role: node)
+  - 3) `system-event` beacons
+  - 4) Node connects (role: node)
 - Merge + dedupe rules (why `instanceId` matters)
 - TTL and bounded size
 - Remote/tunnel caveat (loopback IPs)
@@ -3306,10 +3306,10 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
 - Terms
 - Why we keep both direct and SSH
 - Discovery inputs (how clients learn where the gateway is)
-  - 1. Bonjour / DNS-SD discovery
+  - 1) Bonjour / DNS-SD discovery
     - Service beacon details
-  - 2. Tailnet (cross-network)
-  - 3. Manual / SSH target
+  - 2) Tailnet (cross-network)
+  - 3) Manual / SSH target
 - Transport selection (client policy)
 - Pairing + auth (direct transport)
 - Responsibilities by component
@@ -4263,11 +4263,11 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
 - What you need
 - Automated install with Shelley
 - Manual installation
-- 1. Create the VM
-- 2. Install prerequisites (on the VM)
-- 3. Install OpenClaw
-- 4. Setup nginx to proxy OpenClaw to port 8000
-- 5. Access OpenClaw and grant privileges
+- 1) Create the VM
+- 2) Install prerequisites (on the VM)
+- 3) Install OpenClaw
+- 4) Setup nginx to proxy OpenClaw to port 8000
+- 5) Access OpenClaw and grant privileges
 - Remote channel setup
 - Remote access
 - Updating
@@ -4381,8 +4381,8 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
 - Quick start
 - Local testing with Kind
 - Step by step
-  - 1. Deploy
-  - 2. Access the gateway
+  - 1) Deploy
+  - 2) Access the gateway
 - What gets deployed
 - Customization
   - Agent instructions
@@ -4407,14 +4407,14 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
   - Hosted Mac providers (cloud)
 - Quick path (Lume, experienced users)
 - What you need (Lume)
-- 1. Install Lume
-- 2. Create the macOS VM
-- 3. Complete Setup Assistant
-- 4. Get the VM IP address
-- 5. SSH into the VM
-- 6. Install OpenClaw
-- 7. Configure channels
-- 8. Run the VM headlessly
+- 1) Install Lume
+- 2) Create the macOS VM
+- 3) Complete Setup Assistant
+- 4) Get the VM IP address
+- 5) SSH into the VM
+- 6) Install OpenClaw
+- 7) Configure channels
+- 8) Run the VM headlessly
 - Bonus: iMessage integration
 - Save a golden image
 - Running 24/7
@@ -4875,17 +4875,17 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
 - System control
 - Connection runbook
   - Prerequisites
-  - 1. Start the Gateway
-  - 2. Verify discovery (optional)
+  - 1) Start the Gateway
+  - 2) Verify discovery (optional)
     - Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
-  - 3. Connect from Android
+  - 3) Connect from Android
   - Presence alive beacons
-  - 4. Approve pairing (CLI)
-  - 5. Verify the node is connected
-  - 6. Chat + history
-  - 7. Canvas + camera
+  - 4) Approve pairing (CLI)
+  - 5) Verify the node is connected
+  - 6) Chat + history
+  - 7) Canvas + camera
     - Gateway Canvas Host (recommended for web content)
-  - 8. Voice + expanded Android command surface
+  - 8) Voice + expanded Android command surface
 - Assistant entrypoints
 - Notification forwarding
 - Related
@@ -7868,17 +7868,17 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
 - Where costs show up (chat + CLI)
 - How keys are discovered
 - Features that can spend keys
-  - 1. Core model responses (chat + tools)
-  - 2. Media understanding (audio/image/video)
-  - 3. Image and video generation
-  - 4. Memory embeddings + semantic search
-  - 5. Web search tool
-  - 5. Web fetch tool (Firecrawl)
-  - 6. Provider usage snapshots (status/health)
-  - 7. Compaction safeguard summarization
-  - 8. Model scan / probe
-  - 9. Talk (speech)
-  - 10. Skills (third-party APIs)
+  - 1) Core model responses (chat + tools)
+  - 2) Media understanding (audio/image/video)
+  - 3) Image and video generation
+  - 4) Memory embeddings + semantic search
+  - 5) Web search tool
+  - 5) Web fetch tool (Firecrawl)
+  - 6) Provider usage snapshots (status/health)
+  - 7) Compaction safeguard summarization
+  - 8) Model scan / probe
+  - 9) Talk (speech)
+  - 10) Skills (third-party APIs)
 - Related
 
 ### Application modernization plan
@@ -8578,10 +8578,10 @@ Auto-generated navigation map for LLM agents. Each page lists its H2/H3/H4 headi
 - Run the Gateway from this repo
 - Stable workflow (macOS app first)
 - Bleeding edge workflow (Gateway in a terminal)
-  - 0. (Optional) Run the macOS app from source too
-  - 1. Start the dev Gateway
-  - 2. Point the macOS app at your running Gateway
-  - 3. Verify
+  - 0) (Optional) Run the macOS app from source too
+  - 1) Start the dev Gateway
+  - 2) Point the macOS app at your running Gateway
+  - 3) Verify
   - Common footguns
 - Credential storage map
 - Updating (without wrecking your setup)
