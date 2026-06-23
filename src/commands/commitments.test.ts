@@ -125,6 +125,36 @@ describe("commitments command", () => {
     });
   });
 
+  it("keeps table columns aligned when an id or scope exceeds its column width", async () => {
+    mocks.listCommitments.mockResolvedValue([
+      commitment({
+        id: "cm_abcdefghijklmnopqrstuvwxyz",
+        scope: "main/telegram/+1555123456789012345678901234567890",
+      }),
+    ]);
+    const { runtime, logs } = createRuntime();
+
+    await commitmentsListCommand({}, runtime);
+
+    const output = logs.map(stripAnsi).join("\n");
+    // Verify the truncated row does not overflow its column width
+    // The id column is 16 chars wide; the scope column is 28 chars wide.
+    // With the single-char ellipsis, the truncated cell should be exactly
+    // maxChars wide, so padEnd holds the column and every row stays aligned.
+    const lines = output.split("\n");
+    const headerLine = lines.find((line) => line.startsWith("ID"));
+    const dataLine = lines.find((line) => line.startsWith("cm_"));
+    expect(headerLine).toBeDefined();
+    expect(dataLine).toBeDefined();
+    // Find the "Status" column position in the header
+    const statusIndex = headerLine?.indexOf("Status") ?? -1;
+    expect(statusIndex).toBeGreaterThan(-1);
+    // The "Status" column should start at the same position in the data line
+    expect(dataLine?.indexOf("pending")).toBe(statusIndex);
+    // Verify the truncated id ends with a single ellipsis character
+    expect(dataLine).toContain("cm_abcdefghijkl…");
+  });
+
   it("writes dismiss JSON to runtime stdout instead of log output", async () => {
     const { runtime, logs, stdout } = createRuntime();
 
