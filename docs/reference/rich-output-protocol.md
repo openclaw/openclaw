@@ -35,6 +35,31 @@ Legacy final assistant reply text may still be normalized for compatibility, but
 it is not a general plugin/tool protocol.
 </Warning>
 
+## Legacy `MEDIA:` lines
+
+Legacy final assistant replies can still attach local media with a plain
+standalone `MEDIA:` line. The parser only recognizes lines whose trimmed text
+starts with `MEDIA:` outside Markdown wrappers and code fences.
+
+Valid legacy final reply:
+
+```text
+Here is the generated image.
+
+MEDIA:/workspace/image.png
+```
+
+These remain ordinary text and do not attach media:
+
+```text
+**MEDIA:/workspace/image.png**
+`MEDIA:/workspace/image.png`
+Here is your image: MEDIA:/workspace/image.png
+```
+
+Prefer structured `mediaUrl` / `mediaUrls` fields for tools, plugins, browser
+output, streaming blocks, and message actions.
+
 Plain Markdown image syntax stays text by default. Channels that intentionally
 map Markdown image replies to media attachments opt in at their outbound
 adapter; Telegram does this so `![alt](url)` can still become a media reply.
