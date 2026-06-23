@@ -340,10 +340,10 @@ function assertDeleteAfterRunSchedulePatch(params: {
   if (!hasInvalidDeleteAfterRunSchedule(params.before)) {
     throw new Error('cron deleteAfterRun is only supported for schedule.kind="at"');
   }
-  if (params.after.enabled === false) {
+  if (!params.after.enabled) {
     return;
   }
-  if (params.before.enabled === false && params.after.enabled === true) {
+  if (!params.before.enabled && params.after.enabled) {
     throw new Error('cron deleteAfterRun is only supported for schedule.kind="at"');
   }
   if (
