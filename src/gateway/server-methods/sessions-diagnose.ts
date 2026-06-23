@@ -468,8 +468,8 @@ function buildDiagnoseFindings(params: {
     addFinding(findings, {
       code: "delivery_uncertain",
       severity: "info",
-      message: "The stored run is terminal, but generic delivery metadata is incomplete.",
-      evidence: ["terminal store row lacks complete last delivery fields"],
+      message: "The stored run is terminal, but route delivery metadata is incomplete.",
+      evidence: ["terminal store row lacks lastChannel or lastTo"],
     });
   }
   if (findings.length === 0) {
@@ -619,14 +619,10 @@ async function buildDiagnoseResult(params: {
     maxLines: clampDiagnoseTail(p.tail),
   });
   const transcriptResolved = transcript?.resolved === true;
-  const deliveryUncertain =
-    isDiagnoseRowTerminal(target.row) &&
-    !target.row.lastChannel &&
-    !target.row.lastTo &&
-    !target.row.lastThreadId;
   const lastChannel = normalizeOptionalString(target.row.lastChannel);
   const lastTo = normalizeOptionalString(target.row.lastTo);
   const lastThreadId = normalizeOptionalString(target.row.lastThreadId);
+  const deliveryUncertain = isDiagnoseRowTerminal(target.row) && (!lastChannel || !lastTo);
   const findings = buildDiagnoseFindings({
     row: target.row,
     gatewayRun,
