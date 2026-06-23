@@ -120,14 +120,25 @@ function setSubagentControlDepsForTest(
   testing.setDepsForTest({
     abortEmbeddedAgentRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
-    updateSessionStore: async <T>(
-      storePath: string,
-      mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
+    patchSessionEntry: async (
+      scope: { storePath?: string; sessionKey: string },
+      patcher: (entry: SessionEntry) => Promise<SessionEntry> | SessionEntry,
     ) => {
-      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<string, SessionEntry>;
-      const result = await mutator(store);
-      fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
-      return result;
+      if (!scope.storePath) {
+        return null;
+      }
+      const store = JSON.parse(fs.readFileSync(scope.storePath, "utf-8")) as Record<
+        string,
+        SessionEntry
+      >;
+      const entry = store[scope.sessionKey];
+      if (!entry) {
+        return null;
+      }
+      const next = await patcher(entry);
+      store[scope.sessionKey] = next;
+      fs.writeFileSync(scope.storePath, JSON.stringify(store, null, 2), "utf-8");
+      return next;
     },
     ...overrides,
   });
@@ -639,7 +650,7 @@ describe("killSubagentRunAdmin", () => {
     });
 
     setSubagentControlDepsForTest({
-      updateSessionStore: async () => {
+      patchSessionEntry: async () => {
         throw new Error("session store unavailable");
       },
     });

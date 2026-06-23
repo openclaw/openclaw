@@ -5,7 +5,8 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
@@ -211,10 +212,13 @@ export async function clearLiveModelSwitchPending(params: {
   if (!storePath) {
     return;
   }
-  await updateSessionStore(storePath, (store) => {
-    const entry = store[sessionKey];
-    if (entry) {
-      delete entry.liveModelSwitchPending;
-    }
-  });
+  await patchSessionEntry(
+    { storePath, sessionKey },
+    (entry) => {
+      const next = { ...entry };
+      delete next.liveModelSwitchPending;
+      return next;
+    },
+    { replaceEntry: true },
+  );
 }

@@ -5,14 +5,15 @@
  */
 import fsSync, { promises as fs } from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
-  loadSessionStore,
+  loadSessionEntry,
+  patchSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import {
   resolveAgentIdFromSessionKey,
   resolveStorePath,
-  updateSessionStore,
   type SessionEntry,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -94,22 +95,6 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
   );
 }
 
-// Session keys may differ only by casing after legacy writes. Prefer exact
-// matches, then fall back to normalized lookup for recovery paths.
-function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  for (const [key, entry] of Object.entries(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === normalized) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
 /** Persists child session timing/status derived from the subagent registry row. */
 export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
   const childSessionKey = entry.childSessionKey?.trim();
@@ -129,36 +114,38 @@ export async function persistSubagentSessionTiming(entry: SubagentRunRecord) {
       : getSubagentSessionRuntimeMs(entry);
   const status = resolveSubagentSessionStatus(entry);
 
-  await updateSessionStore(storePath, (store) => {
-    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
-    if (!sessionEntry) {
-      return;
-    }
+  await patchSessionEntry(
+    { storePath, sessionKey: childSessionKey },
+    (sessionEntry) => {
+      const next = { ...sessionEntry };
 
-    if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
-      sessionEntry.startedAt = startedAt;
-    } else {
-      delete sessionEntry.startedAt;
-    }
+      if (typeof startedAt === "number" && Number.isFinite(startedAt)) {
+        next.startedAt = startedAt;
+      } else {
+        delete next.startedAt;
+      }
 
-    if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
-      sessionEntry.endedAt = endedAt;
-    } else {
-      delete sessionEntry.endedAt;
-    }
+      if (typeof endedAt === "number" && Number.isFinite(endedAt)) {
+        next.endedAt = endedAt;
+      } else {
+        delete next.endedAt;
+      }
 
-    if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      sessionEntry.runtimeMs = runtimeMs;
-    } else {
-      delete sessionEntry.runtimeMs;
-    }
+      if (typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
+        next.runtimeMs = runtimeMs;
+      } else {
+        delete next.runtimeMs;
+      }
 
-    if (status) {
-      sessionEntry.status = status;
-    } else {
-      delete sessionEntry.status;
-    }
-  });
+      if (status) {
+        next.status = status;
+      } else {
+        delete next.status;
+      }
+      return next;
+    },
+    { replaceEntry: true },
+  );
 }
 
 /** Resolves whether a registry row is orphaned from its child session entry. */
@@ -176,12 +163,17 @@ export function resolveSubagentRunOrphanReason(params: {
     const cfg = getRuntimeConfig();
     const agentId = resolveAgentIdFromSessionKey(childSessionKey);
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    let store = params.storeCache?.get(storePath);
-    if (!store) {
-      store = loadSessionStore(storePath);
-      params.storeCache?.set(storePath, store);
+    let sessionEntry = params.storeCache?.get(storePath)?.[childSessionKey];
+    if (!sessionEntry) {
+      sessionEntry = loadSessionEntry({
+        storePath,
+        sessionKey: childSessionKey,
+        clone: false,
+      });
+      if (params.storeCache && sessionEntry) {
+        params.storeCache.set(storePath, { [childSessionKey]: sessionEntry });
+      }
     }
-    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
     if (!sessionEntry) {
       return "missing-session-entry";
     }
