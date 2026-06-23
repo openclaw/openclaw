@@ -24,6 +24,13 @@ export type CodexAppServerTranscriptMirrorResult = {
 };
 
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
+// Harness stamped on every Codex-owned transcript message so operators read
+// the actual execution harness directly. Provider/api labels on these messages
+// track the canonical openai migration artifact (#95875); without an explicit
+// harness field an operator must infer "this ran on Codex" indirectly from the
+// codex-app-server mirror-identity prefix.
+const HARNESS_META_KEY = "harness" as const;
+const CODEX_TRANSCRIPT_HARNESS = "codex" as const;
 
 function buildSenderLabel(params: {
   senderId?: string;
@@ -221,7 +228,9 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
 }
 
 /**
- * Tag a message with a stable logical identity for mirror dedupe. Callers
+ * Tag a Codex-owned transcript message with provenance metadata: a stable
+ * logical identity for mirror dedupe, plus the execution harness so operators
+ * can read it directly instead of inferring it from provider/api labels (#95875). Callers
  * should use a value that is invariant for the same logical message across
  * re-emits (e.g. `${turnId}:prompt`, `${turnId}:assistant`) but distinct
  * for genuinely-distinct messages (different turns, different kinds). When
@@ -238,7 +247,11 @@ export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, id
       : {};
   return {
     ...record,
-    __openclaw: { ...baseMeta, [MIRROR_IDENTITY_META_KEY]: identity },
+    __openclaw: {
+      ...baseMeta,
+      [MIRROR_IDENTITY_META_KEY]: identity,
+      [HARNESS_META_KEY]: CODEX_TRANSCRIPT_HARNESS,
+    },
   } as unknown as T;
 }
 

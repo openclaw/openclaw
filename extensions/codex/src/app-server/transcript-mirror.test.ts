@@ -237,6 +237,48 @@ describe("mirrorCodexAppServerTranscript", () => {
     ]);
   });
 
+  it("stamps every codex transcript message with an explicit harness field", async () => {
+    const sessionFile = await createTempSessionFile();
+
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "agent:main:main",
+      messages: [
+        attachCodexMirrorIdentity(
+          makeAgentUserMessage({
+            content: [{ type: "text", text: "prompt" }],
+            timestamp: Date.now(),
+          }),
+          "turn-1:prompt",
+        ),
+        attachCodexMirrorIdentity(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "reply" }],
+            timestamp: Date.now() + 1,
+          }),
+          "turn-1:assistant",
+        ),
+      ],
+      idempotencyScope: "codex-app-server:thread-1",
+    });
+
+    // The persisted transcript must carry an explicit harness field so an
+    // operator reads "ran on Codex" directly, instead of inferring it from the
+    // canonical openai provider/api labels (#95875).
+    const raw = await fs.readFile(sessionFile, "utf8");
+    const messageEntries = raw
+      .split("\n")
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as { type?: string; message?: unknown })
+      .filter((entry) => entry.type === "message");
+    expect(messageEntries.length).toBe(2);
+    for (const entry of messageEntries) {
+      const message = entry.message as Record<string, unknown> | undefined;
+      const openclaw = (message?.["__openclaw"] ?? undefined) as { harness?: string } | undefined;
+      expect(openclaw?.harness).toBe("codex");
+    }
+  });
+
   it("creates the transcript directory on first mirror", async () => {
     const root = await makeRoot("openclaw-codex-transcript-missing-dir-");
     const sessionFile = path.join(root, "nested", "sessions", "session.jsonl");
