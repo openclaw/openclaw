@@ -19,7 +19,7 @@ GATEWAY="node --max-old-space-size=4096 openclaw.mjs gateway --bind lan --port $
 write_config() {
   mkdir -p "$(dirname "$CONFIG_PATH")" 2>/dev/null || true
   cat > "$CONFIG_PATH" <<'JSON'
-{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"plugins":{"entries":{"admin-http-rpc":{"enabled":true}}},"agents":{"defaults":{"model":{"primary":"anthropic/claude-opus-4-8","fallback":["anthropic/claude-sonnet-4-6"]},"thinkingDefault":"high"}}}
+{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"plugins":{"entries":{"admin-http-rpc":{"enabled":true}}},"agents":{"defaults":{"model":{"primary":"anthropic/claude-opus-4-8","fallbacks":["anthropic/claude-sonnet-4-6"]},"thinkingDefault":"high"}}}
 JSON
 }
 
