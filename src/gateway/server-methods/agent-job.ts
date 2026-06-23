@@ -470,8 +470,24 @@ export async function waitForAgentJob(params: {
     removeWaiter = addAgentRunWaiter(runId);
 
     const timer = setSafeTimeout(() => {
+      // Mirror the eager-check ordering above: consult pendingError first, then
+      // pendingTimeout. Without the timeout fallback, a subagent force-killed by
+      // runTimeoutSeconds drops its terminal snapshot when the wait timer fires
+      // near-simultaneously with the gateway-side kill — finish(null) cancels
+      // the grace timer, isTerminalWaitTimeout never becomes true, and a parent
+      // waiting via sessions_yield hangs in state=processing until restart.
+      // See https://github.com/openclaw/openclaw/issues/89095.
       const pendingError = getPendingAgentRunError(runId);
-      finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
+      if (pendingError) {
+        finish(createPendingErrorTimeoutSnapshot(pendingError.snapshot));
+        return;
+      }
+      const pendingTimeout = getPendingAgentRunTimeout(runId);
+      if (pendingTimeout) {
+        finish(pendingTimeout.snapshot);
+        return;
+      }
+      finish(null);
     }, timeoutMs);
     const onAbort: (() => void) | undefined = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
