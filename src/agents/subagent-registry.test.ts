@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import type {
+  SessionAccessScope,
+  SessionEntryPatchContext,
+  SessionEntryPatchOptions,
+} from "../config/sessions/session-accessor.js";
 
 const noop = () => {};
 const waitForFast = <T>(callback: () => T | Promise<T>) =>
@@ -81,47 +86,45 @@ const mocks = vi.hoisted(() => ({
     agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
     session: { mainKey: "main", scope: "per-sender" as const },
   })),
-  loadSessionEntry: vi.fn((scope: { sessionKey: string; storePath?: string }) => {
+  loadSessionEntry: vi.fn((scope: SessionAccessScope) => {
     const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
       string,
       SessionEntry
     >;
     return store[scope.sessionKey];
   }),
-  loadSessionStore: vi.fn(() => ({})),
+  loadSessionStore: vi.fn((_storePath?: string, _options?: { clone?: boolean }) => ({})),
   patchSessionEntry: vi.fn(
     async (
-      scope: { sessionKey: string; storePath?: string },
+      scope: SessionAccessScope,
       update: (
         entry: SessionEntry,
-        context: { sessionKey: string; synthesized: boolean },
+        context: SessionEntryPatchContext,
       ) => Partial<SessionEntry> | null | Promise<Partial<SessionEntry> | null>,
+      options: SessionEntryPatchOptions = {},
     ) => {
       let updatedEntry: SessionEntry | null = null;
-      const applyPatch = (store: Record<string, SessionEntry>, patch: Partial<SessionEntry>) => {
-        const currentEntry = store[scope.sessionKey] ?? {};
-        updatedEntry = { ...currentEntry, ...patch };
-        store[scope.sessionKey] = updatedEntry;
+      const store = mocks.loadSessionStore(scope.storePath, { clone: false }) as Record<
+        string,
+        SessionEntry
+      >;
+      const currentEntry = store[scope.sessionKey];
+      if (!currentEntry) {
+        return null;
+      }
+      const patch = await update(currentEntry, { existingEntry: { ...currentEntry } });
+      if (!patch) {
+        return currentEntry;
+      }
+      const applyPatch = (targetStore: Record<string, SessionEntry>) => {
+        const targetEntry = targetStore[scope.sessionKey] ?? currentEntry;
+        updatedEntry = options.replaceEntry
+          ? (patch as SessionEntry)
+          : { ...targetEntry, ...patch };
+        targetStore[scope.sessionKey] = updatedEntry;
       };
-      mocks.updateSessionStore(scope.storePath, (store: Record<string, SessionEntry>) => {
-        const currentEntry = store[scope.sessionKey] ?? {};
-        const patch = update(currentEntry, {
-          sessionKey: scope.sessionKey,
-          synthesized: store[scope.sessionKey] === undefined,
-        });
-        if (typeof (patch as { then?: unknown }).then === "function") {
-          void Promise.resolve(patch).then((resolvedPatch) => {
-            if (resolvedPatch !== null) {
-              applyPatch(store, resolvedPatch);
-            }
-          });
-          return;
-        }
-        if (patch === null) {
-          return;
-        }
-        applyPatch(store, patch);
-      });
+      mocks.updateSessionStore(scope.storePath, applyPatch);
+      applyPatch(store);
       return updatedEntry;
     },
   ),

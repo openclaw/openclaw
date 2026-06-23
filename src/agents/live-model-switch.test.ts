@@ -136,7 +136,9 @@ describe("live model switch", () => {
       .mockImplementation(
         async (
           scope: { sessionKey: string },
-          updater: (entry: Record<string, unknown>) => Record<string, unknown>,
+          updater: (
+            entry: Record<string, unknown>,
+          ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null,
         ) => {
           const store = state.loadSessionStoreMock(scope) as Record<
             string,
@@ -147,6 +149,9 @@ describe("live model switch", () => {
             return null;
           }
           const next = await updater(entry);
+          if (!next) {
+            return entry;
+          }
           for (const key of Object.keys(entry)) {
             delete entry[key];
           }

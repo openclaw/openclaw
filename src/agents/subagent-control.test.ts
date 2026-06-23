@@ -4,6 +4,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  SessionAccessScope,
+  SessionEntryPatchContext,
+  SessionEntryPatchOptions,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
@@ -121,8 +126,12 @@ function setSubagentControlDepsForTest(
     abortEmbeddedAgentRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     patchSessionEntry: async (
-      scope: { storePath?: string; sessionKey: string },
-      patcher: (entry: SessionEntry) => Promise<SessionEntry> | SessionEntry,
+      scope: SessionAccessScope,
+      patcher: (
+        entry: SessionEntry,
+        context: SessionEntryPatchContext,
+      ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+      options: SessionEntryPatchOptions = {},
     ) => {
       if (!scope.storePath) {
         return null;
@@ -135,7 +144,11 @@ function setSubagentControlDepsForTest(
       if (!entry) {
         return null;
       }
-      const next = await patcher(entry);
+      const patch = await patcher(entry, { existingEntry: { ...entry } });
+      if (!patch) {
+        return entry;
+      }
+      const next = options.replaceEntry ? (patch as SessionEntry) : { ...entry, ...patch };
       store[scope.sessionKey] = next;
       fs.writeFileSync(scope.storePath, JSON.stringify(store, null, 2), "utf-8");
       return next;
