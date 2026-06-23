@@ -302,10 +302,10 @@ describe("createMinimaxFastModeWrapper", () => {
   });
 });
 
-describe("createMinimaxThinkingDisabledWrapper service_tier", () => {
+describe("createMinimaxFastModeWrapper service_tier", () => {
   function capturePayload(params: {
     modelId: string;
-    serviceTierPriority?: boolean;
+    fastMode: boolean | (() => boolean | undefined);
     initialPayload?: Record<string, unknown>;
   }): Record<string, unknown> {
     let captured: Record<string, unknown> = {};
@@ -315,11 +315,7 @@ describe("createMinimaxThinkingDisabledWrapper service_tier", () => {
       captured = payload;
       return {} as ReturnType<StreamFn>;
     };
-    const wrapped = createMinimaxThinkingDisabledWrapper(
-      baseStreamFn,
-      "adaptive",
-      params.serviceTierPriority,
-    );
+    const wrapped = createMinimaxFastModeWrapper(baseStreamFn, params.fastMode);
     void wrapped(
       {
         api: "anthropic-messages",
@@ -332,21 +328,30 @@ describe("createMinimaxThinkingDisabledWrapper service_tier", () => {
     return captured;
   }
 
-  it("injects service_tier priority for MiniMax-M3 when enabled", () => {
-    expect(capturePayload({ modelId: "MiniMax-M3", serviceTierPriority: true }).service_tier).toBe(
-      "priority",
-    );
+  it("injects service_tier priority for MiniMax-M3 when fast mode is on", () => {
+    expect(capturePayload({ modelId: "MiniMax-M3", fastMode: true }).service_tier).toBe("priority");
   });
 
-  it("does not inject service_tier for MiniMax-M3 when disabled", () => {
+  it("resolves function-based fast mode (e.g. /fast auto) for M3 priority", () => {
+    // Auto fast mode passes fastMode as a resolver function; the wrapper must
+    // call it per stream rather than only honoring a literal `true`.
+    expect(capturePayload({ modelId: "MiniMax-M3", fastMode: () => true }).service_tier).toBe(
+      "priority",
+    );
     expect(
-      capturePayload({ modelId: "MiniMax-M3", serviceTierPriority: false }).service_tier,
+      capturePayload({ modelId: "MiniMax-M3", fastMode: () => false }).service_tier,
     ).toBeUndefined();
   });
 
-  it("does not inject service_tier for M2.x even when enabled (no priority benefit)", () => {
+  it("does not inject service_tier for MiniMax-M3 when fast mode is off", () => {
+    expect(capturePayload({ modelId: "MiniMax-M3", fastMode: false }).service_tier).toBeUndefined();
+  });
+
+  it("does not inject service_tier for M2.x even in fast mode (no priority benefit)", () => {
+    // M2.7 routes to the highspeed model variant instead, so the captured
+    // payload carries no service_tier.
     expect(
-      capturePayload({ modelId: "MiniMax-M2.7", serviceTierPriority: true }).service_tier,
+      capturePayload({ modelId: "MiniMax-M2.7", fastMode: true }).service_tier,
     ).toBeUndefined();
   });
 
@@ -354,7 +359,7 @@ describe("createMinimaxThinkingDisabledWrapper service_tier", () => {
     expect(
       capturePayload({
         modelId: "MiniMax-M3",
-        serviceTierPriority: true,
+        fastMode: true,
         initialPayload: { service_tier: "standard_only" },
       }).service_tier,
     ).toBe("standard_only");

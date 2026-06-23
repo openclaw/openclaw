@@ -877,13 +877,7 @@ function applyPostPluginStreamWrappers(
   // MiniMax's Anthropic-compatible stream can leak reasoning_content into the
   // visible reply path because it does not emit native Anthropic thinking
   // blocks. Disable thinking unless an earlier wrapper already set it.
-  // fastMode for M3 opts it into MiniMax's paid priority lane
-  const minimaxFastMode = ctx.effectiveExtraParams?.fastMode === true;
-  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(
-    ctx.agent.streamFn,
-    ctx.thinkingLevel,
-    minimaxFastMode,
-  );
+  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
 
   const rawChatTemplateKwargs = resolveAliasedParamValue(
     [ctx.effectiveExtraParams, ctx.override],
