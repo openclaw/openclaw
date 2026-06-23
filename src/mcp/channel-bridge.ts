@@ -143,40 +143,45 @@ export class OpenClawChannelBridge {
       return;
     }
 
-    this.gateway = new GatewayClientCtor({
-      url: bootstrap.url,
-      token: bootstrap.auth.token,
-      password: bootstrap.auth.password,
-      onStop: () => bootstrap.sshTunnel?.stop(),
-      preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-      clientDisplayName: "OpenClaw MCP",
-      clientVersion: VERSION,
-      mode: GATEWAY_CLIENT_MODES.CLI,
-      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
-      requestTimeoutMs: 180_000,
-      onEvent: (event) => {
-        void this.handleGatewayEvent(event);
-      },
-      onHelloOk: () => {
-        this.retryingInitialConnect = false;
-        void this.handleHelloOk();
-      },
-      onConnectError: (error) => {
-        const normalizedError = error instanceof Error ? error : new Error(String(error));
-        if (shouldRetryInitialMcpGatewayConnect(normalizedError)) {
-          this.retryingInitialConnect = true;
-          return;
-        }
-        this.rejectReadyOnce(normalizedError);
-      },
-      onClose: (code, reason) => {
-        if (!this.ready && !this.closed && !this.retryingInitialConnect) {
-          this.rejectReadyOnce(new Error(`gateway closed before ready (${code}): ${reason}`));
-        }
-        this.retryingInitialConnect = false;
-      },
-    });
+    try {
+      this.gateway = new GatewayClientCtor({
+        url: bootstrap.url,
+        token: bootstrap.auth.token,
+        password: bootstrap.auth.password,
+        onStop: () => bootstrap.sshTunnel?.stop(),
+        preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        clientDisplayName: "OpenClaw MCP",
+        clientVersion: VERSION,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+        scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
+        requestTimeoutMs: 180_000,
+        onEvent: (event) => {
+          void this.handleGatewayEvent(event);
+        },
+        onHelloOk: () => {
+          this.retryingInitialConnect = false;
+          void this.handleHelloOk();
+        },
+        onConnectError: (error) => {
+          const normalizedError = error instanceof Error ? error : new Error(String(error));
+          if (shouldRetryInitialMcpGatewayConnect(normalizedError)) {
+            this.retryingInitialConnect = true;
+            return;
+          }
+          this.rejectReadyOnce(normalizedError);
+        },
+        onClose: (code, reason) => {
+          if (!this.ready && !this.closed && !this.retryingInitialConnect) {
+            this.rejectReadyOnce(new Error(`gateway closed before ready (${code}): ${reason}`));
+          }
+          this.retryingInitialConnect = false;
+        },
+      });
+    } catch (error) {
+      await bootstrap.sshTunnel?.stop().catch(() => undefined);
+      throw error;
+    }
     try {
       const readiness = await startGatewayClientWhenEventLoopReady(this.gateway, {
         clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },

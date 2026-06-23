@@ -45,30 +45,35 @@ export async function createOperatorApprovalsGatewayClient(
   });
   const sendsApprovalRuntimeToken = shouldSendApprovalRuntimeToken(bootstrap.urlSource);
 
-  return new GatewayClient({
-    url: bootstrap.url,
-    token: bootstrap.auth.token,
-    password: bootstrap.auth.password,
-    onStop: () => bootstrap.sshTunnel?.stop(),
-    ...(sendsApprovalRuntimeToken
-      ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
-      : {}),
-    preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
-    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-    clientDisplayName: params.clientDisplayName,
-    mode: GATEWAY_CLIENT_MODES.BACKEND,
-    scopes: ["operator.approvals"],
-    deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
-      sendsApprovalRuntimeToken,
-    })
-      ? null
-      : undefined,
-    onEvent: params.onEvent,
-    onHelloOk: params.onHelloOk,
-    onConnectError: params.onConnectError,
-    onReconnectPaused: params.onReconnectPaused,
-    onClose: params.onClose,
-  });
+  try {
+    return new GatewayClient({
+      url: bootstrap.url,
+      token: bootstrap.auth.token,
+      password: bootstrap.auth.password,
+      onStop: () => bootstrap.sshTunnel?.stop(),
+      ...(sendsApprovalRuntimeToken
+        ? { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }
+        : {}),
+      preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientDisplayName: params.clientDisplayName,
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      scopes: ["operator.approvals"],
+      deviceIdentity: shouldOmitApprovalRuntimeDeviceIdentity({
+        sendsApprovalRuntimeToken,
+      })
+        ? null
+        : undefined,
+      onEvent: params.onEvent,
+      onHelloOk: params.onHelloOk,
+      onConnectError: params.onConnectError,
+      onReconnectPaused: params.onReconnectPaused,
+      onClose: params.onClose,
+    });
+  } catch (error) {
+    await bootstrap.sshTunnel?.stop().catch(() => undefined);
+    throw error;
+  }
 }
 
 /** Run a callback with a started operator-approvals Gateway client and close it after. */

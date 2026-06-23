@@ -12,6 +12,7 @@ const gatewayClientState = vi.hoisted(() => ({
   options: null as Record<string, unknown> | null,
   stopAndWait: vi.fn(async () => undefined),
   sshTunnelStop: vi.fn(async () => undefined),
+  constructError: null as Error | null,
   bootstrapPromise: null as Promise<Record<string, unknown>> | null,
   readinessResult: {
     ready: true,
@@ -40,6 +41,9 @@ vi.mock("../gateway/client.js", () => ({
     private readonly opts: Record<string, unknown>;
 
     constructor(opts: Record<string, unknown>) {
+      if (gatewayClientState.constructError) {
+        throw gatewayClientState.constructError;
+      }
       this.opts = opts;
       gatewayClientState.options = opts;
     }
@@ -132,6 +136,7 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
     gatewayClientState.options = null;
     gatewayClientState.stopAndWait.mockReset().mockResolvedValue(undefined);
     gatewayClientState.sshTunnelStop.mockReset().mockResolvedValue(undefined);
+    gatewayClientState.constructError = null;
     gatewayClientState.bootstrapPromise = null;
     gatewayClientState.readinessResult = {
       ready: true,
@@ -322,6 +327,17 @@ describe("OpenClawChannelBridge — pendingClaudePermissions / pendingApprovals 
 
     expect(gatewayClientState.options).not.toBeNull();
     expect(gatewayClientState.stopAndWait).toHaveBeenCalledTimes(1);
+    expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
+  });
+
+  test("start() stops the bootstrap SSH tunnel when GatewayClient construction fails", async () => {
+    gatewayClientState.constructError = new Error("device identity unavailable");
+    const bridge = makeBridge();
+
+    await expect(bridge.start()).rejects.toThrow("device identity unavailable");
+
+    expect(gatewayClientState.options).toBeNull();
+    expect(gatewayClientState.stopAndWait).not.toHaveBeenCalled();
     expect(gatewayClientState.sshTunnelStop).toHaveBeenCalledTimes(1);
   });
 

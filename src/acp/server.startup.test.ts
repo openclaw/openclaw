@@ -36,6 +36,7 @@ const mockState = vi.hoisted(() => ({
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
+  gatewayConstructorError: null as Error | null,
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
@@ -55,6 +56,9 @@ class MockGatewayClient {
   private callbacks: GatewayClientCallbacks;
 
   constructor(opts: GatewayClientOptions) {
+    if (mockState.gatewayConstructorError) {
+      throw mockState.gatewayConstructorError;
+    }
     this.callbacks = opts;
     mockState.gatewayOptions.push(opts);
     mockState.gatewayAuth.push({ token: opts.token, password: opts.password });
@@ -287,6 +291,7 @@ describe("serveAcpGateway startup", () => {
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
+    mockState.gatewayConstructorError = null;
     mockState.agentSideConnectionCtor.mockReset();
     mockState.agentStart.mockReset();
     mockState.routeLogsToStderr.mockReset();
@@ -468,6 +473,34 @@ describe("serveAcpGateway startup", () => {
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
 
+      expect(sshTunnelStop).toHaveBeenCalledTimes(1);
+    } finally {
+      onceSpy.mockRestore();
+    }
+  });
+
+  it("stops bootstrap SSH tunnel when ACP GatewayClient construction fails", async () => {
+    const sshTunnelStop = vi.fn(async () => undefined);
+    mockState.gatewayConstructorError = new Error("device identity unavailable");
+    mockState.resolveGatewayClientBootstrap.mockResolvedValue({
+      url: "ws://127.0.0.1:19091",
+      urlSource: "config gateway.remote.url via ssh tunnel",
+      auth: {
+        token: undefined,
+        password: undefined,
+      },
+      sshTunnel: { stop: sshTunnelStop },
+    });
+    const onceSpy = vi
+      .spyOn(process, "once")
+      .mockImplementation(
+        ((_signal: NodeJS.Signals, _handler: () => void) => process) as typeof process.once,
+      );
+
+    try {
+      await expect(serveAcpGateway({})).rejects.toThrow("device identity unavailable");
+
+      expect(mockState.gateways).toHaveLength(0);
       expect(sshTunnelStop).toHaveBeenCalledTimes(1);
     } finally {
       onceSpy.mockRestore();

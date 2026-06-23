@@ -7,6 +7,7 @@ const clientState = vi.hoisted(() => ({
   startMode: "hello" as "hello" | "close",
   close: { code: 1008, reason: "pairing required" },
   requestSpy: vi.fn(),
+  constructError: null as Error | null,
   stopSpy: vi.fn(),
   stopAndWaitSpy: vi.fn(async () => undefined),
 }));
@@ -22,6 +23,9 @@ class MockGatewayClient {
   private readonly opts: Record<string, unknown>;
 
   constructor(opts: Record<string, unknown>) {
+    if (clientState.constructError) {
+      throw clientState.constructError;
+    }
     this.opts = opts;
     clientState.options = opts;
   }
@@ -107,6 +111,7 @@ describe("withOperatorApprovalsGatewayClient", () => {
     clientState.startMode = "hello";
     clientState.close = { code: 1008, reason: "pairing required" };
     clientState.requestSpy.mockReset().mockResolvedValue(undefined);
+    clientState.constructError = null;
     clientState.stopSpy.mockReset();
     clientState.stopAndWaitSpy.mockReset().mockResolvedValue(undefined);
     bootstrapState.url = "ws://127.0.0.1:18789";
@@ -118,6 +123,17 @@ describe("withOperatorApprovalsGatewayClient", () => {
   it("stops bootstrap SSH tunnel when the approval client closes", async () => {
     await runOperatorApprovalsGatewayClient();
 
+    expect(bootstrapState.sshTunnelStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops bootstrap SSH tunnel when approval GatewayClient construction fails", async () => {
+    clientState.constructError = new Error("device identity unavailable");
+
+    await expect(runOperatorApprovalsGatewayClient()).rejects.toThrow(
+      "device identity unavailable",
+    );
+
+    expect(clientState.options).toBeNull();
     expect(bootstrapState.sshTunnelStop).toHaveBeenCalledTimes(1);
   });
 

@@ -80,40 +80,46 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     onGatewayReadyReject(err instanceof Error ? err : new Error(String(err)));
   };
 
-  const gateway = new GatewayClient({
-    url: bootstrap.url,
-    token: bootstrap.auth.token,
-    password: bootstrap.auth.password,
-    onStop: () => bootstrap.sshTunnel?.stop(),
-    preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
-    clientDisplayName: "ACP",
-    clientVersion: "acp",
-    mode: GATEWAY_CLIENT_MODES.CLI,
-    caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
-    onEvent: (evt) => {
-      void agent?.handleGatewayEvent(evt);
-    },
-    onHelloOk: () => {
-      resolveGatewayReady();
-      agent?.handleGatewayReconnect();
-    },
-    onConnectError: (err) => {
-      rejectGatewayReady(err);
-    },
-    onClose: (code, reason) => {
-      if (!stopped) {
-        rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
-      }
-      agent?.handleGatewayDisconnect(`${code}: ${reason}`);
-      // Resolve only on intentional shutdown (gateway.stop() sets closed
-      // which skips scheduleReconnect, then fires onClose).  Transient
-      // disconnects are followed by automatic reconnect attempts.
-      if (stopped) {
-        onClosed();
-      }
-    },
-  });
+  let gateway: GatewayClient;
+  try {
+    gateway = new GatewayClient({
+      url: bootstrap.url,
+      token: bootstrap.auth.token,
+      password: bootstrap.auth.password,
+      onStop: () => bootstrap.sshTunnel?.stop(),
+      preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      clientDisplayName: "ACP",
+      clientVersion: "acp",
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS],
+      onEvent: (evt) => {
+        void agent?.handleGatewayEvent(evt);
+      },
+      onHelloOk: () => {
+        resolveGatewayReady();
+        agent?.handleGatewayReconnect();
+      },
+      onConnectError: (err) => {
+        rejectGatewayReady(err);
+      },
+      onClose: (code, reason) => {
+        if (!stopped) {
+          rejectGatewayReady(new Error(`gateway closed before ready (${code}): ${reason}`));
+        }
+        agent?.handleGatewayDisconnect(`${code}: ${reason}`);
+        // Resolve only on intentional shutdown (gateway.stop() sets closed
+        // which skips scheduleReconnect, then fires onClose).  Transient
+        // disconnects are followed by automatic reconnect attempts.
+        if (stopped) {
+          onClosed();
+        }
+      },
+    });
+  } catch (error) {
+    await bootstrap.sshTunnel?.stop().catch(() => undefined);
+    throw error;
+  }
 
   const shutdown = () => {
     if (stopped) {
