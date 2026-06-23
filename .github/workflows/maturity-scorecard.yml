@@ -322,14 +322,12 @@ jobs:
           cat > "$body_file" <<BODY
           ## Summary
 
-          - refresh \`qa/maturity-scores.yaml\` with the maturity scorecard agent
-          - refresh generated maturity scorecard docs from release QA evidence
+          - render maturity scorecard docs from \`qa/maturity-scores.yaml\` and release QA evidence
           - maturity source ref: ${REF_INPUT}
           - QA evidence run: ${evidence_run_id}
 
           ## Verification
 
-          - Codex maturity scorecard agent ran with the \`\$claw-score\` workflow
           - QA Lab maturity score validation passed
           - Maturity scorecard workflow rendered docs from release profile qa-evidence.json artifacts with strict inputs
           BODY
