@@ -34,28 +34,60 @@ export function resolveTavilySearchConfig(cfg?: OpenClawConfig): TavilySearchCon
   return undefined;
 }
 
-function normalizeConfiguredSecret(value: unknown, path: string): string | undefined {
-  // Resolve with inspect mode so unresolved SecretRef input returns
-  // configured_unavailable instead of throwing. This lets callers fall
-  // back to process.env (or other runtime sources) without a try/catch.
+type SecretResolution =
+  | { kind: "available"; value: string }
+  | { kind: "allow_env_fallback" }
+  | { kind: "blocked"; ref: NonNullable<ReturnType<typeof resolveSecretInputString>["ref"]> };
+
+/**
+ * Resolves the configured apiKey with inspect-mode SecretRef handling.
+ *
+ * - available: the secret resolved successfully → use it.
+ * - allow_env_fallback: no apiKey configured, or an env-source SecretRef
+ *   could not be resolved by the config snapshot (the runtime may still
+ *   have the variable in process.env) → caller should try process.env.
+ * - blocked: a non-env SecretRef (file, exec) is explicitly configured
+ *   but unavailable → caller should NOT fall back to process.env.
+ */
+function normalizeConfiguredSecret(
+  value: unknown,
+  path: string,
+): SecretResolution {
   const resolution = resolveSecretInputString({
     value,
     path,
     mode: "inspect",
   });
   if (resolution.status === "available") {
-    return normalizeSecretInput(resolution.value);
+    return { kind: "available", value: normalizeSecretInput(resolution.value) };
   }
-  return undefined;
+  if (resolution.status === "missing") {
+    return { kind: "allow_env_fallback" };
+  }
+  // configured_unavailable: a SecretRef exists but cannot be resolved.
+  if (resolution.ref?.source === "env") {
+    return { kind: "allow_env_fallback" };
+  }
+  return { kind: "blocked", ref: resolution.ref! };
 }
 
 export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = resolveTavilySearchConfig(cfg);
-  return (
-    normalizeConfiguredSecret(search?.apiKey, "plugins.entries.tavily.config.webSearch.apiKey") ||
-    normalizeSecretInput(process.env.TAVILY_API_KEY) ||
-    undefined
+  const resolved = normalizeConfiguredSecret(
+    search?.apiKey,
+    "plugins.entries.tavily.config.webSearch.apiKey",
   );
+  if (resolved.kind === "available") {
+    return resolved.value || undefined;
+  }
+  if (resolved.kind === "blocked") {
+    // A non-env SecretRef was explicitly configured but is unavailable.
+    // Do not fall back to process.env — this would silently replace an
+    // explicit operator configuration.
+    return undefined;
+  }
+  // allow_env_fallback: no apiKey configured, or env SecretRef unresolved
+  return normalizeSecretInput(process.env.TAVILY_API_KEY) || undefined;
 }
 
 export function resolveTavilyBaseUrl(cfg?: OpenClawConfig): string {
