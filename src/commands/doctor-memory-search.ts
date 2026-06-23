@@ -472,10 +472,12 @@ export async function noteMemorySearchHealth(
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
-    if (opts?.gatewayMemoryProbe?.skipped) {
+    const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
+    const hasUnavailableConfiguredLocalModel =
+      Boolean(normalizeOptionalString(resolved.local.modelPath)) && !hasExplicitLocalModel;
+    if (opts?.gatewayMemoryProbe?.skipped && !hasUnavailableConfiguredLocalModel) {
       return;
     }
-    const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
     const detail = opts?.gatewayMemoryProbe?.error?.trim();
     note(
       [
