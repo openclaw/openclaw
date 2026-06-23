@@ -1070,6 +1070,11 @@ function classifyFailoverClassificationFromMessage(
   if (isOpenRouterProviderReturnedError(raw, provider)) {
     return toReasonClassification("timeout");
   }
+  // Upstream provider errors indicate a transient failure in the provider chain
+  // and should trigger model fallback rather than surfacing as a terminal error.
+  if (/upstream/i.test(raw)) {
+    return toReasonClassification("server_error");
+  }
   if (isServerErrorMessage(raw)) {
     return toReasonClassification("timeout");
   }
