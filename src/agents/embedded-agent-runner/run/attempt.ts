@@ -883,13 +883,13 @@ export async function archiveNonDeliverableTerminalSessionIfNeeded(params: {
     const suffix = `.non-deliverable-${Date.now()}.bak`;
     const sessionArchive = `${params.sessionFile}${suffix}`;
     const trajectoryArchive = `${trajectoryFile}${suffix}`;
-    await fs.rename(params.sessionFile, sessionArchive).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") {
+    await fs.rename(params.sessionFile, sessionArchive).catch((error: unknown) => {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
         throw error;
       }
     });
-    await fs.rename(trajectoryFile, trajectoryArchive).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== "ENOENT") {
+    await fs.rename(trajectoryFile, trajectoryArchive).catch((error: unknown) => {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
         throw error;
       }
     });
