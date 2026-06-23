@@ -99,6 +99,7 @@ describe("qa suite runtime launcher", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await Promise.all(
       tempRoots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })),
     );
@@ -474,7 +475,7 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow", "isolated"),
         concurrency: 1,
-        workerStartStaggerMs: 500,
+        workerStartStaggerMs: 0,
         scenarioIds: ["group-visible-reply-tool"],
       }),
     );
@@ -563,6 +564,67 @@ describe("qa suite runtime launcher", () => {
         outputDir: path.join(outputDir, "flow", "isolated"),
         concurrency: 3,
         workerStartStaggerMs: 500,
+        scenarioIds: [
+          "runtime-tool-image-generate",
+          "runtime-inventory-drift-check",
+          "session-memory-ranking",
+        ],
+      }),
+    );
+  });
+
+  it("isolates flow scenarios that restart after state mutations", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-gateway-state-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/gateway-state",
+      concurrency: 8,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "subagent-stale-child-links",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "gateway-state");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "shared"),
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated"),
+        scenarioIds: ["subagent-stale-child-links"],
+      }),
+    );
+  });
+
+  it("preserves configured isolated worker start stagger overrides", async () => {
+    vi.stubEnv("OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS", "2500");
+    const repoRoot = await makeTempRepo("qa-suite-stagger-env-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/stagger-env",
+      concurrency: 8,
+      scenarioIds: [
+        "runtime-tool-image-generate",
+        "runtime-inventory-drift-check",
+        "session-memory-ranking",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "stagger-env");
+    expect(runQaFlowSuite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow"),
+        concurrency: 3,
+        workerStartStaggerMs: 2500,
         scenarioIds: [
           "runtime-tool-image-generate",
           "runtime-inventory-drift-check",

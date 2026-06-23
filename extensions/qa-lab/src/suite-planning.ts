@@ -14,6 +14,7 @@ const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
 const QA_SHARED_STATE_MUTATION_FLOW_CALLS = new Set([
   "ensureImageGenerationConfigured",
+  "env.gateway.restartAfterStateMutation",
   "forceMemoryIndex",
   "patchConfig",
   "writeWorkspaceSkill",
@@ -262,17 +263,18 @@ function normalizeQaSuiteConcurrency(
 function resolveQaSuiteWorkerStartStaggerMs(
   concurrency: number,
   env: NodeJS.ProcessEnv = process.env,
+  defaultStaggerMs = DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS,
 ) {
   if (concurrency <= 1) {
     return 0;
   }
   const raw = env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS;
   if (raw === undefined) {
-    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+    return defaultStaggerMs;
   }
   const parsed = parseStrictNonNegativeInteger(raw);
   if (parsed === undefined) {
-    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+    return defaultStaggerMs;
   }
   return parsed;
 }

@@ -20,6 +20,7 @@ import {
 import {
   normalizeQaSuiteConcurrency,
   resolveQaSuiteOutputDir,
+  resolveQaSuiteWorkerStartStaggerMs,
   scenarioRequiresIsolatedQaSuiteWorker,
 } from "./suite-planning.js";
 import {
@@ -473,7 +474,12 @@ async function runUnifiedQaSuite(params: {
             concurrency: partition.concurrency,
             workerStartStaggerMs:
               partition.kind === "isolated"
-                ? ISOLATED_FLOW_WORKER_START_STAGGER_MS
+                ? (params.runParams?.workerStartStaggerMs ??
+                  resolveQaSuiteWorkerStartStaggerMs(
+                    partition.concurrency,
+                    process.env,
+                    ISOLATED_FLOW_WORKER_START_STAGGER_MS,
+                  ))
                 : params.runParams?.workerStartStaggerMs,
             scenarioIds: partition.scenarios.map((scenario) => scenario.id),
           });
