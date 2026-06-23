@@ -10,10 +10,9 @@ type TestModelProviderConfig = NonNullable<
 
 function installGeminiFetch() {
   const mockFetch = vi.fn((_input?: RequestInfo | URL, _init?: RequestInit) =>
-    Promise.resolve({
-      ok: true,
-      json: () =>
-        Promise.resolve({
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
           candidates: [
             {
               content: { parts: [{ text: "Grounded answer" }] },
@@ -23,7 +22,8 @@ function installGeminiFetch() {
             },
           ],
         }),
-    } as Response),
+      ),
+    ),
   );
   vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
