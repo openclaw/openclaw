@@ -162,7 +162,9 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                               @click=${editableTextFile.onSave}
                               class="btn btn--sm primary"
                               type="button"
-                              ?disabled=${!editableTextFile.dirty || editableTextFile.saving}
+                              ?disabled=${!editableTextFile.canEdit ||
+                              !editableTextFile.dirty ||
+                              editableTextFile.saving}
                             >
                               ${editableTextFile.saving ? "Saving" : "Save"}
                             </button>
@@ -184,6 +186,8 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                         </div>
                         <textarea
                           class="sidebar-file-editor__textarea"
+                          aria-label=${`Edit ${editableTextFile.path}`}
+                          ?readonly=${!editableTextFile.canEdit}
                           spellcheck="false"
                           .value=${editableTextFile.draft}
                           @input=${(event: Event) =>

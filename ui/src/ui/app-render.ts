@@ -1645,6 +1645,11 @@ export function renderApp(state: AppViewState) {
   const currentChatWorkspaceFilesState = () =>
     getChatWorkspaceFilesState(state, state.sessionKey, resolveChatWorkspaceAgentId());
   const currentSessionWorkspaceKey = () => state.sessionKey;
+  const canSaveChatWorkspaceFiles = () => {
+    const auth =
+      (state.hello as { auth?: { role?: string; scopes?: string[] } } | null)?.auth ?? null;
+    return hasOperatorAdminAccess(auth);
+  };
   const getCurrentConfigValue = () =>
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const findAgentIndex = (agentId: string) =>
@@ -2333,6 +2338,7 @@ export function renderApp(state: AppViewState) {
     const draft = chatWorkspaceFiles.editorDrafts[key] ?? base;
     const baseUpdatedAtMs = chatWorkspaceFiles.editorBaseUpdatedAtMs[key] ?? file.updatedAtMs;
     const saving = chatWorkspaceFiles.savingPath === key;
+    const canEdit = canSaveChatWorkspaceFiles();
     const title = file.name || file.path || "Workspace file";
     state.handleOpenSidebar({
       kind: "markdown",
@@ -2345,6 +2351,7 @@ export function renderApp(state: AppViewState) {
         ...(editorAgentId ? { agentId: editorAgentId } : {}),
         base,
         draft,
+        canEdit,
         dirty: draft !== base,
         saving,
         sizeLabel: formatBytes(new TextEncoder().encode(draft).length),
@@ -2385,6 +2392,9 @@ export function renderApp(state: AppViewState) {
     opts: { sessionKey: string; agentId?: string },
   ) => {
     if (!state.client || !state.connected) {
+      return;
+    }
+    if (!canSaveChatWorkspaceFiles()) {
       return;
     }
     const key = workspaceEditorKey(opts.sessionKey, file.path);

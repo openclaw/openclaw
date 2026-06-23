@@ -2319,7 +2319,7 @@ public struct SessionsFilesSetParams: Codable, Sendable {
         path: String,
         content: String,
         agentid: String? = nil,
-        baseupdatedatms: Int?)
+        baseupdatedatms: Int? = nil)
     {
         self.sessionkey = sessionkey
         self.path = path

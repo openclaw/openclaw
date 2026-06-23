@@ -19,6 +19,7 @@ export type MarkdownSidebarContent = {
     agentId?: string;
     draft: string;
     base: string;
+    canEdit: boolean;
     dirty: boolean;
     saving: boolean;
     sizeLabel?: string;
