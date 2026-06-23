@@ -61,33 +61,61 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
 ] as const;
 
 const MUTATING_FAILURE_ACTION_PATTERN =
-  "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|run|execute|execution|command|script|shell|bash|exec|tool|action|operation)";
+  "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|run|execute|execution|command|shell|bash|exec|tool)";
+const MUTATING_FAILURE_WORD_PATTERN = "(?:failed|failure|errored)";
+const MUTATING_RECOVERY_WORD_PATTERN = "(?:recovered|fixed|corrected|succeeded|passed|passes)";
+const TOOL_FAILURE_ERROR_VERB_PATTERN = "(?:hit|encountered|ran into|reported|returned|threw)";
 
-const MUTATING_FAILURE_INABILITY_PATTERN = new RegExp(
-  `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
-const MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN = new RegExp(
-  `\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b.{0,100}\\b(?:failed|failure|errored)\\b`,
-  "u",
-);
-const MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN = new RegExp(
-  `\\b(?:failed|failure)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
-const MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN = new RegExp(
-  `\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
-  "u",
-);
 const DID_NOT_FAIL_PATTERN = /\b(?:did not|didn't)\s+fail\b/u;
 const NEGATED_FAILURE_PATTERN = /\b(?:no|not|without)\s+(?:failures?|errors?)\b/u;
+
+function escapeRegexPattern(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getMutatingFailureActionPattern(lastToolError: ToolErrorSummary | undefined): string {
+  const normalizedToolName = normalizeOptionalLowercaseString(lastToolError?.toolName) ?? "";
+  if (!normalizedToolName) {
+    return MUTATING_FAILURE_ACTION_PATTERN;
+  }
+  if (isExecLikeToolName(normalizedToolName)) {
+    return "(?:run|execute|execution|command|check|script|shell|bash|exec)";
+  }
+  if (normalizedToolName === "write") {
+    return "(?:write|writing|save|saved|create|created)";
+  }
+  if (normalizedToolName === "edit" || normalizedToolName === "apply_patch") {
+    return "(?:edit|edited|update|updated|modify|modified|change|changed|apply|applied|patch|patched)";
+  }
+  if (normalizedToolName === "message" || normalizedToolName === "sessions_send") {
+    return "(?:send|sent|reply|replied|message|messaged|post|posted|dm)";
+  }
+  if (normalizedToolName === "sessions_spawn") {
+    return "(?:spawn|spawned|start|started|session|task)";
+  }
+  if (normalizedToolName === "create_goal" || normalizedToolName === "update_goal") {
+    return "(?:goal|create|created|update|updated)";
+  }
+  if (normalizedToolName === "session_status") {
+    return "(?:status|session)";
+  }
+  const normalizedWords = normalizedToolName
+    .split(/[_\s.-]+/u)
+    .map((word) => escapeRegexPattern(word))
+    .filter((word) => word.length > 0);
+  const toolNamePattern = escapeRegexPattern(normalizedToolName).replace(/[_\s.-]+/gu, "[_\\s.-]+");
+  return `(?:${[toolNamePattern, ...normalizedWords, "tool"].join("|")})`;
+}
 
 function isRecoverableToolError(error: string | undefined): boolean {
   const errorLower = normalizeOptionalLowercaseString(error) ?? "";
   return RECOVERABLE_TOOL_ERROR_KEYWORDS.some((keyword) => errorLower.includes(keyword));
 }
 
-function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
+function hasExplicitMutatingToolFailureAcknowledgement(
+  text: string,
+  lastToolError: ToolErrorSummary | undefined,
+): boolean {
   const normalizedText = normalizeTextForComparison(text);
   if (!normalizedText) {
     return false;
@@ -95,16 +123,42 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
   if (DID_NOT_FAIL_PATTERN.test(normalizedText)) {
     return false;
   }
-  if (MUTATING_FAILURE_INABILITY_PATTERN.test(normalizedText)) {
-    return true;
-  }
   if (NEGATED_FAILURE_PATTERN.test(normalizedText)) {
     return false;
   }
+  const actionPattern = getMutatingFailureActionPattern(lastToolError);
+  const failureInabilityPattern = new RegExp(
+    `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\b.{0,100}\\b${actionPattern}\\b`,
+    "u",
+  );
+  const actionThenFailurePattern = new RegExp(
+    `\\b${actionPattern}\\b.{0,100}\\b${MUTATING_FAILURE_WORD_PATTERN}\\b`,
+    "u",
+  );
+  const failureThenActionPattern = new RegExp(
+    `\\b${MUTATING_FAILURE_WORD_PATTERN}\\b.{0,100}\\b${actionPattern}\\b`,
+    "u",
+  );
+  const actionThenErrorPattern = new RegExp(
+    `\\b${actionPattern}\\b.{0,100}\\b${TOOL_FAILURE_ERROR_VERB_PATTERN}\\b.{0,60}\\berror\\b`,
+    "u",
+  );
+  const errorWhileActionPattern = new RegExp(
+    `\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${actionPattern}\\b`,
+    "u",
+  );
+  const failureSignalPattern = `(?:\\b${actionPattern}\\b.{0,120}\\b${MUTATING_FAILURE_WORD_PATTERN}\\b|\\b${MUTATING_FAILURE_WORD_PATTERN}\\b.{0,120}\\b${actionPattern}\\b|\\b${actionPattern}\\b.{0,120}\\b${TOOL_FAILURE_ERROR_VERB_PATTERN}\\b.{0,60}\\berror\\b|\\b(?:hit|encountered|ran into)\\b.{0,60}\\berror\\b.{0,100}\\b(?:while|trying to|when)\\b.{0,100}\\b${actionPattern}\\b)`;
+  const failureThenRecoveryPattern = new RegExp(
+    `${failureSignalPattern}.{0,180}(?:\\b${MUTATING_RECOVERY_WORD_PATTERN}\\b|\\b(?:reran|re-ran|retried)\\b.{0,80}\\b(?:succeeded|passed|passes)\\b)`,
+    "u",
+  );
   return (
-    MUTATING_FAILURE_ACTION_THEN_FAILURE_PATTERN.test(normalizedText) ||
-    MUTATING_FAILURE_FAILURE_THEN_ACTION_PATTERN.test(normalizedText) ||
-    MUTATING_FAILURE_ERROR_WHILE_ACTION_PATTERN.test(normalizedText)
+    failureInabilityPattern.test(normalizedText) ||
+    actionThenFailurePattern.test(normalizedText) ||
+    failureThenActionPattern.test(normalizedText) ||
+    actionThenErrorPattern.test(normalizedText) ||
+    errorWhileActionPattern.test(normalizedText) ||
+    failureThenRecoveryPattern.test(normalizedText)
   );
 }
 
@@ -528,7 +582,10 @@ export function buildEmbeddedRunPayloads(params: {
       replyToCurrent,
     });
     hasUserFacingAssistantReply = true;
-    if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {
+    if (
+      cleanedText &&
+      hasExplicitMutatingToolFailureAcknowledgement(cleanedText, params.lastToolError)
+    ) {
       hasUserFacingFailureAcknowledgement = true;
     }
   }
