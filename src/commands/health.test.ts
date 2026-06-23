@@ -235,7 +235,12 @@ describe("healthCommand", () => {
       ["  Gateway mode: local"],
       [`  Gateway target: ${TEST_GATEWAY_URL}`],
     ]);
-    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalled();
+    expect(buildGatewayConnectionDetailsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowConfiguredSshTransport: true,
+        config: {},
+      }),
+    );
   });
 
   it("passes explicit gateway credentials through to the gateway call", async () => {

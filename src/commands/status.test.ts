@@ -352,7 +352,10 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
       },
       registry: { latestVersion: "0.0.0" },
     },
-    gatewayConnection: { url: "ws://127.0.0.1:18789" },
+    gatewayConnection: {
+      url: "ws://127.0.0.1:18789",
+      message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+    },
     remoteUrlMissing: false,
     gatewayMode: "local" as const,
     gatewayProbeAuth: process.env.OPENCLAW_GATEWAY_TOKEN
@@ -435,6 +438,9 @@ const mocks = vi.hoisted(() => ({
     ...createDefaultProbeGatewayResult(),
   }),
   callGateway: vi.fn().mockResolvedValue({}),
+  buildGatewayConnectionDetails: vi.fn(() => ({
+    message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+  })),
   listGatewayAgentsBasic: vi.fn().mockReturnValue({
     defaultId: "main",
     mainKey: "agent:main:main",
@@ -664,9 +670,7 @@ vi.mock("../gateway/probe.js", () => ({
 }));
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
-  buildGatewayConnectionDetails: vi.fn(() => ({
-    message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
-  })),
+  buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
   resolveGatewayCredentialsWithSecretInputs: vi.fn(
     async (params: {
       config?: {
@@ -923,6 +927,10 @@ describe("statusCommand", () => {
     mocks.probeGateway.mockResolvedValue(createDefaultProbeGatewayResult());
     mocks.callGateway.mockReset();
     mocks.callGateway.mockResolvedValue({});
+    mocks.buildGatewayConnectionDetails.mockReset();
+    mocks.buildGatewayConnectionDetails.mockReturnValue({
+      message: "Gateway mode: local\nGateway target: ws://127.0.0.1:18789",
+    });
     mocks.listGatewayAgentsBasic.mockReset();
     mocks.listGatewayAgentsBasic.mockReturnValue({
       defaultId: "main",
@@ -1164,6 +1172,8 @@ describe("statusCommand", () => {
       expectLogsInclude(logs, token);
     }
     expectLogsInclude(logs, "legacy-plugin still uses legacy before_agent_start");
+    expectLogsInclude(logs, "Gateway target: ws://127.0.0.1:18789");
+    expect(mocks.buildGatewayConnectionDetails).not.toHaveBeenCalled();
     expectLogsMatch(logs, /openclaw (?:--profile isolated )?status --all/);
     expectLogsInclude(logs, "Cache");
     expectLogsInclude(logs, "40% hit");

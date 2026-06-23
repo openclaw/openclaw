@@ -132,7 +132,10 @@ export async function checkGatewayHealth(params: {
     }
     const message = String(err);
     if (message.includes("gateway closed")) {
-      const gatewayDetails = buildGatewayConnectionDetails({ config: params.cfg });
+      const gatewayDetails = buildGatewayConnectionDetails({
+        config: params.cfg,
+        allowConfiguredSshTransport: true,
+      });
       const closedDiagnostic = formatGatewayClosedDiagnostic(err);
       if (closedDiagnostic) {
         note(closedDiagnostic, "Gateway");

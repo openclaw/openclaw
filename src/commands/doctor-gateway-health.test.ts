@@ -7,6 +7,12 @@ import {
 } from "./gateway-health-auth-diagnostic.js";
 
 const callGateway = vi.hoisted(() => vi.fn());
+const buildGatewayConnectionDetails = vi.hoisted(() =>
+  vi.fn(() => ({
+    message: "Gateway target: ws://127.0.0.1:18789",
+    url: "ws://127.0.0.1:18789",
+  })),
+);
 const isGatewayCredentialsRequiredError = vi.hoisted(() => vi.fn(() => false));
 const isGatewayTransportError = vi.hoisted(() => vi.fn((_value: unknown) => false));
 const isGatewaySecretRefUnavailableError = vi.hoisted(() => vi.fn(() => false));
@@ -18,10 +24,7 @@ const TEST_AUTH_CLOSE_ERROR = "gateway closed (1008):";
 const TEST_TLS_FINGERPRINT = "sha256:test-doctor-gateway-fingerprint";
 
 vi.mock("../gateway/call.js", () => ({
-  buildGatewayConnectionDetails: vi.fn(() => ({
-    message: `Gateway target: ${TEST_GATEWAY_URL}`,
-    url: TEST_GATEWAY_URL,
-  })),
+  buildGatewayConnectionDetails,
   buildGatewayProbeConnectionDetails: vi.fn(() => ({
     preauthHandshakeTimeoutMs: 4321,
     sshTunnel: { stop: stopGatewayProbeTunnel },
@@ -56,6 +59,11 @@ describe("checkGatewayHealth", () => {
 
   beforeEach(() => {
     callGateway.mockReset();
+    buildGatewayConnectionDetails.mockReset();
+    buildGatewayConnectionDetails.mockReturnValue({
+      message: `Gateway target: ${TEST_GATEWAY_URL}`,
+      url: TEST_GATEWAY_URL,
+    });
     isGatewayCredentialsRequiredError.mockReset();
     isGatewayCredentialsRequiredError.mockReturnValue(false);
     isGatewayTransportError.mockReset();
@@ -144,6 +152,12 @@ describe("checkGatewayHealth", () => {
     expect(note).toHaveBeenCalledWith(
       "Gateway connect failed: gateway closed (1008): protocol version mismatch",
       "Gateway",
+    );
+    expect(buildGatewayConnectionDetails).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowConfiguredSshTransport: true,
+        config: cfg,
+      }),
     );
     expect(note).not.toHaveBeenCalledWith("Gateway not running.", "Gateway");
   });

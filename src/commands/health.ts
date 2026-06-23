@@ -760,6 +760,7 @@ export async function healthCommand(
       const details = buildGatewayConnectionDetails({
         config: cfg,
         localPortOverride: opts.localPortOverride,
+        allowConfiguredSshTransport: true,
       });
       logGatewayConnectionDetails({
         runtime,
