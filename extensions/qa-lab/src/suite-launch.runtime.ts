@@ -175,6 +175,7 @@ async function runQaTestFileSuiteFromRuntime(params: {
     providerMode,
     primaryModel,
     scenarios: params.scenarios,
+    writeEvidenceFile: runParams?.writeEvidenceFile,
   });
 }
 
@@ -290,6 +291,13 @@ async function runWeightedUnifiedPartitionTasks(
 
 async function readQaSuiteEvidenceSummary(evidencePath: string) {
   return validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(evidencePath, "utf8")));
+}
+
+async function resolveQaSuiteResultEvidenceSummary(result: {
+  evidence?: QaEvidenceSummaryJson;
+  evidencePath: string;
+}) {
+  return result.evidence ?? (await readQaSuiteEvidenceSummary(result.evidencePath));
 }
 
 function mergeQaEvidenceSummaries(params: {
@@ -489,6 +497,7 @@ async function runUnifiedQaSuite(params: {
               flowPartitions.length === 1
                 ? suitePartitionOutputDir(outputDir, "flow")
                 : flowSuitePartitionOutputDir(outputDir, partition.kind),
+            writeEvidenceFile: false,
             providerMode,
             primaryModel,
             alternateModel,
@@ -512,7 +521,7 @@ async function runUnifiedQaSuite(params: {
             }
           }
           return {
-            evidenceSummaries: [await readQaSuiteEvidenceSummary(result.evidencePath)],
+            evidenceSummaries: [await resolveQaSuiteResultEvidenceSummary(result)],
             scenarioResults,
           };
         },
@@ -530,13 +539,14 @@ async function runUnifiedQaSuite(params: {
             runParams: {
               ...params.runParams,
               outputDir: suitePartitionOutputDir(outputDir, kind),
+              writeEvidenceFile: false,
               providerMode,
               primaryModel,
               scenarioIds: testFileScenarios.map((scenario) => scenario.id),
             },
             scenarios: testFileScenarios,
           });
-          testFileEvidenceSummaries.push(await readQaSuiteEvidenceSummary(result.evidencePath));
+          testFileEvidenceSummaries.push(await resolveQaSuiteResultEvidenceSummary(result));
           testFileScenarioResults.push(
             ...result.results.map((scenarioResult) => ({
               scenarioId: scenarioResult.scenario.id,

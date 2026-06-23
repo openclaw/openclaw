@@ -10,7 +10,7 @@ export const QA_MATURITY_TAXONOMY_PATH = "taxonomy.yaml";
 export const QA_MATURITY_SCORES_PATH = "qa/maturity-scores.yaml";
 export const QA_MATURITY_SCORE_KEYS = ["quality", "completeness"] as const;
 export const QA_MATURITY_SCORE_LABELS = [
-  "Lovable",
+  "Clawesome",
   "Stable",
   "Beta",
   "Alpha",

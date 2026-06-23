@@ -73,7 +73,7 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
+import { forkSessionEntryFromParent } from "./session-fork.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
@@ -753,47 +753,39 @@ export async function initSessionState(params: {
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
   let inheritedParentContext = false;
-  if (
-    parentSessionKey &&
-    parentSessionKey !== sessionKey &&
-    sessionStore[parentSessionKey] &&
-    !alreadyForked
-  ) {
-    const parentEntry = sessionStore[parentSessionKey];
-    const forkDecision = await resolveParentForkDecision({
-      parentEntry,
+  if (parentSessionKey && parentSessionKey !== sessionKey && !alreadyForked) {
+    const forked = await forkSessionEntryFromParent({
+      parentSessionKey,
+      sessionKey,
       storePath,
+      fallbackEntry: sessionEntry,
+      agentId,
+      sessionsDir: path.dirname(storePath),
+      decisionSkipPatch: () => ({ ...sessionEntry, forkedFromParent: true }),
+      patch: () => ({
+        ...sessionEntry,
+        totalTokens: undefined,
+        totalTokensFresh: false,
+      }),
     });
-    if (forkDecision.status === "skip") {
+    if (forked.status === "skipped" && forked.decision?.status === "skip") {
       // The parent branch is too large to inherit usefully. Start fresh and
       // mark as handled so the thread does not retry this decision every turn.
       log.warn(
         `skipping parent fork (parent too large): parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${forkDecision.parentTokens} maxTokens=${forkDecision.maxTokens}`,
+          `parentTokens=${forked.decision.parentTokens} maxTokens=${forked.decision.maxTokens}`,
       );
-      sessionEntry.forkedFromParent = true;
-    } else {
+      sessionEntry = forked.sessionEntry;
+    } else if (forked.status === "forked") {
       log.warn(
         `forking from parent session: parentKey=${parentSessionKey} → sessionKey=${sessionKey} ` +
-          `parentTokens=${forkDecision.parentTokens ?? "unknown"}`,
+          `parentTokens=${forked.decision.parentTokens ?? "unknown"}`,
       );
-      const forked = await forkSessionFromParent({
-        parentEntry,
-        agentId,
-        sessionsDir: path.dirname(storePath),
-      });
-      if (forked) {
-        sessionId = forked.sessionId;
-        sessionEntry.sessionId = forked.sessionId;
-        sessionEntry.sessionFile = forked.sessionFile;
-        sessionEntry.forkedFromParent = true;
-        // The fork replaces the target transcript with inherited parent
-        // history, so any prior target-session token snapshot is stale.
-        sessionEntry.totalTokens = undefined;
-        sessionEntry.totalTokensFresh = false;
-        inheritedParentContext = true;
-        log.warn(`forked session created: file=${forked.sessionFile}`);
-      }
+      sessionId = forked.fork.sessionId;
+      sessionEntry = forked.sessionEntry;
+      sessionEntry.forkedFromParent = true;
+      inheritedParentContext = true;
+      log.warn(`forked session created: file=${forked.fork.sessionFile}`);
     }
   }
   const threadIdFromSessionKey = parseSessionThreadInfoFast(

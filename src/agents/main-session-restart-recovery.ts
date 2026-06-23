@@ -191,7 +191,6 @@ export async function markRestartAbortedMainSessions(params: {
         const target = resolveGatewaySessionStoreTarget({
           cfg,
           key: sessionKey,
-          scanLegacyKeys: true,
         });
         storePaths.add(path.resolve(target.storePath));
         for (const storeKey of target.storeKeys) {
@@ -711,7 +710,6 @@ function isRoutableRecoveryStore(params: {
     const target = resolveGatewaySessionStoreTarget({
       cfg: params.cfg,
       key: params.sessionKey,
-      scanLegacyKeys: true,
     });
     return path.resolve(target.storePath) === path.resolve(params.storePath);
   } catch (err) {

@@ -2675,6 +2675,20 @@ function assertFullCheckoutAvailableBeforeExit(dir) {
   return false;
 }
 
+function injectFullCheckoutLeaseReclaim(commandArgs) {
+  if (
+    commandArgs[0] !== "run" ||
+    !hasOption(commandArgs, "--id") ||
+    hasOption(commandArgs, "--reclaim")
+  ) {
+    return commandArgs;
+  }
+  const normalizedArgs = [...commandArgs];
+  const { optionEnd } = runCommandBounds(normalizedArgs);
+  normalizedArgs.splice(optionEnd, 0, "--reclaim");
+  return normalizedArgs;
+}
+
 const version = checkedOutput(binary, ["--version"]);
 const help = checkedOutput(binary, ["run", "--help"]);
 const providerAliases = new Map([
@@ -2856,6 +2870,7 @@ try {
     const changedGateBase = isChangedGateCommand(runWords) ? mergeBaseForChangedGate() : "";
     const checkout = prepareFullCheckoutForSync({ changedGateBase });
     fullCheckout = checkout;
+    normalizedArgs = injectFullCheckoutLeaseReclaim(normalizedArgs);
     childCwd = checkout.dir;
     cleanupChildCwd = () => checkout.cleanup();
     remoteChangedGateBase = checkout.changedGateBase;

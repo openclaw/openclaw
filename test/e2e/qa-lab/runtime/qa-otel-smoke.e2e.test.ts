@@ -148,6 +148,22 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(() => testing.parseArgs(args)).toThrow(`${flag} requires a value`);
   });
 
+  it("rejects duplicate OTEL smoke CLI options", () => {
+    const duplicateCases = [
+      ["--collector", ["--collector", "local", "--collector", "docker"]],
+      ["--logs-exporter", ["--logs-exporter", "otlp", "--logs-exporter", "stdout"]],
+      ["--output-dir", ["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]],
+      ["--provider-mode", ["--provider-mode", "mock-openai", "--provider-mode", "live-frontier"]],
+      ["--scenario", ["--scenario", "custom-one", "--scenario", "custom-two"]],
+      ["--model", ["--model", "openai/gpt-5.5", "--model", "openai/gpt-5.4"]],
+      ["--alt-model", ["--alt-model", "openai/gpt-5.5", "--alt-model", "openai/gpt-5.4"]],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => testing.parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
+    }
+  });
+
   it("selects the matching scenario for the requested log exporter", () => {
     expect(testing.parseArgs(["--logs-exporter", "otlp"]).scenarioId).toBe("otel-trace-smoke");
     expect(testing.parseArgs(["--logs-exporter", "stdout"]).scenarioId).toBe(
@@ -170,6 +186,18 @@ describe("qa-otel-smoke receiver bounds", () => {
       testing.parseArgs(["--logs-exporter", "stdout", "--scenario", "custom-stdout-smoke"])
         .scenarioId,
     ).toBe("custom-stdout-smoke");
+  });
+
+  it("uses unique default output dirs", () => {
+    const firstOutputDir = testing.parseArgs([]).outputDir;
+    const secondOutputDir = testing.parseArgs([]).outputDir;
+
+    expect(path.dirname(firstOutputDir)).toBe(path.join(".artifacts", "qa-e2e"));
+    expect(path.basename(firstOutputDir)).toMatch(/^otel-smoke-[a-z0-9]+-[a-f0-9]{8}$/u);
+    expect(secondOutputDir).not.toBe(firstOutputDir);
+    expect(testing.parseArgs(["--output-dir", ".artifacts/custom"]).outputDir).toBe(
+      ".artifacts/custom",
+    );
   });
 
   it("parses body-size limit env values as strict positive integers", () => {

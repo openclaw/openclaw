@@ -25,13 +25,14 @@ import {
   deriveQmdScopeChatType,
   isSessionArchiveArtifactName,
   isQmdScopeAllowed,
-  listSessionFilesForAgent,
+  listSessionTranscriptCorpusEntriesForAgent,
   parseQmdQueryJson,
   resolveSessionIdentityForTranscriptFile,
   resolveCliSpawnInvocation,
   runCliCommand,
   type QmdQueryResult,
   type SessionFileEntry,
+  type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildMemoryReadResult,
@@ -2556,7 +2557,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     const exportDir = this.sessionExporter.dir;
     await fs.mkdir(exportDir, { recursive: true });
     const exportRoot = await root(exportDir);
-    const files = await listSessionFilesForAgent(this.agentId);
+    const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
     const keep = new Set<string>();
     const tracked = new Set<string>();
     const artifactMappings: QmdSessionArtifactMapping[] = [];
@@ -2571,7 +2572,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     const cachedBySessionFile = new Map(
       cachedEntries.map((entry) => [entry.sessionFile, entry] as const),
     );
-    for (const sessionFile of files) {
+    for (const corpusEntry of corpusEntries) {
+      const sessionFile = corpusEntry.sessionFile;
       let stat: Awaited<ReturnType<typeof fs.stat>>;
       try {
         stat = await fs.stat(sessionFile);
@@ -2607,7 +2609,12 @@ export class QmdMemoryManager implements MemorySearchManager {
           try {
             await fs.access(target);
             tracked.add(sessionFile);
-            const identity = this.buildSessionArtifactMapping(sessionFile, targetName, target);
+            const identity = this.buildSessionArtifactMapping(
+              sessionFile,
+              targetName,
+              target,
+              corpusEntry,
+            );
             if (identity) {
               artifactMappings.push(identity);
             }
@@ -2619,7 +2626,10 @@ export class QmdMemoryManager implements MemorySearchManager {
         }
       }
       // Slow path: rebuild the entry and write the markdown if needed.
-      const entry = await buildSessionEntry(sessionFile);
+      const entry = await buildSessionEntry(sessionFile, {
+        generatedByDreamingNarrative: corpusEntry.generatedByDreamingNarrative === true,
+        generatedByCronRun: corpusEntry.generatedByCronRun === true,
+      });
       if (!entry) {
         continue;
       }
@@ -2627,7 +2637,12 @@ export class QmdMemoryManager implements MemorySearchManager {
         continue;
       }
       tracked.add(sessionFile);
-      const identity = this.buildSessionArtifactMapping(sessionFile, targetName, target);
+      const identity = this.buildSessionArtifactMapping(
+        sessionFile,
+        targetName,
+        target,
+        corpusEntry,
+      );
       if (identity) {
         artifactMappings.push(identity);
       }
@@ -2688,11 +2703,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     sessionFile: string,
     artifactPath: string,
     target: string,
+    corpusEntry?: SessionTranscriptCorpusEntry,
   ): QmdSessionArtifactMapping | null {
     if (!this.sessionExporter) {
       return null;
     }
-    const identity = resolveSessionIdentityForTranscriptFile(sessionFile);
+    const identity = corpusEntry ?? resolveSessionIdentityForTranscriptFile(sessionFile);
     if (!identity?.agentId) {
       return null;
     }

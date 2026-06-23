@@ -800,6 +800,33 @@ describe("qa cli registration", () => {
     await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
   });
 
+  it.each([
+    [["qa", "ui", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+    [
+      ["qa", "ui", "--advertise-port", "999999"],
+      "--advertise-port must be a TCP port between 1 and 65535.",
+    ],
+    [
+      ["qa", "docker-scaffold", "--output-dir", "/tmp/qa", "--gateway-port", "65536"],
+      "--gateway-port must be a TCP port between 1 and 65535.",
+    ],
+    [
+      ["qa", "up", "--qa-lab-port", "65536"],
+      "--qa-lab-port must be a TCP port between 1 and 65535.",
+    ],
+    [["qa", "aimock", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+  ])("rejects out-of-range QA port option %j", async (args, message) => {
+    const invalidProgram = new Command();
+    invalidProgram.exitOverride();
+    invalidProgram.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerQaLabCli(invalidProgram);
+
+    await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
+  });
+
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {
     listQaRunnerCliContributions.mockReset().mockReturnValue([createBlockedQaRunnerContribution()]);
     const blockedProgram = new Command();

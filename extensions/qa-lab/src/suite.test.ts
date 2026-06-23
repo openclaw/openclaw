@@ -274,6 +274,36 @@ describe("qa suite", () => {
     }
   });
 
+  it("can return evidence without writing duplicate child evidence files", async () => {
+    const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-memory-evidence-");
+    try {
+      const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
+        outputDir,
+        startedAt: new Date("2026-04-11T00:00:00.000Z"),
+        finishedAt: new Date("2026-04-11T00:01:00.000Z"),
+        scenarios: [{ name: "Baseline", status: "pass", steps: [] }],
+        scenarioDefinitions: [makeQaSuiteTestScenario("baseline")],
+        transport: {
+          id: "qa-channel",
+          createReportNotes: () => [],
+        } as unknown as QaTransportAdapter,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        alternateModel: "mock-openai/gpt-5.5-alt",
+        fastMode: true,
+        concurrency: 1,
+        writeEvidenceFile: false,
+      });
+
+      expect(artifacts.evidence?.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
+      await expect(fs.access(artifacts.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(artifacts.reportPath)).resolves.toBeUndefined();
+      await expect(fs.access(artifacts.summaryPath)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("writes Crabline channel-driver smoke artifacts when selected", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-");
     try {
@@ -433,6 +463,7 @@ describe("qa suite", () => {
           enabledPluginIds: ["acpx"],
           transportReadyTimeoutMs: 180_000,
           forcedRuntime: "codex",
+          writeEvidenceFile: false,
         },
       }),
     ).toMatchObject({
@@ -445,6 +476,7 @@ describe("qa suite", () => {
       enabledPluginIds: ["acpx"],
       transportReadyTimeoutMs: 180_000,
       forcedRuntime: "codex",
+      writeEvidenceFile: false,
     });
   });
 

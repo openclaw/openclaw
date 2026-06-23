@@ -393,6 +393,11 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
     sessionFile,
     sessionKey: params.sessionKey,
     agentId: params.route.agentId,
+    target: {
+      agentId: params.route.agentId,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: params.sessionKey,
+    },
     message: appendedMessage,
     messageId,
   });
