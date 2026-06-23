@@ -20,8 +20,6 @@ export function renderSlackCard(params: {
   const configured = resolveChannelConfigured("slack", props);
 
   return renderSingleAccountChannelCard({
-    title: "Slack",
-    subtitle: "Socket mode status and channel configuration.",
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

@@ -58,36 +58,29 @@ export function renderTelegramCard(params: {
 
   if (hasMultipleAccounts) {
     return html`
-      <div class="card">
-        <div class="card-title">Telegram</div>
-        <div class="card-sub">Bot status and channel configuration.</div>
-        ${accountCountLabel}
+      ${accountCountLabel}
+      <div class="account-card-list">
+        ${telegramAccounts.map((account) => renderAccountCard(account))}
+      </div>
 
-        <div class="account-card-list">
-          ${telegramAccounts.map((account) => renderAccountCard(account))}
-        </div>
+      ${telegram?.lastError
+        ? html`<div class="callout danger" style="margin-top: 12px;">${telegram.lastError}</div>`
+        : nothing}
+      ${telegram?.probe
+        ? html`<div class="callout" style="margin-top: 12px;">
+            ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
+            ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
+          </div>`
+        : nothing}
+      ${renderChannelConfigSection({ channelId: "telegram", props })}
 
-        ${telegram?.lastError
-          ? html`<div class="callout danger" style="margin-top: 12px;">${telegram.lastError}</div>`
-          : nothing}
-        ${telegram?.probe
-          ? html`<div class="callout" style="margin-top: 12px;">
-              ${telegram.probe.ok ? t("common.probeOk") : t("common.probeFailed")} ·
-              ${telegram.probe.status ?? ""} ${telegram.probe.error ?? ""}
-            </div>`
-          : nothing}
-        ${renderChannelConfigSection({ channelId: "telegram", props })}
-
-        <div class="row" style="margin-top: 12px;">
-          <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
-        </div>
+      <div class="row" style="margin-top: 12px;">
+        <button class="btn" @click=${() => props.onRefresh(true)}>${t("common.probe")}</button>
       </div>
     `;
   }
 
   return renderSingleAccountChannelCard({
-    title: "Telegram",
-    subtitle: "Bot status and channel configuration.",
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

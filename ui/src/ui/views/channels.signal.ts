@@ -20,8 +20,6 @@ export function renderSignalCard(params: {
   const configured = resolveChannelConfigured("signal", props);
 
   return renderSingleAccountChannelCard({
-    title: "Signal",
-    subtitle: "signal-cli status and channel configuration.",
     accountCountLabel,
     statusRows: [
       { label: t("common.configured"), value: formatNullableBoolean(configured) },

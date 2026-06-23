@@ -1,7 +1,7 @@
 // Control UI view renders channels.shared screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import type { ChannelAccountSnapshot } from "../types.ts";
+import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../types.ts";
 import type { ChannelKey, ChannelsProps } from "./channels.types.ts";
 
 type ChannelDisplayState = {
@@ -94,9 +94,10 @@ export function formatNullableBoolean(value: boolean | null): string {
   return value ? t("common.yes") : t("common.no");
 }
 
+// Body-only channel card: the directory row owns identity (logo + name), so this
+// renders just the status rows, callouts, config form, and per-channel footer
+// that live inside an expanded row.
 export function renderSingleAccountChannelCard(params: {
-  title: string;
-  subtitle: string;
   accountCountLabel: unknown;
   statusRows: readonly ChannelStatusRow[];
   lastError?: string | null;
@@ -106,29 +107,108 @@ export function renderSingleAccountChannelCard(params: {
   footer?: unknown;
 }) {
   return html`
-    <div class="card">
-      <div class="card-title">${params.title}</div>
-      <div class="card-sub">${params.subtitle}</div>
-      ${params.accountCountLabel}
-
-      <div class="status-list" style="margin-top: 16px;">
-        ${params.statusRows.map(
-          (row) => html`
-            <div>
-              <span class="label">${row.label}</span>
-              <span>${row.value}</span>
-            </div>
-          `,
-        )}
-      </div>
-
-      ${params.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${params.lastError}</div>`
-        : nothing}
-      ${params.secondaryCallout ?? nothing} ${params.extraContent ?? nothing}
-      ${params.configSection} ${params.footer ?? nothing}
+    ${params.accountCountLabel}
+    <div class="status-list">
+      ${params.statusRows.map(
+        (row) => html`
+          <div>
+            <span class="label">${row.label}</span>
+            <span>${row.value}</span>
+          </div>
+        `,
+      )}
     </div>
+    ${params.lastError
+      ? html`<div class="callout danger" style="margin-top: 12px;">${params.lastError}</div>`
+      : nothing}
+    ${params.secondaryCallout ?? nothing} ${params.extraContent ?? nothing} ${params.configSection}
+    ${params.footer ?? nothing}
   `;
+}
+
+// Display label + descriptive subtitle for the directory row of each built-in
+// channel. Unknown plugin channels fall back to the snapshot label + generic copy.
+const CHANNEL_DIRECTORY_META: Record<string, { labelKey: string; subtitleKey: string }> = {
+  whatsapp: {
+    labelKey: "channels.directory.labels.whatsapp",
+    subtitleKey: "channels.directory.subtitles.whatsapp",
+  },
+  telegram: {
+    labelKey: "channels.directory.labels.telegram",
+    subtitleKey: "channels.directory.subtitles.telegram",
+  },
+  discord: {
+    labelKey: "channels.directory.labels.discord",
+    subtitleKey: "channels.directory.subtitles.discord",
+  },
+  slack: {
+    labelKey: "channels.directory.labels.slack",
+    subtitleKey: "channels.directory.subtitles.slack",
+  },
+  signal: {
+    labelKey: "channels.directory.labels.signal",
+    subtitleKey: "channels.directory.subtitles.signal",
+  },
+  imessage: {
+    labelKey: "channels.directory.labels.imessage",
+    subtitleKey: "channels.directory.subtitles.imessage",
+  },
+  googlechat: {
+    labelKey: "channels.directory.labels.googlechat",
+    subtitleKey: "channels.directory.subtitles.googlechat",
+  },
+  nostr: {
+    labelKey: "channels.directory.labels.nostr",
+    subtitleKey: "channels.directory.subtitles.nostr",
+  },
+};
+
+function resolveSnapshotLabel(snapshot: ChannelsStatusSnapshot | null, key: ChannelKey): string {
+  const meta = snapshot?.channelMeta?.find((entry) => entry.id === key);
+  return meta?.label ?? snapshot?.channelLabels?.[key] ?? key;
+}
+
+export function resolveChannelDirectoryName(
+  snapshot: ChannelsStatusSnapshot | null,
+  key: ChannelKey,
+): string {
+  const meta = CHANNEL_DIRECTORY_META[key];
+  return meta ? t(meta.labelKey) : resolveSnapshotLabel(snapshot, key);
+}
+
+export function resolveChannelDirectorySubtitle(key: ChannelKey): string {
+  const meta = CHANNEL_DIRECTORY_META[key];
+  return meta ? t(meta.subtitleKey) : t("channels.generic.subtitle");
+}
+
+export type ChannelDotState = "ok" | "warn" | "off";
+
+function hasAccountLastError(accounts: readonly ChannelAccountSnapshot[]): boolean {
+  return accounts.some(
+    (account) => typeof account.lastError === "string" && account.lastError.trim().length > 0,
+  );
+}
+
+// Row status dot: off = not enabled; ok = connected/running/active account;
+// warn = enabled but reporting an error or not yet connected (needs attention).
+export function resolveChannelDotState(key: ChannelKey, props: ChannelsProps): ChannelDotState {
+  if (!channelEnabled(key, props)) {
+    return "off";
+  }
+  const displayState = resolveChannelDisplayState(key, props);
+  const lastError =
+    typeof displayState.status?.lastError === "string" ? displayState.status.lastError.trim() : "";
+  if (lastError || hasAccountLastError(props.snapshot?.channelAccounts?.[key] ?? [])) {
+    return "warn";
+  }
+  if (
+    displayState.connected === true ||
+    displayState.running === true ||
+    displayState.hasAnyActiveAccount
+  ) {
+    return "ok";
+  }
+  return "warn";
 }
 
 export function getChannelAccountCount(

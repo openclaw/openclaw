@@ -1,10 +1,10 @@
-// Control UI view renders channels screen content.
+// Control UI view renders the channels directory screen.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../format.ts";
+import { icon } from "../icons.ts";
 import type {
   ChannelAccountSnapshot,
-  ChannelUiMetaEntry,
   ChannelsStatusSnapshot,
   DiscordStatus,
   GoogleChatStatus,
@@ -16,6 +16,7 @@ import type {
   TelegramStatus,
   WhatsAppStatus,
 } from "../types.ts";
+import { renderChannelLogo } from "./channel-logos.ts";
 import { renderChannelConfigSection } from "./channels.config.ts";
 import { renderDiscordCard } from "./channels.discord.ts";
 import { renderGoogleChatCard } from "./channels.googlechat.ts";
@@ -25,12 +26,21 @@ import {
   channelEnabled,
   formatNullableBoolean,
   renderChannelAccountCount,
+  resolveChannelDirectoryName,
+  resolveChannelDirectorySubtitle,
   resolveChannelDisplayState,
+  resolveChannelDotState,
+  type ChannelDotState,
 } from "./channels.shared.ts";
 import { renderSignalCard } from "./channels.signal.ts";
 import { renderSlackCard } from "./channels.slack.ts";
 import { renderTelegramCard } from "./channels.telegram.ts";
-import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./channels.types.ts";
+import type {
+  ChannelFilter,
+  ChannelKey,
+  ChannelsChannelData,
+  ChannelsProps,
+} from "./channels.types.ts";
 import { renderWhatsAppCard } from "./channels.whatsapp.ts";
 
 export function renderChannels(props: ChannelsProps) {
@@ -56,59 +66,150 @@ export function renderChannels(props: ChannelsProps) {
       }
       return a.order - b.order;
     });
-  const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
-  const partialWarnings = props.snapshot?.warnings?.filter((warning) => warning.trim()) ?? [];
+
+  const data: ChannelsChannelData = {
+    whatsapp,
+    telegram,
+    discord,
+    googlechat,
+    slack,
+    signal,
+    imessage,
+    nostr,
+    channelAccounts: props.snapshot?.channelAccounts ?? null,
+  };
+
+  const enabledCount = orderedChannels.filter((channel) => channel.enabled).length;
+  const totalCount = orderedChannels.length;
+  const filter = props.channelFilter;
+  const visibleChannels = orderedChannels.filter((channel) =>
+    filter === "enabled" ? channel.enabled : filter === "disabled" ? !channel.enabled : true,
+  );
+
+  const filterOptions: ReadonlyArray<{ value: ChannelFilter; label: string; count: number }> = [
+    { value: "all", label: t("channels.directory.all"), count: totalCount },
+    { value: "enabled", label: t("common.enabled"), count: enabledCount },
+    { value: "disabled", label: t("common.disabled"), count: totalCount - enabledCount },
+  ];
 
   return html`
-    <section class="grid grid-cols-2">
-      ${orderedChannels.map((channel) =>
-        renderChannel(channel.key, props, {
-          whatsapp,
-          telegram,
-          discord,
-          googlechat,
-          slack,
-          signal,
-          imessage,
-          nostr,
-          channelAccounts: props.snapshot?.channelAccounts ?? null,
-        }),
-      )}
-    </section>
-
-    <section class="card" style="margin-top: 18px;">
-      <div class="row" style="justify-content: space-between;">
-        <div>
-          <div class="card-title">${t("channels.health.title")}</div>
-          <div class="card-sub">${t("channels.health.subtitle")}</div>
-        </div>
-        <div class="muted">
-          ${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : t("common.na")}
-        </div>
+    <section class="channel-directory">
+      <div
+        class="channel-directory__filters"
+        role="group"
+        aria-label=${t("channels.directory.filterLabel")}
+      >
+        ${filterOptions.map((option) => renderFilterButton(props, option))}
       </div>
-      ${showingStaleSnapshot
-        ? html`
-            <div class="callout info" style="margin-top: 12px;">
-              Refreshing channel status in the background; showing the last successful snapshot.
-            </div>
-          `
+
+      ${renderHealthCallouts(props)}
+
+      <div class="channel-directory__list">
+        ${visibleChannels.length === 0
+          ? html`<div class="channel-directory__empty muted">${t("channels.directory.empty")}</div>`
+          : visibleChannels.map((channel) => renderChannelRow(channel.key, props, data))}
+      </div>
+
+      ${renderRawSnapshot(props)}
+    </section>
+  `;
+}
+
+function renderFilterButton(
+  props: ChannelsProps,
+  option: { value: ChannelFilter; label: string; count: number },
+) {
+  const active = props.channelFilter === option.value;
+  return html`
+    <button
+      class="channel-filter ${active ? "channel-filter--active" : ""}"
+      aria-pressed=${active}
+      @click=${() => props.onChannelFilterChange(option.value)}
+    >
+      ${option.label}<span class="channel-filter__count">${option.count}</span>
+    </button>
+  `;
+}
+
+const DOT_CLASS: Record<ChannelDotState, string> = { ok: "ok", warn: "warn", off: "muted" };
+
+function resolveStatusLabel(state: ChannelDotState) {
+  return state === "ok"
+    ? t("common.connected")
+    : state === "warn"
+      ? t("channels.directory.needsAttention")
+      : t("common.disabled");
+}
+
+function renderStatusDot(state: ChannelDotState) {
+  return html`<span
+    class="statusDot ${DOT_CLASS[state]} channel-row__dot"
+    aria-hidden="true"
+  ></span>`;
+}
+
+function renderChannelRow(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
+  const expanded = props.expandedChannelIds.includes(key);
+  const name = resolveChannelDirectoryName(props.snapshot, key);
+  const subtitle = resolveChannelDirectorySubtitle(key);
+  const dotState = resolveChannelDotState(key, props);
+  const statusLabel = resolveStatusLabel(dotState);
+  return html`
+    <div class="channel-row ${expanded ? "channel-row--open" : ""}">
+      <button
+        class="channel-row__header"
+        aria-expanded=${expanded}
+        aria-label=${`${name}. ${subtitle} ${statusLabel}.`}
+        @click=${() => props.onChannelToggle(key)}
+      >
+        ${renderChannelLogo(key)}
+        <span class="channel-row__text">
+          <span class="channel-row__name">${name}</span>
+          <span class="channel-row__sub">${subtitle}</span>
+        </span>
+        ${renderStatusDot(dotState)}
+        <span class="channel-row__chevron">${icon(expanded ? "chevronDown" : "chevronRight")}</span>
+      </button>
+      ${expanded
+        ? html`<div class="channel-row__body" role="region" aria-label=${name}>
+            ${renderChannel(key, props, data)}
+          </div>`
         : nothing}
-      ${props.snapshot?.partial
-        ? html`
-            <div class="callout warn" style="margin-top: 12px;">
-              Some channel checks did not finish before the UI budget.
-              ${partialWarnings.length > 0 ? partialWarnings.slice(0, 3).join("; ") : ""}
-            </div>
-          `
-        : nothing}
-      ${props.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
-        : nothing}
-      <pre class="code-block" style="margin-top: 12px;">
+    </div>
+  `;
+}
+
+function renderHealthCallouts(props: ChannelsProps) {
+  const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
+  const partialWarnings = props.snapshot?.warnings?.filter((warning) => warning.trim()) ?? [];
+  return html`
+    ${showingStaleSnapshot
+      ? html`<div class="callout info">
+          Refreshing channel status in the background; showing the last successful snapshot.
+        </div>`
+      : nothing}
+    ${props.snapshot?.partial
+      ? html`<div class="callout warn">
+          Some channel checks did not finish before the UI budget.
+          ${partialWarnings.length > 0 ? partialWarnings.slice(0, 3).join("; ") : ""}
+        </div>`
+      : nothing}
+    ${props.lastError ? html`<div class="callout danger">${props.lastError}</div>` : nothing}
+  `;
+}
+
+function renderRawSnapshot(props: ChannelsProps) {
+  const lastSeen = props.lastSuccessAt
+    ? formatRelativeTimestamp(props.lastSuccessAt)
+    : t("common.na");
+  return html`
+    <details class="channel-raw">
+      <summary>${t("channels.health.title")} · ${lastSeen}</summary>
+      <pre class="code-block">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
       </pre
       >
-    </section>
+    </details>
   `;
 }
 
@@ -205,7 +306,6 @@ function renderGenericChannelCard(
   props: ChannelsProps,
   channelAccounts: Record<string, ChannelAccountSnapshot[]>,
 ) {
-  const label = resolveChannelLabel(props.snapshot, key);
   const displayState = resolveChannelDisplayState(key, props);
   const lastError =
     typeof displayState.status?.lastError === "string" ? displayState.status.lastError : undefined;
@@ -213,52 +313,34 @@ function renderGenericChannelCard(
   const accountCountLabel = renderChannelAccountCount(key, channelAccounts);
 
   return html`
-    <div class="card">
-      <div class="card-title">${label}</div>
-      <div class="card-sub">${t("channels.generic.subtitle")}</div>
-      ${accountCountLabel}
-      ${accounts.length > 0
-        ? html`
-            <div class="account-card-list">
-              ${accounts.map((account) => renderGenericAccount(account))}
+    ${accountCountLabel}
+    ${accounts.length > 0
+      ? html`
+          <div class="account-card-list">
+            ${accounts.map((account) => renderGenericAccount(account))}
+          </div>
+        `
+      : html`
+          <div class="status-list">
+            <div>
+              <span class="label">${t("common.configured")}</span>
+              <span>${formatNullableBoolean(displayState.configured)}</span>
             </div>
-          `
-        : html`
-            <div class="status-list" style="margin-top: 16px;">
-              <div>
-                <span class="label">${t("common.configured")}</span>
-                <span>${formatNullableBoolean(displayState.configured)}</span>
-              </div>
-              <div>
-                <span class="label">${t("common.running")}</span>
-                <span>${formatNullableBoolean(displayState.running)}</span>
-              </div>
-              <div>
-                <span class="label">${t("common.connected")}</span>
-                <span>${formatNullableBoolean(displayState.connected)}</span>
-              </div>
+            <div>
+              <span class="label">${t("common.running")}</span>
+              <span>${formatNullableBoolean(displayState.running)}</span>
             </div>
-          `}
-      ${lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
-        : nothing}
-      ${renderChannelConfigSection({ channelId: key, props })}
-    </div>
+            <div>
+              <span class="label">${t("common.connected")}</span>
+              <span>${formatNullableBoolean(displayState.connected)}</span>
+            </div>
+          </div>
+        `}
+    ${lastError
+      ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
+      : nothing}
+    ${renderChannelConfigSection({ channelId: key, props })}
   `;
-}
-
-function resolveChannelMetaMap(
-  snapshot: ChannelsStatusSnapshot | null,
-): Record<string, ChannelUiMetaEntry> {
-  if (!snapshot?.channelMeta?.length) {
-    return {};
-  }
-  return Object.fromEntries(snapshot.channelMeta.map((entry) => [entry.id, entry]));
-}
-
-function resolveChannelLabel(snapshot: ChannelsStatusSnapshot | null, key: string): string {
-  const meta = resolveChannelMetaMap(snapshot)[key];
-  return meta?.label ?? snapshot?.channelLabels?.[key] ?? key;
 }
 
 const RECENT_ACTIVITY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes

@@ -1,13 +1,16 @@
 // Control UI tests cover channels behavior.
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WhatsAppStatus } from "../types.ts";
+import { readExpandedChannelsFromUrl, writeExpandedChannelsToUrl } from "./channels-url.ts";
 import {
   channelEnabled,
   resolveChannelConfigured,
   resolveChannelDisplayState,
+  resolveChannelDotState,
 } from "./channels.shared.ts";
-import type { ChannelsProps } from "./channels.types.ts";
+import { renderChannels } from "./channels.ts";
+import type { ChannelFilter, ChannelsProps } from "./channels.types.ts";
 import { renderWhatsAppCard } from "./channels.whatsapp.ts";
 
 function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
@@ -27,6 +30,10 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     configUiHints: {},
     configSaving: false,
     configFormDirty: false,
+    expandedChannelIds: [],
+    channelFilter: "all",
+    onChannelToggle: () => {},
+    onChannelFilterChange: () => {},
     nostrProfileFormState: null,
     nostrProfileAccountId: null,
     onRefresh: () => {},
@@ -200,5 +207,125 @@ describe("WhatsApp card actions", () => {
     });
 
     expect(labels).toEqual(["Save", "Reload", "Show QR", "Wait for scan", "Logout", "Refresh"]);
+  });
+});
+
+function createDirectoryProps(overrides: Partial<ChannelsProps> = {}): ChannelsProps {
+  const props = createProps({
+    ts: Date.now(),
+    channelOrder: ["whatsapp", "telegram"],
+    channelLabels: { whatsapp: "WhatsApp", telegram: "Telegram" },
+    channels: {
+      whatsapp: { configured: true, running: true, connected: true },
+      telegram: { configured: false },
+    },
+    channelAccounts: {},
+    channelDefaultAccountId: {},
+  });
+  return { ...props, ...overrides };
+}
+
+function renderDirectory(props: ChannelsProps) {
+  const container = document.createElement("div");
+  render(renderChannels(props), container);
+  return container;
+}
+
+describe("channels directory", () => {
+  it("derives the row status dot from connection state", () => {
+    const props = createDirectoryProps();
+    expect(resolveChannelDotState("whatsapp", props)).toBe("ok");
+    expect(resolveChannelDotState("telegram", props)).toBe("off");
+
+    const erroring = createProps({
+      ts: Date.now(),
+      channelOrder: ["slack"],
+      channelLabels: { slack: "Slack" },
+      channels: { slack: { configured: true, lastError: "boom" } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    expect(resolveChannelDotState("slack", erroring)).toBe("warn");
+
+    const accountErroring = createProps({
+      ts: Date.now(),
+      channelOrder: ["telegram"],
+      channelLabels: { telegram: "Telegram" },
+      channels: { telegram: { configured: true, running: true } },
+      channelAccounts: {
+        telegram: [{ accountId: "bot", configured: true, running: true, lastError: "bad token" }],
+      },
+      channelDefaultAccountId: { telegram: "bot" },
+    });
+    expect(resolveChannelDotState("telegram", accountErroring)).toBe("warn");
+  });
+
+  it("renders one collapsed row per channel and expands only the selected ones", () => {
+    const collapsed = renderDirectory(createDirectoryProps());
+    expect(collapsed.querySelectorAll(".channel-row").length).toBe(2);
+    expect(collapsed.querySelector(".channel-row__body")).toBeNull();
+
+    const expanded = renderDirectory(createDirectoryProps({ expandedChannelIds: ["whatsapp"] }));
+    expect(expanded.querySelectorAll(".channel-row--open").length).toBe(1);
+    expect(expanded.querySelectorAll(".channel-row__body").length).toBe(1);
+  });
+
+  it("filters rows by enabled state", () => {
+    const enabled = renderDirectory(createDirectoryProps({ channelFilter: "enabled" }));
+    expect(enabled.querySelectorAll(".channel-row").length).toBe(1);
+    expect(enabled.textContent).toContain("WhatsApp");
+
+    const disabled = renderDirectory(createDirectoryProps({ channelFilter: "disabled" }));
+    expect(disabled.querySelectorAll(".channel-row").length).toBe(1);
+    expect(disabled.textContent).toContain("Telegram");
+  });
+
+  it("toggles a channel when its header is clicked", () => {
+    const onChannelToggle = vi.fn();
+    const container = renderDirectory(createDirectoryProps({ onChannelToggle }));
+    const headers = container.querySelectorAll<HTMLButtonElement>(".channel-row__header");
+    headers[1].click();
+    expect(onChannelToggle).toHaveBeenCalledWith("telegram");
+  });
+
+  it("switches the active filter when a filter button is clicked", () => {
+    const onChannelFilterChange = vi.fn<(filter: ChannelFilter) => void>();
+    const container = renderDirectory(createDirectoryProps({ onChannelFilterChange }));
+    const buttons = container.querySelectorAll<HTMLButtonElement>(".channel-filter");
+    expect(container.querySelector(".channel-directory__filters")?.getAttribute("role")).toBe(
+      "group",
+    );
+    expect(container.querySelector('[role="tablist"]')).toBeNull();
+    expect(buttons[0].getAttribute("aria-pressed")).toBe("true");
+    expect(buttons[1].textContent).toContain("Enabled");
+    expect(buttons[2].textContent).toContain("Disabled");
+    buttons[2].click();
+    expect(onChannelFilterChange).toHaveBeenCalledWith("disabled");
+  });
+
+  it("keeps the raw snapshot behind a collapsed disclosure", () => {
+    const container = renderDirectory(createDirectoryProps());
+    const details = container.querySelector("details.channel-raw");
+    expect(details).toBeInstanceOf(HTMLDetailsElement);
+    expect((details as HTMLDetailsElement).open).toBe(false);
+  });
+});
+
+describe("channels deep-link url", () => {
+  afterEach(() => {
+    window.history.replaceState({}, "", "/channels");
+  });
+
+  it("round-trips the expanded channel set through the query string", () => {
+    writeExpandedChannelsToUrl(["telegram", "whatsapp"]);
+    expect(new URL(window.location.href).searchParams.get("channels")).toBe("telegram,whatsapp");
+    expect(readExpandedChannelsFromUrl()).toEqual(["telegram", "whatsapp"]);
+  });
+
+  it("clears the query param when no channels are expanded", () => {
+    writeExpandedChannelsToUrl(["telegram"]);
+    writeExpandedChannelsToUrl([]);
+    expect(new URL(window.location.href).searchParams.has("channels")).toBe(false);
+    expect(readExpandedChannelsFromUrl()).toEqual([]);
   });
 });

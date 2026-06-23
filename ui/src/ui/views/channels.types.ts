@@ -17,10 +17,16 @@ import type { NostrProfileFormState } from "./channels.nostr-profile-form.ts";
 
 export type ChannelKey = string;
 
+export type ChannelFilter = "all" | "enabled" | "disabled";
+
 export type ChannelsProps = {
   connected: boolean;
   loading: boolean;
   snapshot: ChannelsStatusSnapshot | null;
+  expandedChannelIds: readonly string[];
+  channelFilter: ChannelFilter;
+  onChannelToggle: (channelId: string) => void;
+  onChannelFilterChange: (filter: ChannelFilter) => void;
   lastError: string | null;
   lastSuccessAt: number | null;
   whatsappMessage: string | null;
