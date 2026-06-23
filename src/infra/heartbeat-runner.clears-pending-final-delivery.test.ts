@@ -37,11 +37,14 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
   function heartbeatDeps(
     sendTelegram: ReturnType<typeof vi.fn>,
     replySpy: HeartbeatReplySpy,
+    now?: number,
   ): HeartbeatDeps {
     return {
       telegram: sendTelegram as unknown,
       getQueueSize: () => 0,
-      nowMs: () => Date.now(),
+      // A fixed clock lets a test seed pendingFinalDeliveryCreatedAt relative to
+      // the run's startedAt, which is what the ownership guard compares against.
+      nowMs: () => now ?? Date.now(),
       getReplyFromConfig: replySpy,
     } satisfies HeartbeatDeps;
   }
@@ -78,23 +81,25 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
   it("nulls every pendingFinalDelivery* field after delivering substantive heartbeat content", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatConfig(storePath);
+      const NOW = Date.now();
 
-      // Seed a session that carries a stuck pendingFinalDelivery from a prior run.
-      // pendingFinalDeliveryText is a heartbeat-ack token so the pendingFinalDelivery
-      // gate at heartbeat-runner.ts:~1390 does not bail before the send.
+      // Seed a stuck pendingFinalDelivery this run owns: createdAt at run start
+      // marks it as produced by this heartbeat (the case the original fix
+      // targets). pendingFinalDeliveryText is a heartbeat-ack token so the
+      // pendingFinalDelivery defer gate does not bail before the send.
       const sessionKey = await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
         lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
-        updatedAt: Date.now(),
+        updatedAt: NOW,
         pendingFinalDelivery: true,
         pendingFinalDeliveryText: "HEARTBEAT_OK",
-        pendingFinalDeliveryCreatedAt: 1,
+        pendingFinalDeliveryCreatedAt: NOW,
         pendingFinalDeliveryAttemptCount: 3,
         pendingFinalDeliveryLastError: "prior-error",
       });
       await patchEntry(storePath, sessionKey, {
-        pendingFinalDeliveryLastAttemptAt: 2,
+        pendingFinalDeliveryLastAttemptAt: NOW,
         pendingFinalDeliveryContext: { foo: "bar" },
         pendingFinalDeliveryIntentId: "intent-send-success",
       });
@@ -105,7 +110,10 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       replySpy.mockResolvedValue({ text: replyText });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
-      const result = await runHeartbeatOnce({ cfg, deps: heartbeatDeps(sendTelegram, replySpy) });
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+      });
 
       expect(result.status).toBe("ran");
       expect(sendTelegram).toHaveBeenCalledTimes(1);
@@ -136,10 +144,11 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
 
       const body = "Heartbeat update: everything is green.";
       const deliveredText = `🤖 ${body}`;
+      const NOW = Date.now();
       // updatedAt is well past the 30s defer window so the pendingFinalDelivery
       // gate does not bail before the duplicate branch (the pending text is
       // substantive, not a heartbeat ack).
-      const staleAt = Date.now() - 60_000;
+      const staleAt = NOW - 60_000;
 
       const sessionKey = await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
@@ -148,7 +157,9 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         updatedAt: staleAt,
         pendingFinalDelivery: true,
         pendingFinalDeliveryText: body, // prefix-less; diverges from deliveredText
-        pendingFinalDeliveryCreatedAt: 1,
+        // createdAt at run start: this run produced the pending (real runs stamp
+        // a fresh createdAt during the agent turn the defer gate ran ahead of).
+        pendingFinalDeliveryCreatedAt: NOW,
         pendingFinalDeliveryAttemptCount: 3,
         pendingFinalDeliveryLastError: "prior-error",
       });
@@ -157,7 +168,7 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
         // which is what makes this run a duplicate and the pending clear safe.
         lastHeartbeatText: deliveredText,
         lastHeartbeatSentAt: staleAt,
-        pendingFinalDeliveryLastAttemptAt: 2,
+        pendingFinalDeliveryLastAttemptAt: NOW,
         pendingFinalDeliveryContext: { foo: "bar" },
         pendingFinalDeliveryIntentId: "intent-duplicate-skip",
       });
@@ -167,7 +178,10 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       replySpy.mockResolvedValue({ text: body });
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
 
-      const result = await runHeartbeatOnce({ cfg, deps: heartbeatDeps(sendTelegram, replySpy) });
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+      });
 
       // status "ran" (not "skipped") proves the run reached the duplicate branch
       // rather than bailing at the pendingFinalDelivery gate.
@@ -179,6 +193,106 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       // lastHeartbeat* stays intact; only the satisfied pending state clears.
       expect(entry?.lastHeartbeatText).toBe(deliveredText);
       expectPendingFinalDeliveryCleared(entry);
+    });
+  });
+
+  it("preserves an older unsatisfied pendingFinalDelivery the heartbeat send did not create", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig(storePath);
+      const NOW = Date.now();
+      // An older user-facing final that failed delivery and still owns its own
+      // get-reply redelivery recovery path. It predates this run (createdAt <
+      // startedAt) and a message_tool_only/response-tool heartbeat would not
+      // refresh it, so the send-success clear must NOT retire it.
+      const olderCreatedAt = NOW - 60_000;
+      const olderText = "Older final the user never received";
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        // Stale so the substantive-pending defer gate does not bail this run.
+        updatedAt: NOW - 60_000,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: olderText,
+        pendingFinalDeliveryCreatedAt: olderCreatedAt,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: "prior-delivery-failure",
+      });
+      await patchEntry(storePath, sessionKey, {
+        pendingFinalDeliveryLastAttemptAt: NOW - 50_000,
+        pendingFinalDeliveryContext: { channel: "telegram", to: "older-chat" },
+        pendingFinalDeliveryIntentId: "intent-older-unsatisfied",
+      });
+
+      // A fresh, different heartbeat payload that gets delivered this run.
+      const replyText = "Fresh heartbeat content unrelated to the older final.";
+      replySpy.mockResolvedValue({ text: replyText });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+      });
+
+      expect(result.status).toBe("ran");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+
+      const entry = await readEntry(storePath, sessionKey);
+      // Send-success records the dedupe markers for the delivered payload...
+      expect(entry?.lastHeartbeatText).toBe(replyText);
+      // ...but the older, unowned pending-final survives for its own recovery.
+      expect(entry?.pendingFinalDelivery).toBe(true);
+      expect(entry?.pendingFinalDeliveryText).toBe(olderText);
+      expect(entry?.pendingFinalDeliveryCreatedAt).toBe(olderCreatedAt);
+      expect(entry?.pendingFinalDeliveryIntentId).toBe("intent-older-unsatisfied");
+    });
+  });
+
+  it("preserves an older unowned pendingFinalDelivery on a duplicate skip", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatConfig(storePath);
+      const NOW = Date.now();
+      const body = "Recurring heartbeat status line.";
+      const olderCreatedAt = NOW - 60_000;
+      const olderText = "A different older final still awaiting delivery";
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        updatedAt: NOW - 60_000,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: olderText,
+        pendingFinalDeliveryCreatedAt: olderCreatedAt,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: "prior-delivery-failure",
+      });
+      await patchEntry(storePath, sessionKey, {
+        // Same payload already delivered within 24h -> this run is a duplicate skip.
+        lastHeartbeatText: body,
+        lastHeartbeatSentAt: NOW - 60_000,
+        pendingFinalDeliveryLastAttemptAt: NOW - 50_000,
+        pendingFinalDeliveryContext: { channel: "telegram", to: "older-chat" },
+        pendingFinalDeliveryIntentId: "intent-older-dupe",
+      });
+
+      replySpy.mockResolvedValue({ text: body });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+      });
+
+      expect(result.status).toBe("ran");
+      // Duplicate payload: nothing is sent this run.
+      expect(sendTelegram).not.toHaveBeenCalled();
+
+      const entry = await readEntry(storePath, sessionKey);
+      // The duplicate-skip clear must not retire the older, unowned pending-final.
+      expect(entry?.pendingFinalDelivery).toBe(true);
+      expect(entry?.pendingFinalDeliveryText).toBe(olderText);
+      expect(entry?.pendingFinalDeliveryCreatedAt).toBe(olderCreatedAt);
+      expect(entry?.pendingFinalDeliveryIntentId).toBe("intent-older-dupe");
     });
   });
 });
