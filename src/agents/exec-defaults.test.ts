@@ -294,6 +294,38 @@ describe("resolveExecDefaults", () => {
     });
   });
 
+  it("lets narrower legacy policy override a global exec mode", () => {
+    expect(
+      resolveExecDefaults({
+        cfg: {
+          tools: {
+            exec: {
+              mode: "full",
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "agent-a",
+                tools: {
+                  exec: {
+                    security: "deny",
+                  },
+                },
+              },
+            ],
+          },
+        },
+        agentId: "agent-a",
+        sandboxAvailable: false,
+      }),
+    ).toMatchObject({
+      mode: "deny",
+      security: "deny",
+      ask: "off",
+    });
+  });
+
   it("blocks node advertising in helper calls when sandbox is available", () => {
     expect(
       canExecRequestNode({
