@@ -305,6 +305,8 @@ export type SessionAbortTargetContext = {
 };
 
 export type SessionAbortTargetResult = SessionAbortTargetContext & {
+  persisted: boolean;
+  persistenceError?: string;
   sessionId?: string;
 };
 
@@ -651,50 +653,68 @@ export async function markSessionAbortTarget(params: {
 }): Promise<SessionAbortTargetResult | null> {
   const storePath = resolveAccessStorePath(params.scope);
   let canPersistSingleEntry = false;
-  return await updateSessionStore(
-    storePath,
-    (store) => {
-      const resolved = resolveSessionStoreEntry({
-        store,
-        sessionKey: params.scope.sessionKey,
-      });
-      if (!resolved.existing) {
-        return null;
-      }
-      const sessionKey = resolved.normalizedKey;
-      const entry = {
-        ...resolved.existing,
-        abortedLastRun: true,
-        updatedAt: params.now?.() ?? Date.now(),
-      };
-      applySessionAbortCutoff(
-        entry,
-        params.resolveAbortCutoff?.({
-          entry: { ...resolved.existing },
-          sessionKey,
-        }),
-      );
-      store[sessionKey] = entry;
-      canPersistSingleEntry = resolved.legacyKeys.length === 0;
-      for (const legacyKey of resolved.legacyKeys) {
-        if (legacyKey !== sessionKey) {
-          delete store[legacyKey];
+  let resolvedTarget: SessionAbortTargetResult | null = null;
+  try {
+    return await updateSessionStore(
+      storePath,
+      (store) => {
+        const resolved = resolveSessionStoreEntry({
+          store,
+          sessionKey: params.scope.sessionKey,
+        });
+        if (!resolved.existing) {
+          return null;
         }
-      }
+        const sessionKey = resolved.normalizedKey;
+        resolvedTarget = {
+          entry: { ...resolved.existing },
+          persisted: false,
+          sessionId: resolved.existing.sessionId,
+          sessionKey,
+        };
+        const entry = {
+          ...resolved.existing,
+          abortedLastRun: true,
+          updatedAt: params.now?.() ?? Date.now(),
+        };
+        applySessionAbortCutoff(
+          entry,
+          params.resolveAbortCutoff?.({
+            entry: { ...resolved.existing },
+            sessionKey,
+          }),
+        );
+        store[sessionKey] = entry;
+        canPersistSingleEntry = resolved.legacyKeys.length === 0;
+        for (const legacyKey of resolved.legacyKeys) {
+          if (legacyKey !== sessionKey) {
+            delete store[legacyKey];
+          }
+        }
+        return {
+          entry: { ...entry },
+          persisted: true,
+          sessionId: entry.sessionId,
+          sessionKey,
+        };
+      },
+      {
+        resolveSingleEntryPersistence: (result) =>
+          result && result.sessionKey && canPersistSingleEntry
+            ? { sessionKey: result.sessionKey, entry: result.entry }
+            : null,
+        skipSaveWhenResult: (result) => result === null,
+      },
+    );
+  } catch (error) {
+    if (resolvedTarget) {
       return {
-        entry: { ...entry },
-        sessionId: entry.sessionId,
-        sessionKey,
+        ...resolvedTarget,
+        persistenceError: formatErrorMessage(error),
       };
-    },
-    {
-      resolveSingleEntryPersistence: (result) =>
-        result && result.sessionKey && canPersistSingleEntry
-          ? { sessionKey: result.sessionKey, entry: result.entry }
-          : null,
-      skipSaveWhenResult: (result) => result === null,
-    },
-  );
+    }
+    throw error;
+  }
 }
 
 function applySessionAbortCutoff(

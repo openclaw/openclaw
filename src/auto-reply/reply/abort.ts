@@ -347,6 +347,11 @@ export async function tryFastAbortFromMessage(params: {
         `abort: failed to persist abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
       );
     }
+    if (persistedAbortTarget?.persisted === false) {
+      logVerbose(
+        `abort: failed to persist abort metadata for ${targetKey}: ${persistedAbortTarget.persistenceError ?? "unknown error"}`,
+      );
+    }
     const resolvedTargetKey = persistedAbortTarget?.sessionKey ?? targetKey;
     const conversationBoundAcpTargetKey = commandSessionKey
       ? resolveBoundAcpAbortTargetSessionKey({

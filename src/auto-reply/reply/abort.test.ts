@@ -486,6 +486,49 @@ describe("abort detection", () => {
     expect(getAbortMemory(sessionKey)).toBe(true);
   });
 
+  it("fast-abort uses resolved target identity when abort metadata save fails", async () => {
+    const requestedKey = "Agent:Main:Telegram:Group:-1001234567890:Topic:99";
+    const canonicalKey = "agent:main:telegram:group:-1001234567890:topic:99";
+    const sessionId = "resolved-persistence-failure";
+    const { root, cfg } = await createAbortConfig();
+    abortTesting.setDepsForTests({
+      getAcpSessionManager: (() =>
+        ({
+          resolveSession: acpManagerMocks.resolveSession,
+          cancelSession: acpManagerMocks.cancelSession,
+        }) as never) as never,
+      abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
+      resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
+      markSessionAbortTarget: vi.fn(async () => ({
+        entry: {
+          sessionId,
+          updatedAt: 10,
+        },
+        persisted: false,
+        persistenceError: "simulated persistence failure",
+        sessionId,
+        sessionKey: canonicalKey,
+      })),
+      getLatestSubagentRunByChildSessionKey:
+        subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
+      listSubagentRunsForController: subagentRegistryMocks.listSubagentRunsForRequester,
+      markSubagentRunTerminated: subagentRegistryMocks.markSubagentRunTerminated,
+    });
+    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: canonicalKey });
+
+    const result = await runStopCommand({
+      cfg,
+      sessionKey: requestedKey,
+      from: "telegram:123",
+      to: "telegram:123",
+    });
+
+    expect(result.handled).toBe(true);
+    expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
+    expect(getFollowupQueueDepth(canonicalKey)).toBe(0);
+    expectSessionLaneCleared(canonicalKey);
+  });
+
   it("plain-language stop on ACP-bound session triggers ACP cancel", async () => {
     const sessionKey = "agent:codex:acp:test-1";
     const sessionId = "session-123";
