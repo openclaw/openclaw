@@ -1457,25 +1457,33 @@ describe("config strict validation", () => {
     it("rejects zero", () => {
       const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: 0 } });
       expect(res.ok).toBe(false);
-      expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+      if (!res.ok) {
+        expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+      }
     });
 
     it("rejects negative values", () => {
       const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: -1 } });
       expect(res.ok).toBe(false);
-      expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+      if (!res.ok) {
+        expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+      }
     });
 
     it("rejects non-integer values", () => {
       const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: "8000" } });
       expect(res.ok).toBe(false);
-      expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+      if (!res.ok) {
+        expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+      }
     });
 
     it("rejects float values", () => {
       const res = validateConfigObject({ gateway: { chatHistoryTextMaxChars: 8000.5 } });
       expect(res.ok).toBe(false);
-      expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+      if (!res.ok) {
+        expect(res.issues.some((i) => i.path === "gateway.chatHistoryTextMaxChars")).toBe(true);
+      }
     });
 
     it("allows omission (field is optional)", () => {
