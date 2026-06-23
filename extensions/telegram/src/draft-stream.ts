@@ -88,12 +88,16 @@ function isTelegramHtmlParseError(err: unknown): boolean {
   return TELEGRAM_PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
+function telegramRichHtmlToParseModeHtml(html: string): string {
+  return html.replace(/<br\s*\/?>/giu, "\n");
+}
+
 function normalizeTelegramDraftTransportPreview(
   preview: TelegramDraftPreview,
 ): TelegramDraftTransportPreview {
   if (preview.richMessage?.html) {
     return {
-      text: preview.richMessage.html,
+      text: telegramRichHtmlToParseModeHtml(preview.richMessage.html),
       parseMode: "HTML",
       plainText: preview.text,
     };
@@ -135,6 +139,13 @@ function telegramDraftRichPayloadLength(preview: TelegramDraftPreview): number {
   return richMessage.html?.length ?? richMessage.markdown?.length ?? 0;
 }
 
+function resolveTelegramDraftRenderedText(
+  preview: TelegramDraftPreview,
+  richMessages: boolean,
+): string {
+  return richMessages ? preview.text : normalizeTelegramDraftTransportPreview(preview).text;
+}
+
 function findTelegramDraftChunkLength(
   text: string,
   maxChars: number,
@@ -147,7 +158,7 @@ function findTelegramDraftChunkLength(
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
     const preview = renderTelegramDraftPreview(text.slice(0, mid), renderText);
-    const renderedText = normalizeTelegramDraftTransportPreview(preview).text.trimEnd();
+    const renderedText = resolveTelegramDraftRenderedText(preview, richMessages).trimEnd();
     const payloadLength = richMessages
       ? telegramDraftRichPayloadLength(preview)
       : renderedText.length;
@@ -254,7 +265,6 @@ export function createTelegramDraftStream(params: {
     preview,
     sendGeneration,
   }: PreviewSendParams): Promise<boolean> => {
-    const transportPreview = normalizeTelegramDraftTransportPreview(preview);
     if (typeof streamMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
       if (richMessages) {
@@ -265,6 +275,7 @@ export function createTelegramDraftStream(params: {
         });
         return true;
       }
+      const transportPreview = normalizeTelegramDraftTransportPreview(preview);
       if (transportPreview.parseMode === "HTML") {
         try {
           await params.api.editMessageText(chatId, streamMessageId, transportPreview.text, {
@@ -340,13 +351,11 @@ export function createTelegramDraftStream(params: {
       deliveredTextOffset === 0 && lastRequestedPreview?.text === trimmed
         ? lastRequestedPreview
         : renderTelegramDraftPreview(currentText, params.renderText);
-    const transportPreview = normalizeTelegramDraftTransportPreview(rendered);
-    const renderedText = transportPreview.text.trimEnd();
+    const renderedText = resolveTelegramDraftRenderedText(rendered, richMessages).trimEnd();
     const renderedPayloadLength = richMessages
       ? telegramDraftRichPayloadLength(rendered)
       : renderedText.length;
-    const renderedPreview = { ...rendered, text: renderedText };
-    const renderedPreviewKey = telegramDraftPreviewKey(renderedPreview);
+    const renderedPreviewKey = telegramDraftPreviewKey({ ...rendered, text: renderedText });
     if (!renderedText) {
       return false;
     }
@@ -407,7 +416,7 @@ export function createTelegramDraftStream(params: {
     lastSentPreviewKey = renderedPreviewKey;
     try {
       const sent = await sendMessageTransportPreview({
-        preview: renderedPreview,
+        preview: rendered,
         sendGeneration,
       });
       if (sent) {

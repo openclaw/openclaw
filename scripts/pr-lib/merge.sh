@@ -27,27 +27,33 @@ print_file_list_with_limit() {
 }
 
 mainline_drift_requires_sync() {
-  local prep_head_sha="$1"
+  local mainline_base="$1"
+  local prepared_head_sha="$2"
 
-  require_artifact .local/pr-meta.json
-
-  if ! git cat-file -e "${prep_head_sha}^{commit}" 2>/dev/null; then
-    echo "Mainline drift relevance: prep head $prep_head_sha is missing locally; require sync."
+  if ! git cat-file -e "${mainline_base}^{commit}" 2>/dev/null; then
+    echo "Mainline drift relevance: mainline base $mainline_base is missing locally; require sync."
+    return 0
+  fi
+  if ! git cat-file -e "${prepared_head_sha}^{commit}" 2>/dev/null; then
+    echo "Mainline drift relevance: prepared head $prepared_head_sha is missing locally; require sync."
     return 0
   fi
 
   local delta_file
-  local pr_files_file
+  local prepared_files_file
   local overlap_file
   local critical_file
   delta_file=$(mktemp)
-  pr_files_file=$(mktemp)
+  prepared_files_file=$(mktemp)
   overlap_file=$(mktemp)
   critical_file=$(mktemp)
 
-  git diff --name-only "${prep_head_sha}..origin/main" | sed '/^$/d' | sort -u > "$delta_file"
-  jq -r '.files[]?.path // empty' .local/pr-meta.json | sed '/^$/d' | sort -u > "$pr_files_file"
-  comm -12 "$delta_file" "$pr_files_file" > "$overlap_file" || true
+  # Compare only mainline commits since the prepared lineage base. The remote
+  # GraphQL commit has a different parent but its verified tree shares this
+  # lineage, so its PR files must not look like incoming mainline drift.
+  git diff --name-only "${mainline_base}..origin/main" | sed '/^$/d' | sort -u > "$delta_file"
+  git diff --name-only "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file"
+  comm -12 "$delta_file" "$prepared_files_file" > "$overlap_file" || true
 
   local path
   while IFS= read -r path; do
@@ -65,22 +71,22 @@ mainline_drift_requires_sync() {
   critical_count=$(wc -l < "$critical_file" | tr -d ' ')
 
   if [ "$delta_count" -eq 0 ]; then
-    echo "Mainline drift relevance: unable to enumerate drift files; require sync."
-    rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
-    return 0
+    echo "Mainline drift relevance: no mainline changes since the prepared base."
+    rm -f "$delta_file" "$prepared_files_file" "$overlap_file" "$critical_file"
+    return 1
   fi
 
   if [ "$overlap_count" -gt 0 ] || [ "$critical_count" -gt 0 ]; then
     echo "Mainline drift relevance: sync required before merge."
-    print_file_list_with_limit "Mainline files overlapping PR touched files" "$overlap_file"
+    print_file_list_with_limit "Mainline files overlapping prepared files" "$overlap_file"
     print_file_list_with_limit "Mainline files touching merge-critical infrastructure" "$critical_file"
-    rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
+    rm -f "$delta_file" "$prepared_files_file" "$overlap_file" "$critical_file"
     return 0
   fi
 
-  echo "Mainline drift relevance: no overlap with PR files and no critical infra drift."
+  echo "Mainline drift relevance: no overlap with prepared files and no critical infra drift."
   print_file_list_with_limit "Mainline-only drift files" "$delta_file"
-  rm -f "$delta_file" "$pr_files_file" "$overlap_file" "$critical_file"
+  rm -f "$delta_file" "$prepared_files_file" "$overlap_file" "$critical_file"
   return 1
 }
 
@@ -91,7 +97,7 @@ merge_verify() {
   require_artifact .local/prep.env
   # shellcheck disable=SC1091
   source .local/prep.env
-  verify_prep_branch_matches_prepared_head "$pr" "$PREP_HEAD_SHA"
+  verify_prep_branch_matches_prepared_head "$pr" "${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
 
   local json
   json=$(pr_meta_json "$pr")
@@ -154,7 +160,10 @@ merge_verify() {
   git fetch origin "pull/$pr/head:pr-$pr" --force
   if ! git merge-base --is-ancestor origin/main "pr-$pr"; then
     echo "PR branch is behind main."
-    if mainline_drift_requires_sync "$PREP_HEAD_SHA"; then
+    if mainline_drift_requires_sync \
+      "${PREP_MAINLINE_BASE_SHA:-${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}}" \
+      "$PREP_HEAD_SHA"
+    then
       echo "Merge verify failed: mainline drift is relevant to this PR; run scripts/pr prepare-sync-head $pr before merge."
       exit 1
     fi
@@ -178,58 +187,13 @@ merge_run() {
   source .local/prep.env
 
   local pr_meta_json
-  pr_meta_json=$(gh pr view "$pr" --json number,title,state,isDraft,author)
-  local pr_title
-  pr_title=$(printf '%s\n' "$pr_meta_json" | jq -r .title)
-  local pr_number
-  pr_number=$(printf '%s\n' "$pr_meta_json" | jq -r .number)
-  local contrib
-  contrib=$(printf '%s\n' "$pr_meta_json" | jq -r .author.login)
+  pr_meta_json=$(gh pr view "$pr" --json state,isDraft)
   local is_draft
   is_draft=$(printf '%s\n' "$pr_meta_json" | jq -r .isDraft)
   if [ "$is_draft" = "true" ]; then
     echo "PR is draft; stop."
     exit 1
   fi
-
-  local reviewer
-  reviewer=$(gh api user --jq .login)
-  local reviewer_id
-  reviewer_id=$(gh api user --jq .id)
-
-  local contrib_coauthor_email="${COAUTHOR_EMAIL:-}"
-  if [ -z "$contrib_coauthor_email" ] || [ "$contrib_coauthor_email" = "null" ]; then
-    if contrib_coauthor_email=$(resolve_contributor_coauthor_email "$contrib"); then
-      :
-    else
-      contrib_coauthor_email=""
-    fi
-  fi
-
-  local reviewer_email_candidates=()
-  local reviewer_email_candidate
-  while IFS= read -r reviewer_email_candidate; do
-    [ -n "$reviewer_email_candidate" ] || continue
-    reviewer_email_candidates+=("$reviewer_email_candidate")
-  done < <(merge_author_email_candidates "$reviewer" "$reviewer_id")
-  if [ "${#reviewer_email_candidates[@]}" -eq 0 ]; then
-    echo "Unable to resolve a candidate merge author email for reviewer $reviewer"
-    exit 1
-  fi
-
-  local reviewer_email="${reviewer_email_candidates[0]}"
-  local reviewer_coauthor_email="${reviewer_id}+${reviewer}@users.noreply.github.com"
-
-  {
-    echo "Merged via squash."
-    echo
-    echo "Prepared head SHA: $PREP_HEAD_SHA"
-    if [ -n "$contrib_coauthor_email" ]; then
-      echo "Co-authored-by: $contrib <$contrib_coauthor_email>"
-    fi
-    echo "Co-authored-by: $reviewer <$reviewer_coauthor_email>"
-    echo "Reviewed-by: @$reviewer"
-  } > .local/merge-body.txt
 
   delete_remote_pr_head_branch_after_merge() {
     local head_json
@@ -260,48 +224,19 @@ merge_run() {
     return 0
   }
 
-  run_merge_with_email() {
-    local email="$1"
-    local merge_output_file
-    merge_output_file=$(mktemp)
-    if gh pr merge "$pr" \
-      --squash \
-      --match-head-commit "$PREP_HEAD_SHA" \
-      --author-email "$email" \
-      --subject "$pr_title (#$pr_number)" \
-      --body-file .local/merge-body.txt \
-      >"$merge_output_file" 2>&1
-    then
-      rm -f "$merge_output_file"
-      return 0
-    fi
-
-    MERGE_ERR_MSG=$(cat "$merge_output_file")
-    print_relevant_log_excerpt "$merge_output_file"
-    rm -f "$merge_output_file"
-    return 1
-  }
-
-  local MERGE_ERR_MSG=""
-  local selected_merge_author_email="$reviewer_email"
-  if ! run_merge_with_email "$selected_merge_author_email"; then
-    if is_author_email_merge_error "$MERGE_ERR_MSG" && [ "${#reviewer_email_candidates[@]}" -ge 2 ]; then
-      selected_merge_author_email="${reviewer_email_candidates[1]}"
-      echo "Retrying merge once with fallback author email: $selected_merge_author_email"
-      run_merge_with_email "$selected_merge_author_email" || {
-        echo "Merge failed after fallback retry."
-        exit 1
-      }
-    else
-      echo "Merge failed."
-      exit 1
-    fi
+  if ! gh pr merge "$pr" \
+    --rebase \
+    --match-head-commit "$PREP_HEAD_SHA" \
+    >.local/merge-output.log 2>&1
+  then
+    print_relevant_log_excerpt .local/merge-output.log
+    exit 1
   fi
 
   local state
   state=$(gh pr view "$pr" --json state --jq .state)
   if [ "$state" != "MERGED" ]; then
-    echo "Merge not finalized yet (state=$state), waiting up to 15 minutes..."
+    echo "Landing not finalized yet (state=$state), waiting up to 15 minutes..."
     local i
     for i in $(seq 1 90); do
       sleep 10
@@ -317,20 +252,20 @@ merge_run() {
     exit 1
   fi
 
-  local merge_sha
-  merge_sha=$(gh pr view "$pr" --json mergeCommit --jq '.mergeCommit.oid')
-  if [ -z "$merge_sha" ] || [ "$merge_sha" = "null" ]; then
-    echo "Merge commit SHA missing."
+  local landed_sha
+  landed_sha=$(gh pr view "$pr" --json mergeCommit --jq '.mergeCommit.oid')
+  if [ -z "$landed_sha" ] || [ "$landed_sha" = "null" ]; then
+    echo "Landed commit SHA missing."
     exit 1
   fi
   local repo_nwo
   repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
-  local merge_sha_url=""
-  if gh api repos/:owner/:repo/commits/"$merge_sha" >/dev/null 2>&1; then
-    merge_sha_url="https://github.com/$repo_nwo/commit/$merge_sha"
+  local landed_sha_url=""
+  if gh api repos/:owner/:repo/commits/"$landed_sha" >/dev/null 2>&1; then
+    landed_sha_url="https://github.com/$repo_nwo/commit/$landed_sha"
   else
-    echo "Merge commit is not resolvable via repository commit endpoint: $merge_sha"
+    echo "Landed commit is not resolvable via repository commit endpoint: $landed_sha"
     exit 1
   fi
 
@@ -349,29 +284,16 @@ merge_run() {
     exit 1
   fi
 
-  local commit_body
-  commit_body=$(gh api repos/:owner/:repo/commits/"$merge_sha" --jq .commit.message)
-  if [ -n "$contrib_coauthor_email" ]; then
-    printf '%s\n' "$commit_body" | rg -q "^Co-authored-by: $contrib <" || { echo "Missing PR author co-author trailer"; exit 1; }
-  else
-    echo "Skipping PR author co-author trailer check for bot/app author $contrib."
-  fi
-  printf '%s\n' "$commit_body" | rg -q "^Co-authored-by: $reviewer <" || { echo "Missing reviewer co-author trailer"; exit 1; }
-
   local ok=0
   local comment_output=""
   local attempt
   for attempt in 1 2 3; do
     if comment_output=$(
       {
-        echo "Merged via squash."
+        echo "Merged via rebase."
         echo
         echo "- Prepared head SHA: [$PREP_HEAD_SHA]($prep_sha_url)"
-        echo "- Merge commit: [$merge_sha]($merge_sha_url)"
-        if pr_contributor_allows_human_trailers "$contrib"; then
-          echo
-          echo "Thanks @$contrib!"
-        fi
+        echo "- Landed commit: [$landed_sha]($landed_sha_url)"
       } | gh pr comment "$pr" -F - 2>&1
     ); then
       ok=1
@@ -400,8 +322,7 @@ merge_run() {
   pr_url=$(gh pr view "$pr" --json url --jq .url)
 
   echo "merge-run complete for PR #$pr"
-  echo "merge commit: $merge_sha"
-  echo "merge author email: $selected_merge_author_email"
+  echo "landed commit: $landed_sha"
   echo "completion comment: $comment_url"
   echo "$pr_url"
 }

@@ -1,8 +1,8 @@
 /** JSON opening delimiters supported by the balanced-fragment scanner. */
-export type JsonOpeningDelimiter = "{" | "[";
+type JsonOpeningDelimiter = "{" | "[";
 
 /** One balanced JSON object/array fragment found inside arbitrary text. */
-export type BalancedJsonFragment = {
+type BalancedJsonFragment = {
   json: string;
   startIndex: number;
   endIndex: number;

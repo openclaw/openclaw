@@ -22,14 +22,13 @@ export {
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
-  INTERNAL_NON_DELIVERY_CHANNELS,
   isInternalNonDeliveryChannel,
+  NATIVE_APPROVAL_CHANNELS,
+  isNativeApprovalChannel,
   type InternalMessageChannel,
+  type NativeApprovalChannel,
 } from "./message-channel-constants.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  type InternalMessageChannel,
-} from "./message-channel-constants.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 import { normalizeMessageChannel } from "./message-channel-normalize.js";
 
 /**
@@ -40,7 +39,6 @@ import { normalizeMessageChannel } from "./message-channel-normalize.js";
  */
 export { GATEWAY_CLIENT_NAMES, GATEWAY_CLIENT_MODES };
 export type { GatewayClientName, GatewayClientMode };
-export { normalizeGatewayClientName, normalizeGatewayClientMode };
 
 type GatewayClientInfoLike = {
   mode?: string | null;
@@ -65,7 +63,9 @@ export function isBrowserOperatorUiClient(client?: GatewayClientInfoLike | null)
 }
 
 /** Return whether a raw channel id resolves to OpenClaw's internal channel. */
-export function isInternalMessageChannel(raw?: string | null): raw is InternalMessageChannel {
+export function isInternalMessageChannel(
+  raw?: string | null,
+): raw is typeof INTERNAL_MESSAGE_CHANNEL {
   return normalizeMessageChannel(raw) === INTERNAL_MESSAGE_CHANNEL;
 }
 

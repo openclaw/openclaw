@@ -134,6 +134,28 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+const RESTART_LIFECYCLE_REPLY_TEXT =
+  "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
+
+function scheduleFollowupDrainAfterReplyOperationClear(params: {
+  operation: ReplyOperation;
+  queueKey: string;
+  runFollowup: (run: FollowupRun) => Promise<void>;
+}): void {
+  runAfterReplyOperationClear(params.operation, (admissionSessionId) => {
+    const completedSessionId = params.operation.sessionId;
+    const runFollowupAfterClear =
+      admissionSessionId === completedSessionId
+        ? params.runFollowup
+        : (queued: FollowupRun) =>
+            params.runFollowup(
+              queued.run.sessionId === completedSessionId
+                ? { ...queued, admissionSessionId }
+                : queued,
+            );
+    scheduleFollowupDrain(params.queueKey, runFollowupAfterClear);
+  });
+}
 
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
@@ -1226,11 +1248,15 @@ export async function runReplyAgent(params: {
     isHeartbeat,
   });
 
-  const shouldEmitToolResult = createShouldEmitToolResult({
+  const baseShouldEmitToolResult = createShouldEmitToolResult({
     sessionKey,
     storePath,
     resolvedVerboseLevel,
   });
+  const channelProgressCanConsumeToolResults =
+    Boolean(opts?.forceToolResultProgress) && Boolean(opts?.onToolResult);
+  const shouldEmitToolResult = () =>
+    channelProgressCanConsumeToolResults || baseShouldEmitToolResult();
   const shouldEmitToolOutput = createShouldEmitToolOutput({
     sessionKey,
     storePath,
@@ -1317,12 +1343,19 @@ export async function runReplyAgent(params: {
       typing.cleanup();
       return undefined;
     }
-    // Re-check liveness after enqueue so a stale active snapshot cannot leave
-    // the followup queue idle if the original run already finished.
-    const queuedBehindActiveRun = isRunActive?.() === true;
-    if (!queuedBehindActiveRun) {
+    // The queue must stay dormant while the active owner can still collect
+    // messages. Registering after enqueue closes the owner-clear race.
+    const activeReplyOperation = replyRunRegistry.get(queueKey);
+    if (activeReplyOperation) {
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: activeReplyOperation,
+        queueKey,
+        runFollowup: queuedRunFollowupTurn,
+      });
+    } else {
       scheduleFollowupDrain(queueKey, queuedRunFollowupTurn);
     }
+    const queuedBehindActiveRun = isRunActive?.() === true;
     await touchActiveSessionEntry();
     if (queuedBehindActiveRun) {
       await typingSignals.signalToolStart();
@@ -1464,19 +1497,6 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  const drainQueuedFollowupsAfterClear = (admissionSessionId: string) => {
-    const completedSessionId = replyOperation.sessionId;
-    const runFollowupAfterClear =
-      admissionSessionId === completedSessionId
-        ? runFollowupTurn
-        : (queued: FollowupRun) =>
-            runFollowupTurn(
-              queued.run.sessionId === completedSessionId
-                ? { ...queued, admissionSessionId }
-                : queued,
-            );
-    scheduleFollowupDrain(queueKey, runFollowupAfterClear);
-  };
   const restartRecoveryDeliveryRunId = crypto.randomUUID();
   let trackedRestartRecoveryDeliveryContext = false;
   const persistRestartRecoveryDeliveryContext = async (): Promise<void> => {
@@ -1547,6 +1567,18 @@ export async function runReplyAgent(params: {
         activeSessionStore[sessionKey] = persisted;
       }
     }
+  };
+  const isRestartRecoveryArmed = (): boolean => {
+    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
+      return false;
+    }
+    const persisted = loadSessionEntry({
+      sessionKey,
+      storePath,
+      clone: false,
+      hydrateSkillPromptRefs: false,
+    });
+    return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
   };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied;
@@ -1722,6 +1754,7 @@ export async function runReplyAgent(params: {
         resolvedVerboseLevel,
         toolProgressDetail,
         replyMediaContext,
+        isRestartRecoveryArmed,
       }),
     );
 
@@ -2570,24 +2603,36 @@ export async function runReplyAgent(params: {
 
     return result;
   } catch (error) {
+    // Drain/restart aborts stay silent and defer to post-restart main-session
+    // recovery, which resumes the interrupted turn (or emits its own genuine
+    // non-resumable notice). Surfacing a generic "try again" here is a false
+    // terminal: it looks like the owed work was abandoned and invites a
+    // duplicate manual retry. `aborted_for_restart` is an "aborted" result, so
+    // it falls through to the shared abort branch below.
+    if (
+      replyOperation.result?.kind === "aborted" &&
+      replyOperation.result.code === "aborted_by_user"
+    ) {
+      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+    }
     if (
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart"
     ) {
+      if (isRestartRecoveryArmed()) {
+        return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
+      }
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: RESTART_LIFECYCLE_REPLY_TEXT,
         }),
       );
-    }
-    if (replyOperation.result?.kind === "aborted") {
-      return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
     }
     if (error instanceof GatewayDrainingError) {
       replyOperation.fail("gateway_draining", error);
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: RESTART_LIFECYCLE_REPLY_TEXT,
         }),
       );
     }
@@ -2595,7 +2640,7 @@ export async function runReplyAgent(params: {
       replyOperation.fail("command_lane_cleared", error);
       return returnWithQueuedFollowupDrain(
         markReplyPayloadForSourceSuppressionDelivery({
-          text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+          text: RESTART_LIFECYCLE_REPLY_TEXT,
         }),
       );
     }
@@ -2625,10 +2670,13 @@ export async function runReplyAgent(params: {
       );
     }
     if (shouldDrainQueuedFollowupsAfterClear) {
-      if (providedReplyOperation) {
-        runAfterReplyOperationClear(replyOperation, drainQueuedFollowupsAfterClear);
-      } else {
-        replyOperation.completeThen(() => drainQueuedFollowupsAfterClear(replyOperation.sessionId));
+      scheduleFollowupDrainAfterReplyOperationClear({
+        operation: replyOperation,
+        queueKey,
+        runFollowup: runFollowupTurn,
+      });
+      if (!providedReplyOperation) {
+        replyOperation.complete();
       }
     } else if (!providedReplyOperation) {
       replyOperation.complete();

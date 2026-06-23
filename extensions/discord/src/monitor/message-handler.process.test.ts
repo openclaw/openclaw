@@ -852,6 +852,39 @@ describe("processDiscordMessage ack reactions", () => {
     });
   });
 
+  it("records accepted mention ingress before acking and dispatching", async () => {
+    const events: string[] = [];
+    recordInboundSession.mockImplementationOnce(async () => {
+      events.push("record");
+    });
+    sendMocks.reactMessageDiscord.mockImplementationOnce(async () => {
+      events.push("ack");
+    });
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      events.push("dispatch");
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      accountId: "ops",
+      shouldRequireMention: true,
+      effectiveWasMentioned: true,
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "ops",
+        sessionKey: "agent:main:discord:channel:c1",
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(events).toEqual(["record", "ack", "dispatch"]);
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    expect(sendMocks.reactMessageDiscord).toHaveBeenCalled();
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
     const ctx = await createAutomaticSourceDeliveryContext({
       message: {
@@ -2606,17 +2639,20 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses reasoning payload delivery to Discord", async () => {
+  it("delivers reasoning block payloads to Discord", async () => {
     mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
     await processStreamOffDiscordMessage();
 
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "thinking...", isReasoning: true }],
+    });
   });
 
-  it("suppresses reasoning-tagged final payload delivery to Discord", async () => {
+  it("delivers reasoning-tagged final payload to Discord", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({
-        text: "Reasoning:\nthis should stay internal",
+        text: "Reasoning:\nthis should be visible",
         isReasoning: true,
       });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
@@ -2628,8 +2664,10 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
-    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "this should be visible", isReasoning: true }],
+    });
   });
 
   it("delivers non-reasoning block payloads to Discord", async () => {
@@ -3024,8 +3062,8 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const lastUpdate = draftStream.update.mock.calls.at(-1)?.[0];
-    expect(lastUpdate).toContain("completed");
-    expect(lastUpdate).not.toContain("install dependencies");
+    expect(lastUpdate).toContain("install dependencies");
+    expect(lastUpdate).not.toContain("completed");
   });
 
   it("drops later tool warning finals after progress preview final replies", async () => {

@@ -6,11 +6,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  BLANK_USER_FALLBACK_TEXT,
-  CORRUPTED_IMAGE_FALLBACK_TEXT,
-  repairSessionFileIfNeeded,
-} from "./session-file-repair.js";
+import { repairSessionFileIfNeeded } from "./session-file-repair.js";
+
+const BLANK_USER_FALLBACK_TEXT = "(continue)";
+const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
 
 function buildSessionHeaderAndMessage() {
   const header = {
@@ -855,6 +854,66 @@ describe("repairSessionFileIfNeeded", () => {
     expect(inserted.message.role).toBe("toolResult");
     expect(inserted.message.toolCallId).toBe("call_process|fc_1");
     expect(inserted.message.toolName).toBe("process");
+    expect(inserted.message.isError).toBe(true);
+    expect(inserted.message.content[0].text).toBe("aborted");
+    expect(JSON.parse(lines[4])).toEqual(deliveryMirror);
+  });
+
+  it("inserts missing Responses message-tool results before delivery mirrors", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-message-tool",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "oca",
+        model: "gpt-5.5",
+        api: "openai-responses",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_message|fc_message",
+            name: "message",
+            arguments: { action: "send", message: "visible reply" },
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    };
+    const deliveryMirror = {
+      type: "message",
+      id: "msg-delivery-mirror",
+      parentId: "msg-asst-message-tool",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        api: "openai-responses",
+        content: [{ type: "text", text: "visible reply" }],
+        stopReason: "stop",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(deliveryMirror)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.insertedToolResults).toBe(1);
+    await expectNoRetainedBackup(file, result);
+
+    const lines = (await fs.readFile(file, "utf-8")).trimEnd().split("\n");
+    expect(lines).toHaveLength(5);
+    const inserted = JSON.parse(lines[3]);
+    expect(inserted.type).toBe("message");
+    expect(inserted.parentId).toBe("msg-asst-message-tool");
+    expect(inserted.message.role).toBe("toolResult");
+    expect(inserted.message.toolCallId).toBe("call_message|fc_message");
+    expect(inserted.message.toolName).toBe("message");
     expect(inserted.message.isError).toBe(true);
     expect(inserted.message.content[0].text).toBe("aborted");
     expect(JSON.parse(lines[4])).toEqual(deliveryMirror);

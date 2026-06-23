@@ -18,6 +18,7 @@ import {
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 
 function applyCliSessionIdToSessionPatch(
@@ -65,10 +66,6 @@ function applyCliSessionIdToSessionPatch(
     };
   }
   return patch;
-}
-
-function resolveNonNegativeNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
@@ -279,6 +276,15 @@ export async function persistSessionUsageUpdate(params: {
               : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
           };
+          if (
+            !preserveUserFacingRunState &&
+            (params.preserveFreshTotalTokensOnStaleUsage !== true ||
+              entry.totalTokensFresh !== true)
+          ) {
+            // A completed run without a context snapshot invalidates any fresh
+            // zero persisted for the previously empty session.
+            patch.totalTokensFresh = false;
+          }
           return preserveSessionModelState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);

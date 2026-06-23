@@ -77,12 +77,19 @@ extensions/canvas/src/host/a2ui/*.map
 
 # fastlane (iOS)
 apps/ios/fastlane/README.md
+apps/android/fastlane/README.md
 apps/ios/fastlane/report.xml
 apps/ios/fastlane/Preview.html
 apps/ios/fastlane/screenshots/
 apps/ios/fastlane/test_output/
 apps/ios/fastlane/logs/
 apps/ios/fastlane/.env
+apps/android/fastlane/report.xml
+apps/android/fastlane/Preview.html
+apps/android/fastlane/test_output/
+apps/android/fastlane/logs/
+apps/android/fastlane/.env
+apps/android/fastlane/metadata/android/**/images/
 
 # fastlane build artifacts (local)
 apps/ios/*.ipa
@@ -125,6 +132,8 @@ mantis/
 !.agents/skills/crabbox/**
 !.agents/skills/clawdtributor/
 !.agents/skills/clawdtributor/**
+!.agents/skills/claw-score/
+!.agents/skills/claw-score/**
 !.agents/skills/control-ui-e2e/
 !.agents/skills/control-ui-e2e/**
 !.agents/skills/discord-user-post/

@@ -156,9 +156,182 @@ describe("createCopilotToolBridge", () => {
       sessionId: "session-1",
     });
 
-    expect(result.sourceTools).toBe(sourceTools);
+    expect(result.sourceTools).toEqual(sourceTools);
     expect(result.sdkTools).toHaveLength(2);
     expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a", "tool-b"]);
+  });
+
+  it("compacts the Copilot tool surface behind tool_search controls when enabled", async () => {
+    const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
+      const includeToolSearchControls = Boolean(
+        (opts as { includeToolSearchControls?: boolean }).includeToolSearchControls,
+      );
+      return includeToolSearchControls
+        ? [
+            makeTool({ name: "tool_search_code" }),
+            makeTool({ name: "fake_hidden" }),
+            makeTool({ name: "read" }),
+          ]
+        : [makeTool({ name: "fake_hidden" }), makeTool({ name: "read" })];
+    });
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { toolSearch: true } },
+        runId: "run-tool-search",
+        sessionKey: "agent:main:main",
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeToolSearchControls: true,
+        toolSearchCatalogRef: expect.any(Object),
+        toolSearchCatalogExecutor: expect.any(Function),
+      }),
+    );
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+  });
+
+  it("keeps tool_search controls visible when a narrow allowlist is active", async () => {
+    const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
+      const includeToolSearchControls = Boolean(
+        (opts as { includeToolSearchControls?: boolean }).includeToolSearchControls,
+      );
+      return includeToolSearchControls
+        ? [makeTool({ name: "tool_search_code" }), makeTool({ name: "read" })]
+        : [makeTool({ name: "read" })];
+    });
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { toolSearch: true } },
+        runId: "run-tool-search",
+        sessionKey: "agent:main:main",
+        toolsAllow: ["read"],
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool_search_code"]);
+  });
+
+  it("filters the hidden tool_search catalog before compacting narrowed tools", async () => {
+    let catalogRef: { current?: { entries?: Array<{ name: string }> } } | undefined;
+    const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
+      catalogRef = (opts as { toolSearchCatalogRef?: typeof catalogRef }).toolSearchCatalogRef;
+      return [
+        makeTool({ name: "tool_search_code" }),
+        makeTool({ name: "read" }),
+        makeTool({ name: "edit" }),
+        makeTool({ name: "write" }),
+      ];
+    });
+
+    await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { toolSearch: true } },
+        runId: "run-tool-search",
+        sessionKey: "agent:main:main",
+        toolsAllow: ["read"],
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(catalogRef?.current?.entries?.map((entry) => entry.name)).toEqual(["read"]);
+  });
+
+  it("compacts the Copilot tool surface behind code-mode exec/wait when enabled", async () => {
+    const createOpenClawCodingTools = vi.fn(async () => [
+      makeTool({ name: "fake_hidden" }),
+      makeTool({ name: "read" }),
+    ]);
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { codeMode: true } },
+        runId: "run-code-mode",
+        sessionKey: "agent:main:main",
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeToolSearchControls: false,
+        toolSearchCatalogRef: expect.any(Object),
+        toolSearchCatalogExecutor: expect.any(Function),
+      }),
+    );
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+  });
+
+  it("keeps code-mode controls visible when a narrow allowlist is active", async () => {
+    const createOpenClawCodingTools = vi.fn(async () => [
+      makeTool({ name: "fake_hidden" }),
+      makeTool({ name: "read" }),
+    ]);
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { codeMode: true } },
+        runId: "run-code-mode",
+        sessionKey: "agent:main:main",
+        toolsAllow: ["read"],
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(result.sourceTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+  });
+
+  it("filters the hidden code-mode catalog before compacting narrowed tools", async () => {
+    let catalogRef: { current?: { entries?: Array<{ name: string }> } } | undefined;
+    const createOpenClawCodingTools = vi.fn(async (opts: unknown) => {
+      catalogRef = (opts as { toolSearchCatalogRef?: typeof catalogRef }).toolSearchCatalogRef;
+      return [makeTool({ name: "read" }), makeTool({ name: "edit" }), makeTool({ name: "write" })];
+    });
+
+    await createCopilotToolBridge({
+      agentId: "agent-1",
+      attemptParams: {
+        config: { tools: { codeMode: true } },
+        runId: "run-code-mode",
+        sessionKey: "agent:main:main",
+        toolsAllow: ["read"],
+      } as never,
+      createOpenClawCodingTools,
+      modelId: "gpt-4o",
+      modelProvider: "github-copilot",
+      sessionId: "session-1",
+    });
+
+    expect(catalogRef?.current?.entries?.map((entry) => entry.name)).toEqual(["read"]);
   });
 
   it("throws when createOpenClawCodingTools returns a non-array", async () => {
@@ -1175,15 +1348,19 @@ describe("convertOpenClawToolToSdkTool", () => {
 
   it("calls prepareArguments and passes the prepared args and toolCallId to execute", async () => {
     const preparedArgs = { value: "prepared" };
+    const onToolCompleted = vi.fn();
     const prepareArguments = vi.fn(() => preparedArgs);
     const sourceTool = makeTool({ prepareArguments });
-    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, {});
+    const sdkTool = convertOpenClawToolToSdkTool(sourceTool, { onToolCompleted });
 
     await runSdkTool(sdkTool, { value: "raw" }, makeInvocation({ toolCallId: "call-99" }));
 
     expect(prepareArguments).toHaveBeenCalledTimes(1);
     expect(prepareArguments).toHaveBeenCalledWith({ value: "raw" });
     expect(sourceTool.execute).toHaveBeenCalledWith("call-99", preparedArgs, undefined, undefined);
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ args: preparedArgs, toolCallId: "call-99" }),
+    );
   });
 
   it("returns a failure result when prepareArguments throws", async () => {
@@ -1232,6 +1409,29 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
   });
 
+  it("reports terminal tool results to the harness lifecycle bridge", async () => {
+    const onToolCompleted = vi.fn();
+    const sourceResult = {
+      content: [{ text: "hello", type: "text" }],
+      details: { results: [{ text: "hello" }] },
+    };
+    const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), {
+      onToolCompleted,
+    });
+
+    await runSdkTool(sdkTool, { value: "input" }, makeInvocation({ toolCallId: "call-9" }));
+    await flushAsync();
+
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: { value: "input" },
+        result: sourceResult,
+        toolCallId: "call-9",
+        toolName: "tool-a",
+      }),
+    );
+  });
+
   it("reports thrown tool failures to the private result observer", async () => {
     const error = new Error("backend unavailable");
     const onAgentToolResult = vi.fn();
@@ -1261,17 +1461,46 @@ describe("convertOpenClawToolToSdkTool", () => {
     });
   });
 
-  it("reports returned OpenClaw error results as observer failures", async () => {
+  it("reports terminal tool failures to the harness lifecycle bridge", async () => {
+    const onToolCompleted = vi.fn();
+    const preparedArgs = { value: "prepared" };
+    const sdkTool = convertOpenClawToolToSdkTool(
+      makeTool({
+        prepareArguments: vi.fn(() => preparedArgs),
+        execute: vi.fn(async () => {
+          throw new Error("backend unavailable");
+        }),
+      }),
+      { onToolCompleted },
+    );
+
+    await runSdkTool(sdkTool, { value: "input" }, makeInvocation({ toolCallId: "call-10" }));
+    await flushAsync();
+
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: preparedArgs,
+        error: "backend unavailable",
+        toolCallId: "call-10",
+        toolName: "tool-a",
+      }),
+    );
+  });
+
+  it("reports returned OpenClaw error results to both tool observers", async () => {
     const onAgentToolResult = vi.fn();
+    const onToolCompleted = vi.fn();
     const sourceResult = {
       content: [{ text: '{"status":"error","error":"backend unavailable"}', type: "text" }],
       details: { status: "error", error: "backend unavailable" },
     };
     const sdkTool = convertOpenClawToolToSdkTool(makeTool({}, sourceResult), {
       onAgentToolResult,
+      onToolCompleted,
     });
 
     const result = await runSdkTool(sdkTool, {});
+    await flushAsync();
 
     expect(result).toMatchObject({ resultType: "success" });
     expect(onAgentToolResult).toHaveBeenCalledWith({
@@ -1279,6 +1508,12 @@ describe("convertOpenClawToolToSdkTool", () => {
       result: sourceResult,
       isError: true,
     });
+    expect(onToolCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "backend unavailable",
+        result: sourceResult,
+      }),
+    );
   });
 
   it("joins multiple text blocks with newlines", async () => {

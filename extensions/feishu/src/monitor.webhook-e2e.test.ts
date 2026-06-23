@@ -363,6 +363,32 @@ describe("Feishu webhook signed-request e2e", () => {
     );
   });
 
+  it("does not emit unhandled-event warning for bot_p2p_chat_entered_v1", async () => {
+    probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
+
+    await withRunningWebhookMonitor(
+      {
+        accountId: "p2p-chat-entered",
+        path: "/hook-e2e-p2p-chat-entered",
+        verificationToken: "verify_token",
+        encryptKey: "encrypt_key",
+      },
+      monitorFeishuProvider,
+      async (url) => {
+        const payload = {
+          schema: "2.0",
+          header: { event_type: "im.chat.access_event.bot_p2p_chat_entered_v1" },
+          event: {},
+        };
+        const response = await postSignedPayload(url, payload);
+
+        expect(response.status).toBe(200);
+        const body = await response.text();
+        expect(body).not.toContain("no im.chat.access_event.bot_p2p_chat_entered_v1 event handle");
+      },
+    );
+  });
+
   it("accepts signed encrypted url_verification challenges end-to-end", async () => {
     probeFeishuMock.mockResolvedValue({ ok: true, botOpenId: "bot_open_id" });
 

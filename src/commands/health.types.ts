@@ -42,7 +42,7 @@ export type PluginHealthSummary = {
 };
 
 /** Context engine quarantine entry included in health output. */
-export type ContextEngineHealthQuarantineSummary = {
+type ContextEngineHealthQuarantineSummary = {
   engineId: string;
   owner?: string;
   operation: string;
@@ -56,7 +56,7 @@ export type ContextEngineHealthSummary = {
 };
 
 /** Optional model pricing cache health reported by the gateway. */
-export type ModelPricingHealthSummary =
+type ModelPricingHealthSummary =
   import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
 
 /** Full gateway health payload consumed by `openclaw health`. */

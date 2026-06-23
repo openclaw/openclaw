@@ -135,7 +135,7 @@ export type CliBackendConfig = {
   /** Output parsing mode when resuming a CLI session. */
   resumeOutput?: "json" | "text" | "jsonl";
   /** JSONL event dialect for CLIs with provider-specific stream formats. */
-  jsonlDialect?: "claude-stream-json";
+  jsonlDialect?: "claude-stream-json" | "gemini-stream-json";
   /** Long-lived CLI process mode. */
   liveSession?: "claude-stdio";
   /** Prompt input mode (default: arg). */
@@ -538,7 +538,7 @@ export type AgentCompactionConfig = {
    * Explicit ["Session Startup", "Red Lines"] preserves legacy fallback headings.
    */
   postCompactionSections?: string[];
-  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").
+  /** Optional provider/model or configured bare alias for compaction summarization.
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;

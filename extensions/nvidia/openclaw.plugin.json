@@ -1,5 +1,6 @@
 {
   "id": "nvidia",
+  "icon": "https://cdn.simpleicons.org/nvidia/111111",
   "activation": {
     "onStartup": false
   },

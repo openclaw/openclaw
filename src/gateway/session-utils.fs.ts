@@ -8,10 +8,13 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
+import {
+  scanSessionTranscriptTree,
+  selectSessionTranscriptTreePathNodes,
+} from "../config/sessions/transcript-tree.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
-import { escapeRegExp } from "../shared/regexp.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
@@ -24,6 +27,11 @@ import {
   readSessionTranscriptIndex,
   type IndexedTranscriptEntry,
 } from "./session-transcript-index.fs.js";
+import {
+  extractJsonNullableStringFieldPrefix,
+  extractJsonNumberFieldPrefix,
+  extractJsonStringFieldPrefix,
+} from "./session-transcript-json.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
 type SessionTitleFields = {
@@ -196,8 +204,6 @@ type ReadSessionMessagesResult = {
 const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
 type TailTranscriptRecord = {
-  id?: string;
-  parentId?: string | null;
   record: Record<string, unknown>;
 };
 
@@ -295,40 +301,6 @@ function isOversizedTranscriptLine(line: string): boolean {
   return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
 }
 
-function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
-  const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
-  if (!match) {
-    return undefined;
-  }
-  try {
-    const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-    return normalizeTailEntryString(decoded);
-  } catch {
-    return undefined;
-  }
-}
-
-function extractJsonNullableStringFieldPrefix(
-  prefix: string,
-  field: string,
-): string | null | undefined {
-  if (new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*null`).test(prefix)) {
-    return null;
-  }
-  return extractJsonStringFieldPrefix(prefix, field);
-}
-
-function extractJsonNumberFieldPrefix(prefix: string, field: string): number | undefined {
-  const match = new RegExp(
-    `"${escapeRegExp(field)}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`,
-  ).exec(prefix);
-  if (!match) {
-    return undefined;
-  }
-  const decoded = Number(match[1]);
-  return Number.isFinite(decoded) ? decoded : undefined;
-}
-
 function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
   const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const messageMatch = /"message"\s*:/.exec(prefix);
@@ -351,15 +323,7 @@ function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
       __openclaw: { truncated: true, reason: "oversized" },
     },
   };
-  return {
-    ...(id ? { id } : {}),
-    ...(parentId !== undefined ? { parentId } : {}),
-    record,
-  };
-}
-
-function normalizeTailEntryString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+  return { record };
 }
 
 function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
@@ -372,59 +336,28 @@ function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
       return null;
     }
     const record = parsed as Record<string, unknown>;
-    return {
-      ...(normalizeTailEntryString(record.id) ? { id: normalizeTailEntryString(record.id) } : {}),
-      ...(record.parentId === null
-        ? { parentId: null }
-        : normalizeTailEntryString(record.parentId)
-          ? { parentId: normalizeTailEntryString(record.parentId) }
-          : {}),
-      record,
-    };
+    return { record };
   } catch {
     return null;
   }
 }
 
-function tailRecordHasTreeLink(entry: TailTranscriptRecord): boolean {
-  return (
-    entry.record.type !== "session" &&
-    typeof entry.id === "string" &&
-    Object.hasOwn(entry.record, "parentId")
-  );
-}
-
-function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTranscriptRecord[] {
-  const byId = new Map<string, TailTranscriptRecord>();
-  let leafId: string | undefined;
-  for (const entry of entries) {
-    if (entry.id) {
-      byId.set(entry.id, entry);
-    }
-    if (tailRecordHasTreeLink(entry) && entry.id) {
-      leafId = entry.id;
-    }
+function selectBoundedActiveTailRecords(
+  entries: TailTranscriptRecord[],
+  opts?: { failClosedOnInvalidLeafControl?: boolean },
+): TailTranscriptRecord[] {
+  const tree = scanSessionTranscriptTree(entries.map((entry) => entry.record));
+  if (opts?.failClosedOnInvalidLeafControl === true && tree.hasInvalidLeafControl) {
+    return [];
   }
-  if (!leafId) {
+  if (!tree.hasExplicitLeafUpdate) {
     return entries;
   }
-
-  const selected: TailTranscriptRecord[] = [];
-  const seen = new Set<string>();
-  let currentId: string | undefined = leafId;
-  while (currentId) {
-    if (seen.has(currentId)) {
-      return [];
-    }
-    seen.add(currentId);
-    const entry = byId.get(currentId);
-    if (!entry) {
-      break;
-    }
-    selected.push(entry);
-    currentId = entry.parentId ?? undefined;
-  }
-  const activeBranch = selected.toReversed();
+  const recordsByValue = new Map(entries.map((entry) => [entry.record, entry]));
+  const activeBranch = selectSessionTranscriptTreePathNodes(tree, tree.leafId).flatMap((node) => {
+    const entry = recordsByValue.get(node.entry);
+    return entry ? [entry] : [];
+  });
   const firstActiveRecord = activeBranch[0];
   const firstActiveIndex = firstActiveRecord ? entries.indexOf(firstActiveRecord) : -1;
   if (firstActiveIndex > 0) {
@@ -453,7 +386,7 @@ function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {
 }
 
 function selectActiveTranscriptRecords(records: TailTranscriptRecord[]): TailTranscriptRecord[] {
-  return records.some(tailRecordHasTreeLink) ? selectBoundedActiveTailRecords(records) : records;
+  return selectBoundedActiveTailRecords(records);
 }
 
 function readSelectedTranscriptRecords(filePath: string): TailTranscriptRecord[] {
@@ -482,7 +415,10 @@ function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number)
     const entry = parseTailTranscriptRecord(line);
     return entry ? [entry] : [];
   });
-  return transcriptRecordsToMessages(selectActiveTranscriptRecords(entries)).slice(-maxMessages);
+  const selected = selectBoundedActiveTailRecords(entries, {
+    failClosedOnInvalidLeafControl: true,
+  });
+  return transcriptRecordsToMessages(selected).slice(-maxMessages);
 }
 
 function visitTranscriptLines(filePath: string, visit: (line: string) => void): void {
@@ -707,22 +643,7 @@ export async function readSessionMessageCountAsync(
   if (!filePath) {
     return 0;
   }
-  let stat: fs.Stats | null = null;
-  try {
-    stat = await fs.promises.stat(filePath);
-    const cached = getCachedTranscriptMessageCount(filePath, stat);
-    if (typeof cached === "number") {
-      return cached;
-    }
-  } catch {
-    // Count from the transcript reader below when stat metadata is unavailable.
-  }
-  const index = await readSessionTranscriptIndex(filePath);
-  const count = index?.entries.length ?? 0;
-  if (stat) {
-    setCachedTranscriptMessageCount(filePath, stat, count);
-  }
-  return count;
+  return await readSessionMessageCountFromPathAsync(filePath);
 }
 
 export function readRecentSessionMessagesWithStats(
@@ -1268,6 +1189,27 @@ export function readFirstUserMessageFromTranscript(
 const LAST_MSG_MAX_BYTES = 16384;
 const LAST_MSG_MAX_LINES = 20;
 
+function extractLastMessagePreviewFromTranscriptLines(lines: string[]): string | null {
+  const records = lines.flatMap((line) => {
+    const parsed = parseTailTranscriptRecord(line);
+    return parsed ? [parsed] : [];
+  });
+  const selected = selectBoundedActiveTailRecords(records, {
+    failClosedOnInvalidLeafControl: true,
+  });
+  for (let index = selected.length - 1; index >= 0; index -= 1) {
+    const msg = selected[index]?.record.message as TranscriptMessage | undefined;
+    if (msg?.role !== "user" && msg?.role !== "assistant") {
+      continue;
+    }
+    const text = extractTextFromContent(msg.content);
+    if (text) {
+      return text;
+    }
+  }
+  return null;
+}
+
 function readLastMessagePreviewFromOpenTranscript(params: {
   fd: number;
   size: number;
@@ -1279,25 +1221,7 @@ function readLastMessagePreviewFromOpenTranscript(params: {
 
   const chunk = buf.toString("utf-8");
   const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
-  const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
-
-  for (let i = tailLines.length - 1; i >= 0; i--) {
-    const line = tailLines[i];
-    try {
-      const parsed = JSON.parse(line);
-      const msg = parsed?.message as TranscriptMessage | undefined;
-      if (msg?.role !== "user" && msg?.role !== "assistant") {
-        continue;
-      }
-      const text = extractTextFromContent(msg.content);
-      if (text) {
-        return text;
-      }
-    } catch {
-      // skip malformed
-    }
-  }
-  return null;
+  return extractLastMessagePreviewFromTranscriptLines(lines.slice(-LAST_MSG_MAX_LINES));
 }
 
 async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
@@ -1314,25 +1238,7 @@ async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
 
   const chunk = buffer.toString("utf-8", 0, bytesRead);
   const lines = chunk.split(/\r?\n/).filter((line) => line.trim());
-  const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
-
-  for (let i = tailLines.length - 1; i >= 0; i--) {
-    const line = tailLines[i];
-    try {
-      const parsed = JSON.parse(line);
-      const msg = parsed?.message as TranscriptMessage | undefined;
-      if (msg?.role !== "user" && msg?.role !== "assistant") {
-        continue;
-      }
-      const text = extractTextFromContent(msg.content);
-      if (text) {
-        return text;
-      }
-    } catch {
-      // skip malformed
-    }
-  }
-  return null;
+  return extractLastMessagePreviewFromTranscriptLines(lines.slice(-LAST_MSG_MAX_LINES));
 }
 
 type SessionTranscriptUsageSnapshot = {

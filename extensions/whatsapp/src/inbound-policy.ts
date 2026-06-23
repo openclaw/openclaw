@@ -13,8 +13,9 @@ import type {
 import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
+import { requireWhatsAppInboundAdmission } from "./inbound/admission.js";
 import { resolveWhatsAppGroupConversationId } from "./inbound/group-conversation.js";
-import type { WebInboundMessage } from "./inbound/types.js";
+import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
 import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
 
@@ -170,7 +171,7 @@ export async function resolveWhatsAppIngressAccess(params: {
 
 export async function resolveWhatsAppCommandAuthorized(params: {
   cfg: OpenClawConfig;
-  msg: WebInboundMessage;
+  msg: AdmittedWebInboundMessage;
   policy?: ResolvedWhatsAppInboundPolicy;
 }): Promise<boolean> {
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
@@ -179,16 +180,17 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   }
 
   const self = getSelfIdentity(params.msg);
+  const admission = requireWhatsAppInboundAdmission(params.msg);
   const policy =
     params.policy ??
     resolveWhatsAppInboundPolicy({
       cfg: params.cfg,
-      accountId: params.msg.accountId,
+      accountId: admission.accountId,
       selfE164: self.e164 ?? null,
     });
-  const isGroup = params.msg.chatType === "group";
+  const isGroup = admission.conversation.kind === "group";
   const sender = getSenderIdentity(params.msg);
-  const dmSender = sender.e164 ?? params.msg.from ?? "";
+  const dmSender = sender.e164 ?? admission.conversation.id;
   const groupSender = sender.e164 ?? "";
   if (!normalizeE164(isGroup ? groupSender : dmSender)) {
     return false;
@@ -198,7 +200,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     cfg: params.cfg,
     policy,
     isGroup,
-    conversationId: params.msg.conversationId ?? params.msg.platform.chatJid ?? params.msg.from,
+    conversationId: admission.conversation.id,
     senderId: isGroup ? groupSender : dmSender,
     dmSenderId: dmSender,
     includeCommand: true,

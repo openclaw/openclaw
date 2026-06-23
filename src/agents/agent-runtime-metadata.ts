@@ -4,8 +4,6 @@ import { applyAcpRuntimeOverlay, type AgentRuntimeMetadata } from "./acp-runtime
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 
-export type { AgentRuntimeMetadata };
-
 /** Resolves the runtime id/source that should be reported for a model-backed agent session. */
 export function resolveModelAgentRuntimeMetadata(params: {
   cfg: OpenClawConfig;

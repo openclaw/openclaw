@@ -45,6 +45,7 @@ type RestartPostCheckContext = {
   json: boolean;
   stdout: Writable;
   warnings: string[];
+  warn?: (message: string) => void;
   fail: (message: string, hints?: string[]) => void;
 };
 
@@ -58,6 +59,7 @@ type ServiceRecoveryResult = {
 type ServiceRecoveryContext = {
   json: boolean;
   stdout: Writable;
+  warn?: (message: string) => void;
   fail: (message: string, hints?: string[]) => void;
 };
 
@@ -89,6 +91,14 @@ function emitActionMessage(params: {
   if (!params.json && params.payload.message) {
     defaultRuntime.log(params.payload.message);
   }
+}
+
+function mergeWarnings(
+  captured: readonly string[],
+  reported?: readonly string[],
+): string[] | undefined {
+  const combined = [...captured, ...(reported ?? [])];
+  return combined.length > 0 ? combined : undefined;
 }
 
 async function handleServiceNotLoaded(params: {
@@ -249,7 +259,8 @@ export async function runServiceStart(params: {
   repairLoadedService?: (ctx: ServiceStartRepairContext) => Promise<ServiceRecoveryResult | null>;
 }) {
   const json = Boolean(params.opts?.json);
-  const { stdout, emit, fail } = createDaemonActionContext({ action: "start", json });
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "start", json });
+  const warn = json ? (message: string) => warnings.push(message) : undefined;
   const loaded = await resolveServiceLoadedOrFail({
     serviceNoun: params.serviceNoun,
     service: params.service,
@@ -275,13 +286,13 @@ export async function runServiceStart(params: {
   }
   if (!loaded) {
     try {
-      const handled = await params.onNotLoaded?.({ json, stdout, fail });
+      const handled = await params.onNotLoaded?.({ json, stdout, warn, fail });
       if (handled) {
         emit({
           ok: true,
           result: handled.result,
           message: handled.message,
-          warnings: handled.warnings,
+          warnings: mergeWarnings(warnings, handled.warnings),
           service: buildDaemonServiceSnapshot(params.service, handled.loaded ?? false),
         });
         if (!json && handled.message) {
@@ -296,7 +307,11 @@ export async function runServiceStart(params: {
     }
   }
   try {
-    const startResult = await startGatewayService(params.service, { env: process.env, stdout });
+    const startResult = await startGatewayService(params.service, {
+      env: process.env,
+      stdout,
+      warn,
+    });
     if (startResult.outcome === "missing-install") {
       await handleServiceNotLoaded({
         serviceNoun: params.serviceNoun,
@@ -320,6 +335,7 @@ export async function runServiceStart(params: {
           result: "scheduled",
           message: restartStatus.message,
           service: buildDaemonServiceSnapshot(params.service, startResult.state.loaded),
+          warnings: warnings.length ? warnings : undefined,
         },
       });
       return;
@@ -329,6 +345,7 @@ export async function runServiceStart(params: {
         const handled = await params.repairLoadedService?.({
           json,
           stdout,
+          warn,
           fail,
           state: startResult.state,
           issues: startResult.issues,
@@ -338,7 +355,7 @@ export async function runServiceStart(params: {
             ok: true,
             result: handled.result,
             message: handled.message,
-            warnings: handled.warnings,
+            warnings: mergeWarnings(warnings, handled.warnings),
             service: buildDaemonServiceSnapshot(params.service, handled.loaded ?? true),
           });
           if (!json && handled.message) {
@@ -363,6 +380,7 @@ export async function runServiceStart(params: {
       ok: true,
       result: "started",
       service: buildDaemonServiceSnapshot(params.service, startResult.state.loaded),
+      warnings: warnings.length ? warnings : undefined,
     });
   } catch (err) {
     const hints = params.renderStartHints();
@@ -470,8 +488,8 @@ export async function runServiceRestart(params: {
   onNotLoaded?: (ctx: ServiceRecoveryContext) => Promise<ServiceRecoveryResult | null>;
 }): Promise<boolean> {
   const json = Boolean(params.opts?.json);
-  const { stdout, emit, fail } = createDaemonActionContext({ action: "restart", json });
-  const warnings: string[] = [];
+  const { stdout, warnings, emit, fail } = createDaemonActionContext({ action: "restart", json });
+  const warn = json ? (message: string) => warnings.push(message) : undefined;
   const restartIntent = params.opts?.restartIntent;
   let handledRecovery: ServiceRecoveryResult | null = null;
   let recoveredLoadedState: boolean | null = null;
@@ -519,7 +537,7 @@ export async function runServiceRestart(params: {
 
   if (!loaded) {
     try {
-      handledRecovery = (await params.onNotLoaded?.({ json, stdout, fail })) ?? null;
+      handledRecovery = (await params.onNotLoaded?.({ json, stdout, warn, fail })) ?? null;
     } catch (err) {
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
@@ -590,7 +608,7 @@ export async function runServiceRestart(params: {
         });
       }
       try {
-        restartResult = await params.service.restart({ env: process.env, stdout });
+        restartResult = await params.service.restart({ env: process.env, stdout, warn });
       } catch (err) {
         if (wroteRestartIntent) {
           clearGatewayRestartIntentSync();
@@ -603,7 +621,13 @@ export async function runServiceRestart(params: {
       return emitScheduledRestart(restartStatus, loaded || recoveredLoadedState === true);
     }
     if (params.postRestartCheck) {
-      const postRestartResult = await params.postRestartCheck({ json, stdout, warnings, fail });
+      const postRestartResult = await params.postRestartCheck({
+        json,
+        stdout,
+        warnings,
+        warn,
+        fail,
+      });
       if (postRestartResult) {
         restartStatus = describeGatewayServiceRestart(params.serviceNoun, postRestartResult);
         if (restartStatus.scheduled) {

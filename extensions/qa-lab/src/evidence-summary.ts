@@ -349,7 +349,7 @@ function uniqueSortedStrings(values: readonly (string | undefined)[]) {
   );
 }
 
-function resolveQaEvidenceProfile(params: {
+export function resolveQaEvidenceProfile(params: {
   env?: NodeJS.ProcessEnv;
   explicit?: QaEvidenceProfile;
 }) {
@@ -702,6 +702,20 @@ export function buildPlaywrightEvidenceSummary(
     defaultRunner: "playwright",
     testKind: "playwright-test",
     runner: params.runner ?? "playwright",
+  });
+}
+
+export function buildScriptEvidenceSummary(
+  params: QaEvidenceBuildBase & {
+    targets: readonly QaEvidenceTestTargetInput[];
+    results: readonly QaEvidenceTestResultInput[];
+  },
+): QaEvidenceSummaryJson {
+  return buildTestRunnerEvidenceSummary({
+    ...params,
+    defaultRunner: "script",
+    testKind: "script-test",
+    runner: params.runner ?? "script",
   });
 }
 

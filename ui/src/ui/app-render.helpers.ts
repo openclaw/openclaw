@@ -20,6 +20,7 @@ import {
   resetChatSessionPickerState,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
+import { cacheChatMessages, readChatMessagesFromCache } from "./chat/session-message-cache.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -138,19 +139,37 @@ function restoreChatQueueForSession(state: AppViewState, sessionKey: string): Ch
   return [...(state.chatQueueBySession?.[sessionKey] ?? [])];
 }
 
+function chatMessageCacheForState(state: AppViewState) {
+  return (state.chatMessagesBySession ??= new Map());
+}
+
+function saveChatMessagesForSession(state: AppViewState, sessionKey: string) {
+  cacheChatMessages(chatMessageCacheForState(state), state, { sessionKey }, state.chatMessages);
+}
+
+function restoreChatMessagesForSession(state: AppViewState, sessionKey: string): unknown[] {
+  return readChatMessagesFromCache(chatMessageCacheForState(state), state, { sessionKey });
+}
+
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   const host = state as unknown as SessionSwitchHost;
   const previousSessionKey = state.sessionKey;
   persistChatComposerState(state, previousSessionKey);
   saveChatQueueForSession(state, previousSessionKey);
+  saveChatMessagesForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
   if (previousSessionKey !== sessionKey) {
     resetChatSessionPickerState(state);
   }
-  (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
+  const chatSessionState = state as unknown as {
+    currentSessionId?: string | null;
+    reconnectResumeSessionId?: string | null;
+  };
+  chatSessionState.currentSessionId = null;
+  chatSessionState.reconnectResumeSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
-  state.chatMessages = [];
+  state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
   state.chatToolMessages = [];
   state.activityEntries = [];
   state.activityExpandedIds = new Set();
@@ -689,22 +708,26 @@ export function switchChatSessionAndWait(
   );
 }
 
+export function dismissRealtimeTalkError(state: AppViewState) {
+  if (state.realtimeTalkStatus !== "error") {
+    return;
+  }
+  const talkHost = state as unknown as {
+    realtimeTalkSession?: { stop(): void } | null;
+  };
+  talkHost.realtimeTalkSession?.stop();
+  talkHost.realtimeTalkSession = null;
+  state.realtimeTalkActive = false;
+  state.realtimeTalkStatus = "idle";
+  state.realtimeTalkDetail = null;
+  state.realtimeTalkTranscript = null;
+  state.resetRealtimeTalkConversation?.();
+}
+
 export function dismissChatError(state: AppViewState) {
   state.lastError = null;
   state.lastErrorCode = null;
   state.chatError = null;
-  if (state.realtimeTalkStatus === "error") {
-    const talkHost = state as unknown as {
-      realtimeTalkSession?: { stop(): void } | null;
-    };
-    talkHost.realtimeTalkSession?.stop();
-    talkHost.realtimeTalkSession = null;
-    state.realtimeTalkActive = false;
-    state.realtimeTalkStatus = "idle";
-    state.realtimeTalkDetail = null;
-    state.realtimeTalkTranscript = null;
-    state.resetRealtimeTalkConversation?.();
-  }
 }
 
 export type CreateChatSessionIntent = { source: "user" };
@@ -829,17 +852,18 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   return html`
     <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
       ${THEME_MODE_OPTIONS.map((opt) => {
+        // Group aria-label already says "Color mode"; per-button label only needs
+        // the differentiating mode name (System/Light/Dark).
         const label = t(opt.labelKey);
-        const tooltip = t("common.colorModeOption", { mode: label });
         return html`
           <button
             type="button"
             class="topbar-theme-mode__btn ${opt.id === state.themeMode
               ? "topbar-theme-mode__btn--active"
               : ""}"
-            title=${tooltip}
-            aria-label=${tooltip}
-            data-tooltip=${tooltip}
+            title=${label}
+            aria-label=${label}
+            data-tooltip=${label}
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >

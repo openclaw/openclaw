@@ -87,9 +87,10 @@
   "cwd": "/tmp/openclaw-happy-path/workspace",
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "dynamicTools": [
+    "message",
+    "sessions_yield",
     "nodes",
     "cron",
-    "message",
     "heartbeat_respond",
     "tts",
     "gateway",
@@ -98,7 +99,6 @@
     "sessions_history",
     "sessions_send",
     "sessions_spawn",
-    "sessions_yield",
     "subagents",
     "session_status",
     "web_search",
@@ -228,8 +228,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 46059,
-    "roughTokens": 11515
+    "chars": 51775,
+    "roughTokens": 12944
   },
   "openClawDeveloperInstructions": {
     "chars": 1983,
@@ -240,8 +240,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6780
   },
   "totalWithDynamicToolsJson": {
-    "chars": 73180,
-    "roughTokens": 18295
+    "chars": 78896,
+    "roughTokens": 19724
   },
   "userInputText": {
     "chars": 1367,
@@ -553,9 +553,10 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
 
 ```json
 [
+  "message",
+  "sessions_yield",
   "nodes",
   "cron",
-  "message",
   "heartbeat_respond",
   "tts",
   "gateway",
@@ -564,7 +565,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
-  "sessions_yield",
   "subagents",
   "session_status",
   "web_search",
@@ -698,7 +698,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
       "required": ["action"],
       "type": "object"
     },
-    "name": "message"
+    "name": "message",
+    "type": "function"
   },
   {
     "deferLoading": true,
@@ -734,7 +735,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
       "type": "object"
     },
     "name": "heartbeat_respond",
-    "namespace": "openclaw"
+    "type": "function"
   }
 ]
 ```

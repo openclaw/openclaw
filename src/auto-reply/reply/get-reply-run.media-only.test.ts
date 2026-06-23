@@ -2854,6 +2854,17 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.commandBody).toContain("System: [t] Node connected.");
   });
 
+  it("forwards resolved fast-mode override into the followup run", async () => {
+    await runPreparedReply(
+      baseParams({
+        resolvedFastMode: "auto",
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.fastMode).toBe("auto");
+  });
+
   it("carries system events into followupRun.prompt for deferred turns", async () => {
     // drainFormattedSystemEvents returns the events block; the caller prepends it to
     // effectiveBaseBody for the queue path so deferred turns see events.

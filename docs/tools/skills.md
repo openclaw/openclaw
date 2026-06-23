@@ -145,12 +145,12 @@ publish and sync.
 
 | Action                             | Command                                                |
 | ---------------------------------- | ------------------------------------------------------ |
-| Install a skill into the workspace | `openclaw skills install <slug>`                       |
+| Install a skill into the workspace | `openclaw skills install @owner/<slug>`                |
 | Install from a Git repository      | `openclaw skills install git:owner/repo@ref`           |
 | Install a local skill directory    | `openclaw skills install ./path/to/skill --as my-tool` |
-| Install for all local agents       | `openclaw skills install <slug> --global`              |
+| Install for all local agents       | `openclaw skills install @owner/<slug> --global`       |
 | Update all workspace skills        | `openclaw skills update --all`                         |
-| Update a shared managed skill      | `openclaw skills update <slug> --global`               |
+| Update a shared managed skill      | `openclaw skills update @owner/<slug> --global`        |
 | Update all shared managed skills   | `openclaw skills update --all --global`                |
 | Verify a skill's trust envelope    | `openclaw skills verify <slug>`                        |
 | Print the generated Skill Card     | `openclaw skills verify <slug> --card`                 |
@@ -179,7 +179,7 @@ publish and sync.
     with detail pages for VirusTotal, ClawScan, and static analysis. The
     command exits non-zero when ClawHub marks verification as failed. Publishers
     recover false positives through the ClawHub dashboard or
-    `clawhub skill rescan <slug>`.
+    `clawhub skill rescan @owner/<slug>`.
 
   </Accordion>
   <Accordion title="Private archive installs">

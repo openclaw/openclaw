@@ -8,7 +8,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateExecApprovalRequestParams } from "../../../packages/gateway-protocol/src/index.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../../agents/stream-message-shared.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerLegacyContextEngine } from "../../context-engine/legacy.registration.js";
@@ -901,6 +903,367 @@ describe("sanitizeChatHistoryMessages", () => {
 });
 
 describe("projectRecentChatDisplayMessages", () => {
+  it("projects empty assistant error turns as a generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+  });
+
+  it("projects empty text-block assistant errors as a generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
+  it.each([
+    ["output_text", ""],
+    ["output_text", "NO_REPLY"],
+    ["input_text", ""],
+    ["input_text", "NO_REPLY"],
+  ])("projects hidden %s assistant errors %j as a generic safe failure", (type, text) => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type, text }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
+  it("preserves visible output_text from a failed assistant turn", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "output_text", text: "A partial reply before the run failed." }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "output_text", text: "A partial reply before the run failed." },
+    ]);
+  });
+
+  it("projects thinking-only assistant errors as a generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "private upstream details" }],
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+  });
+
+  it("projects reasoning-text-only assistant errors as a generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "reasoning", text: "private upstream details" }],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+  });
+
+  it("projects redacted-thinking-only assistant errors as a generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "redacted_thinking", data: "private upstream details" }],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+    expect(JSON.stringify(result[0]?.content)).not.toContain("secret.internal.example");
+  });
+
+  it("projects commentary-phase assistant errors as a visible generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        phase: "commentary",
+        content: [],
+        text: "private upstream details",
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]).not.toHaveProperty("phase");
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "The agent run failed before producing a reply." },
+    ]);
+    expect(result[0]).not.toHaveProperty("text");
+  });
+
+  it("leaves legacy top-level assistant error text unchanged", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [],
+        text: "A real reply before the run failed.",
+        stopReason: "error",
+        errorMessage: "Connection error.",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.text).toBe("A real reply before the run failed.");
+    expect(result[0]).not.toHaveProperty("errorMessage");
+  });
+
+  it("preserves partial error replies without hidden reasoning or diagnostics", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private upstream reasoning" },
+          { type: "text", text: "A partial reply before the run failed." },
+        ],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        diagnostics: { provider: "private-provider" },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "A partial reply before the run failed." },
+    ]);
+    expect(result[0]).not.toHaveProperty("diagnostics");
+    expect(result[0]).not.toHaveProperty("errorMessage");
+    expect(JSON.stringify(result)).not.toContain("private upstream");
+  });
+
+  it.each(["[[reply_to_current]]", "NO_REPLY", STREAM_ERROR_FALLBACK_TEXT])(
+    "projects display-hidden assistant error text %j as a generic safe failure",
+    (text) => {
+      const result = projectRecentChatDisplayMessages([
+        {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          stopReason: "error",
+          errorMessage: "private upstream at secret.internal.example failed",
+          timestamp: 1,
+        },
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+          stopReason: "error",
+          timestamp: 1,
+        },
+      ]);
+      expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+    },
+  );
+
+  it("projects suppressed error text accompanied by hidden reasoning", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private upstream details" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+    expect(JSON.stringify(result)).not.toContain("private upstream details");
+  });
+
+  it.each([undefined, ""])(
+    "projects repaired stream errors with errorMessage %j as a generic safe failure",
+    (errorMessage) => {
+      const result = projectRecentChatDisplayMessages([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
+          stopReason: "error",
+          ...(errorMessage === undefined ? {} : { errorMessage }),
+          errorBody: "private response body from secret.internal.example",
+          timestamp: 1,
+        },
+      ]);
+
+      expect(result).toEqual([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+          stopReason: "error",
+          timestamp: 1,
+        },
+      ]);
+      expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+    },
+  );
+
+  it("projects signature-only commentary errors as a visible generic safe failure", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "private upstream details",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg-commentary",
+              phase: "commentary",
+            }),
+          },
+        ],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        errorCode: "private_error_code",
+        errorType: "private_error_type",
+        errorBody: "private response body from secret.internal.example",
+        diagnostics: [
+          {
+            type: "provider-error",
+            timestamp: 1,
+            error: { message: "private diagnostic from secret.internal.example" },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The agent run failed before producing a reply." }],
+        stopReason: "error",
+        timestamp: 1,
+      },
+    ]);
+    expect(JSON.stringify(result)).not.toContain("secret.internal.example");
+    expect(JSON.stringify(result)).not.toContain("private_error");
+  });
+
+  it("preserves attachment-only assistant errors without private diagnostics", () => {
+    const attachment = {
+      type: "attachment",
+      name: "report.txt",
+      url: "https://example.test/report.txt",
+    };
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [attachment],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        diagnostics: { provider: "private-provider" },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([attachment]);
+    expect(result[0]).not.toHaveProperty("diagnostics");
+    expect(result[0]).not.toHaveProperty("errorMessage");
+  });
+
+  it("preserves tool-bearing assistant errors without hidden reasoning or diagnostics", () => {
+    const toolCall = {
+      type: "toolCall",
+      id: "call-1",
+      name: "read",
+      arguments: { path: "README.md" },
+    };
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private upstream reasoning" },
+          { type: "text", text: "I read the requested file before the run failed." },
+          toolCall,
+        ],
+        stopReason: "error",
+        errorMessage: "private upstream at secret.internal.example failed",
+        errorBody: "private response body",
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result[0]?.content).toEqual([
+      { type: "text", text: "I read the requested file before the run failed." },
+    ]);
+    expect(result[0]).not.toHaveProperty("errorBody");
+    expect(result[0]).not.toHaveProperty("errorMessage");
+    expect(JSON.stringify(result)).not.toContain("private upstream");
+  });
+
   it("projects sessions_send inter-session turns as forwarded assistant-side display messages", () => {
     const result = projectRecentChatDisplayMessages([
       {
@@ -2012,7 +2375,7 @@ describe("gateway chat transcript writes (guardrail)", () => {
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
     expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
-    expect(helperSrc).toContain("appendSessionTranscriptMessage({");
+    expect(helperSrc).toContain("persistSessionTranscriptTurn(");
     expect(helperSrc).toContain("useRawWhenLinear: true");
     expect(helperSrc).not.toContain("SessionManager.open(params.transcriptPath)");
   });
@@ -2040,6 +2403,24 @@ describe("exec approval handlers", () => {
     host: "node",
     timeoutMs: 2000,
   } as const;
+
+  function createExecApprovalClient(params: {
+    connId: string;
+    clientId: string;
+    deviceId?: string;
+    scopes?: string[];
+    approvalRuntime?: boolean;
+  }): ExecApprovalRequestArgs["client"] {
+    return {
+      connId: params.connId,
+      connect: {
+        client: { id: params.clientId },
+        device: params.deviceId ? { id: params.deviceId } : undefined,
+        scopes: params.scopes,
+      },
+      ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
+    } as unknown as ExecApprovalRequestArgs["client"];
+  }
 
   function toExecApprovalRequestContext(context: {
     broadcast: (event: string, payload: unknown) => void;
@@ -2194,6 +2575,15 @@ describe("exec approval handlers", () => {
     };
   }
 
+  async function waitForRequestedExecApprovalPayload(
+    broadcasts: Array<{ event: string; payload: unknown }>,
+  ): Promise<{ id: string; request: Record<string, unknown> }> {
+    await vi.waitFor(() => {
+      expect(broadcasts.some((entry) => entry.event === "exec.approval.requested")).toBe(true);
+    });
+    return getRequestedExecApprovalPayload(broadcasts);
+  }
+
   function createForwardingExecApprovalFixture(opts?: {
     iosPushDelivery?: {
       handleRequested: ReturnType<typeof vi.fn>;
@@ -2213,6 +2603,7 @@ describe("exec approval handlers", () => {
     });
     const respond = vi.fn();
     const context = {
+      getRuntimeConfig: () => ({}),
       broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => false,
     };
@@ -2248,6 +2639,24 @@ describe("exec approval handlers", () => {
     ])("accepts request with resolvedPath $label", ({ extra }) => {
       const params = { ...baseParams, ...extra };
       expect(validateExecApprovalRequestParams(params)).toBe(true);
+    });
+
+    it("accepts unavailable optional decisions", () => {
+      expect(
+        validateExecApprovalRequestParams({
+          ...baseParams,
+          unavailableDecisions: ["allow-always"],
+        }),
+      ).toBe(true);
+    });
+
+    it.each(["allow-once", "deny"])("rejects baseline unavailable decision %s", (decision) => {
+      expect(
+        validateExecApprovalRequestParams({
+          ...baseParams,
+          unavailableDecisions: [decision],
+        }),
+      ).toBe(false);
     });
   });
 
@@ -2344,10 +2753,7 @@ describe("exec approval handlers", () => {
         nodeId: undefined,
       },
     });
-
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const id = (requested?.payload as { id?: string })?.id ?? "";
-    expect(id).not.toBe("");
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     const getRespond = vi.fn();
     await getExecApproval({ handlers, id, respond: getRespond });
@@ -2390,9 +2796,7 @@ describe("exec approval handlers", () => {
         nodeId: undefined,
       },
     });
-
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const request = requested?.payload as { id?: string; request?: { commandAnalysis?: unknown } };
+    const request = await waitForRequestedExecApprovalPayload(broadcasts);
     const commandAnalysis = request.request?.commandAnalysis as Record<string, unknown>;
     expect(commandAnalysis.commandCount).toBe(1);
     expect(commandAnalysis.riskKinds).toEqual(["inline-eval"]);
@@ -2421,6 +2825,9 @@ describe("exec approval handlers", () => {
         systemRunPlan: undefined,
         nodeId: undefined,
       },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
 
     const listRespond = vi.fn();
@@ -2520,6 +2927,280 @@ describe("exec approval handlers", () => {
     expect(otherRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it("ignores approval reviewer devices from non-runtime approval request clients", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-client",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+    });
+    const reviewerClient = createExecApprovalClient({
+      connId: "conn-ios-reviewer",
+      clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+      deviceId: "device-ios-reviewer",
+      scopes: ["operator.approvals"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-untrusted",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    expect(
+      manager.getSnapshot("approval-reviewer-untrusted")?.approvalReviewerDeviceIds,
+    ).toBeUndefined();
+
+    const listRespond = vi.fn();
+    await listExecApprovals({
+      handlers,
+      respond: listRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(listRespond)).toBe(true);
+    expect(mockCallArg(listRespond, 0, 1)).toEqual([]);
+
+    const getRespond = vi.fn();
+    await getExecApproval({
+      handlers,
+      id: "approval-reviewer-untrusted",
+      respond: getRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(getRespond)).toBe(false);
+    expectRecordFields(mockCallArg(getRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+
+    expect(manager.resolve("approval-reviewer-untrusted", "deny")).toBe(true);
+    await requestPromise;
+  });
+
+  it("allows the internal approval runtime to bind the initiating mobile approval reviewer device", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const reviewerClient = createExecApprovalClient({
+      connId: "conn-ios-reviewer",
+      clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+      deviceId: "device-ios-reviewer",
+      scopes: ["operator.approvals"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    expect(manager.getSnapshot("approval-reviewer-runtime")?.approvalReviewerDeviceIds).toEqual([
+      "device-ios-reviewer",
+    ]);
+
+    const listRespond = vi.fn();
+    await listExecApprovals({
+      handlers,
+      respond: listRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(listRespond)).toBe(true);
+    const approvals = mockCallArg(listRespond, 0, 1) as Array<Record<string, unknown>>;
+    expect(approvals.map((entry) => entry.id)).toEqual(["approval-reviewer-runtime"]);
+
+    const getRespond = vi.fn();
+    await getExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime",
+      respond: getRespond,
+      client: reviewerClient,
+    });
+    expect(mockCallArg(getRespond)).toBe(true);
+    expectRecordFields(mockCallArg(getRespond, 0, 1), {
+      id: "approval-reviewer-runtime",
+      commandText: "echo ok",
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime",
+      respond: resolveRespond,
+      context,
+      client: reviewerClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-reviewer-runtime")?.decision).toBe("allow-once");
+  });
+
+  it("allows admin clients to resolve reviewer-targeted runtime approvals", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const adminClient = createExecApprovalClient({
+      connId: "conn-admin",
+      clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      deviceId: "device-admin",
+      scopes: ["operator.admin"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime-admin",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime-admin",
+      respond: resolveRespond,
+      context,
+      client: adminClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-reviewer-runtime-admin")?.decision).toBe("allow-once");
+  });
+
+  it("allows the internal approval runtime to resolve reviewer-targeted runtime approvals", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime-requester",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime-requester",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const runtimeResolverClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime-resolver",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime-resolver",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime-runtime",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime-runtime",
+      respond: resolveRespond,
+      context,
+      client: runtimeResolverClient,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(manager.getSnapshot("approval-reviewer-runtime-runtime")?.decision).toBe("allow-once");
+  });
+
+  it("does not allow reviewer devices without approval scope to resolve runtime approvals", async () => {
+    const { manager, handlers, respond, context } = createExecApprovalFixture();
+    const requesterClient = createExecApprovalClient({
+      connId: "conn-gateway-runtime",
+      clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+      deviceId: "device-gateway-runtime",
+      scopes: ["operator.approvals"],
+      approvalRuntime: true,
+    });
+    const reviewerClient = createExecApprovalClient({
+      connId: "conn-ios-reviewer",
+      clientId: GATEWAY_CLIENT_IDS.IOS_APP,
+      deviceId: "device-ios-reviewer",
+      scopes: ["operator.read"],
+    });
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      client: requesterClient,
+      params: {
+        id: "approval-reviewer-runtime-no-scope",
+        twoPhase: true,
+        approvalReviewerDeviceIds: ["device-ios-reviewer"],
+      },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-reviewer-runtime-no-scope",
+      respond: resolveRespond,
+      context,
+      client: reviewerClient,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unknown or expired approval id",
+    });
+    expect(manager.getSnapshot("approval-reviewer-runtime-no-scope")?.decision).toBeUndefined();
+
+    expect(manager.resolve("approval-reviewer-runtime-no-scope", "deny")).toBe(true);
+    await requestPromise;
+  });
+
   it("returns not found for stale exec.approval.get ids", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
 
@@ -2528,6 +3209,9 @@ describe("exec approval handlers", () => {
       respond,
       context,
       params: { twoPhase: true, host: "gateway", systemRunPlan: undefined, nodeId: undefined },
+    });
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
     });
     const acceptedId = respond.mock.calls.find((call) => call[1]?.status === "accepted")?.[1]?.id;
     expect(typeof acceptedId).toBe("string");
@@ -2560,8 +3244,7 @@ describe("exec approval handlers", () => {
       context,
       params: { twoPhase: true },
     });
-
-    const { id } = getRequestedExecApprovalPayload(broadcasts);
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     expect(mockCallArg(respond)).toBe(true);
     expectRecordFields(mockCallArg(respond, 0, 1), { status: "accepted", id });
@@ -2593,6 +3276,7 @@ describe("exec approval handlers", () => {
       context,
       params: { id: "approval-repeat-1", twoPhase: true },
     });
+    await drainApprovalRequestTicks();
 
     const firstResolveRespond = vi.fn();
     await resolveExecApproval({
@@ -2646,8 +3330,7 @@ describe("exec approval handlers", () => {
       context,
       params: { twoPhase: true, ask: "always" },
     });
-
-    const { id } = getRequestedExecApprovalPayload(broadcasts);
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -2664,6 +3347,78 @@ describe("exec approval handlers", () => {
       message:
         "allow-always is unavailable because the effective policy requires approval every time",
     });
+
+    const denyRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "deny",
+      respond: denyRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("rejects allow-always when the request marks it unavailable", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        unavailableDecisions: ["allow-always"],
+      },
+    });
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "allow-always",
+      respond: resolveRespond,
+      context,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      message:
+        "allow-always is unavailable because the effective policy requires approval every time",
+    });
+
+    const allowOnceRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "allow-once",
+      respond: allowOnceRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(allowOnceRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("keeps baseline decisions available when allow-always is unavailable", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        unavailableDecisions: ["allow-always"],
+      },
+    });
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    expect(request.allowedDecisions).toEqual(["allow-once", "deny"]);
 
     const denyRespond = vi.fn();
     await resolveExecApproval({
@@ -3020,9 +3775,7 @@ describe("exec approval handlers", () => {
       context,
       params: { id: "approval-123", host: "gateway" },
     });
-
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const id = (requested?.payload as { id?: string })?.id ?? "";
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
     expect(id).toBe("approval-123");
 
     const resolveRespond = vi.fn();
@@ -3138,26 +3891,12 @@ describe("exec approval handlers", () => {
     const manager = new ExecApprovalManager();
     const handlers = createExecApprovalHandlers(manager);
     const context = {
+      getRuntimeConfig: () => ({}),
       broadcast: (_eventValue: string, _payload: unknown) => {},
       hasExecApprovalClients: () => true,
     };
-    const respondOne = vi.fn();
-    const respondTwo = vi.fn();
-
-    const requestOne = requestExecApproval({
-      handlers,
-      respond: respondOne,
-      context,
-      params: { id: "approval-one", host: "gateway", timeoutMs: 60_000 },
-    });
-    const requestTwo = requestExecApproval({
-      handlers,
-      respond: respondTwo,
-      context,
-      params: { id: "approval-two", host: "gateway", timeoutMs: 60_000 },
-    });
-
-    await drainApprovalRequestTicks();
+    void manager.register(manager.create({ command: "echo one" }, 60_000, "approval-one"), 60_000);
+    void manager.register(manager.create({ command: "echo two" }, 60_000, "approval-two"), 60_000);
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -3173,21 +3912,6 @@ describe("exec approval handlers", () => {
     expect(manager.getSnapshot("approval-two")?.resolvedAtMs).toBeUndefined();
 
     expect(manager.expire("approval-two", "test-expire")).toBe(true);
-    await requestOne;
-    await requestTwo;
-
-    expect(lastMockCallArg(respondOne)).toBe(true);
-    expectRecordFields(lastMockCallArg(respondOne, 1), {
-      id: "approval-one",
-      decision: "allow-once",
-    });
-    expect(lastMockCallArg(respondOne, 2)).toBeUndefined();
-    expect(lastMockCallArg(respondTwo)).toBe(true);
-    expectRecordFields(lastMockCallArg(respondTwo, 1), {
-      id: "approval-two",
-      decision: null,
-    });
-    expect(lastMockCallArg(respondTwo, 2)).toBeUndefined();
   });
 
   it("forwards turn-source metadata to exec approval forwarding", async () => {
@@ -3253,7 +3977,10 @@ describe("exec approval handlers", () => {
         turnSourceThreadId: "thread-456",
       },
     });
-    await drainApprovalRequestTicks();
+    await waitForRequestedExecApprovalPayload(broadcasts);
+    await vi.waitFor(() => {
+      expect(respond.mock.calls.some((call) => call[1]?.status === "accepted")).toBe(true);
+    });
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -3415,7 +4142,9 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-ios-cleanup", host: "gateway" },
     });
-    await drainApprovalRequestTicks();
+    await vi.waitFor(() => {
+      expect(iosPushDelivery.handleRequested).toHaveBeenCalledTimes(1);
+    });
 
     await resolveExecApproval({
       handlers,
@@ -3523,9 +4252,9 @@ describe("exec approval handlers", () => {
       context,
       params: { timeoutMs: 60_000, id: "approval-forwarded", host: "gateway" },
     });
-    await drainApprovalRequestTicks();
-
-    expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(forwarder.handleRequested).toHaveBeenCalledTimes(1);
+    });
     expect(expireSpy).not.toHaveBeenCalled();
 
     await resolveExecApproval({

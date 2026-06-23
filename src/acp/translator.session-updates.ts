@@ -8,7 +8,7 @@ import type {
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 
 /** Session identity used when emitting and recording ACP translator updates. */
-export type AcpTranslatorSessionRef = {
+type AcpTranslatorSessionRef = {
   sessionId: string;
   sessionKey: string;
   ledgerSessionId?: string;

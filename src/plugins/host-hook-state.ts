@@ -1,9 +1,6 @@
 // Tracks host hook state and scheduled turn identifiers.
 import { randomUUID } from "node:crypto";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -83,17 +80,6 @@ function isExpired(entry: unknown, now: number) {
   return typeof entry.ttlMs === "number" && entry.ttlMs >= 0 && now - entry.createdAt > entry.ttlMs;
 }
 
-function findStoreKeysIgnoreCase(store: Record<string, unknown>, targetKey: string): string[] {
-  const lowered = normalizeLowercaseStringOrEmpty(targetKey);
-  const matches: string[] = [];
-  for (const key of Object.keys(store)) {
-    if (normalizeLowercaseStringOrEmpty(key) === lowered) {
-      matches.push(key);
-    }
-  }
-  return matches;
-}
-
 function findFreshestStoreMatch(
   store: Record<string, SessionEntry>,
   ...candidates: string[]
@@ -107,12 +93,6 @@ function findFreshestStoreMatch(
     const exact = store[trimmed];
     if (exact && (!freshest || (exact.updatedAt ?? 0) >= (freshest.entry.updatedAt ?? 0))) {
       freshest = { entry: exact, key: trimmed };
-    }
-    for (const legacyKey of findStoreKeysIgnoreCase(store, trimmed)) {
-      const entry = store[legacyKey];
-      if (entry && (!freshest || (entry.updatedAt ?? 0) >= (freshest.entry.updatedAt ?? 0))) {
-        freshest = { entry, key: legacyKey };
-      }
     }
   }
   return freshest;
@@ -396,26 +376,6 @@ export async function drainPluginNextTurnInjectionContext(params: {
     queuedInjections,
     ...buildPluginAgentTurnPrepareContext({ queuedInjections }),
   };
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Session-extension JSON reads are caller-typed by namespace.
-export function getPluginSessionExtensionSync<T extends PluginJsonValue = PluginJsonValue>(params: {
-  cfg: OpenClawConfig;
-  pluginId: string;
-  sessionKey?: string;
-  namespace: string;
-}): T | undefined {
-  const pluginId = params.pluginId.trim();
-  const sessionKey = normalizeOptionalString(params.sessionKey);
-  const namespace = normalizeNamespace(params.namespace);
-  if (!pluginId || !sessionKey || !namespace) {
-    return undefined;
-  }
-  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
-  const value = loaded.entry?.pluginExtensions?.[pluginId]?.[namespace] as
-    | PluginJsonValue
-    | undefined;
-  return value as T | undefined;
 }
 
 export function getPluginSessionExtensionStateSync(params: {

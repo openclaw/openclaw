@@ -25,6 +25,7 @@ import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-b
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   type ChatRunEntry,
+  type ChatRunRegistration,
   createChatRunState,
   createToolEventRecipientRegistry,
 } from "./server-chat-state.js";
@@ -116,7 +117,7 @@ export async function createGatewayRuntimeState(params: {
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
-  addChatRun: (sessionId: string, entry: ChatRunEntry) => void;
+  addChatRun: (sessionId: string, entry: ChatRunRegistration) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,

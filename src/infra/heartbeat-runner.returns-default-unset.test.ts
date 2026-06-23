@@ -14,7 +14,11 @@ import {
 } from "../config/sessions.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { buildAgentPeerSessionKey } from "../routing/session-key.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createDirectOutboundTestAdapter,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import {
   type HeartbeatDeps,
@@ -292,9 +296,7 @@ beforeAll(async () => {
 
   const discordPlugin = createOutboundTestPlugin({
     id: "discord",
-    outbound: {
-      deliveryMode: "direct",
-    },
+    outbound: createDirectOutboundTestAdapter({ channel: "discord" }),
   });
 
   testRegistry = createTestRegistry([
@@ -1285,6 +1287,15 @@ describe("runHeartbeatOnce", () => {
         expectedTexts: ["Thinking\n\n_Because it helps_"],
       },
       {
+        // Reasoning-only result: the selector returns no main reply, but the
+        // documented includeReasoning opt-in must still deliver the Thinking
+        // message instead of going silent (#92242 follow-up / review finding).
+        name: "raw flagged reasoning only (no main reply)",
+        caseDir: "hb-reasoning-only",
+        replies: [{ text: "Because it helps", isReasoning: true }],
+        expectedTexts: ["Thinking\n\n_Because it helps_"],
+      },
+      {
         name: "visible final that starts with thinking prose",
         caseDir: "hb-thinking-visible-final",
         replies: [{ text: "Thinking... all clear" }],
@@ -1368,6 +1379,67 @@ describe("runHeartbeatOnce", () => {
       }
     },
   );
+
+  it("does not surface a trailing legacy reasoning payload as the reply when includeReasoning is unset", async () => {
+    // With includeReasoning unset, a legacy "Reasoning:"-prefixed payload after
+    // the final answer must not become the visible heartbeat reply, and no
+    // separate Thinking message is sent. (#92242 review follow-up)
+    const replySpy = vi.fn();
+    try {
+      const tmpDir = await createCaseDir("hb-legacy-reasoning-unset");
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = resolveMainSessionKey(cfg);
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastProvider: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockResolvedValue([
+        { text: "All clear" },
+        { text: "Reasoning: because nothing changed" },
+      ]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+
+      expect(sendWhatsApp).toHaveBeenCalledTimes(1);
+      expectWhatsAppSendCall(sendWhatsApp, 0, {
+        to: "120363401234567890@g.us",
+        text: "All clear",
+      });
+    } finally {
+      replySpy.mockReset();
+    }
+  });
 
   it("loads the default agent session from templated stores", async () => {
     const tmpDir = await createCaseDir("openclaw-hb");

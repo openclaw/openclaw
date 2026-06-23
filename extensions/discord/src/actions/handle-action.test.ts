@@ -614,4 +614,59 @@ describe("handleDiscordMessageAction", () => {
 
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
+
+  it("does not add session channel to search when explicit channelIds are provided", async () => {
+    handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
+    await handleDiscordMessageAction({
+      action: "search",
+      params: {
+        query: "test query",
+        channelIds: ["ch-1", "ch-2"],
+        guildId: "g1",
+      },
+      cfg: discordConfig(),
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "session-ch",
+      },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      action: "searchMessages",
+      content: "test query",
+      guildId: "g1",
+      channelIds: ["ch-1", "ch-2"],
+    });
+    // Session channel must NOT appear as channelId when explicit channelIds exist.
+    expect(payload.channelId).toBeUndefined();
+  });
+
+  it("does not inject session channel when guildId is explicit and no channel filters are provided", async () => {
+    handleDiscordActionMock.mockResolvedValueOnce({ content: [], details: { ok: true } });
+    await handleDiscordMessageAction({
+      action: "search",
+      params: {
+        query: "guild-wide query",
+        guildId: "g1",
+      },
+      cfg: discordConfig(),
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "session-ch",
+      },
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+    const payload = handleDiscordActionMock.mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      action: "searchMessages",
+      content: "guild-wide query",
+      guildId: "g1",
+    });
+    // Guild-wide search must NOT be narrowed to the session channel.
+    expect(payload.channelId).toBeUndefined();
+    expect(payload.channelIds).toBeUndefined();
+  });
 });

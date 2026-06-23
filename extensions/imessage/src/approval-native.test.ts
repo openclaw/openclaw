@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   imessageApprovalCapability,
-  imessageNativeApprovalAdapter,
   shouldSuppressLocalIMessageExecApprovalPrompt,
 } from "./approval-native.js";
 
@@ -112,7 +111,7 @@ describe("imessage approval capability", () => {
     const pluginRequest = buildPluginRequest("+15551230000");
 
     expect(
-      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      imessageApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "default",
         action: "approve",
@@ -255,7 +254,7 @@ describe("imessage approval capability", () => {
     const request = buildExecRequest("+15551230000");
 
     expect(
-      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      imessageApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "default",
         action: "approve",
@@ -398,7 +397,7 @@ describe("imessage approval capability", () => {
     });
 
     expect(
-      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      imessageApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "default",
         action: "approve",
@@ -440,7 +439,7 @@ describe("imessage approval capability", () => {
     });
 
     expect(
-      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      imessageApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "default",
         action: "approve",
@@ -448,7 +447,7 @@ describe("imessage approval capability", () => {
       }),
     ).toEqual({ kind: "disabled" });
     expect(
-      imessageNativeApprovalAdapter.auth?.getActionAvailabilityState?.({
+      imessageApprovalCapability?.getActionAvailabilityState?.({
         cfg,
         accountId: "work",
         action: "approve",

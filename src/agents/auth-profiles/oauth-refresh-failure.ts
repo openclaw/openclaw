@@ -14,7 +14,7 @@ export type OAuthRefreshFailureReason =
   | "invalid_refresh_token"
   | "revoked";
 
-export type OAuthRefreshFailure = {
+type OAuthRefreshFailure = {
   provider: string | null;
   reason: OAuthRefreshFailureReason | null;
 };

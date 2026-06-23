@@ -965,6 +965,47 @@ describe("channel turn kernel", () => {
     ]);
   });
 
+  it("runs afterRecord only after session recording succeeds and before dispatch", async () => {
+    const events: string[] = [];
+    await runPreparedChannelTurn({
+      channel: "test",
+      routeSessionKey: "agent:main:test:peer",
+      storePath: "/tmp/sessions.json",
+      ctxPayload: createCtx(),
+      recordInboundSession: createRecordInboundSession(events),
+      afterRecord: vi.fn(async () => {
+        events.push("afterRecord");
+      }),
+      runDispatch: vi.fn(async () => {
+        events.push("dispatch");
+        return { visibleReplySent: true };
+      }),
+    });
+
+    expect(events).toEqual(["record", "afterRecord", "dispatch"]);
+  });
+
+  it("does not run afterRecord when session recording fails", async () => {
+    const recordError = new Error("session store failed");
+    const afterRecord = vi.fn();
+
+    await expect(
+      runPreparedChannelTurn({
+        channel: "test",
+        routeSessionKey: "agent:main:test:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx(),
+        recordInboundSession: vi.fn(async () => {
+          throw recordError;
+        }) as unknown as RecordInboundSession,
+        afterRecord,
+        runDispatch: vi.fn(),
+      }),
+    ).rejects.toThrow(recordError);
+
+    expect(afterRecord).not.toHaveBeenCalled();
+  });
+
   it("normalizes visible dispatch checks", () => {
     expect(hasVisibleChannelTurnDispatch(undefined)).toBe(false);
     expect(

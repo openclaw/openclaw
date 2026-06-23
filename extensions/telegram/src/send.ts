@@ -179,14 +179,40 @@ function resolveTelegramMessageIdOrThrow(
   throw new Error(`Telegram ${context} returned no message_id`);
 }
 
+// Pull a chunk end back off a UTF-16 surrogate pair so neither chunk carries a
+// lone surrogate that re-encodes to U+FFFD. Mirrors the guard in
+// bot/native-quote.ts `truncateUtf16Safe`; shared by both plain-text splitters.
+//
+// `start` is the beginning of the current chunk — the return value is
+// guaranteed to be > start, so callers that loop on `start = end` always
+// advance. When clamping would land on `start` (i.e. the surrogate pair begins
+// exactly at `start`), we emit both surrogates together (end = start + 2)
+// rather than emitting a lone surrogate or stalling.
+function surrogateSafeChunkEnd(text: string, end: number, start: number): number {
+  const high = text.charCodeAt(end - 1);
+  const low = text.charCodeAt(end);
+  const splitsPair = end > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+  if (!splitsPair) {
+    return end;
+  }
+  const clamped = end - 1;
+  // Guard: never return an index that would stall the loop. If clamped equals
+  // start the surrogate pair's high unit is the very first char of this chunk;
+  // emit both surrogates together instead of splitting or stalling.
+  return clamped > start ? clamped : start + 2;
+}
+
 function splitTelegramPlainTextChunks(text: string, limit: number): string[] {
   if (!text) {
     return [];
   }
   const normalizedLimit = Math.max(1, Math.floor(limit));
   const chunks: string[] = [];
-  for (let start = 0; start < text.length; start += normalizedLimit) {
-    chunks.push(text.slice(start, start + normalizedLimit));
+  let start = 0;
+  while (start < text.length) {
+    const end = surrogateSafeChunkEnd(text, start + normalizedLimit, start);
+    chunks.push(text.slice(start, end));
+    start = end;
   }
   return chunks;
 }
@@ -209,10 +235,17 @@ function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit:
       remainingChunks === 1
         ? remainingChars
         : Math.min(normalizedLimit, Math.ceil(remainingChars / remainingChunks));
-    chunks.push(text.slice(offset, offset + nextChunkLength));
-    offset += nextChunkLength;
+    const end = surrogateSafeChunkEnd(text, offset + nextChunkLength, offset);
+    chunks.push(text.slice(offset, end));
+    offset = end;
   }
   return chunks;
+}
+
+// Test-only handle: the plain-text splitter is internal, but its surrogate-safe
+// chunk boundary needs direct behavior coverage.
+export function splitTelegramPlainTextChunksForTests(text: string, limit: number): string[] {
+  return splitTelegramPlainTextChunks(text, limit);
 }
 
 function logTelegramOutboundSendOk(params: TelegramOutboundSuccessLogParams): void {

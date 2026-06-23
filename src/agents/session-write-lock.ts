@@ -46,9 +46,9 @@ type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
 const CLEANUP_STATE_KEY = Symbol.for("openclaw.sessionWriteLockCleanupState");
 const WATCHDOG_STATE_KEY = Symbol.for("openclaw.sessionWriteLockWatchdogState");
 
-export const DEFAULT_SESSION_WRITE_LOCK_STALE_MS = 30 * 60 * 1000;
-export const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
-export const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
+const DEFAULT_SESSION_WRITE_LOCK_STALE_MS = 30 * 60 * 1000;
+const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
+const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
 const REPORT_ONLY_STALE_LOCK_REASONS = new Set(["too-old", "hold-exceeded"]);
@@ -189,7 +189,7 @@ export function resolveSessionWriteLockStaleMs(
   });
 }
 
-export function resolveSessionWriteLockMaxHoldMs(
+function resolveSessionWriteLockMaxHoldMs(
   config?: SessionWriteLockAcquireTimeoutConfig,
   params: { env?: NodeJS.ProcessEnv; fallback?: number } = {},
 ): number {

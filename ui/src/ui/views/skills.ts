@@ -257,7 +257,7 @@ export function renderSkills(props: SkillsProps) {
         ${agents.length > 0
           ? html`
               <label class="field" style="min-width: 180px;">
-                <span>Agent</span>
+                <span>${t("common.filters.agent")}</span>
                 <select
                   name="skills-agent"
                   .value=${selectedAgentId}

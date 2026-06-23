@@ -29,6 +29,7 @@ const resolveEmbeddedAgentStreamFnMock = vi.fn();
 const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
+const ensureSelectedAgentHarnessPluginMock = vi.fn();
 
 vi.mock("../llm/stream.js", async () => {
   const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -119,7 +120,7 @@ vi.mock("./model-runtime-aliases.js", () => ({
         }
       }
     }
-    return runtime || undefined;
+    return runtime === "claude-cli" ? runtime : undefined;
   },
 }));
 
@@ -129,6 +130,11 @@ vi.mock("./cli-runner/prepare.runtime.js", () => ({
 
 vi.mock("./cli-runner/execute.runtime.js", () => ({
   executePreparedCliRun: (...args: unknown[]) => executePreparedCliRunMock(...args),
+}));
+
+vi.mock("./harness/runtime-plugin.js", () => ({
+  ensureSelectedAgentHarnessPlugin: (...args: unknown[]) =>
+    ensureSelectedAgentHarnessPluginMock(...args),
 }));
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
@@ -455,6 +461,7 @@ describe("runBtwSideQuestion", () => {
     prepareCliRunContextMock.mockReset();
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
+    ensureSelectedAgentHarnessPluginMock.mockReset();
     clearAgentHarnesses();
 
     readFileMock.mockResolvedValue("mock transcript");
@@ -676,6 +683,65 @@ describe("runBtwSideQuestion", () => {
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
+  it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: (ctx) =>
+        ctx.provider === "openai"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "openai only" },
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:user@example.test");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai-codex:user@example.test"],
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+        },
+      } as never,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    const sideQuestionParams = mockArg(codexSideQuestionMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+    };
+    expect(sideQuestionParams.provider).toBe("openai");
+    expect(sideQuestionParams.authProfileId).toBe("openai-codex:user@example.test");
+    const authArgs = mockArg(resolveSessionAuthProfileOverrideMock, 0, 0) as {
+      provider?: string;
+      acceptedProviderIds?: string[];
+    };
+    expect(authArgs.provider).toBe("openai");
+    expect(authArgs.acceptedProviderIds).toEqual(["openai"]);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
   it("prepares deny-all sender policy before calling a plugin side-question hook", async () => {
     const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Policy answer." });
     registerAgentHarness({
@@ -690,7 +756,6 @@ describe("runBtwSideQuestion", () => {
       id: "gpt-5.5",
       api: "openai-responses",
     });
-
     await runSideQuestion({
       cfg: {
         channels: {
@@ -775,6 +840,55 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Direct fallback answer." });
     expect(streamSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads a cold Copilot harness before selecting the /btw provider fallback", async () => {
+    let loaded = false;
+    ensureSelectedAgentHarnessPluginMock.mockImplementation(async () => {
+      if (loaded) {
+        return;
+      }
+      loaded = true;
+      registerAgentHarness({
+        id: "copilot",
+        label: "Copilot test harness",
+        supports: () => ({ supported: true, priority: 100 }),
+        runAttempt: vi.fn(),
+      });
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "github-copilot",
+      id: "gpt-4o",
+      api: "openai-completions",
+    });
+    mockDoneAnswer("Copilot fallback answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "github-copilot/gpt-4o": { agentRuntime: { id: "copilot" } },
+            },
+          },
+        },
+      } as never,
+      provider: "github-copilot",
+      model: "gpt-4o",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Copilot fallback answer." });
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledOnce();
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith({
+      provider: "github-copilot",
+      modelId: "gpt-4o",
+      config: expect.any(Object),
+      agentId: "main",
+      sessionKey: DEFAULT_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(streamSimpleMock).toHaveBeenCalledOnce();
   });
 
   it("runs CLI-runtime alias BTW as an ephemeral CLI side question", async () => {
@@ -997,6 +1111,59 @@ describe("runBtwSideQuestion", () => {
     expect(prepareParams.provider).toBe("claude-cli");
     expect(prepareParams.executionMode).toBe("side-question");
     expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(getApiKeyForModelMock).not.toHaveBeenCalled();
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves auto-selected session CLI BTW routing before resolving runtime auth", async () => {
+    const cleanup = vi.fn(async () => undefined);
+    const sessionEntry = createSessionEntry({
+      authProfileOverride: "anthropic:auto-cli",
+      authProfileOverrideSource: "auto",
+    });
+    const sessionStore = { [DEFAULT_SESSION_KEY]: sessionEntry };
+    prepareCliRunContextMock.mockResolvedValueOnce({
+      prepared: true,
+      preparedBackend: { cleanup },
+    });
+    executePreparedCliRunMock.mockResolvedValueOnce({ text: "Session Claude CLI answer." });
+    resolveSessionAuthProfileOverrideMock.mockImplementation(
+      async (params: { sessionEntry?: SessionEntry }) => {
+        if (params.sessionEntry) {
+          params.sessionEntry.authProfileOverride = "anthropic:api";
+          params.sessionEntry.authProfileOverrideSource = "auto";
+        }
+        return "anthropic:api";
+      },
+    );
+    mockDoneAnswer("Generic fallback answer.");
+
+    const result = await runSideQuestion({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:api"] },
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+            "anthropic:auto-cli": { provider: "claude-cli", mode: "oauth" },
+          },
+        },
+      } as never,
+      sessionEntry,
+      sessionStore,
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Session Claude CLI answer." });
+    const prepareParams = mockArg(prepareCliRunContextMock, 0, 0) as {
+      provider?: string;
+      authProfileId?: string;
+      executionMode?: string;
+    };
+    expect(prepareParams.provider).toBe("claude-cli");
+    expect(prepareParams.executionMode).toBe("side-question");
+    expect(prepareParams.authProfileId).toBe("anthropic:auto-cli");
+    expect(resolveSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(getApiKeyForModelMock).not.toHaveBeenCalled();
     expect(streamSimpleMock).not.toHaveBeenCalled();
@@ -1480,6 +1647,144 @@ describe("runBtwSideQuestion", () => {
     expect(diagDebugMock).toHaveBeenCalledWith(
       "btw snapshot leaf unavailable: sessionId=session-1 leaf=assistant-gone",
     );
+  });
+
+  it("honors an explicitly empty active run snapshot", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    mockTranscriptEntries([userEntry, assistantEntry]);
+    getActiveEmbeddedRunSnapshotMock.mockReturnValue({
+      transcriptLeafId: null,
+    });
+
+    await expect(runMathSideQuestion()).rejects.toThrow("No active session context.");
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([]);
+  });
+
+  it("uses the branch selected by a terminal transcript leaf control", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+    };
+    mockTranscriptEntries([userEntry, assistantEntry, sideEntry, leafEntry]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("keeps parentless history addressed by a terminal leaf control", async () => {
+    const userEntry = {
+      type: "message",
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    };
+    const assistantEntry = {
+      type: "message",
+      id: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    };
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+    };
+    mockTranscriptEntries([userEntry, assistantEntry, sideEntry, leafEntry]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledWith([
+      { ...userEntry, parentId: null },
+      { ...assistantEntry, parentId: "user-seed" },
+    ]);
+    expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("keeps visible history after continuing from a disjoint opaque append cursor", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const sideEntry = createTranscriptEntry({
+      id: "side-delivery",
+      parentId: "assistant-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "side delivery" }]),
+    });
+    const metadataEntry = {
+      type: "metadata",
+      id: "plugin-metadata",
+      parentId: "side-delivery",
+    };
+    const leafEntry = {
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "side-delivery",
+      targetId: "assistant-seed",
+      appendParentId: "plugin-metadata",
+    };
+    const continuationEntry = createTranscriptEntry({
+      id: "assistant-continuation",
+      parentId: "plugin-metadata",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "continued answer" }]),
+    });
+    mockTranscriptEntries([
+      userEntry,
+      assistantEntry,
+      sideEntry,
+      metadataEntry,
+      leafEntry,
+      continuationEntry,
+    ]);
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion();
+
+    expect(buildSessionContextMock).toHaveBeenCalledWith([
+      userEntry,
+      assistantEntry,
+      { ...continuationEntry, parentId: "assistant-seed" },
+    ]);
+    expect(result).toEqual({ text: MATH_ANSWER });
   });
 
   it("returns the BTW answer without appending transcript custom entries", async () => {

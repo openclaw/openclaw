@@ -11,7 +11,6 @@ import {
 export {
   replaceDirectoryAtomic,
   replaceFileAtomicSync,
-  type ReplaceDirectoryAtomicOptions,
   type ReplaceFileAtomicFileSystem,
   type ReplaceFileAtomicOptions,
   type ReplaceFileAtomicResult,
