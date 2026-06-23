@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/local-realtime-voice",
+  "version": "2026.6.9",
+  "private": true,
+  "description": "OpenClaw local realtime voice and dictation provider",
+  "type": "module",
+  "main": "./index.js",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.js"]
+  }
+}

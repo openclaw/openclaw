@@ -1,0 +1,62 @@
+{
+  "id": "local-realtime-voice",
+  "name": "Local Realtime Voice",
+  "description": "Local realtime voice assistant and dictation using Whisper STT, Kokoro TTS, and Ollama chat",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
+  "contracts": {
+    "realtimeVoiceProviders": ["local"],
+    "realtimeTranscriptionProviders": ["local"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "whisperBaseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8000"
+      },
+      "whisperModel": {
+        "type": "string",
+        "default": ""
+      },
+      "kokoroBaseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8880"
+      },
+      "kokoroVoice": {
+        "type": "string",
+        "default": "af"
+      },
+      "ollamaBaseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:11434"
+      },
+      "chatModel": {
+        "type": "string"
+      },
+      "vadThreshold": {
+        "type": "number",
+        "default": 100
+      },
+      "silenceMs": {
+        "type": "number",
+        "default": 1200
+      },
+      "maxTurnMs": {
+        "type": "number",
+        "default": 15000
+      },
+      "partialIntervalMs": {
+        "type": "number",
+        "default": 2000
+      },
+      "audioChunkMs": {
+        "type": "number",
+        "default": 50
+      }
+    }
+  }
+}
