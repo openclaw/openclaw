@@ -12,6 +12,7 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
@@ -714,14 +715,46 @@ function loadPluginMetadataSnapshotImpl(params: LoadPluginMetadataSnapshotParams
           diagnostics: [...index.diagnostics],
           installRecords: index.installRecords,
         })
-      : loadPluginManifestRegistryForInstalledIndex({
-          index,
-          config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
-          ...(pluginIds !== undefined ? { pluginIds } : {}),
-          includeDisabled: true,
-        });
+      : (() => {
+          // Load plugins from the persisted installed-plugin index (fast path).
+          // Then discover source-root plugins (extensions/, etc.) that were
+          // added manually after the index was last written — the index-only
+          // path would miss those. Merge both source lists so the Gateway's
+          // slot validation finds all available plugins regardless of how they
+          // were installed. This is a one-time startup scan; subsequent calls
+          // hit the memoized snapshot.
+          const indexed = loadPluginManifestRegistryForInstalledIndex({
+            index,
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+            ...(pluginIds !== undefined ? { pluginIds } : {}),
+            includeDisabled: true,
+          });
+          const indexedIds = new Set(indexed.plugins.map((p) => p.id));
+          const sourceRootDiscovery = discoverOpenClawPlugins({
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+            installRecords: index.installRecords,
+          });
+          const extraPlugins: PluginManifestRecord[] = [];
+          for (const candidate of sourceRootDiscovery.candidates) {
+            if (!indexedIds.has(candidate.idHint)) {
+              extraPlugins.push(
+                ...loadPluginManifestRegistry({
+                  config: params.config,
+                  workspaceDir: params.workspaceDir,
+                  env: params.env,
+                  candidates: [candidate],
+                }).plugins,
+              );
+            }
+          }
+          return {
+            plugins: [...indexed.plugins, ...extraPlugins],
+            diagnostics: [...indexed.diagnostics, ...sourceRootDiscovery.diagnostics],
+          };
+        })();
   const manifestRegistryMs = performance.now() - manifestStartedAt;
   const normalizePluginId = createPluginRegistryIdNormalizer(index, { manifestRegistry });
   const byPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
