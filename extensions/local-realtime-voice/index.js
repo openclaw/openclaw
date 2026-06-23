@@ -282,7 +282,11 @@ class LocalRealtimeVoiceBridge {
     this.responsePending = false;
     this.silenceTimer = null;
     this.turnTimer = null;
-    this.messages = [{ role: "system", content: config.instructions ?? "You are a helpful voice assistant. Keep replies short and natural." }];
+    this.isSpeaking = false;
+    this.speakingCooldownTimer = null;
+    this.inCooldown = false;
+    this.totalAudioBytesSent = 0;
+    this.messages = [{ role: "system", content: config.instructions ?? "You are a helpful voice assistant. Keep replies short and natural. Answer directly; do not say you will check, search, or look something up unless you actually have a tool to do so." }];
     this.chatModel = resolveOllamaModel(config.cfg, this.providerConfig);
     this.ollamaBaseUrl = resolveOllamaBaseUrl(config.cfg, this.providerConfig);
     log("voice bridge created", this.audioFormat, "model", this.chatModel);
@@ -290,12 +294,19 @@ class LocalRealtimeVoiceBridge {
 
   async connect() {
     this.connected = true;
+    this.isSpeaking = false;
+    this.inCooldown = false;
+    this.totalAudioBytesSent = 0;
+    this.clearTimers();
     log("voice connect");
     this.config.onReady?.();
   }
 
   close() {
     this.connected = false;
+    this.isSpeaking = false;
+    this.inCooldown = false;
+    this.totalAudioBytesSent = 0;
     this.clearTimers();
     log("voice close");
     this.config.onClose?.("completed");
@@ -323,6 +334,7 @@ class LocalRealtimeVoiceBridge {
   clearTimers() {
     if (this.silenceTimer) { clearTimeout(this.silenceTimer); this.silenceTimer = null; }
     if (this.turnTimer) { clearTimeout(this.turnTimer); this.turnTimer = null; }
+    if (this.speakingCooldownTimer) { clearTimeout(this.speakingCooldownTimer); this.speakingCooldownTimer = null; }
   }
 
   resetTurn() {
@@ -332,8 +344,22 @@ class LocalRealtimeVoiceBridge {
     this.turnStartAt = 0;
   }
 
+  beginCooldown(extraMs = 200) {
+    this.inCooldown = true;
+    if (this.speakingCooldownTimer) { clearTimeout(this.speakingCooldownTimer); this.speakingCooldownTimer = null; }
+    const bytesPerChannel = this.audioFormat.encoding === "g711_ulaw" ? 1 : 2;
+    const bytesPerMs = ((this.audioFormat.sampleRateHz || 24000) * bytesPerChannel) / 1000;
+    const playbackMs = this.totalAudioBytesSent / bytesPerMs;
+    const cooldownMs = Math.max(600, Math.round(playbackMs + extraMs));
+    log("voice cooldown", cooldownMs, "ms");
+    this.speakingCooldownTimer = setTimeout(() => {
+      this.inCooldown = false;
+      this.speakingCooldownTimer = null;
+    }, cooldownMs);
+  }
+
   sendAudio(audio) {
-    if (!this.connected) return;
+    if (!this.connected || this.isSpeaking || this.inCooldown) return;
     const buf = Buffer.from(audio);
     let pcm;
     if (this.audioFormat.encoding === "g711_ulaw") {
@@ -447,11 +473,15 @@ class LocalRealtimeVoiceBridge {
           log("voice audio out bytes", audio.length);
           const bytesPerMs = (this.audioFormat.sampleRateHz || 24000) * 2 / 1000;
           const chunkBytes = Math.max(2400, Math.round((this.providerConfig.audioChunkMs ?? 50) * bytesPerMs));
+          this.isSpeaking = true;
+          this.totalAudioBytesSent += audio.length;
           for (let offset = 0; offset < audio.length; offset += chunkBytes) {
             this.config.onAudio(audio.slice(offset, offset + chunkBytes));
           }
+          this.isSpeaking = false;
           this.config.onEvent?.({ type: "response.audio.delta", direction: "server" });
         } catch (e) {
+          this.isSpeaking = false;
           log("voice speak chunk error", e);
           this.config.onError?.(e instanceof Error ? e : new Error(String(e)));
         }
@@ -478,6 +508,7 @@ class LocalRealtimeVoiceBridge {
       }
 
       await flushSentence();
+      this.beginCooldown();
 
       this.messages.push({ role: "assistant", content: fullText });
       this.config.onTranscript?.("assistant", fullText, true);
@@ -488,6 +519,7 @@ class LocalRealtimeVoiceBridge {
       this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
     } finally {
       this.responsePending = false;
+      this.totalAudioBytesSent = 0;
     }
   }
 
