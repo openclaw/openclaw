@@ -83,11 +83,11 @@ rolls the session, queued system-event notices for the old session are
 discarded so stale background updates are not prepended to the first prompt in
 the new session.
 
-Thread-scoped sessions default to `idle` reset without an inactivity expiry
-when no `session.reset`, `session.resetByType`, or legacy
-`session.idleMinutes` is configured, so topic/thread continuity is preserved
-across the daily boundary. Configure `session.resetByType.thread` to make
-thread sessions rotate on a timer.
+Thread-scoped sessions use the same daily reset default as other sessions when
+no `session.reset`, `session.resetByType`, or legacy `session.idleMinutes` is
+configured. Configure `session.resetByType.thread` with `mode: "idle"` and
+`idleMinutes: 0` when topic/thread continuity should be preserved across the
+daily boundary.
 
 Sessions with an active provider-owned CLI session are not cut by the implicit
 daily default. Use `/reset` or configure `session.reset` explicitly when those

@@ -22,7 +22,6 @@ export type SessionFreshness = {
 
 export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
 export const DEFAULT_RESET_AT_HOUR = 4;
-export const DEFAULT_THREAD_RESET_MODE: SessionResetMode = "idle";
 
 /** Returns the most recent daily reset boundary for the supplied wall-clock time. */
 export function resolveDailyResetAtMs(now: number, atHour: number): number {
@@ -55,14 +54,10 @@ export function resolveSessionResetPolicy(params: {
   const legacyIdleMinutes = params.resetOverride ? undefined : sessionCfg?.idleMinutes;
   const configured = Boolean(baseReset || typeReset || legacyIdleMinutes != null);
   // Legacy `idleMinutes` implied idle reset only when no modern reset block was configured.
-  const defaultMode =
-    params.resetType === "thread" && !hasExplicitReset && legacyIdleMinutes == null
-      ? DEFAULT_THREAD_RESET_MODE
-      : DEFAULT_RESET_MODE;
   const mode =
     typeReset?.mode ??
     baseReset?.mode ??
-    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : defaultMode);
+    (!hasExplicitReset && legacyIdleMinutes != null ? "idle" : DEFAULT_RESET_MODE);
   const atHour = normalizeResetAtHour(
     typeReset?.atHour ?? baseReset?.atHour ?? DEFAULT_RESET_AT_HOUR,
   );
