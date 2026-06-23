@@ -2,9 +2,10 @@
 # Railway entrypoint for the OpenClaw gateway.
 #
 # 1) Writes the PaaS gateway config: Control UI host-header fallback + device-auth
-#    off (needed behind Railway's proxy) AND enables the bundled admin-http-rpc
-#    plugin so the Hypertransient MCP server can reach the gateway control plane
-#    at POST /api/v1/admin/rpc.
+#    off (needed behind Railway's proxy); enables the bundled admin-http-rpc
+#    plugin so the Hypertransient MCP server can reach POST /api/v1/admin/rpc; and
+#    sets the default agent model to Claude (Opus 4.8, Sonnet fallback, high
+#    thinking) so it uses ANTHROPIC_API_KEY instead of the v2026.6.9 openai default.
 # 2) Railway mounts the persistent volume ROOT-owned at /home/node/.openclaw, but
 #    the gateway runs as `node`; chown it, then drop to node with HOME and
 #    OPENCLAW_STATE_DIR pinned to the volume (so state lands there, not /root).
@@ -18,7 +19,7 @@ GATEWAY="node --max-old-space-size=4096 openclaw.mjs gateway --bind lan --port $
 write_config() {
   mkdir -p "$(dirname "$CONFIG_PATH")" 2>/dev/null || true
   cat > "$CONFIG_PATH" <<'JSON'
-{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"plugins":{"entries":{"admin-http-rpc":{"enabled":true}}}}
+{"gateway":{"controlUi":{"dangerouslyAllowHostHeaderOriginFallback":true,"dangerouslyDisableDeviceAuth":true}},"plugins":{"entries":{"admin-http-rpc":{"enabled":true}}},"agents":{"defaults":{"model":{"primary":"anthropic/claude-opus-4-8","fallback":["anthropic/claude-sonnet-4-6"]},"thinkingDefault":"high"}}}
 JSON
 }
 
