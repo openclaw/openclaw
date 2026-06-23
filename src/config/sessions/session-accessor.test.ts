@@ -23,10 +23,12 @@ import {
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  resolveSessionEntryAccessTarget,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
   trimSessionTranscriptForManualCompact,
+  updateResolvedSessionEntry,
   updateSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.js";
@@ -446,6 +448,88 @@ describe("session accessor file-backed seam", () => {
         sessionId: "legacy-session",
       }),
     });
+  });
+
+  it("updates the freshest matching session entry across discovered agent stores", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const cfg = {
+      session: {
+        mainKey: "main",
+        store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+      agents: { list: [{ id: "retired-agent", default: true }] },
+    } satisfies OpenClawConfig;
+    const configuredStorePath = path.join(
+      stateDir,
+      "agents",
+      "retired-agent",
+      "sessions",
+      "sessions.json",
+    );
+    const discoveredStorePath = path.join(
+      stateDir,
+      "agents",
+      "Retired Agent",
+      "sessions",
+      "sessions.json",
+    );
+    fs.mkdirSync(path.dirname(configuredStorePath), { recursive: true });
+    fs.mkdirSync(path.dirname(discoveredStorePath), { recursive: true });
+    fs.writeFileSync(
+      configuredStorePath,
+      JSON.stringify({
+        "agent:retired-agent:main": { sessionId: "configured", updatedAt: 10 },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      discoveredStorePath,
+      JSON.stringify({
+        "agent:retired-agent:main": { sessionId: "discovered", updatedAt: 20 },
+      }),
+      "utf8",
+    );
+
+    const resolved = resolveSessionEntryAccessTarget({
+      cfg,
+      env,
+      sessionKey: "agent:retired-agent:main",
+    });
+
+    expect(resolved.entry?.sessionId).toBe("discovered");
+
+    const updated = await updateResolvedSessionEntry(
+      {
+        cfg,
+        env,
+        sessionKey: "agent:retired-agent:main",
+      },
+      (entry, context) => {
+        expect(context.canonicalKey).toBe("agent:retired-agent:main");
+        expect(context.storeKey).toBe("agent:retired-agent:main");
+        entry.model = "gpt-5.5";
+        entry.updatedAt = Date.now();
+        return entry.sessionId;
+      },
+    );
+
+    expect(updated).toMatchObject({
+      found: true,
+      canonicalKey: "agent:retired-agent:main",
+      result: "discovered",
+    });
+    expect(loadSessionStore(configuredStorePath)["agent:retired-agent:main"]).toMatchObject({
+      sessionId: "configured",
+      updatedAt: 10,
+    });
+    expect(Object.values(loadSessionStore(discoveredStorePath))).toContainEqual(
+      expect.objectContaining({
+        model: "gpt-5.5",
+        sessionId: "discovered",
+        updatedAt: expect.any(Number),
+      }),
+    );
   });
 
   it("applies restart recovery replacements without exposing mutable store rows", async () => {

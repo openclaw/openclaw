@@ -59,6 +59,7 @@ describe("session accessor boundary guard", () => {
         "src/infra/outbound/message-action-tts.ts",
         "src/agents/tools/embedded-gateway-stub.ts",
         "src/agents/tools/sessions-list-tool.ts",
+        "src/plugins/host-hook-state.ts",
         "src/status/status-message.ts",
         "src/tui/embedded-backend.ts",
       ]),
@@ -105,6 +106,7 @@ describe("session accessor boundary guard", () => {
         "src/commands/tasks.ts",
         "src/config/sessions/cleanup-service.ts",
         "src/plugins/host-hook-cleanup.ts",
+        "src/plugins/host-hook-state.ts",
         "src/tui/embedded-backend.ts",
       ]),
     );

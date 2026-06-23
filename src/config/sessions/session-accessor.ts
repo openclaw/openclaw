@@ -6,6 +6,10 @@ import {
   acquireSessionWriteLock,
   resolveSessionWriteLockOptions,
 } from "../../agents/session-write-lock.js";
+import {
+  resolveSessionStoreAgentId,
+  resolveSessionStoreKey,
+} from "../../gateway/session-store-key.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -18,6 +22,7 @@ import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
+import { resolveAgentMainSessionKey } from "./main-session.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -68,6 +73,7 @@ import {
   type SessionLifecycleArtifactCleanupResult,
   type SessionLifecycleStoreTarget,
 } from "./store.js";
+import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import {
   type AppendSessionTranscriptMessageParams,
@@ -123,6 +129,48 @@ export type SessionAccessScope = {
   /** Explicit store path for callers that already resolved the owning store. */
   storePath?: string;
 };
+
+export type LogicalSessionAccessScope = {
+  /** Runtime config whose session store rules define the logical session owner. */
+  cfg: OpenClawConfig;
+  /** Environment override used when resolving configured/discovered agent stores. */
+  env?: NodeJS.ProcessEnv;
+  /** Canonical or alias session key for the logical entry being read or written. */
+  sessionKey: string;
+};
+
+export type ResolvedSessionEntryAccessTarget = {
+  /** Agent owner inferred from the canonical session key. */
+  agentId: string;
+  /** Canonical session key returned to callers even when an alias row won. */
+  canonicalKey: string;
+  /** Freshest matching entry, if any, from the selected backing store. */
+  entry?: SessionEntry;
+  /** Original caller-supplied key after trimming. */
+  requestedKey: string;
+  /** Persisted key for the selected row. */
+  storeKey: string;
+  /** Current file-backed store path; future backends keep this detail internal. */
+  storePath: string;
+};
+
+export type ResolvedSessionEntryUpdateContext = Omit<ResolvedSessionEntryAccessTarget, "entry"> & {
+  /** Mutable entry inside the storage operation. */
+  entry: SessionEntry;
+};
+
+export type ResolvedSessionEntryUpdateResult<T> =
+  | {
+      canonicalKey: string;
+      found: false;
+    }
+  | {
+      canonicalKey: string;
+      entry: SessionEntry;
+      found: true;
+      result: T;
+      storeKey: string;
+    };
 
 export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"> & {
   /** Explicit transcript file path; bypasses store lookup when already known. */
@@ -427,6 +475,166 @@ export type DeleteSessionEntryLifecycleParams = {
 };
 
 export { clearPluginOwnedSessionState };
+
+function isStorePathTemplate(store?: string): boolean {
+  return typeof store === "string" && store.includes("{agentId}");
+}
+
+function resolveLogicalSessionStoreCandidates(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): SessionStoreTarget[] {
+  const storeConfig = params.cfg.session?.store;
+  const defaultTarget = {
+    agentId: params.agentId,
+    storePath: resolveStorePath(storeConfig, { agentId: params.agentId, env: params.env }),
+  };
+  if (!isStorePathTemplate(storeConfig)) {
+    return [defaultTarget];
+  }
+  const targets = new Map<string, SessionStoreTarget>();
+  targets.set(defaultTarget.storePath, defaultTarget);
+  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env })) {
+    if (target.agentId === params.agentId) {
+      targets.set(target.storePath, target);
+    }
+  }
+  return [...targets.values()];
+}
+
+function buildLogicalSessionEntryCandidateKeys(params: {
+  agentId: string;
+  canonicalKey: string;
+  cfg: OpenClawConfig;
+  requestedKey: string;
+}): string[] {
+  const targets = new Set<string>();
+  if (params.canonicalKey) {
+    targets.add(params.canonicalKey);
+  }
+  if (params.requestedKey && params.requestedKey !== params.canonicalKey) {
+    targets.add(params.requestedKey);
+  }
+  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
+    return [...targets];
+  }
+  const agentMainKey = resolveAgentMainSessionKey({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  if (params.canonicalKey === agentMainKey) {
+    targets.add(`agent:${params.agentId}:main`);
+  }
+  return [...targets];
+}
+
+function findFreshestSessionEntryMatch(
+  entries: SessionEntrySummary[],
+  candidateKeys: readonly string[],
+): SessionEntrySummary | undefined {
+  let freshest: SessionEntrySummary | undefined;
+  for (const candidate of candidateKeys) {
+    const trimmed = candidate.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const match = entries.find((entry) => entry.sessionKey === trimmed);
+    if (match && (!freshest || (match.entry.updatedAt ?? 0) >= (freshest.entry.updatedAt ?? 0))) {
+      freshest = match;
+    }
+  }
+  return freshest;
+}
+
+/**
+ * Resolves a logical session key to the freshest matching entry across the
+ * configured store and discovered same-agent stores.
+ */
+export function resolveSessionEntryAccessTarget(
+  scope: LogicalSessionAccessScope,
+): ResolvedSessionEntryAccessTarget {
+  const requestedKey = scope.sessionKey.trim();
+  const canonicalKey = resolveSessionStoreKey({ cfg: scope.cfg, sessionKey: requestedKey });
+  const agentId = resolveSessionStoreAgentId(scope.cfg, canonicalKey);
+  const scanTargets = buildLogicalSessionEntryCandidateKeys({
+    agentId,
+    canonicalKey,
+    cfg: scope.cfg,
+    requestedKey,
+  });
+  const candidates = resolveLogicalSessionStoreCandidates({
+    agentId,
+    cfg: scope.cfg,
+    env: scope.env,
+  });
+  const fallback = candidates[0] ?? {
+    agentId,
+    storePath: resolveStorePath(scope.cfg.session?.store, { agentId, env: scope.env }),
+  };
+  let selectedStorePath = fallback.storePath;
+  let selectedMatch = findFreshestSessionEntryMatch(
+    listSessionEntries({ storePath: fallback.storePath, clone: false }),
+    scanTargets,
+  );
+  for (let index = 1; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    if (!candidate) {
+      continue;
+    }
+    const match = findFreshestSessionEntryMatch(
+      listSessionEntries({ storePath: candidate.storePath, clone: false }),
+      scanTargets,
+    );
+    if (
+      match &&
+      (!selectedMatch || (match.entry.updatedAt ?? 0) >= (selectedMatch.entry.updatedAt ?? 0))
+    ) {
+      selectedStorePath = candidate.storePath;
+      selectedMatch = match;
+    }
+  }
+  return {
+    agentId,
+    canonicalKey,
+    entry: selectedMatch?.entry,
+    requestedKey,
+    storeKey: selectedMatch?.sessionKey ?? canonicalKey,
+    storePath: selectedStorePath,
+  };
+}
+
+/**
+ * Mutates the freshest matching logical session entry without exposing the
+ * backing store map to callers.
+ */
+export async function updateResolvedSessionEntry<T>(
+  scope: LogicalSessionAccessScope,
+  update: (entry: SessionEntry, context: ResolvedSessionEntryUpdateContext) => Promise<T> | T,
+): Promise<ResolvedSessionEntryUpdateResult<T>> {
+  const target = resolveSessionEntryAccessTarget(scope);
+  if (!target.entry) {
+    return { canonicalKey: target.canonicalKey, found: false };
+  }
+  return await updateSessionStore(target.storePath, async (store) => {
+    const entry = store[target.storeKey];
+    if (!entry) {
+      return { canonicalKey: target.canonicalKey, found: false };
+    }
+    const context = {
+      ...target,
+      entry,
+    };
+    const result = await update(entry, context);
+    return {
+      canonicalKey: target.canonicalKey,
+      entry: structuredClone(entry),
+      found: true,
+      result,
+      storeKey: target.storeKey,
+    };
+  });
+}
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
