@@ -1,7 +1,7 @@
 // Feishu plugin module implements bot content behavior.
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { extractFeishuCardText } from "./card-content.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { saveMessageResourceFeishu } from "./media.js";
@@ -176,136 +176,6 @@ export function parseMessageContent(content: string, messageType: string): strin
   } catch {
     return content;
   }
-}
-
-// Whitelisted text-bearing card element tags. Restricting to these keeps button
-// values, action payloads, and other non-display `content` fields out of the
-// extracted text.
-const FEISHU_CARD_TEXT_TAGS = new Set(["div", "markdown", "lark_md", "plain_text"]);
-
-function normalizeCardTemplateVariable(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  return undefined;
-}
-
-function readCardTemplateVariables(card: Record<string, unknown>): Map<string, string> {
-  const variables = new Map<string, string>();
-  for (const source of [card.template_variable, card.template_variables]) {
-    if (!isRecord(source)) {
-      continue;
-    }
-    for (const [key, value] of Object.entries(source)) {
-      const normalized = normalizeCardTemplateVariable(value);
-      if (normalized !== undefined) {
-        variables.set(key, normalized);
-      }
-    }
-  }
-  return variables;
-}
-
-function applyCardTemplateVariables(text: string, variables: Map<string, string>): string {
-  if (variables.size === 0) {
-    return text;
-  }
-  return text.replace(/\$\{([A-Za-z0-9_.-]+)\}|\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, (match, a, b) => {
-    const variableName = typeof a === "string" ? a : b;
-    return variables.get(variableName) ?? match;
-  });
-}
-
-// Pull the display string off a single leaf element (div text, markdown, plain
-// text). Returns undefined for structural/non-text nodes so the walker keeps
-// descending instead of treating them as leaves.
-function readCardElementText(record: Record<string, unknown>): string | undefined {
-  const tag = typeof record.tag === "string" ? record.tag : "";
-  if (!FEISHU_CARD_TEXT_TAGS.has(tag)) {
-    return undefined;
-  }
-  if (tag === "div") {
-    const text = isRecord(record.text) ? record.text : undefined;
-    return typeof text?.content === "string" ? text.content : undefined;
-  }
-  return typeof record.content === "string" ? record.content : undefined;
-}
-
-// Default-locale element arrays, falling back to a single i18n locale so a
-// multilingual card does not emit every translation of the same content.
-function selectCardElementArrays(card: Record<string, unknown>): unknown[][] {
-  const body = isRecord(card.body) ? card.body : undefined;
-  const direct: unknown[][] = [];
-  for (const candidate of [card.elements, body?.elements]) {
-    if (Array.isArray(candidate)) {
-      direct.push(candidate);
-    }
-  }
-  if (direct.length > 0) {
-    return direct;
-  }
-  for (const candidate of [card.i18n_elements, body?.i18n_elements]) {
-    if (!isRecord(candidate)) {
-      continue;
-    }
-    for (const localeElements of Object.values(candidate)) {
-      if (Array.isArray(localeElements)) {
-        return [localeElements];
-      }
-    }
-  }
-  return [];
-}
-
-// Interactive card text nests under whitelisted tags at arbitrary depth
-// (column_set, table, columns). Walk the header plus default-locale elements,
-// resolve template variables, and collect the text so forwarded cards keep
-// their content instead of collapsing to a bare `[interactive]` placeholder.
-// NOTE: send.ts has a sibling `parseInteractiveCardContent`; these should be
-// unified into one shared extractor in a follow-up.
-function extractFeishuCardText(card: unknown): string {
-  if (!isRecord(card)) {
-    return "";
-  }
-  const variables = readCardTemplateVariables(card);
-  const parts: string[] = [];
-  const push = (text: string): void => {
-    const resolved = applyCardTemplateVariables(text, variables).trim();
-    if (resolved) {
-      parts.push(resolved);
-    }
-  };
-  const visit = (node: unknown): void => {
-    if (Array.isArray(node)) {
-      for (const item of node) {
-        visit(item);
-      }
-      return;
-    }
-    if (!isRecord(node)) {
-      return;
-    }
-    const text = readCardElementText(node);
-    if (text !== undefined) {
-      // Leaf text element: stop here so a div is not re-read through its nested
-      // `text` node.
-      push(text);
-      return;
-    }
-    for (const value of Object.values(node)) {
-      if (value && typeof value === "object") {
-        visit(value);
-      }
-    }
-  };
-  visit(card.header);
-  for (const elements of selectCardElementArrays(card)) {
-    visit(elements);
-  }
-  return parts.join("\n");
 }
 
 function formatSubMessageContent(content: string, contentType: string): string {

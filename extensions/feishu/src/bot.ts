@@ -516,7 +516,11 @@ export async function handleFeishuMessage(params: {
       // Websocket event doesn't include sub-messages, need to fetch via API
       // The API returns all sub-messages in the items array
       const client = createFeishuClient(account);
+      // Request original card JSON for interactive sub-messages; without
+      // user_card_content the fetch returns degraded payloads and forwarded
+      // cards collapse to a bare placeholder. Mirrors getMessageFeishu.
       const response = (await client.im.message.get({
+        params: { card_msg_content_type: "user_card_content" },
         path: { message_id: event.message.message_id },
       })) as { code?: number; data?: { items?: unknown[] } };
 

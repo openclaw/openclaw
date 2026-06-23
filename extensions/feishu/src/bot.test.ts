@@ -2847,6 +2847,7 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     expect(mockGetMerged).toHaveBeenCalledWith({
+      params: { card_msg_content_type: "user_card_content" },
       path: { message_id: "msg-merge-forward" },
     });
     const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
