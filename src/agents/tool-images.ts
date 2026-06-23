@@ -5,6 +5,7 @@
  */
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { toErrorObject } from "../infra/errors.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -275,7 +276,7 @@ async function resizeImageBase64IfNeeded(params: {
   }
 
   if (processorUnavailableError) {
-    throw toLintErrorObject(processorUnavailableError, "Non-Error thrown");
+    throw toErrorObject(processorUnavailableError, "Non-Error thrown");
   }
 
   const best = smallest?.buffer ?? buf;
@@ -396,18 +397,4 @@ export async function sanitizeToolResultImages(
 
   const next = await sanitizeContentBlocksImages(content, label, opts);
   return { ...result, content: next };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

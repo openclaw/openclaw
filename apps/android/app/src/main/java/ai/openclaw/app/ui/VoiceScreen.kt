@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.R
 import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -68,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -177,8 +179,8 @@ fun VoiceScreen(
       Modifier
         .fillMaxSize()
         .imePadding()
-        .padding(horizontal = 20.dp, vertical = 8.dp),
-    verticalArrangement = Arrangement.spacedBy(10.dp),
+        .padding(horizontal = 16.dp, vertical = 10.dp),
+    verticalArrangement = Arrangement.spacedBy(9.dp),
   ) {
     VoiceHeader(
       statusText = voiceAttentionStatus ?: if (voiceActive || !gatewayReady) activeStatus else "Your voice command center.",
@@ -547,14 +549,19 @@ private fun VoiceHeader(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+      Icon(
+        painter = painterResource(id = R.drawable.openclaw_logo),
+        contentDescription = null,
+        modifier = Modifier.size(25.dp),
+        tint = ClawTheme.colors.text,
+      )
       Text(
-        text = "O P E N C L A W",
-        style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+        text = "OpenClaw",
+        style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
         color = ClawTheme.colors.text,
         modifier = Modifier.weight(1f),
       )
       VoicePlainIconButton(icon = Icons.Default.Search, contentDescription = "Search voice", onClick = onOpenCommand)
-      VoiceAvatar(text = "OC")
     }
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -562,7 +569,7 @@ private fun VoiceHeader(
       horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-        Text(text = "Voice", style = ClawTheme.type.display.copy(fontSize = 16.sp, lineHeight = 20.sp), color = ClawTheme.colors.text)
+        Text(text = "Voice", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text)
         Text(
           text = statusText,
           style = ClawTheme.type.body,
@@ -576,21 +583,6 @@ private fun VoiceHeader(
         contentDescription = if (speakerEnabled) "Mute speaker" else "Unmute speaker",
         onClick = onToggleSpeaker,
       )
-    }
-  }
-}
-
-@Composable
-private fun VoiceAvatar(text: String) {
-  Surface(
-    modifier = Modifier.size(34.dp),
-    shape = CircleShape,
-    color = ClawTheme.colors.surfaceRaised,
-    contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
-  ) {
-    Box(contentAlignment = Alignment.Center) {
-      Text(text = text.take(2).uppercase(), style = ClawTheme.type.label)
     }
   }
 }
@@ -861,8 +853,10 @@ private fun VoiceOrb(
   Surface(
     modifier = Modifier.size(112.dp),
     shape = CircleShape,
-    color = if (active) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface,
-    border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
+    color = if (active || listening || speaking) Color(0xFF1976D2) else Color(0xFF123B63),
+    contentColor = Color.White,
+    tonalElevation = 3.dp,
+    shadowElevation = 7.dp,
   ) {
     Box(contentAlignment = Alignment.Center) {
       Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -875,7 +869,7 @@ private fun VoiceOrb(
             },
           contentDescription = null,
           modifier = Modifier.size(32.dp),
-          tint = ClawTheme.colors.text,
+          tint = Color.White,
         )
         Waveform(active = active)
       }
@@ -892,7 +886,7 @@ private fun Waveform(active: Boolean) {
           Modifier
             .size(width = 2.dp, height = (if (active) height else 6 + index % 3 * 3).dp)
             .clip(RoundedCornerShape(999.dp))
-            .background(if (active) ClawTheme.colors.text else ClawTheme.colors.textSubtle),
+            .background(if (active) Color.White else Color.White.copy(alpha = 0.52f)),
       )
     }
   }

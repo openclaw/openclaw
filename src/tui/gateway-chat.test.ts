@@ -655,6 +655,24 @@ describe("GatewayChatClient", () => {
     });
   });
 
+  it("returns the actual chat send ack status from the gateway", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({ runId: "run-gateway", status: "timeout" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    const result = await client.sendChat({
+      sessionKey: "main",
+      message: "hello",
+      runId: "run-local",
+    });
+
+    expect(result).toEqual({ runId: "run-gateway", status: "timeout" });
+  });
+
   it("lists gateway commands through commands.list", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",

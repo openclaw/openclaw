@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Emits diagnostic model-call events around embedded-agent stream functions.
  */
@@ -105,10 +106,6 @@ function assignRequestPayloadBytes(state: ModelCallObservationState, payload: un
   if (bytes !== undefined) {
     state.requestPayloadBytes = bytes;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function utf8StringByteLength(value: string): number {

@@ -6,6 +6,7 @@ type QaSuiteTestScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["sc
 export function makeQaSuiteTestScenario(
   id: string,
   params: {
+    channel?: string;
     config?: Record<string, unknown>;
     plugins?: string[];
     gatewayConfigPatch?: Record<string, unknown>;
@@ -27,6 +28,7 @@ export function makeQaSuiteTestScenario(
     sourcePath: `qa/scenarios/${id}.yaml`,
     execution: {
       kind: "flow",
+      ...(params.channel ? { channel: params.channel } : {}),
       ...(params.config ? { config: params.config } : {}),
       flow: { steps: [{ name: "noop", actions: [{ assert: "true" }] }] },
     },

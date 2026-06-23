@@ -1656,10 +1656,6 @@ ensure_macos_default_node_active() {
     return 1
 }
 
-ensure_macos_node22_active() {
-    ensure_macos_default_node_active "$@"
-}
-
 ensure_default_node_active_shell() {
     promote_supported_node_binary || true
     if node_is_at_least_required; then
@@ -1888,19 +1884,6 @@ check_git() {
 
 is_root() {
     [[ "$(id -u)" -eq 0 ]]
-}
-
-# Run a command with sudo only if not already root
-maybe_sudo() {
-    if is_root; then
-        # Skip -E flag when root (env is already preserved)
-        if [[ "${1:-}" == "-E" ]]; then
-            shift
-        fi
-        "$@"
-    else
-        sudo "$@"
-    fi
 }
 
 require_sudo() {

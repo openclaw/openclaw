@@ -95,7 +95,10 @@ export function renderChatSessionSelect(
   const agentSelect = compact ? "" : renderChatAgentSelect(state, onSwitchSession, agentOptions);
   const sessionSwitcherOnly = options.sessionSwitcherOnly ?? false;
   const modelSelect = sessionSwitcherOnly ? "" : renderChatModelSelect(state);
-  const quotaPill = sessionSwitcherOnly ? "" : renderChatQuotaPill(state);
+  // Quota is informational, not a control: show it whenever there is room
+  // (hidden only in the collapsed/compact sidebar), independent of
+  // sessionSwitcherOnly which suppresses the model *control* (#93041).
+  const quotaPill = compact ? "" : renderChatQuotaPill(state);
   const surface = options.surface ?? "desktop";
   const selectedSessionLabel = resolveSelectedChatSessionLabel(state, sessionGroups);
   const pickerOpen = state.chatSessionPickerOpen && state.chatSessionPickerSurface === surface;
@@ -357,9 +360,9 @@ function appendChatSessionPickerResult(
 async function loadChatSessionPickerPage(
   state: AppViewState,
   options: { query?: string; offset?: number; append?: boolean } = {},
-) {
+): Promise<SessionsListResult | null> {
   if (!state.client || !state.connected) {
-    return;
+    return null;
   }
   const query = normalizeOptionalString(options.query ?? state.chatSessionPickerAppliedQuery) ?? "";
   const requestId = beginChatSessionPickerSearchRequest(
@@ -371,7 +374,7 @@ async function loadChatSessionPickerPage(
     }),
   );
   if (requestId === null) {
-    return;
+    return null;
   }
   state.chatSessionPickerLoading = true;
   state.chatSessionPickerError = null;
@@ -385,17 +388,19 @@ async function loadChatSessionPickerPage(
       ),
     );
     if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
-      return;
+      return null;
     }
     const previous = state.chatSessionPickerResult ?? state.sessionsResult;
     state.chatSessionPickerResult =
       options.append === true && previous ? appendChatSessionPickerResult(previous, page) : page;
     state.chatSessionPickerAppliedQuery = query;
+    return state.chatSessionPickerResult;
   } catch (err) {
     if (!isCurrentChatSessionPickerSearchRequest(state, requestId)) {
-      return;
+      return null;
     }
     state.chatSessionPickerError = String(err);
+    return null;
   } finally {
     if (isCurrentChatSessionPickerSearchRequest(state, requestId)) {
       finishChatSessionPickerSearchRequest(state, requestId);
@@ -463,16 +468,28 @@ function updateChatSessionPickerSearchQuery(state: AppViewState, nextQuery: stri
 }
 
 async function loadMoreChatSessionPickerResults(state: AppViewState) {
-  const result = state.chatSessionPickerResult;
-  const offset = resolveNextChatSessionOffset(result);
-  if (offset === null) {
-    return;
+  let result = state.chatSessionPickerResult;
+  let offset = resolveNextChatSessionOffset(result);
+  let visibleCount = resolveChatSessionPickerRows(state, result).length;
+  const seenOffsets = new Set<number>();
+  while (offset !== null && !seenOffsets.has(offset)) {
+    seenOffsets.add(offset);
+    const next = await loadChatSessionPickerPage(state, {
+      query: state.chatSessionPickerAppliedQuery,
+      offset,
+      append: true,
+    });
+    if (!next) {
+      return;
+    }
+    result = next;
+    const nextVisibleCount = resolveChatSessionPickerRows(state, result).length;
+    if (nextVisibleCount > visibleCount) {
+      return;
+    }
+    visibleCount = nextVisibleCount;
+    offset = resolveNextChatSessionOffset(result);
   }
-  await loadChatSessionPickerPage(state, {
-    query: state.chatSessionPickerAppliedQuery,
-    offset,
-    append: true,
-  });
 }
 
 function resolveChatSessionRow(
@@ -601,9 +618,10 @@ function renderChatSessionPickerPopover(
     state.chatSessionPickerQuery.trim() !== "" || state.chatSessionPickerAppliedQuery.trim() !== "";
   const loadMoreOffset = resolveNextChatSessionOffset(result);
   const shownCount = pickerRows.length;
+  const rawLoadedCount = result?.sessions.length ?? 0;
   const totalCount = result?.totalCount;
   const countLabel =
-    typeof totalCount === "number" && Number.isFinite(totalCount)
+    rawLoadedCount === shownCount && typeof totalCount === "number" && Number.isFinite(totalCount)
       ? `${shownCount} / ${totalCount}`
       : String(shownCount);
 

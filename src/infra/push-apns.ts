@@ -9,7 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatErrorMessage, toErrorObject } from "./errors.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 import {
   APNS_HTTP2_CANCEL_CODE,
@@ -700,7 +700,7 @@ async function sendApnsRequest(params: {
       }
       settled = true;
       client.destroy();
-      reject(toLintErrorObject(err, "Non-Error rejection"));
+      reject(toErrorObject(err, "Non-Error rejection"));
     };
     const finish = (result: { status: number; apnsId?: string; body: string }) => {
       if (settled) {
@@ -1188,17 +1188,3 @@ export async function sendApnsExecApprovalResolvedWake(
 }
 
 export { type ApnsRelayConfig, resolveApnsRelayConfigFromEnv };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
