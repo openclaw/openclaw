@@ -6,6 +6,8 @@ import { parse } from "yaml";
 const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
 const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae";
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
+const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -102,6 +104,34 @@ describe("ci workflow guards", () => {
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
+  });
+
+  it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
+    const cases = [
+      {
+        workflowPath: OPENGREP_PR_DIFF_WORKFLOW,
+        artifactName: "opengrep-pr-diff-sarif",
+      },
+      {
+        workflowPath: OPENGREP_FULL_WORKFLOW,
+        artifactName: "opengrep-full-sarif",
+      },
+    ];
+
+    for (const item of cases) {
+      const workflow = parse(readFileSync(item.workflowPath, "utf8"));
+      const uploadStep = workflow.jobs.scan.steps.find(
+        (step) => step.name === "Upload SARIF as workflow artifact",
+      );
+
+      expect(uploadStep.if, item.workflowPath).toBe("always()");
+      expect(uploadStep.uses, item.workflowPath).toBe(UPLOAD_ARTIFACT_V7);
+      expect(uploadStep.with, item.workflowPath).toMatchObject({
+        name: item.artifactName,
+        path: ".opengrep-out/precise.sarif",
+        "if-no-files-found": "error",
+      });
+    }
   });
 
   it("runs real behavior proof from the trusted workflow revision", () => {
