@@ -24,7 +24,8 @@ vi.mock("../../plugins/host-hook-state.js", async () => {
   };
 });
 
-const { createSessionStoreDir } = setupGatewaySessionsTestHarness();
+const { createSessionStoreDir, createSelectedGlobalSessionStore } =
+  setupGatewaySessionsTestHarness();
 
 afterEach(() => {
   ACTIVE_EMBEDDED_RUNS.clear();
@@ -304,12 +305,64 @@ test("sessions.diagnose rejects ambiguous label selectors", async () => {
   });
 });
 
+test("sessions.diagnose rejects ambiguous label selectors across agent global rows", async () => {
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  await writeSessionStore({
+    storePath: mainStorePath,
+    entries: {
+      global: sessionStoreEntry("sess-main-global", { label: "ops", updatedAt: 1 }),
+    },
+  });
+  await writeSessionStore({
+    storePath: workStorePath,
+    entries: {
+      global: sessionStoreEntry("sess-work-global", { label: "ops", updatedAt: 2 }),
+    },
+  });
+
+  const result = await directSessionReq("sessions.diagnose", { label: "ops" });
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("multiple sessions match label ops"),
+    },
+  });
+});
+
 test("sessions.diagnose rejects ambiguous session-id selectors", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
     entries: {
       first: sessionStoreEntry("sess-shared"),
       second: sessionStoreEntry("sess-shared"),
+    },
+  });
+
+  const result = await directSessionReq("sessions.diagnose", { sessionId: "sess-shared" });
+
+  expect(result).toMatchObject({
+    ok: false,
+    error: {
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("multiple sessions match sessionId sess-shared"),
+    },
+  });
+});
+
+test("sessions.diagnose rejects ambiguous session-id selectors across agent unknown rows", async () => {
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  await writeSessionStore({
+    storePath: mainStorePath,
+    entries: {
+      unknown: sessionStoreEntry("sess-shared", { updatedAt: 1 }),
+    },
+  });
+  await writeSessionStore({
+    storePath: workStorePath,
+    entries: {
+      unknown: sessionStoreEntry("sess-shared", { updatedAt: 2 }),
     },
   });
 

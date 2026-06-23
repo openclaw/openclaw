@@ -11,13 +11,21 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import { getEmbeddedRunDiagnosticSnapshot } from "../../agents/embedded-agent-runner/run-state.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../../config/sessions.js";
+import { listSessionEntries } from "../../config/sessions/session-accessor.js";
+import {
+  resolveAgentSessionStoreTargetsSync,
+  resolveAllAgentSessionStoreTargetsSync,
+} from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getDiagnosticSessionStateSnapshot } from "../../logging/diagnostic-session-state.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { resolveStoredSessionOwnerAgentId } from "../session-store-key.js";
+import {
+  resolveStoredSessionKeyForAgentStore,
+  resolveStoredSessionOwnerAgentId,
+} from "../session-store-key.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
@@ -66,6 +74,8 @@ type DiagnoseTarget = {
   storePath: string;
   agentId?: string;
 };
+
+type DiagnoseCandidate = Omit<DiagnoseTarget, "chosenBecause">;
 
 type DiagnoseTranscriptEvidence = {
   resolved: boolean;
@@ -204,6 +214,70 @@ function scoreDiagnoseCandidatePreselect(params: {
   return score;
 }
 
+function buildDiagnoseCandidate(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  entry: SessionEntry;
+  storePath: string;
+  fallbackAgentId?: string;
+}): DiagnoseCandidate {
+  return {
+    key: params.key,
+    entry: params.entry,
+    row: buildDiagnoseRow(params.key, params.entry),
+    storePath: params.storePath,
+    agentId:
+      resolveStoredSessionOwnerAgentId({
+        cfg: params.cfg,
+        agentId: params.fallbackAgentId ?? resolveDefaultAgentId(params.cfg),
+        sessionKey: params.key,
+      }) ?? params.fallbackAgentId,
+  };
+}
+
+function listExplicitDiagnoseCandidateRows(params: {
+  cfg: OpenClawConfig;
+  p: DiagnoseParams;
+}): DiagnoseCandidate[] {
+  const { cfg, p } = params;
+  const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
+  const targets = requestedAgentId
+    ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
+    : resolveAllAgentSessionStoreTargetsSync(cfg);
+  const candidates: DiagnoseCandidate[] = [];
+  for (const target of targets) {
+    for (const { sessionKey, entry } of listSessionEntries({
+      clone: false,
+      storePath: target.storePath,
+    })) {
+      if (!entry?.sessionId) {
+        continue;
+      }
+      if (p.label && entry.label !== p.label) {
+        continue;
+      }
+      if (p.sessionId && entry.sessionId !== p.sessionId) {
+        continue;
+      }
+      const key = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId: target.agentId,
+        sessionKey,
+      });
+      candidates.push(
+        buildDiagnoseCandidate({
+          cfg,
+          key,
+          entry,
+          storePath: target.storePath,
+          fallbackAgentId: target.agentId,
+        }),
+      );
+    }
+  }
+  return candidates;
+}
+
 function listDiagnoseCandidateRows(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
@@ -250,18 +324,15 @@ function listDiagnoseCandidateRows(params: {
       return activePriority || (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
     })
     .slice(0, DEFAULT_DIAGNOSE_SCAN_LIMIT)
-    .map(({ key, entry }) => ({
-      key,
-      entry,
-      row: buildDiagnoseRow(key, entry),
-      storePath,
-      agentId:
-        resolveStoredSessionOwnerAgentId({
-          cfg,
-          agentId: p.agentId ?? resolveDefaultAgentId(cfg),
-          sessionKey: key,
-        }) ?? p.agentId,
-    }));
+    .map(({ key, entry }) =>
+      buildDiagnoseCandidate({
+        cfg,
+        key,
+        entry,
+        storePath,
+        ...(p.agentId ? { fallbackAgentId: p.agentId } : {}),
+      }),
+    );
   return { candidates };
 }
 
@@ -365,15 +436,8 @@ async function resolveDiagnoseTarget(params: {
     };
   }
 
-  const listed = listDiagnoseCandidateRows({ cfg, context, p });
-  let candidates = listed.candidates;
-  if (p.sessionId) {
-    candidates = candidates.filter((candidate) => candidate.row.sessionId === p.sessionId);
-  }
-  if (p.label) {
-    candidates = candidates.filter((candidate) => candidate.row.label === p.label);
-  }
   if (p.sessionId || p.label) {
+    const candidates = listExplicitDiagnoseCandidateRows({ cfg, p });
     if (candidates.length > 1) {
       throw new Error(
         p.sessionId
@@ -389,6 +453,9 @@ async function resolveDiagnoseTarget(params: {
         }
       : null;
   }
+
+  const listed = listDiagnoseCandidateRows({ cfg, context, p });
+  const candidates = listed.candidates;
   if (candidates.length === 0) {
     return null;
   }
