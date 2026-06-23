@@ -123,10 +123,11 @@ export function resolveCodexTurnTerminalIdleTimeoutMs(
 ): number {
   // The terminal watchdog is wrapper-owned; Codex turn options do not carry a
   // timeout budget. Follow the effective run budget without shortening the floor.
-  const defaultMs =
-    effectiveRunTimeoutMs !== undefined && Number.isFinite(effectiveRunTimeoutMs)
-      ? Math.max(CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS, Math.floor(effectiveRunTimeoutMs))
-      : CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
+  const effectiveRunBudgetMs = resolvePositiveIntegerTimeoutMs(
+    effectiveRunTimeoutMs,
+    CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+  );
+  const defaultMs = Math.max(CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS, effectiveRunBudgetMs);
   return resolvePositiveIntegerTimeoutMs(value, defaultMs);
 }
 

@@ -124,6 +124,9 @@ describe("Codex app-server attempt timeouts", () => {
     expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, Number.POSITIVE_INFINITY)).toBe(
       CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
     );
+    expect(resolveCodexTurnTerminalIdleTimeoutMs(undefined, Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
     // An explicit override still wins even when a run budget is present.
     expect(resolveCodexTurnTerminalIdleTimeoutMs(5 * 60_000, overFloor)).toBe(5 * 60_000);
   });
