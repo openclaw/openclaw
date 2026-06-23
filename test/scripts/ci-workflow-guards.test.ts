@@ -619,6 +619,10 @@ describe("ci workflow guards", () => {
       "taxonomy.profiles.find((entry) => entry.id === requested)",
     );
     expect(validateProfileStep.run).toContain("profile=${profile.id}");
+    const ensurePlaywrightStep = qaRunJob.steps.find(
+      (step) => step.name === "Ensure Playwright Chromium",
+    );
+    expect(ensurePlaywrightStep.run).toBe("node scripts/ensure-playwright-chromium.mjs");
     expect(generateJob.if).toBe("${{ inputs.qa_evidence_run_id == '' }}");
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({

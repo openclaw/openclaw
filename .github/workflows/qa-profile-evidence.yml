@@ -243,6 +243,9 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: node scripts/build-all.mjs qaRuntime
 
+      - name: Ensure Playwright Chromium
+        run: node scripts/ensure-playwright-chromium.mjs
+
       - name: Run QA profile
         id: run_profile
         env:
