@@ -1,13 +1,16 @@
+/** Interactive onboarding step for enabling workspace hooks. */
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildWorkspaceHookStatus } from "../hooks/hooks-status.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
+/** Prompts for loadable internal hooks and writes selected hook entries. */
 export async function setupInternalHooks(
   cfg: OpenClawConfig,
-  runtime: RuntimeEnv,
+  _runtime: RuntimeEnv,
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
   await prompter.note(
@@ -17,28 +20,26 @@ export async function setupInternalHooks(
       "",
       "Learn more: https://docs.openclaw.ai/automation/hooks",
     ].join("\n"),
-    "Hooks",
+    t("wizard.hooks.introTitle"),
   );
 
-  // Discover available hooks using the hook discovery system
+  // Discover hooks through the same status path used by hook commands so setup
+  // only offers entries that would be loadable after onboarding finishes.
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const report = buildWorkspaceHookStatus(workspaceDir, { config: cfg });
 
-  // Show every eligible hook so users can opt in during onboarding.
-  const eligibleHooks = report.hooks.filter((h) => h.eligible);
+  // Show every eligible hook so users can opt in during setup.
+  const eligibleHooks = report.hooks.filter((h) => h.loadable);
 
   if (eligibleHooks.length === 0) {
-    await prompter.note(
-      "No eligible hooks found. You can configure hooks later in your config.",
-      "No Hooks Available",
-    );
+    await prompter.note(t("wizard.hooks.noHooksMessage"), t("wizard.hooks.noHooksTitle"));
     return cfg;
   }
 
   const toEnable = await prompter.multiselect({
-    message: "Enable hooks?",
+    message: t("wizard.hooks.enable"),
     options: [
-      { value: "__skip__", label: "Skip for now" },
+      { value: "__skip__", label: t("common.skipForNow") },
       ...eligibleHooks.map((hook) => ({
         value: hook.name,
         label: `${hook.emoji ?? "🔗"} ${hook.name}`,
@@ -52,7 +53,7 @@ export async function setupInternalHooks(
     return cfg;
   }
 
-  // Enable selected hooks using the new entries config format
+  // Use entries format so per-hook enablement survives future global defaults.
   const entries = { ...cfg.hooks?.internal?.entries };
   for (const name of selected) {
     entries[name] = { enabled: true };
@@ -78,7 +79,7 @@ export async function setupInternalHooks(
       `  ${formatCliCommand("openclaw hooks enable <name>")}`,
       `  ${formatCliCommand("openclaw hooks disable <name>")}`,
     ].join("\n"),
-    "Hooks Configured",
+    t("wizard.hooks.configuredTitle"),
   );
 
   return next;

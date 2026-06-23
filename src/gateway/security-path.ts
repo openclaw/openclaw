@@ -1,4 +1,8 @@
-export type SecurityPathCanonicalization = {
+// Gateway path security canonicalizes repeatedly encoded paths and protects
+// plugin HTTP routes even under malformed encoding.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
+type SecurityPathCanonicalization = {
   canonicalPath: string;
   candidates: string[];
   decodePasses: number;
@@ -18,7 +22,7 @@ function normalizePathSeparators(pathname: string): string {
 }
 
 function normalizeProtectedPrefix(prefix: string): string {
-  return normalizePathSeparators(prefix.toLowerCase()) || "/";
+  return normalizePathSeparators(normalizeLowercaseStringOrEmpty(prefix)) || "/";
 }
 
 function resolveDotSegments(pathname: string): string {
@@ -30,7 +34,9 @@ function resolveDotSegments(pathname: string): string {
 }
 
 function normalizePathForSecurity(pathname: string): string {
-  return normalizePathSeparators(resolveDotSegments(pathname).toLowerCase()) || "/";
+  return (
+    normalizePathSeparators(normalizeLowercaseStringOrEmpty(resolveDotSegments(pathname))) || "/"
+  );
 }
 
 function pushNormalizedCandidate(candidates: string[], seen: Set<string>, value: string): void {
@@ -59,7 +65,7 @@ export function buildCanonicalPathCandidates(
   let malformedEncoding = false;
   let decodePasses = 0;
   for (let pass = 0; pass < maxDecodePasses; pass++) {
-    let nextDecoded = decoded;
+    let nextDecoded;
     try {
       nextDecoded = decodeURIComponent(decoded);
     } catch {
@@ -113,13 +119,8 @@ export function canonicalizePathForSecurity(pathname: string): SecurityPathCanon
     decodePasses,
     decodePassLimitReached,
     malformedEncoding,
-    rawNormalizedPath: normalizePathSeparators(pathname.toLowerCase()) || "/",
+    rawNormalizedPath: normalizePathSeparators(normalizeLowercaseStringOrEmpty(pathname)) || "/",
   };
-}
-
-export function hasSecurityPathCanonicalizationAnomaly(pathname: string): boolean {
-  const canonical = canonicalizePathForSecurity(pathname);
-  return canonical.malformedEncoding || canonical.decodePassLimitReached;
 }
 
 const normalizedPrefixesCache = new WeakMap<readonly string[], readonly string[]>();

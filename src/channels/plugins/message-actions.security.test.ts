@@ -1,3 +1,4 @@
+// Message action security tests cover channel message action authorization and validation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -6,7 +7,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { dispatchChannelMessageAction } from "./message-actions.js";
+import { dispatchChannelMessageAction } from "./message-action-dispatch.js";
 import type { ChannelPlugin } from "./types.js";
 
 const handleAction = vi.fn(async () => jsonResult({ ok: true }));
@@ -23,8 +24,10 @@ const discordPlugin: ChannelPlugin = {
     },
   }),
   actions: {
-    listActions: () => ["kick"],
+    describeMessageTool: () => ({ actions: ["kick"] }),
     supportsAction: ({ action }) => action === "kick",
+    requiresTrustedRequesterSender: ({ action, toolContext }) =>
+      Boolean(action === "kick" && toolContext),
     handleAction,
   },
 };

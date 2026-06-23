@@ -8,6 +8,7 @@ import QuartzCore
 import SwiftUI
 
 private let webChatSwiftLogger = Logger(subsystem: "ai.openclaw", category: "WebChatSwiftUI")
+private let webChatThinkingLevelDefaultsKey = "openclaw.webchat.thinkingLevel"
 
 private enum WebChatSwiftUILayout {
     static let windowSize = NSSize(width: 500, height: 840)
@@ -19,6 +20,21 @@ private enum WebChatSwiftUILayout {
 struct MacGatewayChatTransport: OpenClawChatTransport {
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
+    }
+
+    func listModels() async throws -> [OpenClawChatModelChoice] {
+        do {
+            let data = try await GatewayConnection.shared.request(
+                method: "models.list",
+                params: [:],
+                timeoutMs: 15000)
+            let result = try JSONDecoder().decode(ModelsListResult.self, from: data)
+            return result.models.map(Self.mapModelChoice)
+        } catch {
+            webChatSwiftLogger.warning(
+                "models.list failed; hiding model picker: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
     }
 
     func abortRun(sessionKey: String, runId: String) async throws {
@@ -43,7 +59,49 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             method: "sessions.list",
             params: params,
             timeoutMs: 15000)
-        return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        let decoded = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: data)
+        let mainSessionKey = await GatewayConnection.shared.cachedMainSessionKey()
+        let defaults = decoded.defaults.map {
+            OpenClawChatSessionsDefaults(
+                modelProvider: $0.modelProvider,
+                model: $0.model,
+                contextTokens: $0.contextTokens,
+                thinkingLevels: $0.thinkingLevels,
+                thinkingOptions: $0.thinkingOptions,
+                thinkingDefault: $0.thinkingDefault,
+                mainSessionKey: mainSessionKey)
+        } ?? OpenClawChatSessionsDefaults(
+            model: nil,
+            contextTokens: nil,
+            mainSessionKey: mainSessionKey)
+        return OpenClawChatSessionsListResponse(
+            ts: decoded.ts,
+            path: decoded.path,
+            count: decoded.count,
+            defaults: defaults,
+            sessions: decoded.sessions)
+    }
+
+    func setSessionModel(sessionKey: String, model: String?) async throws {
+        var params: [String: AnyCodable] = [
+            "key": AnyCodable(sessionKey),
+        ]
+        params["model"] = model.map(AnyCodable.init) ?? AnyCodable(NSNull())
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.patch",
+            params: params,
+            timeoutMs: 15000)
+    }
+
+    func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
+        let params: [String: AnyCodable] = [
+            "key": AnyCodable(sessionKey),
+            "thinkingLevel": AnyCodable(thinkingLevel),
+        ]
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.patch",
+            params: params,
+            timeoutMs: 15000)
     }
 
     func sendMessage(
@@ -63,6 +121,30 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         try await GatewayConnection.shared.healthOK(timeoutMs: timeoutMs)
+    }
+
+    func resetSession(sessionKey: String) async throws {
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.reset",
+            params: ["key": AnyCodable(sessionKey)],
+            timeoutMs: 10000)
+    }
+
+    func compactSession(sessionKey: String) async throws {
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.compact",
+            params: ["key": AnyCodable(sessionKey)],
+            timeoutMs: 10000)
+    }
+
+    func setActiveSessionKey(_ sessionKey: String) async throws {
+        await MainActor.run {
+            WebChatManager.shared.recordActiveSessionKey(sessionKey)
+        }
+        _ = try await GatewayConnection.shared.request(
+            method: "sessions.messages.subscribe",
+            params: ["key": AnyCodable(sessionKey)],
+            timeoutMs: 10000)
     }
 
     func events() -> AsyncStream<OpenClawChatTransportEvent> {
@@ -116,6 +198,15 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
                     return nil
                 }
                 return .chat(chat)
+            case "session.message":
+                guard let payload = evt.payload else { return nil }
+                guard let message = try? JSONDecoder().decode(
+                    OpenClawSessionMessageEventPayload.self,
+                    from: JSONEncoder().encode(payload))
+                else {
+                    return nil
+                }
+                return .sessionMessage(message)
             case "agent":
                 guard let payload = evt.payload else { return nil }
                 guard let agent = try? JSONDecoder().decode(
@@ -132,6 +223,14 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         case .seqGap:
             return .seqGap
         }
+    }
+
+    private static func mapModelChoice(_ model: OpenClawProtocol.ModelChoice) -> OpenClawChatModelChoice {
+        OpenClawChatModelChoice(
+            modelID: model.id,
+            name: model.name,
+            provider: model.provider,
+            contextWindow: model.contextwindow)
     }
 }
 
@@ -155,7 +254,13 @@ final class WebChatSwiftUIWindowController {
     init(sessionKey: String, presentation: WebChatPresentation, transport: any OpenClawChatTransport) {
         self.sessionKey = sessionKey
         self.presentation = presentation
-        let vm = OpenClawChatViewModel(sessionKey: sessionKey, transport: transport)
+        let vm = OpenClawChatViewModel(
+            sessionKey: sessionKey,
+            transport: transport,
+            initialThinkingLevel: Self.persistedThinkingLevel(),
+            onThinkingLevelChanged: { level in
+                UserDefaults.standard.set(level, forKey: webChatThinkingLevelDefaultsKey)
+            })
         let accent = Self.color(fromHex: AppStateStore.shared.seamColorHex)
         self.hosting = NSHostingController(rootView: OpenClawChatView(
             viewModel: vm,
@@ -252,6 +357,16 @@ final class WebChatSwiftUIWindowController {
 
     private func removeDismissMonitor() {
         OverlayPanelFactory.clearGlobalEventMonitor(&self.dismissMonitor)
+    }
+
+    private static func persistedThinkingLevel() -> String? {
+        let stored = UserDefaults.standard.string(forKey: webChatThinkingLevelDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let stored, ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"].contains(stored) else {
+            return nil
+        }
+        return stored
     }
 
     private static func makeWindow(

@@ -1,12 +1,25 @@
-import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+/**
+ * sessions_history built-in tool.
+ *
+ * Reads bounded, redacted session transcript history after session visibility filtering.
+ */
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { Type } from "typebox";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
+import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import { redactSensitiveText } from "../../logging/redact.js";
+import { redactToolPayloadText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
+import {
+  describeSessionsHistoryTool,
+  SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
+} from "../tool-description-presets.js";
+import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -14,17 +27,17 @@ import {
   resolveSessionReference,
   resolveSandboxedSessionToolContext,
   resolveVisibleSessionReference,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
-  limit: Type.Optional(Type.Number({ minimum: 1 })),
+  limit: optionalPositiveIntegerSchema(),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
+type GatewayCaller = typeof callGateway;
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
 
@@ -33,9 +46,9 @@ function truncateHistoryText(text: string): {
   truncated: boolean;
   redacted: boolean;
 } {
-  // Redact credentials, API keys, tokens before returning session history.
-  // Prevents sensitive data leakage via sessions_history tool (OC-07).
-  const sanitized = redactSensitiveText(text);
+  // sessions_history is a tool surface, not a log sink. Keep it redacted even
+  // when operators disable general-purpose log redaction.
+  const sanitized = redactToolPayloadText(text);
   const redacted = sanitized !== text;
   if (sanitized.length <= SESSIONS_HISTORY_TEXT_MAX_CHARS) {
     return { text: sanitized, truncated: false, redacted };
@@ -74,6 +87,10 @@ function sanitizeHistoryContentBlock(block: unknown): {
       delete entry.thinkingSignature;
       truncated = true;
     }
+    if ("openclawReasoningReplay" in entry) {
+      delete entry.openclawReasoningReplay;
+      truncated = true;
+    }
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateHistoryText(entry.partialJson);
@@ -82,7 +99,7 @@ function sanitizeHistoryContentBlock(block: unknown): {
     redacted ||= res.redacted;
   }
   if (type === "image") {
-    const data = typeof entry.data === "string" ? entry.data : undefined;
+    const data = readStringValue(entry.data);
     const bytes = data ? data.length : undefined;
     if ("data" in entry) {
       delete entry.data;
@@ -169,18 +186,22 @@ function enforceSessionsHistoryHardCap(params: {
 export function createSessionsHistoryTool(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
+  config?: OpenClawConfig;
+  callGateway?: GatewayCaller;
 }): AnyAgentTool {
   return {
     label: "Session History",
     name: "sessions_history",
-    description: "Fetch message history for a session.",
+    displaySummary: SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsHistoryTool(),
     parameters: SessionsHistoryToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
+      const gatewayCall = opts?.callGateway ?? callGateway;
       const sessionKeyParam = readStringParam(params, "sessionKey", {
         required: true,
       });
-      const cfg = loadConfig();
+      const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
@@ -232,12 +253,9 @@ export function createSessionsHistoryTool(opts?: {
         });
       }
 
-      const limit =
-        typeof params.limit === "number" && Number.isFinite(params.limit)
-          ? Math.max(1, Math.floor(params.limit))
-          : undefined;
+      const limit = readPositiveIntegerParam(params, "limit");
       const includeTools = Boolean(params.includeTools);
-      const result = await callGateway<{ messages: Array<unknown> }>({
+      const result = await gatewayCall<{ messages: Array<unknown> }>({
         method: "chat.history",
         params: { sessionKey: resolvedKey, limit },
       });

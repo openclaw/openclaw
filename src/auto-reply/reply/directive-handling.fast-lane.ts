@@ -1,8 +1,9 @@
+// Applies fast-lane reply directives before normal delivery processing.
 import type { ReplyPayload } from "../types.js";
+import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import { handleDirectiveOnly } from "./directive-handling.impl.js";
 import { resolveCurrentDirectiveLevels } from "./directive-handling.levels.js";
 import type { ApplyInlineDirectivesFastLaneParams } from "./directive-handling.params.js";
-import { isDirectiveOnly } from "./directive-handling.parse.js";
 
 export async function applyInlineDirectivesFastLane(
   params: ApplyInlineDirectivesFastLaneParams,
@@ -48,12 +49,19 @@ export async function applyInlineDirectivesFastLane(
   }
 
   const agentCfg = params.agentCfg;
-  const { currentThinkLevel, currentVerboseLevel, currentReasoningLevel, currentElevatedLevel } =
-    await resolveCurrentDirectiveLevels({
-      sessionEntry,
-      agentCfg,
-      resolveDefaultThinkingLevel: () => modelState.resolveDefaultThinkingLevel(),
-    });
+  const {
+    currentThinkLevel,
+    currentFastMode,
+    currentVerboseLevel,
+    currentReasoningLevel,
+    currentElevatedLevel,
+  } = await resolveCurrentDirectiveLevels({
+    sessionEntry,
+    agentCfg,
+    resolveDefaultThinkingLevel: directives.hasThinkDirective
+      ? () => modelState.resolveDefaultThinkingLevel()
+      : async () => undefined,
+  });
 
   const directiveAck = await handleDirectiveOnly({
     cfg,
@@ -71,15 +79,24 @@ export async function applyInlineDirectivesFastLane(
     aliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
+    thinkingCatalog: await modelState.resolveThinkingCatalog(),
     resetModelOverride,
     provider,
     model,
     initialModelLabel: params.initialModelLabel,
     formatModelSwitchEvent,
     currentThinkLevel,
+    currentFastMode,
     currentVerboseLevel,
     currentReasoningLevel,
     currentElevatedLevel,
+    ctx,
+    messageProvider: ctx.Provider,
+    surface: ctx.Surface,
+    gatewayClientScopes: ctx.GatewayClientScopes,
+    commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
+    workspaceDir: params.workspaceDir,
   });
 
   if (sessionEntry?.providerOverride) {

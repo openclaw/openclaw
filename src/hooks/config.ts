@@ -1,12 +1,11 @@
+// Hook config helpers read, normalize, and update hook configuration.
 import type { OpenClawConfig, HookConfig } from "../config/config.js";
 import {
   evaluateRuntimeEligibility,
   hasBinary,
   isConfigPathTruthyWithDefaults,
-  resolveConfigPath,
-  resolveRuntimePlatform,
 } from "../shared/config-eval.js";
-import { resolveHookKey } from "./frontmatter.js";
+import { resolveHookConfig, resolveHookEnableState } from "./policy.js";
 import type { HookEligibilityContext, HookEntry } from "./types.js";
 
 const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
@@ -15,26 +14,14 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "workspace.dir": true,
 };
 
-export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
+export { hasBinary };
 
+/** Evaluate a config path with hook-specific defaults for legacy runtime requirements. */
 export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
-export function resolveHookConfig(
-  config: OpenClawConfig | undefined,
-  hookKey: string,
-): HookConfig | undefined {
-  const hooks = config?.hooks?.internal?.entries;
-  if (!hooks || typeof hooks !== "object") {
-    return undefined;
-  }
-  const entry = (hooks as Record<string, HookConfig | undefined>)[hookKey];
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  return entry;
-}
+export { resolveHookConfig };
 
 function evaluateHookRuntimeEligibility(params: {
   entry: HookEntry;
@@ -44,6 +31,8 @@ function evaluateHookRuntimeEligibility(params: {
 }): boolean {
   const { entry, config, hookConfig, eligibility } = params;
   const remote = eligibility?.remote;
+  // Hook metadata uses the same requirement language as plugins, but hook env
+  // can also come from the per-hook config block.
   const base = {
     os: entry.metadata?.os,
     remotePlatforms: remote?.platforms,
@@ -60,18 +49,18 @@ function evaluateHookRuntimeEligibility(params: {
   });
 }
 
+/** Return true when a hook passes enable policy and runtime requirements. */
 export function shouldIncludeHook(params: {
   entry: HookEntry;
   config?: OpenClawConfig;
   eligibility?: HookEligibilityContext;
 }): boolean {
   const { entry, config, eligibility } = params;
-  const hookKey = resolveHookKey(entry.hook.name, entry);
-  const hookConfig = resolveHookConfig(config, hookKey);
-  const pluginManaged = entry.hook.source === "openclaw-plugin";
-
-  // Check if explicitly disabled
-  if (!pluginManaged && hookConfig?.enabled === false) {
+  const hookConfig = resolveHookConfig(
+    config,
+    params.entry.metadata?.hookKey ?? params.entry.hook.name,
+  );
+  if (!resolveHookEnableState({ entry, config, hookConfig }).enabled) {
     return false;
   }
 

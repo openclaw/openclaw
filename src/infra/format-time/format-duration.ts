@@ -1,3 +1,5 @@
+// Duration formatting helpers produce compact, precise, and human display
+// strings from millisecond values.
 export type FormatDurationSecondsOptions = {
   decimals?: number;
   unit?: "s" | "seconds";
@@ -32,7 +34,7 @@ export function formatDurationPrecise(
     return "unknown";
   }
   if (ms < 1000) {
-    return `${ms}ms`;
+    return `${Math.max(0, Math.round(ms))}ms`;
   }
   return formatDurationSeconds(ms, {
     decimals: options.decimals ?? 2,

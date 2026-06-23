@@ -1,4 +1,4 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/irc";
+// Irc type declarations define plugin contracts.
 import type {
   BlockStreamingCoalesceConfig,
   DmConfig,
@@ -8,7 +8,8 @@ import type {
   GroupToolPolicyConfig,
   MarkdownConfig,
   OpenClawConfig,
-} from "openclaw/plugin-sdk/irc";
+  BaseProbeResult,
+} from "./runtime-api.js";
 
 export type IrcChannelConfig = {
   requireMention?: boolean;
@@ -66,7 +67,7 @@ export type IrcAccountConfig = {
   mediaMaxMb?: number;
 };
 
-export type IrcConfig = IrcAccountConfig & {
+type IrcConfig = IrcAccountConfig & {
   accounts?: Record<string, IrcAccountConfig>;
   defaultAccount?: string;
 };

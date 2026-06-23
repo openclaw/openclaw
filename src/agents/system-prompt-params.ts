@@ -1,7 +1,15 @@
+/**
+ * System prompt runtime parameter resolver.
+ *
+ * Collects repository, time, timezone, channel, shell, and active-process facts for prompt rendering.
+ */
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { ChatType } from "../channels/chat-type.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findGitRoot } from "../infra/git-root.js";
+import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
   resolveUserTimeFormat,
@@ -9,8 +17,10 @@ import {
   type ResolvedTimeFormat,
 } from "./date-time.js";
 
-export type RuntimeInfoInput = {
+type RuntimeInfoInput = {
   agentId?: string;
+  sessionKey?: string;
+  sessionId?: string;
   host: string;
   os: string;
   arch: string;
@@ -19,13 +29,15 @@ export type RuntimeInfoInput = {
   defaultModel?: string;
   shell?: string;
   channel?: string;
+  chatType?: ChatType;
   capabilities?: string[];
   /** Supported message actions for the current channel (e.g., react, edit, unsend) */
   channelActions?: string[];
   repoRoot?: string;
+  activeProcessSessions?: ActiveProcessSessionReference[];
 };
 
-export type SystemPromptRuntimeParams = {
+type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
   userTimezone: string;
   userTime?: string;
@@ -76,9 +88,7 @@ function resolveRepoRoot(params: {
       // ignore invalid config path
     }
   }
-  const candidates = [params.workspaceDir, params.cwd]
-    .map((value) => value?.trim())
-    .filter(Boolean) as string[];
+  const candidates = normalizeStringEntries([params.workspaceDir ?? "", params.cwd ?? ""]);
   const seen = new Set<string>();
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);

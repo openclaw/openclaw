@@ -1,7 +1,10 @@
+// Session file persistence resolves transcript paths and syncs store metadata.
 import { resolveSessionFilePath } from "./paths.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
+/** Resolves a transcript file path and persists it into the session store when needed. */
 export async function resolveAndPersistSessionFile(params: {
   sessionId: string;
   sessionKey: string;
@@ -12,13 +15,21 @@ export async function resolveAndPersistSessionFile(params: {
   sessionsDir?: string;
   fallbackSessionFile?: string;
   activeSessionKey?: string;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 }): Promise<{ sessionFile: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey, sessionStore, storePath } = params;
+  const now = Date.now();
   const baseEntry = params.sessionEntry ??
-    sessionStore[sessionKey] ?? { sessionId, updatedAt: Date.now() };
+    sessionStore[sessionKey] ?? { sessionId, updatedAt: now, sessionStartedAt: now };
+  const shouldReusePersistedSessionFile = baseEntry.sessionId === sessionId;
   const fallbackSessionFile = params.fallbackSessionFile?.trim();
-  const entryForResolve =
-    !baseEntry.sessionFile && fallbackSessionFile
+  // A reset/fork should not reuse the previous transcript path unless the fallback explicitly
+  // points at the intended file for the new session id.
+  const entryForResolve = !shouldReusePersistedSessionFile
+    ? fallbackSessionFile
+      ? { ...baseEntry, sessionFile: fallbackSessionFile }
+      : { ...baseEntry, sessionFile: undefined }
+    : !baseEntry.sessionFile && fallbackSessionFile
       ? { ...baseEntry, sessionFile: fallbackSessionFile }
       : baseEntry;
   const sessionFile = resolveSessionFilePath(sessionId, entryForResolve, {
@@ -28,7 +39,8 @@ export async function resolveAndPersistSessionFile(params: {
   const persistedEntry: SessionEntry = {
     ...baseEntry,
     sessionId,
-    updatedAt: Date.now(),
+    updatedAt: now,
+    sessionStartedAt: baseEntry.sessionId === sessionId ? (baseEntry.sessionStartedAt ?? now) : now,
     sessionFile,
   };
   if (baseEntry.sessionId !== sessionId || baseEntry.sessionFile !== sessionFile) {
@@ -41,7 +53,12 @@ export async function resolveAndPersistSessionFile(params: {
           ...persistedEntry,
         };
       },
-      params.activeSessionKey ? { activeSessionKey: params.activeSessionKey } : undefined,
+      params.activeSessionKey || params.maintenanceConfig
+        ? {
+            ...(params.activeSessionKey ? { activeSessionKey: params.activeSessionKey } : {}),
+            ...(params.maintenanceConfig ? { maintenanceConfig: params.maintenanceConfig } : {}),
+          }
+        : undefined,
     );
     return { sessionFile, sessionEntry: persistedEntry };
   }

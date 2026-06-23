@@ -1,4 +1,5 @@
-import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
+// Gateway readiness checker for channel health and startup sidecar state.
+import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -7,13 +8,17 @@ import {
   type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
+import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
+/** Snapshot returned by the gateway readiness probe. */
 export type ReadinessResult = {
   ready: boolean;
   failing: string[];
   uptimeMs: number;
+  eventLoop?: GatewayEventLoopHealth;
 };
 
+/** Function form used by HTTP readiness endpoints and tests. */
 export type ReadinessChecker = () => ReadinessResult;
 
 const DEFAULT_READINESS_CACHE_TTL_MS = 1_000;
@@ -31,9 +36,15 @@ function shouldIgnoreReadinessFailure(
   return health.reason === "not-running" && accountSnapshot.restartPending === true;
 }
 
+/** Create a cached readiness checker over channel runtime health. */
 export function createReadinessChecker(deps: {
   channelManager: ChannelManager;
   startedAt: number;
+  getStartupPending?: () => boolean;
+  getStartupPendingReason?: () => string | undefined;
+  getGatewayDraining?: () => boolean;
+  getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+  shouldSkipChannelReadiness?: () => boolean;
   cacheTtlMs?: number;
 }): ReadinessChecker {
   const { channelManager, startedAt } = deps;
@@ -44,8 +55,24 @@ export function createReadinessChecker(deps: {
   return (): ReadinessResult => {
     const now = Date.now();
     const uptimeMs = now - startedAt;
+    if (deps.getStartupPending?.()) {
+      const reason = deps.getStartupPendingReason?.() ?? "startup-sidecars";
+      return withEventLoopHealth(
+        { ready: false, failing: [reason], uptimeMs },
+        deps.getEventLoopHealth,
+      );
+    }
+    if (deps.getGatewayDraining?.()) {
+      return withEventLoopHealth(
+        { ready: false, failing: ["gateway-draining"], uptimeMs },
+        deps.getEventLoopHealth,
+      );
+    }
+    if (deps.shouldSkipChannelReadiness?.()) {
+      return withEventLoopHealth({ ready: true, failing: [], uptimeMs }, deps.getEventLoopHealth);
+    }
     if (cachedState && now - cachedAt < cacheTtlMs) {
-      return { ...cachedState, uptimeMs };
+      return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();
@@ -75,6 +102,14 @@ export function createReadinessChecker(deps: {
 
     cachedAt = now;
     cachedState = { ready: failing.length === 0, failing };
-    return { ...cachedState, uptimeMs };
+    return withEventLoopHealth({ ...cachedState, uptimeMs }, deps.getEventLoopHealth);
   };
+}
+
+function withEventLoopHealth(
+  result: ReadinessResult,
+  getEventLoopHealth?: () => GatewayEventLoopHealth | undefined,
+): ReadinessResult {
+  const eventLoop = getEventLoopHealth?.();
+  return eventLoop ? { ...result, eventLoop } : result;
 }

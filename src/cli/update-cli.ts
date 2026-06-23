@@ -1,20 +1,27 @@
+// Commander wiring for `openclaw update`, its status/finalize subcommands, and help text.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
-import {
-  type UpdateCommandOptions,
-  type UpdateStatusOptions,
-  type UpdateWizardOptions,
+import type {
+  UpdateCommandOptions,
+  UpdateFinalizeOptions,
+  UpdateStatusOptions,
+  UpdateWizardOptions,
 } from "./update-cli/shared.js";
 import { updateStatusCommand } from "./update-cli/status.js";
-import { updateCommand } from "./update-cli/update-command.js";
+import { updateCommand, updateFinalizeCommand } from "./update-cli/update-command.js";
 import { updateWizardCommand } from "./update-cli/wizard.js";
 
-export { updateCommand, updateStatusCommand, updateWizardCommand };
-export type { UpdateCommandOptions, UpdateStatusOptions, UpdateWizardOptions };
+export { updateCommand, updateFinalizeCommand, updateStatusCommand, updateWizardCommand };
+export type {
+  UpdateCommandOptions,
+  UpdateFinalizeOptions,
+  UpdateStatusOptions,
+  UpdateWizardOptions,
+};
 
 function inheritedUpdateJson(command?: Command): boolean {
   return Boolean(inheritOptionFromParent<boolean>(command, "json"));
@@ -31,7 +38,47 @@ function inheritedUpdateTimeout(
   return inheritOptionFromParent<string>(command, "timeout");
 }
 
+function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
+  const command = update.command(name, { hidden });
+  command
+    .description("Repair post-update doctor and plugin convergence")
+    .option("--json", "Output result as JSON", false)
+    .option("--channel <stable|beta|dev>", "Persist update channel before repair")
+    .option("--timeout <seconds>", "Timeout for update repair steps in seconds (default: 1800)")
+    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
+    .option("--no-restart", "Accepted for update command parity; repair never restarts")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw update repair", "Rerun post-update doctor and plugin convergence."],
+          ["openclaw update repair --channel beta", "Repair against the beta update channel."],
+          ["openclaw update repair --json", "JSON output for automation."],
+        ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
+          "- Repairs post-update plugin state after the core package already changed",
+        )}\n${theme.muted("- Runs doctor repair and plugin convergence, but never restarts the Gateway")}\n\n${theme.muted(
+          "Docs:",
+        )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
+    )
+    .action(async (opts, actionCommand) => {
+      try {
+        await updateFinalizeCommand({
+          json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
+          channel: opts.channel as string | undefined,
+          timeout: inheritedUpdateTimeout(opts, actionCommand),
+          yes: Boolean(opts.yes),
+          restart: false,
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+}
+
+/** Attach the update command group to the root CLI. */
 export function registerUpdateCli(program: Command) {
+  program.enablePositionalOptions();
   const update = program
     .command("update")
     .description("Update OpenClaw and inspect update channel status")
@@ -39,8 +86,11 @@ export function registerUpdateCli(program: Command) {
     .option("--no-restart", "Skip restarting the gateway service after a successful update")
     .option("--dry-run", "Preview update actions without making changes", false)
     .option("--channel <stable|beta|dev>", "Persist update channel (git + npm)")
-    .option("--tag <dist-tag|version>", "Override npm dist-tag or version for this update")
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+    .option(
+      "--tag <dist-tag|version|spec>",
+      "Override the package target for this update (dist-tag, version, or package spec)",
+    )
+    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
     .addHelpText("after", () => {
       const examples = [
@@ -48,10 +98,12 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --channel beta", "Switch to beta channel (git + npm)"],
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
+        ["openclaw update --tag main", "One-off package update from GitHub main"],
         ["openclaw update --dry-run", "Preview actions without changing anything"],
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
+        ["openclaw update repair", "Repair stranded post-update plugin state"],
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
@@ -66,11 +118,12 @@ ${theme.heading("What this does:")}
 ${theme.heading("Switch channels:")}
   - Use --channel stable|beta|dev to persist the update channel in config
   - Run openclaw update status to see the active channel and source
-  - Use --tag <dist-tag|version> for a one-off npm update without persisting
+  - Use --tag <dist-tag|version|spec> for a one-off package update without persisting
+  - Use --tag main for a one-off package update from GitHub main
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
-  - Combine with --channel/--tag/--restart/--json/--timeout as needed
+  - Combine with --channel/--tag/--no-restart/--json/--timeout as needed
   - Use --dry-run to preview actions without writing config/installing/restarting
 
 ${theme.heading("Examples:")}
@@ -101,10 +154,13 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       }
     });
 
+  registerUpdateFinalizationCommand(update, "repair", false);
+  registerUpdateFinalizationCommand(update, "finalize", true);
+
   update
     .command("wizard")
     .description("Interactive update wizard")
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1200)")
+    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,

@@ -1,3 +1,4 @@
+// Heartbeat summary tests cover suppression of successful heartbeat summaries.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
@@ -32,14 +33,14 @@ function createCronServiceForSummary(params: {
   storePath: string;
   summary: string;
   enqueueSystemEvent: CronServiceParams["enqueueSystemEvent"];
-  requestHeartbeatNow: CronServiceParams["requestHeartbeatNow"];
+  requestHeartbeat: CronServiceParams["requestHeartbeat"];
 }) {
   return new CronService({
     storePath: params.storePath,
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: params.enqueueSystemEvent,
-    requestHeartbeatNow: params.requestHeartbeatNow,
+    requestHeartbeat: params.requestHeartbeat,
     runHeartbeatOnce: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
@@ -71,22 +72,22 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
 
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const cron = createCronServiceForSummary({
       storePath,
       summary: "HEARTBEAT_OK",
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
     });
 
     await runScheduledCron(cron);
 
     // HEARTBEAT_OK should NOT leak into the main session as a system event.
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 
-  it("still enqueues real cron summaries as system events", async () => {
+  it("does not revive legacy main-session relay for real cron summaries", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.now();
 
@@ -99,20 +100,17 @@ describe("cron isolated job HEARTBEAT_OK summary suppression (#32013)", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
 
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const cron = createCronServiceForSummary({
       storePath,
       summary: "Weather update: sunny, 72°F",
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
     });
 
     await runScheduledCron(cron);
 
-    // Real summaries SHOULD be enqueued.
-    expect(enqueueSystemEvent).toHaveBeenCalledWith(
-      expect.stringContaining("Weather update"),
-      expect.objectContaining({ agentId: undefined }),
-    );
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 });

@@ -1,9 +1,8 @@
 /**
  * Upload an image from a URL to Tlon storage.
  */
-import { uploadFile } from "@tloncorp/api";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/tlon";
-import { getDefaultSsrFPolicy } from "./context.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { uploadFile } from "../tlon-api.js";
 
 /**
  * Fetch an image from a URL and upload it to Tlon storage.
@@ -25,7 +24,7 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
     const { response, release } = await fetchWithSsrFGuard({
       url: imageUrl,
       init: { method: "GET" },
-      policy: getDefaultSsrFPolicy(),
+      policy: undefined,
       auditContext: "tlon-upload-image",
     });
 
@@ -54,7 +53,7 @@ export async function uploadImageFromUrl(imageUrl: string): Promise<string> {
       await release();
     }
   } catch (err) {
-    console.warn(`[tlon] Failed to upload image, using original URL: ${err}`);
+    console.warn(`[tlon] Failed to upload image, using original URL: ${String(err)}`);
     return imageUrl;
   }
 }

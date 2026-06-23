@@ -1,6 +1,11 @@
+/** Audits configured secrets and reports plaintext/ref migration status. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  readPersistedAuthProfileStoreRaw,
+  resolveAuthProfileDatabasePath,
+} from "../agents/auth-profiles/sqlite.js";
 import {
   isNonSecretApiKeyMarker,
   isSecretRefHeaderValueMarker,
@@ -9,10 +14,13 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { createSecretsConfigIO } from "./config-io.js";
+import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
+import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { secretRefKey } from "./ref-contract.js";
 import {
@@ -26,24 +34,26 @@ import {
   isExpectedResolvedSecretValue,
 } from "./secret-value.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
-import { describeUnknownError } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
-  listAuthProfileStorePaths,
+  listAuthProfileStoreAgentDirs,
   listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
   readJsonObjectIfExists,
 } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
+/** Stable finding codes emitted by `openclaw secrets audit`. */
 export type SecretsAuditCode =
   | "PLAINTEXT_FOUND"
   | "REF_UNRESOLVED"
   | "REF_SHADOWED"
   | "LEGACY_RESIDUE";
 
+/** Audit severity used for CLI output and check-mode exit behavior. */
 export type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
 
+/** One secret audit finding with file/path context. */
 export type SecretsAuditFinding = {
   code: SecretsAuditCode;
   severity: SecretsAuditSeverity;
@@ -54,11 +64,18 @@ export type SecretsAuditFinding = {
   profileId?: string;
 };
 
+/** Overall audit state derived from findings and unresolved refs. */
 export type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
+/** Structured report returned by the secrets audit command. */
 export type SecretsAuditReport = {
   version: 1;
   status: SecretsAuditStatus;
+  resolution: {
+    refsChecked: number;
+    skippedExecRefs: number;
+    resolvabilityComplete: boolean;
+  };
   filesScanned: string[];
   summary: {
     plaintextCount: number;
@@ -97,41 +114,7 @@ type AuditCollector = {
 };
 
 const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
-const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
-  "authorization",
-  "proxy-authorization",
-  "x-api-key",
-  "api-key",
-  "apikey",
-  "x-auth-token",
-  "auth-token",
-  "x-access-token",
-  "access-token",
-  "x-secret-key",
-  "secret-key",
-]);
-const SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS = [
-  "api-key",
-  "apikey",
-  "token",
-  "secret",
-  "password",
-  "credential",
-];
-
-function isLikelySensitiveModelProviderHeaderName(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES.has(normalized)) {
-    return true;
-  }
-  return SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS.some((fragment) =>
-    normalized.includes(fragment),
-  );
-}
-
+const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 function addFinding(collector: AuditCollector, finding: SecretsAuditFinding): void {
   collector.findings.push(finding);
 }
@@ -253,29 +236,19 @@ function collectConfigSecrets(params: {
 }
 
 function collectAuthStoreSecrets(params: {
-  authStorePath: string;
+  agentDir: string;
   collector: AuditCollector;
   defaults?: SecretDefaults;
 }): void {
-  if (!fs.existsSync(params.authStorePath)) {
+  const authStorePath = resolveAuthProfileDatabasePath(params.agentDir);
+  if (!fs.existsSync(authStorePath)) {
     return;
   }
-  params.collector.filesScanned.add(params.authStorePath);
-  const parsedResult = readJsonObjectIfExists(params.authStorePath);
-  if (parsedResult.error) {
-    addFinding(params.collector, {
-      code: "REF_UNRESOLVED",
-      severity: "error",
-      file: params.authStorePath,
-      jsonPath: "<root>",
-      message: `Invalid JSON in auth-profiles store: ${parsedResult.error}`,
-    });
+  const parsed = readPersistedAuthProfileStoreRaw(params.agentDir);
+  if (!isRecord(parsed) || !isRecord(parsed.profiles)) {
     return;
   }
-  const parsed = parsedResult.value;
-  if (!parsed || !isRecord(parsed.profiles)) {
-    return;
-  }
+  params.collector.filesScanned.add(authStorePath);
   for (const entry of iterateAuthProfileCredentials(parsed.profiles)) {
     if (entry.kind === "api_key" || entry.kind === "token") {
       const { ref } = resolveSecretInputRef({
@@ -283,9 +256,10 @@ function collectAuthStoreSecrets(params: {
         refValue: entry.refValue,
         defaults: params.defaults,
       });
+      const authoredValueRef = coerceSecretRef(entry.value, params.defaults);
       if (ref) {
         params.collector.refAssignments.push({
-          file: params.authStorePath,
+          file: authStorePath,
           path: `profiles.${entry.profileId}.${entry.valueField}`,
           ref,
           expected: "string",
@@ -293,11 +267,14 @@ function collectAuthStoreSecrets(params: {
         });
         trackAuthProviderState(params.collector, entry.provider, entry.kind);
       }
+      if (authoredValueRef) {
+        continue;
+      }
       if (isNonEmptyString(entry.value)) {
         addFinding(params.collector, {
           code: "PLAINTEXT_FOUND",
           severity: "warn",
-          file: params.authStorePath,
+          file: authStorePath,
           jsonPath: `profiles.${entry.profileId}.${entry.valueField}`,
           message:
             entry.kind === "api_key"
@@ -314,7 +291,7 @@ function collectAuthStoreSecrets(params: {
       addFinding(params.collector, {
         code: "LEGACY_RESIDUE",
         severity: "info",
-        file: params.authStorePath,
+        file: authStorePath,
         jsonPath: `profiles.${entry.profileId}`,
         message: "OAuth credentials are present (out of scope for static SecretRef migration).",
         provider: entry.provider,
@@ -369,7 +346,10 @@ function collectModelsJsonSecrets(params: {
     return;
   }
   params.collector.filesScanned.add(params.modelsJsonPath);
-  const parsedResult = readJsonObjectIfExists(params.modelsJsonPath);
+  const parsedResult = readJsonObjectIfExists(params.modelsJsonPath, {
+    requireRegularFile: true,
+    maxBytes: MAX_AUDIT_MODELS_JSON_BYTES,
+  });
   if (parsedResult.error) {
     addFinding(params.collector, {
       code: "REF_UNRESOLVED",
@@ -452,9 +432,13 @@ async function collectUnresolvedRefFindings(params: {
   collector: AuditCollector;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Promise<void> {
+  allowExec: boolean;
+}): Promise<{ refsChecked: number; skippedExecRefs: number }> {
   const cache: SecretRefResolveCache = {};
   const refsByProvider = new Map<string, Map<string, SecretRef>>();
+  const skippedRefKeys = new Set<string>();
+  let refsChecked = 0;
+  let skippedExecRefs = 0;
   for (const assignment of params.collector.refAssignments) {
     const providerKey = `${assignment.ref.source}:${assignment.ref.provider}`;
     let refsForProvider = refsByProvider.get(providerKey);
@@ -470,9 +454,30 @@ async function collectUnresolvedRefFindings(params: {
 
   for (const refsForProvider of refsByProvider.values()) {
     const refs = [...refsForProvider.values()];
+    const selectedRefs = selectRefsForExecPolicy({
+      refs,
+      allowExec: params.allowExec,
+    });
+    if (selectedRefs.skippedExecRefs.length > 0) {
+      skippedExecRefs += selectedRefs.skippedExecRefs.length;
+      for (const ref of selectedRefs.skippedExecRefs) {
+        skippedRefKeys.add(secretRefKey(ref));
+        const staticError = getSkippedExecRefStaticError({
+          ref,
+          config: params.config,
+        });
+        if (staticError) {
+          errorsByRefKey.set(secretRefKey(ref), new Error(staticError));
+        }
+      }
+    }
+    if (selectedRefs.refsToResolve.length === 0) {
+      continue;
+    }
+    refsChecked += selectedRefs.refsToResolve.length;
     const provider = refs[0]?.provider;
     try {
-      const resolved = await resolveSecretRefValues(refs, {
+      const resolved = await resolveSecretRefValues(selectedRefs.refsToResolve, {
         config: params.config,
         env: params.env,
         cache,
@@ -483,7 +488,7 @@ async function collectUnresolvedRefFindings(params: {
       continue;
     } catch (err) {
       if (provider && isProviderScopedSecretResolutionError(err)) {
-        for (const ref of refs) {
+        for (const ref of selectedRefs.refsToResolve) {
           errorsByRefKey.set(secretRefKey(ref), err);
         }
         continue;
@@ -491,7 +496,9 @@ async function collectUnresolvedRefFindings(params: {
       // Fall back to per-ref resolution for provider-specific pinpoint errors.
     }
 
-    const tasks = refs.map(
+    // Batch resolution is cheaper, but individual fallback gives path-specific diagnostics when
+    // a provider returns mixed id failures.
+    const tasks = selectedRefs.refsToResolve.map(
       (ref) => async (): Promise<{ key: string; resolved: unknown }> => ({
         key: secretRefKey(ref),
         resolved: await resolveSecretRefValue(ref, {
@@ -503,10 +510,10 @@ async function collectUnresolvedRefFindings(params: {
     );
     const fallback = await runTasksWithConcurrency({
       tasks,
-      limit: Math.min(REF_RESOLVE_FALLBACK_CONCURRENCY, refs.length),
+      limit: Math.min(REF_RESOLVE_FALLBACK_CONCURRENCY, selectedRefs.refsToResolve.length),
       errorMode: "continue",
       onTaskError: (error, index) => {
-        const ref = refs[index];
+        const ref = selectedRefs.refsToResolve[index];
         if (!ref) {
           return;
         }
@@ -523,6 +530,9 @@ async function collectUnresolvedRefFindings(params: {
 
   for (const assignment of params.collector.refAssignments) {
     const key = secretRefKey(assignment.ref);
+    if (skippedRefKeys.has(key) && !errorsByRefKey.has(key)) {
+      continue;
+    }
     const resolveErr = errorsByRefKey.get(key);
     if (resolveErr) {
       addFinding(params.collector, {
@@ -530,7 +540,7 @@ async function collectUnresolvedRefFindings(params: {
         severity: "error",
         file: assignment.file,
         jsonPath: assignment.path,
-        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${describeUnknownError(resolveErr)}).`,
+        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${formatErrorMessage(resolveErr)}).`,
         provider: assignment.provider,
       });
       continue;
@@ -563,6 +573,10 @@ async function collectUnresolvedRefFindings(params: {
       });
     }
   }
+  return {
+    refsChecked,
+    skippedExecRefs,
+  };
 }
 
 function collectShadowingFindings(collector: AuditCollector): void {
@@ -594,12 +608,16 @@ function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport[
   };
 }
 
+/** Runs local storage/config audit and returns a structured report. */
+/** Runs a secrets audit over config/auth stores and returns structured findings. */
 export async function runSecretsAudit(
   params: {
     env?: NodeJS.ProcessEnv;
+    allowExec?: boolean;
   } = {},
 ): Promise<SecretsAuditReport> {
   const env = params.env ?? process.env;
+  const allowExec = Boolean(params.allowExec);
   const io = createSecretsConfigIO({ env });
   const snapshot = await io.readConfigFileSnapshot();
   const configPath = resolveUserPath(snapshot.path);
@@ -616,6 +634,11 @@ export async function runSecretsAudit(
   const stateDir = resolveStateDir(env, os.homedir);
   const envPath = path.join(resolveConfigDir(env, os.homedir), ".env");
   const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
+  let resolution = {
+    refsChecked: 0,
+    skippedExecRefs: 0,
+    resolvabilityComplete: true,
+  };
 
   if (snapshot.valid) {
     collectConfigSecrets({
@@ -623,24 +646,30 @@ export async function runSecretsAudit(
       configPath,
       collector,
     });
-    for (const authStorePath of listAuthProfileStorePaths(config, stateDir)) {
+    for (const agentDir of listAuthProfileStoreAgentDirs(config, stateDir)) {
       collectAuthStoreSecrets({
-        authStorePath,
+        agentDir,
         collector,
         defaults,
       });
     }
-    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir)) {
+    for (const modelsJsonPath of listAgentModelsJsonPaths(config, stateDir, env)) {
       collectModelsJsonSecrets({
         modelsJsonPath,
         collector,
       });
     }
-    await collectUnresolvedRefFindings({
+    const unresolvedRefResult = await collectUnresolvedRefFindings({
       collector,
       config,
       env,
+      allowExec,
     });
+    resolution = {
+      refsChecked: unresolvedRefResult.refsChecked,
+      skippedExecRefs: unresolvedRefResult.skippedExecRefs,
+      resolvabilityComplete: unresolvedRefResult.skippedExecRefs === 0,
+    };
     collectShadowingFindings(collector);
   } else {
     addFinding(collector, {
@@ -672,12 +701,14 @@ export async function runSecretsAudit(
   return {
     version: 1,
     status,
+    resolution,
     filesScanned: [...collector.filesScanned].toSorted(),
     summary,
     findings: collector.findings,
   };
 }
 
+/** Maps audit results to CLI exit codes. */
 export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: boolean): number {
   if (report.summary.unresolvedRefCount > 0) {
     return 2;

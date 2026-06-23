@@ -1,3 +1,7 @@
+// Zalo tests cover token plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveZaloToken } from "./token.js";
 import type { ZaloConfig } from "./types.js";
@@ -29,6 +33,21 @@ describe("resolveZaloToken", () => {
     expect(res.source).toBe("config");
   });
 
+  it("uses configured defaultAccount token when accountId is omitted", () => {
+    const cfg = {
+      defaultAccount: "work",
+      botToken: "top-level-token",
+      accounts: {
+        work: {
+          botToken: "work-token",
+        },
+      },
+    } as ZaloConfig;
+    const res = resolveZaloToken(cfg);
+    expect(res.token).toBe("work-token");
+    expect(res.source).toBe("config");
+  });
+
   it("does not inherit top-level token when account token is explicitly blank", () => {
     const cfg = {
       botToken: "top-level-token",
@@ -54,5 +73,19 @@ describe("resolveZaloToken", () => {
     const res = resolveZaloToken(cfg, "work");
     expect(res.token).toBe("work-token");
     expect(res.source).toBe("config");
+  });
+
+  it.runIf(process.platform !== "win32")("rejects symlinked token files", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-zalo-token-"));
+    const tokenFile = path.join(dir, "token.txt");
+    const tokenLink = path.join(dir, "token-link.txt");
+    fs.writeFileSync(tokenFile, "file-token\n", "utf8");
+    fs.symlinkSync(tokenFile, tokenLink);
+
+    const cfg = {
+      tokenFile: tokenLink,
+    } as ZaloConfig;
+    expect(() => resolveZaloToken(cfg)).toThrow(/Zalo token file.*must not be a symlink/);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

@@ -1,10 +1,13 @@
-import fs from "node:fs/promises";
+// Reads local agent/session state for status output.
+// This never contacts the gateway; it inspects configured agents and their read-only session stores.
+
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import { listAgentsForGateway } from "../gateway/session-utils.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { pathExists } from "../infra/fs-safe.js";
 
 export type AgentLocalStatus = {
   id: string;
@@ -24,19 +27,11 @@ type AgentLocalStatusesResult = {
   bootstrapPendingCount: number;
 };
 
-async function fileExists(p: string): Promise<boolean> {
-  try {
-    await fs.access(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
+/** Returns per-agent local workspace, bootstrap, session count, and last activity status. */
 export async function getAgentLocalStatuses(
-  cfg: OpenClawConfig = loadConfig(),
+  cfg: OpenClawConfig,
 ): Promise<AgentLocalStatusesResult> {
-  const agentList = listAgentsForGateway(cfg);
+  const agentList = listGatewayAgentsBasic(cfg);
   const now = Date.now();
 
   const statuses: AgentLocalStatus[] = [];
@@ -46,24 +41,19 @@ export async function getAgentLocalStatuses(
       try {
         return resolveAgentWorkspaceDir(cfg, agentId);
       } catch {
+        // A malformed workspace setting should not prevent status from showing other agents.
         return null;
       }
     })();
 
     const bootstrapPath = workspaceDir != null ? path.join(workspaceDir, "BOOTSTRAP.md") : null;
-    const bootstrapPending = bootstrapPath != null ? await fileExists(bootstrapPath) : null;
+    const bootstrapPending = bootstrapPath != null ? await pathExists(bootstrapPath) : null;
 
     const sessionsPath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = (() => {
-      try {
-        return loadSessionStore(sessionsPath);
-      } catch {
-        return {};
-      }
-    })();
-    const sessions = Object.entries(store)
-      .filter(([key]) => key !== "global" && key !== "unknown")
-      .map(([, entry]) => entry);
+    const sessions = listSessionEntries({ agentId, storePath: sessionsPath })
+      // Global/unknown buckets are aggregate compatibility entries, not agent activity.
+      .filter(({ sessionKey }) => sessionKey !== "global" && sessionKey !== "unknown")
+      .map(({ entry }) => entry);
     const sessionsCount = sessions.length;
     const lastUpdatedAt = sessions.reduce((max, e) => Math.max(max, e?.updatedAt ?? 0), 0);
     const resolvedLastUpdatedAt = lastUpdatedAt > 0 ? lastUpdatedAt : null;

@@ -1,14 +1,19 @@
+// DNS setup helper for wide-area discovery using Tailscale addresses and CoreDNS.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
-import { loadConfig } from "../config/config.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
-import { getWideAreaZonePath, resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
+import {
+  getWideAreaZonePath,
+  normalizeWideAreaDomain,
+  resolveWideAreaDiscoveryDomain,
+} from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 
 type RunOpts = { allowFailure?: boolean; inherit?: boolean };
 
@@ -31,6 +36,7 @@ function run(cmd: string, args: string[], opts?: RunOpts): string {
 }
 
 function writeFileSudoIfNeeded(filePath: string, content: string): void {
+  // Zone/CoreDNS paths may be root-owned; fall back to sudo tee only after normal write fails.
   try {
     fs.writeFileSync(filePath, content, "utf-8");
     return;
@@ -120,12 +126,16 @@ export function registerDnsCli(program: Command) {
       false,
     )
     .action(async (opts) => {
-      const cfg = loadConfig();
+      const cfg = getRuntimeConfig();
       const tailnetIPv4 = pickPrimaryTailnetIPv4();
       const tailnetIPv6 = pickPrimaryTailnetIPv6();
-      const wideAreaDomain = resolveWideAreaDiscoveryDomain({
-        configDomain: (opts.domain as string | undefined) ?? cfg.discovery?.wideArea?.domain,
-      });
+      const explicitDomain = (opts.domain as string | undefined) ?? cfg.discovery?.wideArea?.domain;
+      if (explicitDomain) {
+        // Throw on invalid CLI/config input before resolveWideAreaDiscoveryDomain
+        // silently swallows the validation error and falls back to env.
+        normalizeWideAreaDomain(explicitDomain);
+      }
+      const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: explicitDomain });
       if (!wideAreaDomain) {
         throw new Error(
           "No wide-area domain configured. Set discovery.wideArea.domain or pass --domain.",
@@ -133,7 +143,7 @@ export function registerDnsCli(program: Command) {
       }
       const zonePath = getWideAreaZonePath(wideAreaDomain);
 
-      const tableWidth = Math.max(60, (process.stdout.columns ?? 120) - 1);
+      const tableWidth = getTerminalTableWidth();
       defaultRuntime.log(theme.heading("DNS setup"));
       defaultRuntime.log(
         renderTable({
@@ -153,17 +163,15 @@ export function registerDnsCli(program: Command) {
         }).trimEnd(),
       );
       defaultRuntime.log("");
-      defaultRuntime.log(theme.heading("Recommended ~/.openclaw/openclaw.json:"));
       defaultRuntime.log(
-        JSON.stringify(
-          {
-            gateway: { bind: "auto" },
-            discovery: { wideArea: { enabled: true, domain: wideAreaDomain } },
-          },
-          null,
-          2,
+        theme.heading(
+          "Recommended config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json):",
         ),
       );
+      defaultRuntime.writeJson({
+        gateway: { bind: "auto" },
+        discovery: { wideArea: { enabled: true, domain: wideAreaDomain } },
+      });
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
       defaultRuntime.log(
@@ -254,7 +262,7 @@ export function registerDnsCli(program: Command) {
         defaultRuntime.log("");
         defaultRuntime.log(
           theme.muted(
-            "Note: enable discovery.wideArea.enabled in ~/.openclaw/openclaw.json on the gateway and restart the gateway so it writes the DNS-SD zone.",
+            "Note: enable discovery.wideArea.enabled in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
           ),
         );
       }

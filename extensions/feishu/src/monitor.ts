@@ -1,10 +1,6 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk/feishu";
-import { listEnabledFeishuAccounts, resolveFeishuAccount } from "./accounts.js";
-import {
-  monitorSingleAccount,
-  resolveReactionSyntheticEvent,
-  type FeishuReactionCreatedEvent,
-} from "./monitor.account.js";
+// Feishu plugin module implements monitor behavior.
+import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
+import { listEnabledFeishuAccounts, resolveFeishuRuntimeAccount } from "./accounts.js";
 import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import {
   clearFeishuWebhookRateLimitStateForTest,
@@ -16,17 +12,23 @@ import {
 export type MonitorFeishuOpts = {
   config?: ClawdbotConfig;
   runtime?: RuntimeEnv;
+  channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   accountId?: string;
 };
+
+let monitorAccountRuntimePromise: Promise<typeof import("./monitor.account.js")> | undefined;
+
+async function loadMonitorAccountRuntime() {
+  monitorAccountRuntimePromise ??= import("./monitor.account.js");
+  return await monitorAccountRuntimePromise;
+}
 
 export {
   clearFeishuWebhookRateLimitStateForTest,
   getFeishuWebhookRateLimitStateSizeForTest,
   isWebhookRateLimitedForTest,
-  resolveReactionSyntheticEvent,
 };
-export type { FeishuReactionCreatedEvent };
 
 export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promise<void> {
   const cfg = opts.config;
@@ -37,13 +39,18 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   const log = opts.runtime?.log ?? console.log;
 
   if (opts.accountId) {
-    const account = resolveFeishuAccount({ cfg, accountId: opts.accountId });
+    const account = resolveFeishuRuntimeAccount(
+      { cfg, accountId: opts.accountId },
+      { requireEventSecrets: true },
+    );
     if (!account.enabled || !account.configured) {
       throw new Error(`Feishu account "${opts.accountId}" not configured or disabled`);
     }
+    const { monitorSingleAccount } = await loadMonitorAccountRuntime();
     return monitorSingleAccount({
       cfg,
       account,
+      channelRuntime: opts.channelRuntime,
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
     });
@@ -58,6 +65,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     `feishu: starting ${accounts.length} account(s): ${accounts.map((a) => a.accountId).join(", ")}`,
   );
 
+  const { monitorSingleAccount } = await loadMonitorAccountRuntime();
   const monitorPromises: Promise<void>[] = [];
   for (const account of accounts) {
     if (opts.abortSignal?.aborted) {
@@ -80,6 +88,7 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
       monitorSingleAccount({
         cfg,
         account,
+        channelRuntime: opts.channelRuntime,
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
         botOpenIdSource: { kind: "prefetched", botOpenId, botName },
@@ -90,6 +99,6 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
   await Promise.all(monitorPromises);
 }
 
-export function stopFeishuMonitor(accountId?: string): void {
-  stopFeishuMonitorState(accountId);
+export async function stopFeishuMonitor(accountId?: string): Promise<void> {
+  await stopFeishuMonitorState(accountId);
 }

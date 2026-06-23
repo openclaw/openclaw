@@ -1,9 +1,15 @@
+// Voice Call plugin module implements manager harness behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
+import { persistCallRecord } from "./manager/store.js";
 import type { VoiceCallProvider } from "./providers/base.js";
+import { getOptionalVoiceCallStateRuntime, setVoiceCallStateRuntime } from "./runtime-state.js";
+import { CallRecordSchema } from "./types.js";
 import type {
   GetCallStatusInput,
   GetCallStatusResult,
@@ -19,14 +25,15 @@ import type {
 } from "./types.js";
 
 export class FakeProvider implements VoiceCallProvider {
-  readonly name: "plivo" | "twilio";
+  readonly name: "plivo" | "twilio" | "telnyx";
+  twilioStreamConnectEnabled = true;
   readonly playTtsCalls: PlayTtsInput[] = [];
   readonly hangupCalls: HangupCallInput[] = [];
   readonly startListeningCalls: StartListeningInput[] = [];
   readonly stopListeningCalls: StopListeningInput[] = [];
   getCallStatusResult: GetCallStatusResult = { status: "in-progress", isTerminal: false };
 
-  constructor(name: "plivo" | "twilio" = "plivo") {
+  constructor(name: "plivo" | "twilio" | "telnyx" = "plivo") {
     this.name = name;
   }
 
@@ -61,13 +68,33 @@ export class FakeProvider implements VoiceCallProvider {
   async getCallStatus(_input: GetCallStatusInput): Promise<GetCallStatusResult> {
     return this.getCallStatusResult;
   }
+
+  isConversationStreamConnectEnabled(): boolean {
+    return this.name === "twilio" && this.twilioStreamConnectEnabled;
+  }
 }
 
-let storeSeq = 0;
-
 export function createTestStorePath(): string {
-  storeSeq += 1;
-  return path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}-${storeSeq}`);
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-call-test-"));
+}
+
+export function installVoiceCallStateRuntimeForTests(): void {
+  if (getOptionalVoiceCallStateRuntime()) {
+    return;
+  }
+  setVoiceCallStateRuntime({
+    state: {
+      resolveStateDir: () => "",
+      openKeyedStore: (() => {
+        throw new Error("openKeyedStore is not used by voice-call manager tests");
+      }) as never,
+      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openChannelIngressQueue: (() => {
+        throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
+      }) as never,
+    },
+  });
 }
 
 export async function createManagerHarness(
@@ -83,6 +110,7 @@ export async function createManagerHarness(
     fromNumber: "+15550000000",
     ...configOverrides,
   });
+  installVoiceCallStateRuntimeForTests();
   const manager = new CallManager(config, createTestStorePath());
   await manager.initialize(provider, "https://example.com/voice/webhook");
   return { manager, provider };
@@ -99,6 +127,13 @@ export function markCallAnswered(manager: CallManager, callId: string, eventId: 
 }
 
 export function writeCallsToStore(storePath: string, calls: Record<string, unknown>[]): void {
+  fs.mkdirSync(storePath, { recursive: true });
+  for (const call of calls) {
+    persistCallRecord(storePath, CallRecordSchema.parse(call));
+  }
+}
+
+export function writeLegacyCallsJsonl(storePath: string, calls: Record<string, unknown>[]): void {
   fs.mkdirSync(storePath, { recursive: true });
   const logPath = path.join(storePath, "calls.jsonl");
   const lines = calls.map((c) => JSON.stringify(c)).join("\n") + "\n";

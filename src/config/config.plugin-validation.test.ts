@@ -1,9 +1,25 @@
+// Covers plugin config validation and manifest-backed constraints.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
-import { validateConfigObjectWithPlugins } from "./config.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { clearLoadInstalledPluginIndexInstallRecordsCache } from "../plugins/installed-plugin-index-records.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
+
+vi.unmock("../version.js");
+
+async function chmodSafeDir(dir: string) {
+  if (process.platform === "win32") {
+    return;
+  }
+  await fs.chmod(dir, 0o755);
+}
+
+async function mkdirSafe(dir: string) {
+  await fs.mkdir(dir, { recursive: true });
+  await chmodSafeDir(dir);
+}
 
 async function writePluginFixture(params: {
   dir: string;
@@ -11,7 +27,7 @@ async function writePluginFixture(params: {
   schema: Record<string, unknown>;
   channels?: string[];
 }) {
-  await fs.mkdir(params.dir, { recursive: true });
+  await mkdirSafe(params.dir);
   await fs.writeFile(
     path.join(params.dir, "index.js"),
     `export default { id: "${params.id}", register() {} };`,
@@ -31,27 +47,121 @@ async function writePluginFixture(params: {
   );
 }
 
+async function writeBundleFixture(params: {
+  dir: string;
+  format: "codex" | "claude";
+  name: string;
+}) {
+  await mkdirSafe(params.dir);
+  const manifestDir = path.join(
+    params.dir,
+    params.format === "codex" ? ".codex-plugin" : ".claude-plugin",
+  );
+  await mkdirSafe(manifestDir);
+  await fs.writeFile(
+    path.join(manifestDir, "plugin.json"),
+    JSON.stringify({ name: params.name }, null, 2),
+    "utf-8",
+  );
+}
+
+async function writeManifestlessClaudeBundleFixture(params: { dir: string }) {
+  await mkdirSafe(params.dir);
+  await mkdirSafe(path.join(params.dir, "commands"));
+  await fs.writeFile(
+    path.join(params.dir, "commands", "review.md"),
+    "---\ndescription: fixture\n---\n",
+    "utf-8",
+  );
+  await fs.writeFile(path.join(params.dir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+}
+
+function expectRemovedPluginWarnings(
+  result: { ok: boolean; warnings?: Array<{ path: string; message: string }> },
+  removedId: string,
+  removedLabel: string,
+) {
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    const message = `plugin removed: ${removedLabel} (stale config entry ignored; remove it from plugins config)`;
+    expectPathMessage(result.warnings, `plugins.entries.${removedId}`, message);
+    expectPathMessage(result.warnings, "plugins.allow", message);
+    expectPathMessage(result.warnings, "plugins.deny", message);
+    expectPathMessage(result.warnings, "plugins.slots.memory", message);
+  }
+}
+
+function expectPathMessage(
+  entries: readonly { path: string; message: string }[] | undefined,
+  pathValue: string,
+  message: string,
+) {
+  expect(entries?.some((entry) => entry.path === pathValue && entry.message === message)).toBe(
+    true,
+  );
+}
+
+function expectPathMessageIncludes(
+  entries: readonly { path: string; message: string }[] | undefined,
+  pathValue: string,
+  fragment: string,
+) {
+  expect(
+    entries?.some((entry) => entry.path === pathValue && entry.message.includes(fragment)),
+  ).toBe(true);
+}
+
+function expectNoPath(
+  entries: readonly { path: string; message: string }[] | undefined,
+  pathValue: string,
+) {
+  expect(entries?.some((entry) => entry.path === pathValue)).toBe(false);
+}
+
 describe("config plugin validation", () => {
   let fixtureRoot = "";
   let suiteHome = "";
   let badPluginDir = "";
   let enumPluginDir = "";
-  let bluebubblesPluginDir = "";
+  let chatPluginDir = "";
+  let googleOverridePluginDir = "";
   let voiceCallSchemaPluginDir = "";
-  const envSnapshot = {
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS,
-  };
+  let bundlePluginDir = "";
+  let manifestlessClaudeBundleDir = "";
+  let blockedPluginDir = "";
+  const suiteEnv = () =>
+    ({
+      HOME: suiteHome,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_VERSION: undefined,
+      VITEST: "true",
+    }) satisfies NodeJS.ProcessEnv;
 
-  const validateInSuite = (raw: unknown) => validateConfigObjectWithPlugins(raw);
+  const validateInSuite = (raw: unknown) =>
+    validateConfigObjectWithPlugins(raw, { env: suiteEnv() });
+
+  const validateRemovedPluginConfig = (removedId: string) =>
+    validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: false,
+        entries: { [removedId]: { enabled: true } },
+        allow: [removedId],
+        deny: [removedId],
+        slots: { memory: removedId },
+      },
+    });
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-config-plugin-validation-"));
+    await chmodSafeDir(fixtureRoot);
     suiteHome = path.join(fixtureRoot, "home");
-    await fs.mkdir(suiteHome, { recursive: true });
+    await mkdirSafe(suiteHome);
     badPluginDir = path.join(suiteHome, "bad-plugin");
     enumPluginDir = path.join(suiteHome, "enum-plugin");
-    bluebubblesPluginDir = path.join(suiteHome, "bluebubbles-plugin");
+    chatPluginDir = path.join(suiteHome, "chat-plugin");
     await writePluginFixture({
       dir: badPluginDir,
       id: "bad-plugin",
@@ -79,9 +189,36 @@ describe("config plugin validation", () => {
       },
     });
     await writePluginFixture({
-      dir: bluebubblesPluginDir,
-      id: "bluebubbles-plugin",
-      channels: ["bluebubbles"],
+      dir: chatPluginDir,
+      id: "chat-plugin",
+      channels: ["chat"],
+      schema: { type: "object" },
+    });
+    googleOverridePluginDir = path.join(suiteHome, "google");
+    await writePluginFixture({
+      dir: googleOverridePluginDir,
+      id: "google",
+      schema: {
+        type: "object",
+        properties: {
+          apiKey: { type: "string" },
+        },
+      },
+    });
+    bundlePluginDir = path.join(suiteHome, "bundle-plugin");
+    await writeBundleFixture({
+      dir: bundlePluginDir,
+      format: "codex",
+      name: "Bundle Fixture",
+    });
+    manifestlessClaudeBundleDir = path.join(suiteHome, "manifestless-claude-bundle");
+    await writeManifestlessClaudeBundleFixture({
+      dir: manifestlessClaudeBundleDir,
+    });
+    blockedPluginDir = path.join(suiteHome, "blocked-plugin");
+    await writePluginFixture({
+      dir: blockedPluginDir,
+      id: "blocked-plugin",
       schema: { type: "object" },
     });
     voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
@@ -102,40 +239,18 @@ describe("config plugin validation", () => {
       id: "voice-call-schema-fixture",
       schema: voiceCallManifest.configSchema,
     });
-    process.env.OPENCLAW_STATE_DIR = path.join(suiteHome, ".openclaw");
-    process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = "10000";
-    clearPluginManifestRegistryCache();
-    // Warm the plugin manifest cache once so path-based validations can reuse
-    // parsed manifests across test cases.
-    validateInSuite({
-      plugins: {
-        enabled: false,
-        load: { paths: [badPluginDir, bluebubblesPluginDir, voiceCallSchemaPluginDir] },
-      },
-    });
   });
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
-    clearPluginManifestRegistryCache();
-    if (envSnapshot.OPENCLAW_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = envSnapshot.OPENCLAW_STATE_DIR;
-    }
-    if (envSnapshot.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS === undefined) {
-      delete process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS;
-    } else {
-      process.env.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS = envSnapshot.OPENCLAW_PLUGIN_MANIFEST_CACHE_MS;
-    }
   });
 
-  it("reports missing plugin refs across load paths, entries, and allowlist surfaces", async () => {
+  it("reports missing plugin refs across entries and allowlist surfaces", () => {
     const missingPath = path.join(suiteHome, "missing-plugin-dir");
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
-        enabled: false,
+        enabled: true,
         load: { paths: [missingPath] },
         entries: { "missing-plugin": { enabled: true } },
         allow: ["missing-allow"],
@@ -145,71 +260,1166 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(
-        res.issues.some(
-          (issue) =>
-            issue.path === "plugins.load.paths" && issue.message.includes("plugin path not found"),
-        ),
-      ).toBe(true);
-      expect(res.issues).toEqual(
-        expect.arrayContaining([
-          { path: "plugins.allow", message: "plugin not found: missing-allow" },
-          { path: "plugins.deny", message: "plugin not found: missing-deny" },
-          { path: "plugins.slots.memory", message: "plugin not found: missing-slot" },
-        ]),
-      );
-      expect(res.warnings).toContainEqual({
-        path: "plugins.entries.missing-plugin",
-        message:
-          "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
-      });
-    }
-  });
-
-  it("warns for removed legacy plugin ids instead of failing validation", async () => {
-    const removedId = "google-antigravity-auth";
-    const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
-      plugins: {
-        enabled: false,
-        entries: { [removedId]: { enabled: true } },
-        allow: [removedId],
-        deny: [removedId],
-        slots: { memory: removedId },
-      },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
+      expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: missing-slot");
       expect(res.warnings).toEqual(
         expect.arrayContaining([
           {
-            path: `plugins.entries.${removedId}`,
+            path: "plugins.entries.missing-plugin",
             message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+              "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
           },
           {
             path: "plugins.allow",
             message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+              "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
           },
           {
             path: "plugins.deny",
             message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-          },
-          {
-            path: "plugins.slots.memory",
-            message:
-              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+              "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
           },
         ]),
       );
+      expect(res.warnings.filter((warning) => warning.path.startsWith("plugins."))).toEqual([
+        {
+          path: "plugins.entries.missing-plugin",
+          message:
+            "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
+        },
+        {
+          path: "plugins.allow",
+          message:
+            "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
+        },
+        {
+          path: "plugins.deny",
+          message:
+            "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
+        },
+      ]);
     }
   });
 
-  it("surfaces plugin config diagnostics", async () => {
+  it("warns instead of failing for stale plugins.deny entries", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        deny: ["missing-deny"],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toContainEqual({
+        path: "plugins.deny",
+        message:
+          "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
+      });
+    }
+  });
+
+  describe("missing Codex plugin diagnostics", () => {
+    const validateWithMissingCodexPlugin = (raw: Record<string, unknown>) =>
+      validateConfigObjectWithPlugins(
+        {
+          agents: { list: [{ id: "openclaw" }] },
+          ...raw,
+        },
+        {
+          env: suiteEnv(),
+          pluginMetadataSnapshot: {
+            manifestRegistry: {
+              plugins: [],
+              diagnostics: [],
+            },
+          },
+        },
+      );
+
+    const expectNoMissingCodexPluginWarning = (
+      warnings: readonly { path: string; message: string }[] | undefined,
+    ) => {
+      expect(warnings ?? []).not.toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.codex",
+          message: expect.stringContaining("plugin not installed: codex"),
+        }),
+      );
+    };
+
+    const expectMissingCodexPluginWarning = (
+      warnings: readonly { path: string; message: string }[] | undefined,
+    ) => {
+      expect(warnings ?? []).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.entries.codex",
+          message: expect.stringContaining("plugin not installed: codex"),
+        }),
+      );
+    };
+
+    it.each([
+      {
+        name: "provider-level PI runtime policy",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+                agentRuntime: { id: "pi" },
+              },
+            },
+          },
+          plugins: { entries: { codex: {} } },
+        },
+      },
+      {
+        name: "agent wildcard PI runtime policy",
+        config: {
+          agents: {
+            list: [{ id: "openclaw" }],
+            defaults: {
+              models: {
+                "openai/*": { agentRuntime: { id: "pi" } },
+              },
+            },
+          },
+          plugins: { entries: { codex: {} } },
+        },
+      },
+      {
+        name: "explicitly disabled Codex plugin entry",
+        config: {
+          plugins: { entries: { codex: { enabled: false } } },
+        },
+      },
+    ])("does not warn when $name keeps Codex unavailable", ({ config }) => {
+      const res = validateWithMissingCodexPlugin(config);
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when only one provider model route is pinned to OpenClaw", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "openclaw" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when provider PI policy is overridden by an automatic OpenAI model route", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "auto" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when a custom OpenAI-compatible base URL uses automatic runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "auto" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when exact agent policy overrides an automatic OpenAI provider model route", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "auto" },
+                },
+              ],
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "pi" } },
+              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when a custom OpenAI-compatible base URL uses implicit runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("does not warn when a normalized custom OpenAI-compatible provider key uses implicit runtime policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            OpenAI: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still reports explicit Codex allowlist entries for custom OpenAI-compatible base URLs", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+            },
+          },
+        },
+        plugins: {
+          allow: ["codex"],
+          entries: { codex: {} },
+        },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+      expect(res.warnings ?? []).toContainEqual(
+        expect.objectContaining({
+          path: "plugins.allow",
+          message: expect.stringContaining("plugin not installed: codex"),
+        }),
+      );
+    });
+
+    it("does not warn when a custom OpenAI-compatible base URL uses automatic wildcard policy", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://proxy.example.invalid/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "default" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectNoMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when only one agent model route is pinned to PI", () => {
+      const res = validateWithMissingCodexPlugin({
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when a provider-wide PI policy is overridden by an OpenAI wildcard default", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/*": { agentRuntime: { id: "default" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when the missing Codex plugin is explicitly enabled", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        plugins: { entries: { codex: { enabled: true } } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when a provider model route explicitly selects Codex", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128000,
+                  maxTokens: 8192,
+                  agentRuntime: { id: "codex" },
+                },
+              ],
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+
+    it("still warns when an agent model route explicitly selects Codex", () => {
+      const res = validateWithMissingCodexPlugin({
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [],
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+        agents: {
+          list: [{ id: "openclaw" }],
+          defaults: {
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+        plugins: { entries: { codex: {} } },
+      });
+
+      expect(res.ok).toBe(true);
+      expectMissingCodexPluginWarning(res.warnings);
+    });
+  });
+
+  it("deduplicates catalog install hints for missing configured official external plugins", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: { brave: { enabled: true } },
+          allow: ["brave"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
+    expectPathMessage(res.warnings, "plugins.entries.brave", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
+    expect(
+      (res.warnings ?? []).some(
+        (warning) =>
+          (warning.path === "plugins.entries.brave" || warning.path === "plugins.allow") &&
+          warning.message.includes("remove it from plugins config"),
+      ),
+    ).toBe(false);
+  });
+
+  it("warns instead of failing when an official external memory slot plugin is not installed", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: { "memory-lancedb": { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const slotMessage =
+      "plugin not installed: memory-lancedb — gateway will run without persistent memory until installed; install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
+    const entryMessage =
+      "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
+    expectPathMessage(res.warnings, "plugins.slots.memory", slotMessage);
+    expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", entryMessage);
+  });
+
+  it("keeps no-persistent-memory wording scoped to the selected missing memory slot", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          slots: { memory: "none" },
+          entries: { "memory-lancedb": { enabled: true } },
+          allow: ["memory-lancedb"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
+    expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
+    expect(
+      (res.warnings ?? []).some((warning) =>
+        warning.message.includes("gateway will run without persistent memory"),
+      ),
+    ).toBe(false);
+  });
+
+  it("deduplicates yuanbao missing-plugin warnings across entries and allow", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: { yuanbao: { enabled: true } },
+          allow: ["yuanbao"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.15.0";
+    expectPathMessage(res.warnings, "plugins.entries.yuanbao", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
+  });
+
+  it("keeps official external non-memory plugins fatal in the memory slot", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          slots: { memory: "brave" },
+          entries: { brave: { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: brave");
+    expectPathMessage(
+      res.warnings,
+      "plugins.entries.brave",
+      "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin",
+    );
+  });
+
+  it("keeps blocked official external memory slot plugins fatal", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: { "memory-lancedb": { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                pluginId: "memory-lancedb",
+                message: "blocked plugin candidate: fixture safety block",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessageIncludes(
+      res.issues,
+      "plugins.slots.memory",
+      "plugin present but blocked: memory-lancedb",
+    );
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.entries.memory-lancedb",
+      "plugin present but blocked: memory-lancedb",
+    );
+    expect(
+      res.warnings?.some((warning) =>
+        warning.message.includes("plugin not installed: memory-lancedb"),
+      ),
+    ).toBe(false);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reports configured blocked plugins without stale not-found wording",
+    async () => {
+      await fs.chmod(blockedPluginDir, 0o777);
+      try {
+        const res = validateInSuite({
+          agents: { list: [{ id: "openclaw" }] },
+          plugins: {
+            enabled: true,
+            load: { paths: [blockedPluginDir] },
+            entries: { "blocked-plugin": { enabled: true } },
+            allow: ["blocked-plugin"],
+          },
+        });
+
+        expect(res.ok).toBe(true);
+        if (!res.ok) {
+          return;
+        }
+        expectPathMessageIncludes(
+          res.warnings,
+          "plugins.entries.blocked-plugin",
+          "plugin present but blocked: blocked-plugin",
+        );
+        expectPathMessageIncludes(
+          res.warnings,
+          "plugins.allow",
+          "plugin present but blocked: blocked-plugin",
+        );
+        expect(
+          res.warnings.some(
+            (warning) =>
+              warning.message.includes("plugin not found: blocked-plugin") ||
+              warning.message.includes("remove it from plugins config"),
+          ),
+        ).toBe(false);
+      } finally {
+        await chmodSafeDir(blockedPluginDir);
+      }
+    },
+  );
+
+  it("maps legacy blocked diagnostics without plugin ids to configured load paths", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          enabled: true,
+          load: { paths: [blockedPluginDir] },
+          entries: { "blocked-plugin": { enabled: true } },
+          allow: ["blocked-plugin"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                source: path.join(blockedPluginDir, "index.js"),
+                message: `blocked plugin candidate: world-writable path (${blockedPluginDir}, mode=0777)`,
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.entries.blocked-plugin",
+      "plugin present but blocked: blocked-plugin",
+    );
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.allow",
+      "plugin present but blocked: blocked-plugin",
+    );
+    expect(
+      res.warnings.some((warning) => warning.message.includes("plugin not found: blocked-plugin")),
+    ).toBe(false);
+  });
+
+  it("warns for broken discovered plugins that are not referenced by config", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "error",
+                pluginId: "broken-local",
+                source: path.join(suiteHome, "extensions", "broken-local", "openclaw.plugin.json"),
+                message: "plugin manifest entry does not exist: dist/index.js",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectPathMessage(
+      res.warnings,
+      "plugins",
+      "plugin broken-local: plugin manifest entry does not exist: dist/index.js",
+    );
+    expectNoPath(res.warnings, "plugins.entries.broken-local");
+  });
+
+  it("keeps broken discovered plugins fatal when config references them", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            "broken-local": { enabled: true },
+          },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "error",
+                pluginId: "broken-local",
+                source: path.join(suiteHome, "extensions", "broken-local", "openclaw.plugin.json"),
+                message: "plugin manifest entry does not exist: dist/index.js",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessage(
+      res.issues,
+      "plugins.entries.broken-local",
+      "plugin broken-local: plugin manifest entry does not exist: dist/index.js",
+    );
+  });
+
+  it("does not source-match blocked diagnostics that already name a different plugin id", () => {
+    const aliasDir = path.join(suiteHome, "alias-dir");
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          enabled: true,
+          load: { paths: [aliasDir] },
+          entries: {
+            "actual-id": { enabled: true },
+            "alias-dir": { enabled: true },
+          },
+          allow: ["actual-id", "alias-dir"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                pluginId: "actual-id",
+                source: path.join(aliasDir, "index.js"),
+                message: `blocked plugin candidate: world-writable path (${aliasDir}, mode=0777)`,
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.entries.actual-id",
+      "plugin present but blocked: actual-id",
+    );
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.allow",
+      "plugin present but blocked: actual-id",
+    );
+    const aliasMessage =
+      "plugin not found: alias-dir (stale config entry ignored; remove it from plugins config)";
+    expectPathMessage(res.warnings, "plugins.entries.alias-dir", aliasMessage);
+    expectPathMessage(res.warnings, "plugins.allow", aliasMessage);
+    expect(
+      res.warnings.some((warning) =>
+        warning.message.includes("plugin present but blocked: alias-dir"),
+      ),
+    ).toBe(false);
+  });
+
+  it("warns instead of failing for stale channel config backed by missing plugin refs", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      channels: {
+        "missing-chat": { token: "stale" },
+      },
+      plugins: {
+        allow: ["missing-chat"],
+        entries: { "missing-chat": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toContainEqual({
+      path: "channels.missing-chat",
+      message:
+        "unknown channel id: missing-chat (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
+    });
+    expect(res.warnings).toContainEqual({
+      path: "plugins.allow",
+      message:
+        "plugin not found: missing-chat (stale config entry ignored; remove it from plugins config)",
+    });
+    expect(res.warnings).toContainEqual({
+      path: "plugins.entries.missing-chat",
+      message:
+        "plugin not found: missing-chat (stale config entry ignored; remove it from plugins config)",
+    });
+  });
+
+  it("keeps unknown channel typos fatal when there is no stale plugin evidence", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      channels: {
+        telegarm: { botToken: "typo" },
+      },
+      plugins: {
+        allow: ["telegram"],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues.filter((issue) => issue.path === "channels.telegarm")).toEqual([
+      {
+        path: "channels.telegarm",
+        message: "unknown channel id: telegarm",
+      },
+    ]);
+    expectNoPath(res.warnings, "channels.telegarm");
+  });
+
+  it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        channels: {
+          discord: { token: "xxx" },
+        },
+        plugins: {
+          allow: ["discord"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.warnings ?? []).toEqual([
+      {
+        path: "plugins.allow",
+        message:
+          "plugin not installed: discord — install the official external plugin with: openclaw plugins install @openclaw/discord",
+      },
+    ]);
+  });
+
+  it("uses persisted installed-plugin records as stale channel evidence", async () => {
+    const stateDir = path.join(suiteHome, ".openclaw");
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+    await writePersistedInstalledPluginIndex(
+      {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "test",
+        generatedAtMs: 1,
+        installRecords: {
+          "missing-sms": {
+            source: "npm",
+            spec: "missing-sms@1.0.0",
+            installedAt: "2026-04-12T00:00:00.000Z",
+          },
+        },
+        plugins: [],
+        diagnostics: [],
+      },
+      { stateDir },
+    );
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "openclaw" }] },
+        channels: {
+          "missing-sms": { token: "stale" },
+        },
+      });
+
+      expect(res.ok).toBe(true);
+      if (!res.ok) {
+        return;
+      }
+      expect(res.warnings).toContainEqual({
+        path: "channels.missing-sms",
+        message:
+          "unknown channel id: missing-sms (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)",
+      });
+    } finally {
+      await writePersistedInstalledPluginIndex(
+        {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash: "test",
+          generatedAtMs: 2,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        { stateDir },
+      );
+      clearLoadInstalledPluginIndexInstallRecordsCache();
+    }
+  });
+
+  it("warns with actionable guidance when a runtime command name is used in plugins.allow", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        allow: ["dreaming"],
+        entries: {
+          "memory-core": {
+            config: { dreaming: { enabled: true } },
+          },
+        },
+      },
+    });
+    // Should not produce the generic "plugin not found" warning.
+    expect(
+      res.warnings?.some(
+        (w) => w.path === "plugins.allow" && w.message.includes("plugin not found: dreaming"),
+      ),
+    ).toBe(false);
+    // Should produce a helpful redirect to the parent plugin.
+    expect(
+      res.warnings?.some(
+        (w) =>
+          w.path === "plugins.allow" &&
+          w.message.includes('"dreaming" is not a plugin') &&
+          w.message.includes("memory-core"),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not fail validation for the implicit default memory slot when plugins config is explicit", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: { acpx: { enabled: true } },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(suiteHome, "missing-bundled-plugins"),
+        },
+      },
+    );
+    expect(res.ok).toBe(true);
+  });
+
+  it("warns for removed legacy plugin ids instead of failing validation", () => {
+    const removedId = "google-antigravity-auth";
+    const res = validateRemovedPluginConfig(removedId);
+    expectRemovedPluginWarnings(res, removedId, removedId);
+  });
+
+  it("warns for removed google gemini auth plugin ids instead of failing validation", () => {
+    const removedId = "google-gemini-cli-auth";
+    const res = validateRemovedPluginConfig(removedId);
+    expectRemovedPluginWarnings(res, removedId, removedId);
+  });
+
+  it("warns for removed skill-workshop plugin id instead of failing validation", () => {
+    const removedId = "skill-workshop";
+    const res = validateRemovedPluginConfig(removedId);
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Use skills.workshop settings and openclaw skills workshop commands, then remove this plugins config entry)";
+    expectPathMessage(res.warnings, `plugins.entries.${removedId}`, message);
+    expectPathMessage(res.warnings, "plugins.allow", message);
+    expectPathMessage(res.warnings, "plugins.deny", message);
+    expectPathMessage(res.warnings, "plugins.slots.memory", message);
+  });
+
+  it("does not auto-allow config-loaded overrides of bundled web search plugin ids", () => {
+    const res = validateInSuite({
+      plugins: {
+        allow: ["imessage", "memory-core"],
+        load: {
+          paths: [googleOverridePluginDir],
+        },
+        entries: {
+          google: {
+            config: {
+              apiKey: "test-google-key",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toContainEqual({
+      path: "plugins.entries.google",
+      message: "plugin disabled (not in allowlist) but config is present",
+    });
+  });
+
+  it("ignores standalone helper scripts in auto-discovered global extensions", async () => {
+    const helperPath = path.join(suiteHome, ".openclaw", "extensions", "my-helper.mjs");
+    await mkdirSafe(path.dirname(helperPath));
+    await fs.writeFile(helperPath, "export default {};\n", "utf-8");
+    try {
+      const res = validateInSuite({
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: { enabled: true },
+      });
+
+      expect(res.ok).toBe(true);
+    } finally {
+      await fs.rm(helperPath, { force: true });
+    }
+  });
+
+  it("surfaces plugin config diagnostics", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [badPluginDir] },
@@ -227,9 +1437,85 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("surfaces allowed enum values for plugin config diagnostics", async () => {
+  it("surfaces invalid Codex native plugin marketplaces as config diagnostics", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "openclaw" }] },
+        plugins: {
+          entries: {
+            codex: {
+              enabled: true,
+              config: {
+                codexPlugins: {
+                  enabled: true,
+                  plugins: {
+                    github: {
+                      enabled: true,
+                      marketplaceName: "not-openai-curated",
+                      pluginName: "github",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      {
+        env: {
+          ...suiteEnv(),
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expectPathMessageIncludes(
+        res.issues,
+        "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName",
+        "invalid config",
+      );
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+              "plugins.entries.codex.config.codexPlugins.plugins.github.marketplaceName" &&
+            issue.allowedValues?.includes("openai-curated"),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("does not require native config schemas for enabled bundle plugins", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [bundlePluginDir] },
+        entries: { "bundle-fixture": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts enabled manifestless Claude bundles without a native schema", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [manifestlessClaudeBundleDir] },
+        entries: { "manifestless-claude-bundle": { enabled: true } },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("surfaces allowed enum values for plugin config diagnostics", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [enumPluginDir] },
@@ -241,16 +1527,15 @@ describe("config plugin validation", () => {
       const issue = res.issues.find(
         (entry) => entry.path === "plugins.entries.enum-plugin.config.fileFormat",
       );
-      expect(issue).toBeDefined();
       expect(issue?.message).toContain('allowed: "markdown", "html"');
       expect(issue?.allowedValues).toEqual(["markdown", "html"]);
       expect(issue?.allowedValuesHiddenCount).toBe(0);
     }
   });
 
-  it("accepts voice-call webhookSecurity and streaming guard config fields", async () => {
+  it("accepts voice-call webhookSecurity and streaming guard config fields", () => {
     const res = validateInSuite({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       plugins: {
         enabled: true,
         load: { paths: [voiceCallSchemaPluginDir] },
@@ -279,16 +1564,143 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts known plugin ids and valid channel/heartbeat enums", async () => {
+  it("accepts voice-call OpenAI TTS speed, instructions, and baseUrl config fields", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              tts: {
+                providers: {
+                  openai: {
+                    baseUrl: "http://localhost:8880/v1",
+                    voice: "alloy",
+                    speed: 1.5,
+                    instructions: "Speak in a cheerful tone",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts voice-call SecretRef credentials declared by the plugin schema", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              provider: "twilio",
+              twilio: {
+                accountSid: "twilio-account-sid-placeholder",
+                authToken: { source: "env", provider: "default", id: "TWILIO_AUTH_TOKEN" },
+              },
+              tts: {
+                providers: {
+                  openai: {
+                    apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                  },
+                  elevenlabs: {
+                    apiKey: { source: "env", provider: "default", id: "ELEVENLABS_API_KEY" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects out-of-range voice-call OpenAI TTS speed values", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              tts: {
+                providers: {
+                  openai: {
+                    speed: 10,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+            "plugins.entries.voice-call-schema-fixture.config.tts.providers.openai.speed",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("rejects out-of-range voice-call ElevenLabs voice settings", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [voiceCallSchemaPluginDir] },
+        entries: {
+          "voice-call-schema-fixture": {
+            config: {
+              tts: {
+                providers: {
+                  elevenlabs: {
+                    voiceSettings: {
+                      stability: 5,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path ===
+            "plugins.entries.voice-call-schema-fixture.config.tts.providers.elevenlabs.voiceSettings.stability",
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("accepts known plugin ids and valid channel/heartbeat enums", () => {
     const res = validateInSuite({
       agents: {
         defaults: { heartbeat: { target: "last", directPolicy: "block" } },
-        list: [{ id: "pi", heartbeat: { directPolicy: "allow" } }],
+        list: [{ id: "openclaw", heartbeat: { directPolicy: "allow" } }],
       },
       channels: {
         modelByChannel: {
           openai: {
-            whatsapp: "openai/gpt-5.2",
+            whatsapp: "openai/gpt-5.4",
           },
         },
       },
@@ -297,35 +1709,46 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts plugin heartbeat targets", async () => {
+  it("accepts plugin heartbeat targets", () => {
     const res = validateInSuite({
-      agents: { defaults: { heartbeat: { target: "bluebubbles" } }, list: [{ id: "pi" }] },
-      plugins: { enabled: false, load: { paths: [bluebubblesPluginDir] } },
+      agents: { defaults: { heartbeat: { target: "chat" } }, list: [{ id: "openclaw" }] },
+      plugins: { enabled: false, load: { paths: [chatPluginDir] } },
     });
     expect(res.ok).toBe(true);
   });
 
-  it("rejects unknown heartbeat targets", async () => {
+  it("accepts bundled channel aliases for heartbeat targets", () => {
+    const res = validateInSuite({
+      agents: { defaults: { heartbeat: { target: "gchat" } }, list: [{ id: "pi" }] },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown heartbeat targets", () => {
     const res = validateInSuite({
       agents: {
         defaults: { heartbeat: { target: "not-a-channel" } },
-        list: [{ id: "pi" }],
+        list: [{ id: "openclaw" }],
       },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues).toContainEqual({
-        path: "agents.defaults.heartbeat.target",
-        message: "unknown heartbeat target: not-a-channel",
-      });
+      expect(
+        res.issues.filter((issue) => issue.path === "agents.defaults.heartbeat.target"),
+      ).toEqual([
+        {
+          path: "agents.defaults.heartbeat.target",
+          message: "unknown heartbeat target: not-a-channel",
+        },
+      ]);
     }
   });
 
-  it("rejects invalid heartbeat directPolicy values", async () => {
+  it("rejects invalid heartbeat directPolicy values", () => {
     const res = validateInSuite({
       agents: {
         defaults: { heartbeat: { directPolicy: "maybe" } },
-        list: [{ id: "pi" }],
+        list: [{ id: "openclaw" }],
       },
     });
     expect(res.ok).toBe(false);

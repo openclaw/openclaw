@@ -1,11 +1,17 @@
+// Nested subagent registry e2e tests cover requester/controller relationships
+// across orchestrator and leaf child sessions.
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({
-    agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
-  })),
-}));
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  return {
+    ...actual,
+    getRuntimeConfig: vi.fn(() => ({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+    })),
+  };
+});
 
 vi.mock("./subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => true),
@@ -28,7 +34,7 @@ describe("subagent registry nested agent tracking", () => {
     subagentRegistry.resetSubagentRegistryForTests({ persist: false });
   });
 
-  it("listSubagentRunsForRequester returns children of the requesting session", async () => {
+  it("listSubagentRunsForRequester returns children of the requesting session", () => {
     const { registerSubagentRun, listSubagentRunsForRequester } = subagentRegistry;
 
     // Main agent spawns a depth-1 orchestrator
@@ -70,9 +76,9 @@ describe("subagent registry nested agent tracking", () => {
     expect(leafRuns).toHaveLength(0);
   });
 
-  it("announce uses requesterSessionKey to route to the correct parent", async () => {
+  it("announce uses requesterSessionKey to route to the correct parent", () => {
     const { registerSubagentRun } = subagentRegistry;
-    // Register a sub-sub-agent whose parent is a sub-agent
+    // Register a sub-sub-agent whose parent is a sub-agent.
     registerSubagentRun({
       runId: "run-subsub",
       childSessionKey: "agent:main:subagent:orch:subagent:child",
@@ -83,9 +89,8 @@ describe("subagent registry nested agent tracking", () => {
       label: "nested-leaf",
     });
 
-    // When announce fires for the sub-sub-agent, it should target the sub-agent (depth-1),
-    // NOT the main session. The registry entry's requesterSessionKey ensures this.
-    // We verify the registry entry has the correct requesterSessionKey.
+    // Announce should target the depth-1 parent, not the main session. The
+    // registry entry's requesterSessionKey carries that routing boundary.
     const { listSubagentRunsForRequester } = subagentRegistry;
     const orchRuns = listSubagentRunsForRequester("agent:main:subagent:orch");
     expect(orchRuns).toHaveLength(1);
@@ -93,7 +98,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(orchRuns[0].childSessionKey).toBe("agent:main:subagent:orch:subagent:child");
   });
 
-  it("countActiveRunsForSession only counts active children of the specific session", async () => {
+  it("countActiveRunsForSession only counts active children of the specific session", () => {
     const { registerSubagentRun, countActiveRunsForSession } = subagentRegistry;
 
     // Main spawns orchestrator (active)
@@ -132,7 +137,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(countActiveRunsForSession("agent:main:subagent:orch1")).toBe(2);
   });
 
-  it("countActiveDescendantRuns traverses through ended parents", async () => {
+  it("countActiveDescendantRuns traverses through ended parents", () => {
     const { addSubagentRunForTests, countActiveDescendantRuns } = subagentRegistry;
 
     addSubagentRunForTests({
@@ -163,7 +168,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(countActiveDescendantRuns("agent:main:subagent:orch-ended")).toBe(1);
   });
 
-  it("countPendingDescendantRuns includes ended descendants until cleanup completes", async () => {
+  it("countPendingDescendantRuns includes ended descendants until cleanup completes", () => {
     const { addSubagentRunForTests, countPendingDescendantRuns } = subagentRegistry;
 
     addSubagentRunForTests({
@@ -212,7 +217,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(countPendingDescendantRuns("agent:main:subagent:orch-pending")).toBe(1);
   });
 
-  it("keeps parent pending for parallel children until both descendants complete cleanup", async () => {
+  it("keeps parent pending for parallel children until both descendants complete cleanup", () => {
     const { addSubagentRunForTests, countPendingDescendantRuns } = subagentRegistry;
     const parentSessionKey = "agent:main:subagent:orch-parallel";
 
@@ -288,7 +293,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(countPendingDescendantRuns(parentSessionKey)).toBe(0);
   });
 
-  it("countPendingDescendantRunsExcludingRun ignores only the active announce run", async () => {
+  it("countPendingDescendantRunsExcludingRun ignores only the active announce run", () => {
     const { addSubagentRunForTests, countPendingDescendantRunsExcludingRun } = subagentRegistry;
 
     addSubagentRunForTests({

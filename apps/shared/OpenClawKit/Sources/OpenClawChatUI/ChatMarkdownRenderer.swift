@@ -57,7 +57,7 @@ private struct ChatMarkdownStyle: ViewModifier {
     }
 
     private var inlineStyle: InlineStyle {
-        let linkColor: Color = self.context == .user ? self.textColor : .accentColor
+        let linkColor: Color = self.context == .user ? self.textColor : OpenClawChatTheme.accent
         let codeScale: CGFloat = self.variant == .compact ? 0.85 : 0.9
         return InlineStyle()
             .code(.monospaced, .fontScale(codeScale))
@@ -70,7 +70,7 @@ private struct InlineImageList: View {
     let images: [ChatMarkdownPreprocessor.InlineImage]
 
     var body: some View {
-        ForEach(images, id: \.id) { item in
+        ForEach(self.images, id: \.id) { item in
             if let img = item.image {
                 OpenClawPlatformImageFactory.image(img)
                     .resizable()

@@ -1,3 +1,4 @@
+// Covers channel capability config normalization and lookup behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -122,6 +123,23 @@ describe("resolveChannelCapabilities", () => {
       resolveChannelCapabilities({
         cfg,
         channel: "telegram",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("handles Slack object-format capabilities gracefully", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          capabilities: { interactiveReplies: true },
+        },
+      },
+    } as unknown as Partial<OpenClawConfig>;
+
+    expect(
+      resolveChannelCapabilities({
+        cfg,
+        channel: "slack",
       }),
     ).toBeUndefined();
   });

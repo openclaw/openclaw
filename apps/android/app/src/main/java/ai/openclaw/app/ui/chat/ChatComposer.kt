@@ -1,5 +1,18 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileAccentBorderStrong
+import ai.openclaw.app.ui.mobileAccentSoft
+import ai.openclaw.app.ui.mobileBorder
+import ai.openclaw.app.ui.mobileBorderStrong
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCardSurface
+import ai.openclaw.app.ui.mobileHeadline
+import ai.openclaw.app.ui.mobileSurface
+import ai.openclaw.app.ui.mobileText
+import ai.openclaw.app.ui.mobileTextSecondary
+import ai.openclaw.app.ui.mobileTextTertiary
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -26,7 +39,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -34,6 +46,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,24 +59,49 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileAccentSoft
-import ai.openclaw.app.ui.mobileBorder
-import ai.openclaw.app.ui.mobileBorderStrong
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileHeadline
-import ai.openclaw.app.ui.mobileSurface
-import ai.openclaw.app.ui.mobileText
-import ai.openclaw.app.ui.mobileTextSecondary
-import ai.openclaw.app.ui.mobileTextTertiary
 
+/** Result of applying a stored chat draft to the current composer input. */
+internal data class DraftApplication(
+  val input: String,
+  val lastAppliedDraft: String?,
+  val consumed: Boolean,
+)
+
+/** Applies a draft exactly once so restored prompts do not overwrite user edits. */
+internal fun applyDraftText(
+  draftText: String?,
+  currentInput: String,
+  lastAppliedDraft: String?,
+): DraftApplication {
+  val draft =
+    draftText?.trim()?.ifEmpty { null } ?: return DraftApplication(
+      input = currentInput,
+      lastAppliedDraft = null,
+      consumed = false,
+    )
+  if (draft == lastAppliedDraft) {
+    return DraftApplication(
+      input = currentInput,
+      lastAppliedDraft = lastAppliedDraft,
+      consumed = false,
+    )
+  }
+  return DraftApplication(
+    input = draft,
+    lastAppliedDraft = draft,
+    consumed = true,
+  )
+}
+
+/** Chat input surface for text, image attachments, thinking level, and run controls. */
 @Composable
 fun ChatComposer(
+  draftText: String?,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
   attachments: List<PendingImageAttachment>,
+  onDraftApplied: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
@@ -72,39 +110,89 @@ fun ChatComposer(
   onSend: (text: String) -> Unit,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
+  var lastAppliedDraft by rememberSaveable { mutableStateOf<String?>(null) }
   var showThinkingMenu by remember { mutableStateOf(false) }
 
+  LaunchedEffect(draftText) {
+    val next = applyDraftText(draftText = draftText, currentInput = input, lastAppliedDraft = lastAppliedDraft)
+    input = next.input
+    lastAppliedDraft = next.lastAppliedDraft
+    if (next.consumed) {
+      // Consume only after the composer state has accepted the draft so
+      // recomposition cannot reapply it over user edits.
+      onDraftApplied()
+    }
+  }
+
+  // One in-flight run owns the composer actions; attachments alone are enough
+  // to send when the gateway is healthy.
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
   val sendBusy = pendingRunCount > 0
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (attachments.isNotEmpty()) {
+      AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
+    }
+
+    OutlinedTextField(
+      value = input,
+      onValueChange = { input = it },
+      modifier = Modifier.fillMaxWidth(),
+      placeholder = { Text("Type a message…", style = mobileBodyStyle(), color = mobileTextTertiary) },
+      minLines = 2,
+      maxLines = 5,
+      textStyle = mobileBodyStyle().copy(color = mobileText),
+      shape = RoundedCornerShape(14.dp),
+      colors = chatTextFieldColors(),
+    )
+
+    if (!healthOk) {
+      Text(
+        text = "Gateway is offline. Open Settings to reconnect.",
+        style = mobileCallout,
+        color = ai.openclaw.app.ui.mobileWarning,
+      )
+    }
+
     Row(
       modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      Box(modifier = Modifier.weight(1f)) {
+      Box {
         Surface(
           onClick = { showThinkingMenu = true },
           shape = RoundedCornerShape(14.dp),
-          color = mobileAccentSoft,
+          color = mobileCardSurface,
           border = BorderStroke(1.dp, mobileBorderStrong),
         ) {
           Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
           ) {
             Text(
-              text = "Thinking: ${thinkingLabel(thinkingLevel)}",
+              text = thinkingLabel(thinkingLevel),
               style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-              color = mobileText,
+              color = mobileTextSecondary,
             )
-            Icon(Icons.Default.ArrowDropDown, contentDescription = "Select thinking level", tint = mobileTextSecondary)
+            Icon(
+              Icons.Default.ArrowDropDown,
+              contentDescription = "Select thinking level",
+              modifier = Modifier.size(18.dp),
+              tint = mobileTextTertiary,
+            )
           }
         }
 
-        DropdownMenu(expanded = showThinkingMenu, onDismissRequest = { showThinkingMenu = false }) {
+        DropdownMenu(
+          expanded = showThinkingMenu,
+          onDismissRequest = { showThinkingMenu = false },
+          shape = RoundedCornerShape(16.dp),
+          containerColor = mobileCardSurface,
+          tonalElevation = 0.dp,
+          shadowElevation = 8.dp,
+          border = BorderStroke(1.dp, mobileBorder),
+        ) {
           ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
@@ -116,64 +204,27 @@ fun ChatComposer(
         label = "Attach",
         icon = Icons.Default.AttachFile,
         enabled = true,
+        compact = true,
         onClick = onPickImages,
       )
-    }
 
-    if (attachments.isNotEmpty()) {
-      AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
-    }
-
-    HorizontalDivider(color = mobileBorder)
-
-    Text(
-      text = "MESSAGE",
-      style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.9.sp),
-      color = mobileTextSecondary,
-    )
-
-    OutlinedTextField(
-      value = input,
-      onValueChange = { input = it },
-      modifier = Modifier.fillMaxWidth().height(92.dp),
-      placeholder = { Text("Type a message", style = mobileBodyStyle(), color = mobileTextTertiary) },
-      minLines = 2,
-      maxLines = 5,
-      textStyle = mobileBodyStyle().copy(color = mobileText),
-      shape = RoundedCornerShape(14.dp),
-      colors = chatTextFieldColors(),
-    )
-
-    if (!healthOk) {
-      Text(
-        text = "Gateway is offline. Connect first in the Connect tab.",
-        style = mobileCallout,
-        color = ai.openclaw.app.ui.mobileWarning,
+      SecondaryActionButton(
+        label = "Refresh",
+        icon = Icons.Default.Refresh,
+        enabled = true,
+        compact = true,
+        onClick = onRefresh,
       )
-    }
 
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        SecondaryActionButton(
-          label = "Refresh",
-          icon = Icons.Default.Refresh,
-          enabled = true,
-          compact = true,
-          onClick = onRefresh,
-        )
+      SecondaryActionButton(
+        label = "Abort",
+        icon = Icons.Default.Stop,
+        enabled = pendingRunCount > 0,
+        compact = true,
+        onClick = onAbort,
+      )
 
-        SecondaryActionButton(
-          label = "Abort",
-          icon = Icons.Default.Stop,
-          enabled = pendingRunCount > 0,
-          compact = true,
-          onClick = onAbort,
-        )
-      }
+      Spacer(modifier = Modifier.weight(1f))
 
       Button(
         onClick = {
@@ -182,8 +233,9 @@ fun ChatComposer(
           onSend(text)
         },
         enabled = canSend,
-        modifier = Modifier.weight(1f).height(48.dp),
+        modifier = Modifier.height(44.dp),
         shape = RoundedCornerShape(14.dp),
+        contentPadding = PaddingValues(horizontal = 20.dp),
         colors =
           ButtonDefaults.buttonColors(
             containerColor = mobileAccent,
@@ -191,14 +243,14 @@ fun ChatComposer(
             disabledContainerColor = mobileBorderStrong,
             disabledContentColor = mobileTextTertiary,
           ),
-        border = BorderStroke(1.dp, if (canSend) Color(0xFF154CAD) else mobileBorderStrong),
+        border = BorderStroke(1.dp, if (canSend) mobileAccentBorderStrong else mobileBorderStrong),
       ) {
         if (sendBusy) {
           CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
         } else {
           Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null, modifier = Modifier.size(16.dp))
         }
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(6.dp))
         Text(
           text = "Send",
           style = mobileHeadline.copy(fontWeight = FontWeight.Bold),
@@ -225,9 +277,9 @@ private fun SecondaryActionButton(
     shape = RoundedCornerShape(14.dp),
     colors =
       ButtonDefaults.buttonColors(
-        containerColor = Color.White,
+        containerColor = mobileCardSurface,
         contentColor = mobileTextSecondary,
-        disabledContainerColor = Color.White,
+        disabledContainerColor = mobileCardSurface,
         disabledContentColor = mobileTextTertiary,
       ),
     border = BorderStroke(1.dp, mobileBorderStrong),
@@ -268,14 +320,13 @@ private fun ThinkingMenuItem(
   )
 }
 
-private fun thinkingLabel(raw: String): String {
-  return when (raw.trim().lowercase()) {
+private fun thinkingLabel(raw: String): String =
+  when (raw.trim().lowercase()) {
     "low" -> "Low"
     "medium" -> "Medium"
     "high" -> "High"
     else -> "Off"
   }
-}
 
 @Composable
 private fun AttachmentsStrip(
@@ -296,7 +347,10 @@ private fun AttachmentsStrip(
 }
 
 @Composable
-private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
+private fun AttachmentChip(
+  fileName: String,
+  onRemove: () -> Unit,
+) {
   Surface(
     shape = RoundedCornerShape(999.dp),
     color = mobileAccentSoft,
@@ -317,7 +371,7 @@ private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
       Surface(
         onClick = onRemove,
         shape = RoundedCornerShape(999.dp),
-        color = Color.White,
+        color = mobileCardSurface,
         border = BorderStroke(1.dp, mobileBorderStrong),
       ) {
         Text(

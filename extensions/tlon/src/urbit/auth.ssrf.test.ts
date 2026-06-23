@@ -1,5 +1,6 @@
-import type { LookupFn } from "openclaw/plugin-sdk/tlon";
-import { SsrFBlockedError } from "openclaw/plugin-sdk/tlon";
+// Tlon tests cover auth.ssrf plugin behavior.
+import { SsrFBlockedError } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { authenticate } from "./auth.js";
 
@@ -37,6 +38,7 @@ describe("tlon urbit auth ssrf", () => {
     const cookie = await authenticate("http://127.0.0.1:8080", "code", {
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn,
+      fetchImpl: mockFetch as typeof fetch,
     });
     expect(cookie).toContain("urbauth-~zod=123");
     expect(mockFetch).toHaveBeenCalled();

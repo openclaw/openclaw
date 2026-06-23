@@ -1,3 +1,15 @@
+/**
+ * @deprecated Compatibility subpath. Import webhook path helpers from
+ * `openclaw/plugin-sdk/webhook-ingress` instead.
+ */
+
+/**
+ * Normalizes plugin webhook paths to an absolute path without a trailing slash.
+ * Empty values resolve to `/` so route registration and request matching use the
+ * same canonical key.
+ *
+ * @deprecated Import from `openclaw/plugin-sdk/webhook-ingress` instead.
+ */
 export function normalizeWebhookPath(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -10,6 +22,12 @@ export function normalizeWebhookPath(raw: string): string {
   return withSlash;
 }
 
+/**
+ * Resolves a webhook path from explicit path config, then URL pathname, then
+ * caller default. Invalid webhook URLs resolve to `null` instead of guessing.
+ *
+ * @deprecated Import from `openclaw/plugin-sdk/webhook-ingress` instead.
+ */
 export function resolveWebhookPath(params: {
   webhookPath?: string;
   webhookUrl?: string;

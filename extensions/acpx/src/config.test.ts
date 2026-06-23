@@ -1,230 +1,296 @@
+// ACPX tests cover config plugin behavior.
+import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  ACPX_BUNDLED_BIN,
-  ACPX_PINNED_VERSION,
-  createAcpxPluginConfigSchema,
-  resolveAcpxPluginConfig,
-  toAcpMcpServers,
-} from "./config.js";
+import { resolveAcpxPluginConfig, resolveAcpxPluginRoot } from "./config.js";
 
-describe("acpx plugin config parsing", () => {
-  it("resolves bundled acpx with pinned version by default", () => {
+const requireFromTest = createRequire(import.meta.url);
+const TSX_IMPORT = requireFromTest.resolve("tsx");
+
+function expectedMcpServerArgs(params: { sourceEntry: string; distEntry: string }): string[] {
+  const distEntry = path.resolve(params.distEntry);
+  if (fs.existsSync(distEntry)) {
+    return [distEntry];
+  }
+  return ["--import", TSX_IMPORT, path.resolve(params.sourceEntry)];
+}
+
+describe("embedded acpx plugin config", () => {
+  it("resolves workspace stateDir and cwd by default", () => {
+    const workspaceDir = path.resolve("/tmp/openclaw-acpx");
     const resolved = resolveAcpxPluginConfig({
-      rawConfig: {
-        cwd: "/tmp/workspace",
-      },
-      workspaceDir: "/tmp/workspace",
+      rawConfig: undefined,
+      workspaceDir,
     });
 
-    expect(resolved.command).toBe(ACPX_BUNDLED_BIN);
-    expect(resolved.expectedVersion).toBe(ACPX_PINNED_VERSION);
-    expect(resolved.allowPluginLocalInstall).toBe(true);
-    expect(resolved.cwd).toBe(path.resolve("/tmp/workspace"));
-    expect(resolved.strictWindowsCmdWrapper).toBe(true);
-    expect(resolved.mcpServers).toEqual({});
+    expect(resolved.cwd).toBe(workspaceDir);
+    expect(resolved.stateDir).toBe(path.join(workspaceDir, "state"));
+    expect(resolved.permissionMode).toBe("approve-reads");
+    expect(resolved.nonInteractivePermissions).toBe("fail");
+    expect(resolved.timeoutSeconds).toBe(120);
+    expect(resolved.agents).toStrictEqual({});
   });
 
-  it("accepts command override and disables plugin-local auto-install", () => {
-    const command = "/home/user/repos/acpx/dist/cli.js";
+  it("keeps explicit timeoutSeconds config", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
-        command,
+        timeoutSeconds: 300,
       },
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: "/tmp/openclaw-acpx",
     });
 
-    expect(resolved.command).toBe(path.resolve(command));
-    expect(resolved.expectedVersion).toBeUndefined();
-    expect(resolved.allowPluginLocalInstall).toBe(false);
+    expect(resolved.timeoutSeconds).toBe(300);
   });
 
-  it("resolves relative command paths against workspace directory", () => {
+  it("keeps explicit probeAgent config", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
-        command: "../acpx/dist/cli.js",
+        probeAgent: "claude",
       },
-      workspaceDir: "/home/user/repos/openclaw",
+      workspaceDir: "/tmp/openclaw-acpx",
     });
 
-    expect(resolved.command).toBe(path.resolve("/home/user/repos/openclaw", "../acpx/dist/cli.js"));
-    expect(resolved.expectedVersion).toBeUndefined();
-    expect(resolved.allowPluginLocalInstall).toBe(false);
+    expect(resolved.probeAgent).toBe("claude");
   });
 
-  it("keeps bare command names as-is", () => {
+  it("accepts agent command overrides", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
-        command: "acpx",
+        agents: {
+          claude: { command: "claude --acp" },
+          codex: { command: "codex custom-acp" },
+        },
       },
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: "/tmp/openclaw-acpx",
     });
 
-    expect(resolved.command).toBe("acpx");
-    expect(resolved.expectedVersion).toBeUndefined();
-    expect(resolved.allowPluginLocalInstall).toBe(false);
+    expect(resolved.agents).toEqual({
+      claude: "claude --acp",
+      codex: "codex custom-acp",
+    });
   });
 
-  it("accepts exact expectedVersion override", () => {
-    const command = "/home/user/repos/acpx/dist/cli.js";
+  it("combines agent command with args array", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
-        command,
-        expectedVersion: "0.1.99",
+        agents: {
+          claude: {
+            command: "node",
+            args: ["/path/to/adapter.mjs", "--verbose"],
+          },
+          codex: {
+            command: "codex-acp",
+            args: ["--model", "gpt-5"],
+          },
+        },
       },
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: "/tmp/openclaw-acpx",
     });
 
-    expect(resolved.command).toBe(path.resolve(command));
-    expect(resolved.expectedVersion).toBe("0.1.99");
-    expect(resolved.allowPluginLocalInstall).toBe(false);
+    expect(resolved.agents).toEqual({
+      claude: "node /path/to/adapter.mjs --verbose",
+      codex: "codex-acp --model gpt-5",
+    });
   });
 
-  it("treats expectedVersion=any as no version constraint", () => {
+  it("quotes agent args that need to survive command-line parsing as one token", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
-        command: "/home/user/repos/acpx/dist/cli.js",
-        expectedVersion: "any",
+        agents: {
+          custom: {
+            command: "node",
+            args: ["/tmp/My Adapter.mjs", "--flag=value with spaces", "owner's-choice"],
+          },
+        },
       },
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: "/tmp/openclaw-acpx",
     });
 
-    expect(resolved.expectedVersion).toBeUndefined();
+    expect(resolved.agents).toEqual({
+      custom: "node '/tmp/My Adapter.mjs' '--flag=value with spaces' 'owner'\"'\"'s-choice'",
+    });
   });
 
-  it("rejects commandArgs overrides", () => {
+  it("handles agent command without args (backward compat)", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        agents: {
+          simple: { command: "simple-acp" },
+        },
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.agents).toEqual({
+      simple: "simple-acp",
+    });
+  });
+
+  it("leaves probeAgent undefined by default so the runtime picks its built-in probe agent", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: undefined,
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.probeAgent).toBeUndefined();
+  });
+
+  it("carries an explicit probeAgent through to the resolved plugin config, trimmed and lowercased", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        probeAgent: "  OpenCode  ",
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.probeAgent).toBe("opencode");
+  });
+
+  it("rejects an empty probeAgent string", () => {
     expect(() =>
       resolveAcpxPluginConfig({
         rawConfig: {
-          commandArgs: ["--foo"],
+          probeAgent: "",
         },
-        workspaceDir: "/tmp/workspace",
+        workspaceDir: "/tmp/openclaw-acpx",
       }),
-    ).toThrow("unknown config key: commandArgs");
+    ).toThrow(/probeAgent must be a non-empty string/);
   });
 
-  it("schema rejects empty cwd", () => {
-    const schema = createAcpxPluginConfigSchema();
-    if (!schema.safeParse) {
-      throw new Error("acpx config schema missing safeParse");
-    }
-    const parsed = schema.safeParse({ cwd: "   " });
-
-    expect(parsed.success).toBe(false);
-  });
-
-  it("accepts strictWindowsCmdWrapper override", () => {
+  it("injects the built-in plugin-tools MCP server only when explicitly enabled", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
-        strictWindowsCmdWrapper: true,
+        pluginToolsMcpBridge: true,
       },
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: "/tmp/openclaw-acpx",
     });
 
-    expect(resolved.strictWindowsCmdWrapper).toBe(true);
-  });
-
-  it("rejects non-boolean strictWindowsCmdWrapper", () => {
-    expect(() =>
-      resolveAcpxPluginConfig({
-        rawConfig: {
-          strictWindowsCmdWrapper: "yes",
-        },
-        workspaceDir: "/tmp/workspace",
+    const server = resolved.mcpServers["openclaw-plugin-tools"];
+    expect(server).toEqual({
+      command: process.execPath,
+      args: expectedMcpServerArgs({
+        sourceEntry: "src/mcp/plugin-tools-serve.ts",
+        distEntry: "dist/mcp/plugin-tools-serve.js",
       }),
-    ).toThrow("strictWindowsCmdWrapper must be a boolean");
+    });
   });
 
-  it("accepts mcp server maps", () => {
+  it("injects the built-in OpenClaw tools MCP server only when explicitly enabled", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
+        openClawToolsMcpBridge: true,
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    const server = resolved.mcpServers["openclaw-tools"];
+    expect(server).toEqual({
+      command: process.execPath,
+      args: expectedMcpServerArgs({
+        sourceEntry: "src/mcp/openclaw-tools-serve.ts",
+        distEntry: "dist/mcp/openclaw-tools-serve.js",
+      }),
+    });
+  });
+
+  it("resolves the plugin root from shared dist chunk paths", () => {
+    const moduleUrl = new URL("../../../dist/extensions/acpx/service-shared.js", import.meta.url)
+      .href;
+
+    expect(resolveAcpxPluginRoot(moduleUrl)).toBe(path.resolve("extensions/acpx"));
+  });
+
+  it("keeps the runtime json schema in sync with the manifest config schema", () => {
+    const pluginRoot = resolveAcpxPluginRoot();
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "utf8"),
+    ) as { configSchema?: unknown };
+
+    expect(manifest.configSchema).toStrictEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        cwd: {
+          type: "string",
+          minLength: 1,
+        },
+        stateDir: {
+          type: "string",
+          minLength: 1,
+        },
+        permissionMode: {
+          type: "string",
+          enum: ["approve-all", "approve-reads", "deny-all"],
+        },
+        nonInteractivePermissions: {
+          type: "string",
+          enum: ["deny", "fail"],
+        },
+        pluginToolsMcpBridge: {
+          type: "boolean",
+        },
+        openClawToolsMcpBridge: {
+          type: "boolean",
+        },
+        strictWindowsCmdWrapper: {
+          type: "boolean",
+        },
+        timeoutSeconds: {
+          type: "number",
+          minimum: 0.001,
+          default: 120,
+        },
+        queueOwnerTtlSeconds: {
+          type: "number",
+          minimum: 0,
+        },
+        probeAgent: {
+          type: "string",
+          minLength: 1,
+        },
         mcpServers: {
-          canva: {
-            command: "npx",
-            args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
-            env: {
-              CANVA_TOKEN: "secret",
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              command: {
+                type: "string",
+                minLength: 1,
+                description: "Command to run the MCP server",
+              },
+              args: {
+                type: "array",
+                items: { type: "string" },
+                description: "Arguments to pass to the command",
+              },
+              env: {
+                type: "object",
+                additionalProperties: { type: "string" },
+                description: "Environment variables for the MCP server",
+              },
             },
+            required: ["command"],
           },
         },
-      },
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(resolved.mcpServers).toEqual({
-      canva: {
-        command: "npx",
-        args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
-        env: {
-          CANVA_TOKEN: "secret",
-        },
-      },
-    });
-  });
-
-  it("rejects invalid mcp server definitions", () => {
-    expect(() =>
-      resolveAcpxPluginConfig({
-        rawConfig: {
-          mcpServers: {
-            canva: {
-              command: "npx",
-              args: ["-y", 1],
+        agents: {
+          type: "object",
+          additionalProperties: {
+            type: "object",
+            properties: {
+              command: {
+                type: "string",
+                minLength: 1,
+              },
+              args: {
+                type: "array",
+                items: { type: "string" },
+              },
             },
-          },
-        },
-        workspaceDir: "/tmp/workspace",
-      }),
-    ).toThrow(
-      "mcpServers.canva must have a command string, optional args array, and optional env object",
-    );
-  });
-
-  it("schema accepts mcp server config", () => {
-    const schema = createAcpxPluginConfigSchema();
-    if (!schema.safeParse) {
-      throw new Error("acpx config schema missing safeParse");
-    }
-    const parsed = schema.safeParse({
-      mcpServers: {
-        canva: {
-          command: "npx",
-          args: ["-y", "mcp-remote@latest"],
-          env: {
-            CANVA_TOKEN: "secret",
+            required: ["command"],
           },
         },
       },
     });
-
-    expect(parsed.success).toBe(true);
-  });
-});
-
-describe("toAcpMcpServers", () => {
-  it("converts plugin config maps into ACP stdio MCP entries", () => {
-    expect(
-      toAcpMcpServers({
-        canva: {
-          command: "npx",
-          args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
-          env: {
-            CANVA_TOKEN: "secret",
-          },
-        },
-      }),
-    ).toEqual([
-      {
-        name: "canva",
-        command: "npx",
-        args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
-        env: [
-          {
-            name: "CANVA_TOKEN",
-            value: "secret",
-          },
-        ],
-      },
-    ]);
   });
 });

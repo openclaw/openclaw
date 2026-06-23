@@ -1,3 +1,5 @@
+// Defines agent-related Zod schema fragments for config parsing.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
@@ -34,12 +36,26 @@ const BindingMatchSchema = z
   })
   .strict();
 
+const BindingSessionSchema = z
+  .object({
+    dmScope: z
+      .union([
+        z.literal("main"),
+        z.literal("per-peer"),
+        z.literal("per-channel-peer"),
+        z.literal("per-account-channel-peer"),
+      ])
+      .optional(),
+  })
+  .strict();
+
 const RouteBindingSchema = z
   .object({
     type: z.literal("route").optional(),
     agentId: z.string(),
     comment: z.string().optional(),
     match: BindingMatchSchema,
+    session: BindingSessionSchema.optional(),
   })
   .strict();
 
@@ -61,30 +77,12 @@ const AcpBindingSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
-    const peerId = value.match.peer?.id?.trim() ?? "";
+    const peerId = normalizeOptionalString(value.match.peer?.id) ?? "";
     if (!peerId) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["match", "peer"],
         message: "ACP bindings require match.peer.id to target a concrete conversation.",
-      });
-      return;
-    }
-    const channel = value.match.channel.trim().toLowerCase();
-    if (channel !== "discord" && channel !== "telegram") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["match", "channel"],
-        message: 'ACP bindings currently support only "discord" and "telegram" channels.',
-      });
-      return;
-    }
-    if (channel === "telegram" && !/^-\d+:topic:\d+$/.test(peerId)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["match", "peer", "id"],
-        message:
-          "Telegram ACP bindings require canonical topic IDs in the form -1001234567890:topic:42.",
       });
     }
   });

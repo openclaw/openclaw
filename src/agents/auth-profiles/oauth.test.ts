@@ -1,7 +1,31 @@
-import { describe, expect, it } from "vitest";
+/**
+ * Tests auth profile API-key resolution.
+ * Covers token/api-key/OAuth profile compatibility, SecretRefs, and provider
+ * runtime formatting behavior.
+ */
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveApiKeyForProfile } from "./oauth.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import type { AuthProfileStore } from "./types.js";
+
+vi.mock("../cli-credentials.js", () => ({
+  readClaudeCliCredentialsCached: () => null,
+  readCodexCliCredentialsCached: () => null,
+  readMiniMaxCliCredentialsCached: () => null,
+  resetCliCredentialCachesForTest: () => undefined,
+}));
+
+vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+  formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
+    params.context?.access,
+  refreshProviderOAuthCredentialWithPlugin: async () => null,
+}));
+
+let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+
+async function loadOAuthModuleForTest() {
+  ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+}
 
 function cfgFor(profileId: string, provider: string, mode: "api_key" | "token" | "oauth") {
   return {
@@ -32,6 +56,20 @@ function tokenStore(params: {
   };
 }
 
+function githubCopilotTokenStore(profileId: string, includeInlineToken = true): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      [profileId]: {
+        type: "token",
+        provider: "github-copilot",
+        ...(includeInlineToken ? { token: "" } : {}),
+        tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+      },
+    },
+  };
+}
+
 async function resolveWithConfig(params: {
   profileId: string;
   provider: string;
@@ -46,17 +84,37 @@ async function resolveWithConfig(params: {
 }
 
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
-  const previous = process.env[key];
-  process.env[key] = value;
-  try {
-    return await run();
-  } finally {
-    if (previous === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = previous;
-    }
-  }
+  return await withEnvAsync({ [key]: value }, run);
+}
+
+async function expectResolvedApiKey(params: {
+  profileId: string;
+  provider: string;
+  mode: "api_key" | "token" | "oauth";
+  store: AuthProfileStore;
+  expectedApiKey: string;
+}) {
+  const result = await resolveApiKeyForProfile({
+    cfg: cfgFor(params.profileId, params.provider, params.mode),
+    store: params.store,
+    profileId: params.profileId,
+  });
+  expect(result).toEqual({
+    apiKey: params.expectedApiKey, // pragma: allowlist secret
+    provider: params.provider,
+    email: undefined,
+  });
+}
+
+beforeAll(loadOAuthModuleForTest);
+
+afterAll(() => {
+  vi.doUnmock("../cli-credentials.js");
+  vi.doUnmock("../../plugins/provider-runtime.runtime.js");
+});
+
+function createUsableOAuthExpiry(): number {
+  return Date.now() + 30 * 60 * 1000;
 }
 
 describe("resolveApiKeyForProfile config compatibility", () => {
@@ -126,7 +184,7 @@ describe("resolveApiKeyForProfile config compatibility", () => {
           provider: "anthropic",
           access: "access-123",
           refresh: "refresh-123",
-          expires: Date.now() + 60_000,
+          expires: createUsableOAuthExpiry(),
         },
       },
     };
@@ -242,6 +300,26 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
 });
 
 describe("resolveApiKeyForProfile secret refs", () => {
+  it("ignores blank api_key credentials", async () => {
+    const profileId = "openrouter:default";
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "openrouter", "api_key"),
+      store: {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "openrouter",
+            key: "   ",
+          },
+        },
+      },
+      profileId,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("resolves api_key keyRef from env", async () => {
     const profileId = "openai:default";
     const previous = process.env.OPENAI_API_KEY;
@@ -275,28 +353,39 @@ describe("resolveApiKeyForProfile secret refs", () => {
     }
   });
 
+  it("normalizes inline api_key values from auth profiles before header use", async () => {
+    const profileId = "openrouter:masked";
+    const result = await resolveApiKeyForProfile({
+      cfg: cfgFor(profileId, "openrouter", "api_key"),
+      store: {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "openrouter",
+            key: " sk-or-\u202650ec ",
+          },
+        },
+      },
+      profileId,
+    });
+
+    expect(result).toEqual({
+      apiKey: "sk-or-50ec", // pragma: allowlist secret
+      provider: "openrouter",
+      email: undefined,
+    });
+  });
+
   it("resolves token tokenRef from env", async () => {
     const profileId = "github-copilot:default";
     await withEnvVar("GITHUB_TOKEN", "gh-ref-token", async () => {
-      const result = await resolveApiKeyForProfile({
-        cfg: cfgFor(profileId, "github-copilot", "token"),
-        store: {
-          version: 1,
-          profiles: {
-            [profileId]: {
-              type: "token",
-              provider: "github-copilot",
-              token: "",
-              tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
-            },
-          },
-        },
+      await expectResolvedApiKey({
         profileId,
-      });
-      expect(result).toEqual({
-        apiKey: "gh-ref-token", // pragma: allowlist secret
         provider: "github-copilot",
-        email: undefined,
+        mode: "token",
+        store: githubCopilotTokenStore(profileId),
+        expectedApiKey: "gh-ref-token", // pragma: allowlist secret
       });
     });
   });
@@ -304,26 +393,34 @@ describe("resolveApiKeyForProfile secret refs", () => {
   it("resolves token tokenRef without inline token when expires is absent", async () => {
     const profileId = "github-copilot:no-inline-token";
     await withEnvVar("GITHUB_TOKEN", "gh-ref-token", async () => {
-      const result = await resolveApiKeyForProfile({
-        cfg: cfgFor(profileId, "github-copilot", "token"),
+      await expectResolvedApiKey({
+        profileId,
+        provider: "github-copilot",
+        mode: "token",
+        store: githubCopilotTokenStore(profileId, false),
+        expectedApiKey: "gh-ref-token", // pragma: allowlist secret
+      });
+    });
+  });
+
+  it("hard-fails when oauth mode is combined with token SecretRef input", async () => {
+    const profileId = "anthropic:oauth-secretref-token";
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "anthropic", "oauth"),
         store: {
           version: 1,
           profiles: {
             [profileId]: {
               type: "token",
-              provider: "github-copilot",
-              tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+              provider: "anthropic",
+              tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_TOKEN" },
             },
           },
         },
         profileId,
-      });
-      expect(result).toEqual({
-        apiKey: "gh-ref-token", // pragma: allowlist secret
-        provider: "github-copilot",
-        email: undefined,
-      });
-    });
+      }),
+    ).rejects.toThrow(/mode is "oauth"/i);
   });
 
   it("resolves inline ${ENV} api_key values", async () => {

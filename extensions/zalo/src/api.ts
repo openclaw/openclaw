@@ -3,7 +3,11 @@
  * @see https://bot.zaloplatforms.com/docs
  */
 
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
+const ZALO_MEDIA_SSRF_POLICY: SsrFPolicy = {};
 
 export type ZaloFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -25,7 +29,9 @@ export type ZaloMessage = {
   from: {
     id: string;
     name?: string;
+    display_name?: string;
     avatar?: string;
+    is_bot?: boolean;
   };
   chat: {
     id: string;
@@ -33,9 +39,10 @@ export type ZaloMessage = {
   };
   date: number;
   text?: string;
-  photo?: string;
+  photo_url?: string;
   caption?: string;
   sticker?: string;
+  message_type?: string;
 };
 
 export type ZaloUpdate = {
@@ -106,9 +113,12 @@ export async function callZaloApi<T = unknown>(
 ): Promise<ZaloApiResponse<T>> {
   const url = `${ZALO_API_BASE}/bot${token}/${method}`;
   const controller = new AbortController();
-  const timeoutId = options?.timeoutMs
-    ? setTimeout(() => controller.abort(), options.timeoutMs)
-    : undefined;
+  const requestTimeoutMs =
+    options?.timeoutMs === undefined ? undefined : resolveTimerTimeoutMs(options.timeoutMs, 1);
+  const timeoutId =
+    requestTimeoutMs === undefined
+      ? undefined
+      : setTimeout(() => controller.abort(), requestTimeoutMs);
   const fetcher = options?.fetch ?? fetch;
 
   try {
@@ -169,7 +179,28 @@ export async function sendPhoto(
   params: ZaloSendPhotoParams,
   fetcher?: ZaloFetch,
 ): Promise<ZaloApiResponse<ZaloMessage>> {
-  return callZaloApi<ZaloMessage>("sendPhoto", token, params, { fetch: fetcher });
+  const photoUrl = params.photo.trim();
+  let parsedPhotoUrl: URL;
+  try {
+    parsedPhotoUrl = new URL(photoUrl);
+  } catch {
+    throw new Error("Zalo photo URL must be an absolute HTTP or HTTPS URL");
+  }
+
+  if (parsedPhotoUrl.protocol !== "http:" && parsedPhotoUrl.protocol !== "https:") {
+    throw new Error("Zalo photo URL must use HTTP or HTTPS");
+  }
+
+  await resolvePinnedHostnameWithPolicy(parsedPhotoUrl.hostname, {
+    policy: ZALO_MEDIA_SSRF_POLICY,
+  });
+
+  return callZaloApi<ZaloMessage>(
+    "sendPhoto",
+    token,
+    { ...params, photo: parsedPhotoUrl.href },
+    { fetch: fetcher },
+  );
 }
 
 /**

@@ -1,3 +1,4 @@
+// Covers Codex provider usage fetch parsing.
 import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchCodexUsage } from "./provider-usage.fetch.codex.js";
@@ -23,10 +24,21 @@ describe("fetchCodexUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it("returns a stable error for malformed successful usage JSON", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+
+    expect(result.error).toBe("Malformed usage response");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("parses windows, reset times, and plan balance", async () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};
       expect(headers["ChatGPT-Account-Id"]).toBe("acct-1");
+      expect(headers.originator).toBe("openclaw");
+      expect(headers["User-Agent"]).toMatch(/^openclaw\//);
       return makeResponse(200, {
         rate_limit: {
           primary_window: {
@@ -47,7 +59,7 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", "acct-1", 5000, mockFetch);
 
-    expect(result.provider).toBe("openai-codex");
+    expect(result.provider).toBe("openai");
     expect(result.plan).toBe("Plus ($12.50)");
     expect(result.windows).toEqual([
       { label: "3h", usedPercent: 35.5, resetAt: 1_700_000_000_000 },
@@ -106,5 +118,45 @@ describe("fetchCodexUsage", () => {
       { label: "3h", usedPercent: 14, resetAt: 1_700_000_000_000 },
       { label: "Week", usedPercent: 20, resetAt: weeklyLikeSecondaryReset * 1000 },
     ]);
+  });
+
+  it("labels short secondary windows in hours", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          secondary_window: {
+            limit_window_seconds: 21_600,
+            used_percent: 11,
+          },
+        },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.windows).toEqual([{ label: "6h", usedPercent: 11, resetAt: undefined }]);
+  });
+
+  it("builds a balance-only plan when credits exist without a plan type", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        credits: { balance: "7.5" },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.plan).toBe("$7.50");
+    expect(result.windows).toStrictEqual([]);
+  });
+
+  it("falls back invalid credit strings to a zero balance", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        plan_type: "Plus",
+        credits: { balance: "not-a-number" },
+      }),
+    );
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+    expect(result.plan).toBe("Plus ($0.00)");
   });
 });

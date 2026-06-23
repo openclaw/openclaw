@@ -1,15 +1,20 @@
 package ai.openclaw.app.node
 
-import android.os.Build
 import ai.openclaw.app.BuildConfig
+import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.VoiceWakeMode
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayTlsParams
-import ai.openclaw.app.LocationMode
-import ai.openclaw.app.VoiceWakeMode
+import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
+import ai.openclaw.app.gateway.isLoopbackGatewayHost
+import android.os.Build
 
+/**
+ * Builds gateway connect metadata from current Android permissions, settings, and device identity.
+ */
 class ConnectionManager(
   private val prefs: SecurePrefs,
   private val cameraEnabled: () -> Boolean,
@@ -17,11 +22,19 @@ class ConnectionManager(
   private val voiceWakeMode: () -> VoiceWakeMode,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
-  private val smsAvailable: () -> Boolean,
+  private val sendSmsAvailable: () -> Boolean,
+  private val readSmsAvailable: () -> Boolean,
+  private val smsSearchPossible: () -> Boolean,
+  private val callLogAvailable: () -> Boolean,
+  private val photosAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
+  private val installedAppsSharingEnabled: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
   companion object {
+    /**
+     * Decide whether a discovered/manual endpoint must use pinned TLS or can stay local cleartext.
+     */
     internal fun resolveTlsParamsForEndpoint(
       endpoint: GatewayEndpoint,
       storedFingerprint: String?,
@@ -30,9 +43,16 @@ class ConnectionManager(
       val stableId = endpoint.stableId
       val stored = storedFingerprint?.trim().takeIf { !it.isNullOrEmpty() }
       val isManual = stableId.startsWith("manual|")
+      val cleartextAllowedHost =
+        if (isManual) {
+          isLocalCleartextGatewayHost(endpoint.host)
+        } else {
+          isLoopbackGatewayHost(endpoint.host)
+        }
 
       if (isManual) {
-        if (!manualTlsEnabled) return null
+        // Manual remote hosts default to TLS; only local manual hosts may honor the cleartext toggle.
+        if (!manualTlsEnabled && cleartextAllowedHost) return null
         if (!stored.isNullOrBlank()) {
           return GatewayTlsParams(
             required = true,
@@ -70,6 +90,16 @@ class ConnectionManager(
         )
       }
 
+      if (!cleartextAllowedHost) {
+        // Non-loopback discovered hosts require TLS even without TXT hints.
+        return GatewayTlsParams(
+          required = true,
+          expectedFingerprint = null,
+          allowTOFU = false,
+          stableId = stableId,
+        )
+      }
+
       return null
     }
   }
@@ -78,17 +108,27 @@ class ConnectionManager(
     NodeRuntimeFlags(
       cameraEnabled = cameraEnabled(),
       locationEnabled = locationMode() != LocationMode.Off,
-      smsAvailable = smsAvailable(),
+      sendSmsAvailable = sendSmsAvailable(),
+      readSmsAvailable = readSmsAvailable(),
+      smsSearchPossible = smsSearchPossible(),
+      callLogAvailable = callLogAvailable(),
+      photosAvailable = photosAvailable(),
       voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),
+      installedAppsSharingEnabled = installedAppsSharingEnabled(),
       debugBuild = BuildConfig.DEBUG,
     )
 
+  /** Builds the gateway-advertised node.invoke command list from current permission and feature state. */
   fun buildInvokeCommands(): List<String> = InvokeCommandRegistry.advertisedCommands(runtimeFlags())
 
+  /** Builds the gateway-advertised capability list from current permission and feature state. */
   fun buildCapabilities(): List<String> = InvokeCommandRegistry.advertisedCapabilities(runtimeFlags())
 
+  /**
+   * Debug Android builds advertise a dev version so gateway logs do not look like release clients.
+   */
   fun resolvedVersionName(): String {
     val versionName = BuildConfig.VERSION_NAME.trim().ifEmpty { "dev" }
     return if (BuildConfig.DEBUG && !versionName.contains("dev", ignoreCase = true)) {
@@ -98,22 +138,32 @@ class ConnectionManager(
     }
   }
 
-  fun resolveModelIdentifier(): String? {
-    return listOfNotNull(Build.MANUFACTURER, Build.MODEL)
+  /** Human-readable Android device model used in gateway client metadata. */
+  fun resolveModelIdentifier(): String? =
+    listOfNotNull(Build.MANUFACTURER, Build.MODEL)
       .joinToString(" ")
       .trim()
       .ifEmpty { null }
-  }
 
+  /**
+   * User-Agent used for gateway telemetry and troubleshooting.
+   */
   fun buildUserAgent(): String {
     val version = resolvedVersionName()
-    val release = Build.VERSION.RELEASE?.trim().orEmpty()
+    val release =
+      Build.VERSION.RELEASE
+        ?.trim()
+        .orEmpty()
     val releaseLabel = if (release.isEmpty()) "unknown" else release
     return "OpenClawAndroid/$version (Android $releaseLabel; SDK ${Build.VERSION.SDK_INT})"
   }
 
-  fun buildClientInfo(clientId: String, clientMode: String): GatewayClientInfo {
-    return GatewayClientInfo(
+  /** Client identity block shared by node and operator gateway sessions. */
+  fun buildClientInfo(
+    clientId: String,
+    clientMode: String,
+  ): GatewayClientInfo =
+    GatewayClientInfo(
       id = clientId,
       displayName = prefs.displayName.value,
       version = resolvedVersionName(),
@@ -123,10 +173,10 @@ class ConnectionManager(
       deviceFamily = "Android",
       modelIdentifier = resolveModelIdentifier(),
     )
-  }
 
-  fun buildNodeConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectOptions(
+  /** Connect options for the Android node session that exposes phone capabilities. */
+  fun buildNodeConnectOptions(): GatewayConnectOptions =
+    GatewayConnectOptions(
       role = "node",
       scopes = emptyList(),
       caps = buildCapabilities(),
@@ -135,20 +185,25 @@ class ConnectionManager(
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "node"),
       userAgent = buildUserAgent(),
     )
-  }
 
-  fun buildOperatorConnectOptions(): GatewayConnectOptions {
-    return GatewayConnectOptions(
+  /** Connect options for the Android operator session that drives approvals and UI actions. */
+  fun buildOperatorConnectOptions(): GatewayConnectOptions =
+    GatewayConnectOptions(
       role = "operator",
-      scopes = listOf("operator.read", "operator.write", "operator.talk.secrets"),
+      scopes =
+        listOf(
+          "operator.approvals",
+          "operator.read",
+          "operator.write",
+        ),
       caps = emptyList(),
       commands = emptyList(),
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),
       userAgent = buildUserAgent(),
     )
-  }
 
+  /** Resolves persisted TLS pin policy for a concrete gateway endpoint. */
   fun resolveTlsParams(endpoint: GatewayEndpoint): GatewayTlsParams? {
     val stored = prefs.loadGatewayTlsFingerprint(endpoint.stableId)
     return resolveTlsParamsForEndpoint(endpoint, storedFingerprint = stored, manualTlsEnabled = manualTls())

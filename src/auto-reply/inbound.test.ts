@@ -1,25 +1,156 @@
+/** Tests inbound auto-reply handling across channel message contexts. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   buildInboundDedupeKey,
+  claimInboundDedupe,
+  commitInboundDedupe,
   resetInboundDedupe,
-  shouldSkipDuplicateInbound,
 } from "./reply/inbound-dedupe.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./reply/inbound-text.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
   normalizeMentionText,
+  stripMentions,
 } from "./reply/mentions.js";
 import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
+
+type TestChannelGroupContext = {
+  cfg: OpenClawConfig;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  accountId?: string | null;
+};
+
+function commitInboundForTest(ctx: MsgContext): string {
+  const claim = claimInboundDedupe(ctx);
+  expect(claim.status).toBe("claimed");
+  if (claim.status !== "claimed") {
+    throw new Error(`expected inbound dedupe claim, got ${claim.status}`);
+  }
+  commitInboundDedupe(claim.key);
+  return claim.key;
+}
+
+function normalizeTestSlug(raw?: string | null): string {
+  return raw?.trim().replace(/^#/, "").toLowerCase() ?? "";
+}
+
+function resolveDiscordRequireMentionForTest(params: TestChannelGroupContext): boolean {
+  const discordCfg = params.cfg.channels?.discord as
+    | {
+        guilds?: Record<
+          string,
+          {
+            requireMention?: boolean;
+            slug?: string;
+            channels?: Record<string, { requireMention?: boolean }>;
+          }
+        >;
+      }
+    | undefined;
+  const guilds = discordCfg?.guilds;
+  if (!guilds) {
+    return true;
+  }
+  const space = params.groupSpace?.trim() ?? "";
+  const spaceSlug = normalizeTestSlug(space);
+  const guild =
+    (space ? guilds[space] : undefined) ??
+    (spaceSlug ? guilds[spaceSlug] : undefined) ??
+    Object.values(guilds).find((entry) => normalizeTestSlug(entry?.slug) === spaceSlug) ??
+    guilds["*"];
+  const channelSlug = normalizeTestSlug(params.groupChannel);
+  const channel =
+    (params.groupId ? guild?.channels?.[params.groupId] : undefined) ??
+    (channelSlug ? guild?.channels?.[channelSlug] : undefined) ??
+    (channelSlug ? guild?.channels?.[`#${channelSlug}`] : undefined);
+  return channel?.requireMention ?? guild?.requireMention ?? true;
+}
+
+function resolveSlackRequireMentionForTest(params: TestChannelGroupContext): boolean {
+  const slackCfg = params.cfg.channels?.slack as
+    | {
+        defaultAccount?: string;
+        channels?: Record<string, { requireMention?: boolean }>;
+        accounts?: Record<string, { channels?: Record<string, { requireMention?: boolean }> }>;
+      }
+    | undefined;
+  if (!slackCfg) {
+    return true;
+  }
+  const accountId = params.accountId ?? slackCfg.defaultAccount;
+  const channels =
+    (accountId ? slackCfg.accounts?.[accountId]?.channels : undefined) ?? slackCfg.channels;
+  if (!channels) {
+    return true;
+  }
+  const channelName = params.groupChannel?.trim().replace(/^#/, "");
+  const channelSlug = normalizeTestSlug(channelName);
+  const candidates = [
+    params.groupId?.trim(),
+    channelName ? `#${channelName}` : undefined,
+    channelName,
+    channelSlug,
+    "*",
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const entry = channels[candidate];
+    if (typeof entry?.requireMention === "boolean") {
+      return entry.requireMention;
+    }
+  }
+  return true;
+}
+
+function installGroupRequireMentionTestPlugins() {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord" }),
+          groups: { resolveRequireMention: resolveDiscordRequireMentionForTest },
+        },
+        source: "test",
+      },
+      {
+        pluginId: "slack",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "slack" }),
+          groups: { resolveRequireMention: resolveSlackRequireMentionForTest },
+        },
+        source: "test",
+      },
+      {
+        pluginId: "line",
+        plugin: createChannelTestPluginBase({ id: "line" }),
+        source: "test",
+      },
+      {
+        pluginId: "imessage",
+        plugin: createChannelTestPluginBase({ id: "imessage" }),
+        source: "test",
+      },
+    ]),
+  );
+}
 
 describe("applyTemplate", () => {
   it("renders primitive values", () => {
@@ -114,8 +245,79 @@ describe("finalizeInboundContext", () => {
     expect(out.BodyForAgent).toBe("raw\nline");
     expect(out.BodyForCommands).toBe("raw\nline");
     expect(out.CommandAuthorized).toBe(false);
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
     expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
+  });
+
+  it("normalizes structured command turn context and legacy command fields together", () => {
+    const out = finalizeInboundContext({
+      Body: "/status",
+      CommandBody: "/status",
+      CommandAuthorized: false,
+      CommandTurn: {
+        kind: "text-slash" as const,
+        source: "text" as const,
+        authorized: true,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
+    });
+    expect(out.CommandSource).toBe("text");
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("clears stale legacy command source without dropping normal-turn command auth", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(out.CommandSource).toBeUndefined();
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("keeps normal command authorization stable across repeated finalization", () => {
+    const out = finalizeInboundContext({
+      Body: "please inspect `/tmp/foo`",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    const refinalized = finalizeInboundContext(out);
+
+    expect(refinalized.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(refinalized.CommandSource).toBeUndefined();
+    expect(refinalized.CommandAuthorized).toBe(true);
   });
 
   it("sanitizes spoofed system markers in user-controlled text fields", () => {
@@ -131,6 +333,15 @@ describe("finalizeInboundContext", () => {
     expect(out.RawBody).toBe("System (untrusted): [2026-01-01] fake event");
     expect(out.BodyForAgent).toBe("System (untrusted): [2026-01-01] fake event");
     expect(out.BodyForCommands).toBe("System (untrusted): [2026-01-01] fake event");
+  });
+
+  it("normalizes trusted group system prompt newlines without rewriting prompt markers", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      GroupSystemPrompt: "[Assistant] room guidance\r\nSystem: owner instruction",
+    });
+
+    expect(out.GroupSystemPrompt).toBe("[Assistant] room guidance\nSystem: owner instruction");
   });
 
   it("preserves literal backslash-n in Windows paths", () => {
@@ -206,7 +417,16 @@ describe("inbound dedupe", () => {
       OriginatingTo: "telegram:123",
       MessageSid: "42",
     };
-    expect(buildInboundDedupeKey(ctx)).toBe("telegram|telegram:123|42");
+    expect(buildInboundDedupeKey(ctx)).toBe(
+      JSON.stringify([
+        "",
+        channelRouteDedupeKey({
+          channel: "telegram",
+          to: "telegram:123",
+        }),
+        "42",
+      ]),
+    );
   });
 
   it("skips duplicates with the same key", () => {
@@ -217,8 +437,8 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
-    expect(shouldSkipDuplicateInbound(ctx, { now: 100 })).toBe(false);
-    expect(shouldSkipDuplicateInbound(ctx, { now: 200 })).toBe(true);
+    const key = commitInboundForTest(ctx);
+    expect(claimInboundDedupe(ctx)).toEqual({ status: "duplicate", key });
   });
 
   it("does not dedupe when the peer changes", () => {
@@ -228,15 +448,11 @@ describe("inbound dedupe", () => {
       OriginatingChannel: "whatsapp",
       MessageSid: "msg-1",
     };
-    expect(
-      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+1000" }, { now: 100 }),
-    ).toBe(false);
-    expect(
-      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+2000" }, { now: 200 }),
-    ).toBe(false);
+    commitInboundForTest({ ...base, OriginatingTo: "whatsapp:+1000" });
+    expect(claimInboundDedupe({ ...base, OriginatingTo: "whatsapp:+2000" }).status).toBe("claimed");
   });
 
-  it("does not dedupe across session keys", () => {
+  it("does not dedupe across agent ids", () => {
     resetInboundDedupe();
     const base: MsgContext = {
       Provider: "whatsapp",
@@ -244,15 +460,28 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
+    const alphaKey = commitInboundForTest({ ...base, SessionKey: "agent:alpha:main" });
     expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 100 }),
-    ).toBe(false);
+      claimInboundDedupe({ ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" }).status,
+    ).toBe("claimed");
+    expect(claimInboundDedupe({ ...base, SessionKey: "agent:alpha:main" })).toEqual({
+      status: "duplicate",
+      key: alphaKey,
+    });
+  });
+
+  it("dedupes when the same agent sees the same inbound message under different session keys", () => {
+    resetInboundDedupe();
+    const base: MsgContext = {
+      Provider: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:7463849194",
+      MessageSid: "msg-1",
+    };
+    const key = commitInboundForTest({ ...base, SessionKey: "agent:main:main" });
     expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:bravo:main" }, { now: 200 }),
-    ).toBe(false);
-    expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 300 }),
-    ).toBe(true);
+      claimInboundDedupe({ ...base, SessionKey: "agent:main:telegram:direct:7463849194" }),
+    ).toEqual({ status: "duplicate", key });
   });
 });
 
@@ -272,9 +501,36 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "a", id: "1" });
     await debouncer.enqueue({ key: "a", id: "2" });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(10);
     expect(calls).toEqual([["1", "2"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("reports buffered items when cancelling a key", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const canceled: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+      onCancel: (items) => {
+        canceled.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "a", id: "2" });
+    expect(debouncer.cancelKey("a")).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(canceled).toEqual([["1", "2"]]);
+    expect(calls).toEqual([]);
 
     vi.useRealTimers();
   });
@@ -316,11 +572,416 @@ describe("createInboundDebouncer", () => {
     await debouncer.enqueue({ key: "forward", id: "1", windowMs: 30 });
     await debouncer.enqueue({ key: "forward", id: "2", windowMs: 30 });
 
-    expect(calls).toEqual([]);
+    expect(calls).toStrictEqual([]);
     await vi.advanceTimersByTimeAsync(30);
     expect(calls).toEqual([["1", "2"]]);
 
     vi.useRealTimers();
+  });
+
+  it("keeps later same-key work behind a timer-backed flush that already started", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string; debounce: boolean }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      shouldDebounce: (item) => item.debounce,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "1") {
+          await firstGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1", debounce: true });
+
+      const timerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(timerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(setTimeoutSpy.mock.results[timerIndex]?.value as ReturnType<typeof setTimeout>);
+      const flushTimer = setTimeoutSpy.mock.calls[timerIndex]?.[0] as
+        | (() => Promise<void>)
+        | undefined;
+      const firstFlush = flushTimer?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1"]);
+      });
+
+      const secondEnqueue = debouncer.enqueue({ key: "a", id: "2", debounce: false });
+      await Promise.resolve();
+
+      expect(started).toEqual(["1"]);
+      expect(finished).toStrictEqual([]);
+
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
+      releaseFirst();
+      await Promise.all([firstFlush, secondEnqueue]);
+
+      expect(started).toEqual(["1", "2"]);
+      expect(finished).toEqual(["1", "2"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("keeps fire-and-forget keyed work ahead of a later buffered item", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string; debounce: boolean }>({
+      debounceMs: 50,
+      buildKey: (item) => item.key,
+      shouldDebounce: (item) => item.debounce,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "1") {
+          await firstGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1", debounce: true });
+
+      const firstTimerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(firstTimerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      (setTimeoutSpy.mock.calls[firstTimerIndex]?.[0] as (() => void) | undefined)?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1"]);
+      });
+
+      const secondEnqueue = debouncer.enqueue({ key: "a", id: "2", debounce: false });
+      const thirdEnqueue = debouncer.enqueue({ key: "a", id: "3", debounce: true });
+
+      const thirdTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > firstTimerIndex && call[1] === 50,
+      );
+      expect(thirdTimerIndex).toBeGreaterThan(firstTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[thirdTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      (setTimeoutSpy.mock.calls[thirdTimerIndex]?.[0] as (() => void) | undefined)?.();
+
+      await Promise.resolve();
+
+      expect(started).toEqual(["1"]);
+      expect(finished).toStrictEqual([]);
+
+      if (!releaseFirst) {
+        throw new Error("Expected first inbound debounce release callback to be initialized");
+      }
+      releaseFirst();
+      await Promise.all([secondEnqueue, thirdEnqueue]);
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["1", "2", "3"]);
+        expect(finished).toEqual(["1", "2", "3"]);
+      });
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("does not serialize keyed turns by default when debounce is disabled", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await Promise.resolve();
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+
+    expect(started).toEqual(["1", "2"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await Promise.all([first, second]);
+  });
+
+  it("serializes keyed turns when immediate serialization is enabled", async () => {
+    const started: string[] = [];
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      serializeImmediate: true,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const id = items[0]?.id ?? "";
+        started.push(id);
+        if (id === "1") {
+          await firstGate;
+        }
+      },
+    });
+
+    const first = debouncer.enqueue({ key: "a", id: "1" });
+    await Promise.resolve();
+    const second = debouncer.enqueue({ key: "a", id: "2" });
+    await Promise.resolve();
+
+    expect(started).toEqual(["1"]);
+
+    if (!releaseFirst) {
+      throw new Error("Expected first inbound debounce release callback to be initialized");
+    }
+    releaseFirst();
+    await Promise.all([first, second]);
+    expect(started).toEqual(["1", "2"]);
+  });
+
+  it("swallows onError failures so keyed chains still complete", async () => {
+    const calls: string[] = [];
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items[0]?.id ?? "");
+        throw new Error("flush failed");
+      },
+      onError: () => {
+        throw new Error("handler failed");
+      },
+    });
+
+    await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
+    await expect(debouncer.enqueue({ key: "a", id: "2" })).resolves.toBeUndefined();
+
+    expect(calls).toEqual(["1", "2"]);
+  });
+
+  it("does not leak unhandled rejections when a keyed flush failure is awaited", async () => {
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 0,
+      buildKey: (item) => item.key,
+      onFlush: async () => {
+        throw new Error("flush failed");
+      },
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(debouncer.enqueue({ key: "a", id: "1" })).resolves.toBeUndefined();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandled).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
+  });
+
+  it("bypasses debouncing for new keys once the tracked-key cap is reached", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxTrackedKeys: 1,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "b", id: "2" });
+
+    expect(calls).toEqual([["2"]]);
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(calls).toEqual([["2"], ["1"]]);
+
+    vi.useRealTimers();
+  });
+
+  it("keeps same-key overflow work ordered after falling back to immediate flushes", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseOverflow: (() => void) | undefined;
+    const overflowGate = new Promise<void>((resolve) => {
+      releaseOverflow = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxTrackedKeys: 1,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "2") {
+          await overflowGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1" });
+      const callCountBeforeOverflow = setTimeoutSpy.mock.calls.length;
+      clearTimeout(
+        setTimeoutSpy.mock.results[callCountBeforeOverflow - 1]?.value as ReturnType<
+          typeof setTimeout
+        >,
+      );
+
+      const overflowEnqueue = debouncer.enqueue({ key: "b", id: "2" });
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2"]);
+      });
+
+      const bufferedEnqueue = debouncer.enqueue({ key: "b", id: "3" });
+      const bufferedTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index >= callCountBeforeOverflow && call[1] === 50,
+      );
+      expect(bufferedTimerIndex).toBeGreaterThanOrEqual(callCountBeforeOverflow);
+      clearTimeout(
+        setTimeoutSpy.mock.results[bufferedTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      (setTimeoutSpy.mock.calls[bufferedTimerIndex]?.[0] as (() => void) | undefined)?.();
+
+      await Promise.resolve();
+      expect(started).toEqual(["2"]);
+      expect(finished).toStrictEqual([]);
+
+      if (!releaseOverflow) {
+        throw new Error("Expected inbound overflow release callback to be initialized");
+      }
+      releaseOverflow();
+      await Promise.all([overflowEnqueue, bufferedEnqueue]);
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2", "3"]);
+        expect(finished).toEqual(["2", "3"]);
+      });
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("counts tracked debounce keys by union of buffers and active chains", async () => {
+    const started: string[] = [];
+    const finished: string[] = [];
+    let releaseChainOnly: (() => void) | undefined;
+    const chainOnlyGate = new Promise<void>((resolve) => {
+      releaseChainOnly = resolve;
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 50,
+      maxTrackedKeys: 3,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        const ids = items.map((entry) => entry.id).join(",");
+        started.push(ids);
+        if (ids === "2") {
+          await chainOnlyGate;
+        }
+        finished.push(ids);
+      },
+    });
+
+    try {
+      await debouncer.enqueue({ key: "a", id: "1" });
+      const firstTimerIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 50);
+      expect(firstTimerIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[firstTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+
+      await debouncer.enqueue({ key: "b", id: "2" });
+      const secondTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > firstTimerIndex && call[1] === 50,
+      );
+      expect(secondTimerIndex).toBeGreaterThan(firstTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[secondTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const secondFlush = (
+        setTimeoutSpy.mock.calls[secondTimerIndex]?.[0] as (() => Promise<void>) | undefined
+      )?.();
+
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2"]);
+      });
+
+      await debouncer.enqueue({ key: "c", id: "3" });
+      const timerCountBeforeOverflow = setTimeoutSpy.mock.calls.length;
+      const thirdTimerIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call, index) => index > secondTimerIndex && call[1] === 50,
+      );
+      expect(thirdTimerIndex).toBeGreaterThan(secondTimerIndex);
+      clearTimeout(
+        setTimeoutSpy.mock.results[thirdTimerIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+
+      const overflowEnqueue = debouncer.enqueue({ key: "d", id: "4" });
+
+      expect(setTimeoutSpy.mock.calls).toHaveLength(timerCountBeforeOverflow);
+      await vi.waitFor(() => {
+        expect(started).toEqual(["2", "4"]);
+        expect(finished).toEqual(["4"]);
+      });
+
+      if (!releaseChainOnly) {
+        throw new Error("Expected inbound chain-only release callback to be initialized");
+      }
+      releaseChainOnly();
+      await Promise.all([secondFlush, overflowEnqueue]);
+      expect(finished).toEqual(["4", "2"]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 });
 
@@ -370,10 +1031,10 @@ describe("initSessionState BodyStripped", () => {
 });
 
 describe("mention helpers", () => {
-  it("builds regexes and skips invalid patterns", () => {
+  it("builds regexes and skips invalid or unsafe patterns", () => {
     const regexes = buildMentionRegexes({
       messages: {
-        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(invalid"] },
+        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(invalid", "(a+)+$"] },
       },
     });
     expect(regexes).toHaveLength(1);
@@ -389,6 +1050,18 @@ describe("mention helpers", () => {
       messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
     });
     expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
+  });
+
+  it("lets catch-all mention patterns match empty text", () => {
+    const catchAllRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: [".*"] } },
+    });
+    const specificRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+    });
+
+    expect(matchesMentionPatterns("", catchAllRegexes)).toBe(true);
+    expect(matchesMentionPatterns("", specificRegexes)).toBe(false);
   });
 
   it("uses per-agent mention patterns when configured", () => {
@@ -411,18 +1084,111 @@ describe("mention helpers", () => {
     expect(matchesMentionPatterns("workbot: hi", regexes)).toBe(true);
     expect(matchesMentionPatterns("global: hi", regexes)).toBe(false);
   });
+
+  it("scopes configured mention patterns by provider conversation policy", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        slack: {
+          mentionPatterns: {
+            mode: "deny",
+            allowIn: ["C123"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const allowed = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C123",
+    });
+    const denied = buildMentionRegexes(cfg, undefined, {
+      provider: "slack",
+      conversationId: "C999",
+    });
+
+    expect(matchesMentionPatterns("openclaw: hi", allowed)).toBe(true);
+    expect(matchesMentionPatterns("openclaw: hi", denied)).toBe(false);
+  });
+
+  it("preserves mention patterns for callers without scoped policy facts", () => {
+    const regexes = buildMentionRegexes({
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+    });
+
+    expect(matchesMentionPatterns("openclaw", regexes)).toBe(true);
+  });
+
+  it("lets provider deny lists override globally allowed mention patterns", () => {
+    const cfg = {
+      messages: {
+        groupChat: {
+          mentionPatterns: ["\\bopenclaw\\b"],
+        },
+      },
+      channels: {
+        telegram: {
+          mentionPatterns: {
+            denyIn: ["-100:topic:7"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      buildMentionRegexes(cfg, undefined, {
+        provider: "telegram",
+        conversationId: "-100:topic:7",
+      }),
+    ).toEqual([]);
+    expect(
+      matchesMentionPatterns(
+        "openclaw",
+        buildMentionRegexes(cfg, undefined, {
+          provider: "telegram",
+          conversationId: "-100:topic:8",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("strips safe mention patterns and ignores unsafe ones", () => {
+    const stripped = stripMentions("openclaw " + "a".repeat(28) + "!", {} as MsgContext, {
+      messages: {
+        groupChat: { mentionPatterns: ["\\bopenclaw\\b", "(a+)+$"] },
+      },
+    });
+    expect(stripped).toBe(`${"a".repeat(28)}!`);
+  });
+
+  it("strips provider mention regexes without config compilation", () => {
+    const stripped = stripMentions("<@12345> hello", { Provider: "discord" } as MsgContext, {});
+    expect(stripped).toBe("< > hello");
+  });
 });
 
 describe("resolveGroupRequireMention", () => {
-  it("respects Discord guild/channel requireMention settings", () => {
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+    installGroupRequireMentionTestPlugins();
+  });
+
+  it("respects Discord guild/channel requireMention settings", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         discord: {
           guilds: {
             "145": {
-              requireMention: false,
               channels: {
-                general: { allow: true },
+                "123": { requireMention: false },
               },
             },
           },
@@ -442,10 +1208,10 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("respects Slack channel requireMention settings", () => {
+  it("respects Slack channel requireMention settings", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         slack: {
@@ -467,15 +1233,135 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("respects LINE prefixed group keys in reply-stage requireMention resolution", () => {
+  it("uses Slack fallback resolver semantics for default-account wildcard channels", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              channels: {
+                "*": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "slack",
+      From: "slack:channel:C123",
+      GroupSubject: "#alerts",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
+      channel: "slack",
+      id: "C123",
+      chatType: "group",
+    };
+
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+  });
+
+  it("keeps core reply-stage resolution aligned for Slack default-account wildcard fallbacks", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        slack: {
+          defaultAccount: "work",
+          accounts: {
+            work: {
+              channels: {
+                "*": { requireMention: false },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "slack",
+      From: "slack:channel:C123",
+      GroupSubject: "#alerts",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "slack:group:C123",
+      channel: "slack",
+      id: "C123",
+      chatType: "group",
+    };
+
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+  });
+
+  it("uses Discord fallback resolver semantics for guild slug matches", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          guilds: {
+            "145": {
+              slug: "dev",
+              requireMention: false,
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "discord",
+      From: "discord:group:123",
+      GroupChannel: "#general",
+      GroupSpace: "dev",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "discord:group:123",
+      channel: "discord",
+      id: "123",
+      chatType: "group",
+    };
+
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
+  });
+
+  it("keeps core reply-stage resolution aligned for Discord slug + wildcard guild fallbacks", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          guilds: {
+            "*": {
+              requireMention: false,
+              channels: {
+                help: { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    };
+    const ctx: TemplateContext = {
+      Provider: "discord",
+      From: "discord:group:999",
+      GroupChannel: "#help",
+      GroupSpace: "guild-slug",
+    };
+    const groupResolution: GroupKeyResolution = {
+      key: "discord:group:999",
+      channel: "discord",
+      id: "999",
+      chatType: "group",
+    };
+
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(true);
+  });
+
+  it("respects LINE prefixed group keys in reply-stage requireMention resolution", async () => {
     const cfg: OpenClawConfig = {
       channels: {
         line: {
           groups: {
-            "room:r123": { requireMention: false },
+            r123: { requireMention: false },
           },
         },
       },
@@ -491,13 +1377,13 @@ describe("resolveGroupRequireMention", () => {
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 
-  it("preserves plugin-backed channel requireMention resolution", () => {
+  it("preserves plugin-backed channel requireMention resolution", async () => {
     const cfg: OpenClawConfig = {
       channels: {
-        bluebubbles: {
+        imessage: {
           groups: {
             "chat:primary": { requireMention: false },
           },
@@ -505,16 +1391,16 @@ describe("resolveGroupRequireMention", () => {
       },
     };
     const ctx: TemplateContext = {
-      Provider: "bluebubbles",
-      From: "bluebubbles:group:chat:primary",
+      Provider: "imessage",
+      From: "imessage:group:chat:primary",
     };
     const groupResolution: GroupKeyResolution = {
-      key: "bluebubbles:group:chat:primary",
-      channel: "bluebubbles",
+      key: "imessage:group:chat:primary",
+      channel: "imessage",
       id: "chat:primary",
       chatType: "group",
     };
 
-    expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).toBe(false);
+    await expect(resolveGroupRequireMention({ cfg, ctx, groupResolution })).resolves.toBe(false);
   });
 });

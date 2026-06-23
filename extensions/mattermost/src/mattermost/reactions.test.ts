@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from "vitest";
+// Mattermost tests cover reactions plugin behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addMattermostReaction,
   removeMattermostReaction,
@@ -7,12 +8,35 @@ import {
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
+  requestUrl,
 } from "./reactions.test-helpers.js";
 
 describe("mattermost reactions", () => {
   beforeEach(() => {
     resetMattermostReactionBotUserCacheForTests();
   });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function addReactionWithFetch(fetchMock: typeof fetch) {
+    return addMattermostReaction({
+      cfg: createMattermostTestConfig(),
+      postId: "POST1",
+      emojiName: "thumbsup",
+      fetchImpl: fetchMock,
+    });
+  }
+
+  async function removeReactionWithFetch(fetchMock: typeof fetch) {
+    return removeMattermostReaction({
+      cfg: createMattermostTestConfig(),
+      postId: "POST1",
+      emojiName: "thumbsup",
+      fetchImpl: fetchMock,
+    });
+  }
 
   it("adds reactions by calling /users/me then POST /reactions", async () => {
     const fetchMock = createMattermostReactionFetchMock({
@@ -21,12 +45,7 @@ describe("mattermost reactions", () => {
       emojiName: "thumbsup",
     });
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
-    });
+    const result = await addReactionWithFetch(fetchMock);
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalled();
@@ -41,12 +60,7 @@ describe("mattermost reactions", () => {
       body: { id: "err", message: "boom" },
     });
 
-    const result = await addMattermostReaction({
-      cfg: createMattermostTestConfig(),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
-    });
+    const result = await addReactionWithFetch(fetchMock);
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -61,12 +75,7 @@ describe("mattermost reactions", () => {
       emojiName: "thumbsup",
     });
 
-    const result = await removeMattermostReaction({
-      cfg: createMattermostTestConfig(),
-      postId: "POST1",
-      emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
-    });
+    const result = await removeReactionWithFetch(fetchMock);
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalled();
@@ -84,20 +93,110 @@ describe("mattermost reactions", () => {
       cfg,
       postId: "POST1",
       emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
+      fetchImpl: fetchMock,
     });
     const removeResult = await removeMattermostReaction({
       cfg,
       postId: "POST1",
       emojiName: "thumbsup",
-      fetchImpl: fetchMock as unknown as typeof fetch,
+      fetchImpl: fetchMock,
     });
 
     const usersMeCalls = fetchMock.mock.calls.filter((call) =>
-      String(call[0]).endsWith("/api/v4/users/me"),
+      requestUrl(call[0]).endsWith("/api/v4/users/me"),
     );
     expect(addResult).toEqual({ ok: true });
     expect(removeResult).toEqual({ ok: true });
     expect(usersMeCalls).toHaveLength(1);
+  });
+
+  it("does not reuse cached bot user ids while the process clock is invalid", async () => {
+    const cfg = createMattermostTestConfig();
+    const firstFetch = createMattermostReactionFetchMock({
+      mode: "add",
+      postId: "POST1",
+      emojiName: "thumbsup",
+      userId: "BOT_OLD",
+    });
+    const secondFetch = createMattermostReactionFetchMock({
+      mode: "add",
+      postId: "POST2",
+      emojiName: "thumbsup",
+      userId: "BOT_FRESH",
+    });
+    const thirdFetch = createMattermostReactionFetchMock({
+      mode: "add",
+      postId: "POST3",
+      emojiName: "thumbsup",
+      userId: "BOT_RECOVERED",
+    });
+
+    await expect(
+      addMattermostReaction({
+        cfg,
+        postId: "POST1",
+        emojiName: "thumbsup",
+        fetchImpl: firstFetch,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    await expect(
+      addMattermostReaction({
+        cfg,
+        postId: "POST2",
+        emojiName: "thumbsup",
+        fetchImpl: secondFetch,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    vi.mocked(Date.now).mockReturnValue(1_000);
+    await expect(
+      addMattermostReaction({
+        cfg,
+        postId: "POST3",
+        emojiName: "thumbsup",
+        fetchImpl: thirdFetch,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const usersMeCalls = [
+      ...firstFetch.mock.calls,
+      ...secondFetch.mock.calls,
+      ...thirdFetch.mock.calls,
+    ].filter((call) => requestUrl(call[0]).endsWith("/api/v4/users/me"));
+    expect(usersMeCalls).toHaveLength(3);
+  });
+
+  it("does not cache bot user ids when cache expiry would exceed the Date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const cfg = createMattermostTestConfig();
+    const fetchMock = createMattermostReactionFetchMock({
+      mode: "both",
+      postId: "POST1",
+      emojiName: "thumbsup",
+    });
+
+    await expect(
+      addMattermostReaction({
+        cfg,
+        postId: "POST1",
+        emojiName: "thumbsup",
+        fetchImpl: fetchMock,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      removeMattermostReaction({
+        cfg,
+        postId: "POST1",
+        emojiName: "thumbsup",
+        fetchImpl: fetchMock,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const usersMeCalls = fetchMock.mock.calls.filter((call) =>
+      requestUrl(call[0]).endsWith("/api/v4/users/me"),
+    );
+    expect(usersMeCalls).toHaveLength(2);
   });
 });

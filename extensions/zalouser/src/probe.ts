@@ -1,4 +1,7 @@
-import type { BaseProbeResult } from "openclaw/plugin-sdk/zalouser";
+// Zalouser plugin module implements probe behavior.
+import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ZcaUserInfo } from "./types.js";
 import { getZaloUserInfo } from "./zalo-js.js";
 
@@ -14,9 +17,9 @@ export async function probeZalouser(
     const user = timeoutMs
       ? await Promise.race([
           getZaloUserInfo(profile),
-          new Promise<null>((resolve) =>
-            setTimeout(() => resolve(null), Math.max(timeoutMs, 1000)),
-          ),
+          new Promise<null>((resolve) => {
+            setTimeout(() => resolve(null), resolveTimerTimeoutMs(timeoutMs, 1000, 1000));
+          }),
         ])
       : await getZaloUserInfo(profile);
 
@@ -28,7 +31,7 @@ export async function probeZalouser(
   } catch (error) {
     return {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     };
   }
 }

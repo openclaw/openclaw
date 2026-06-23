@@ -1,20 +1,53 @@
+// Shared Gateway session projection types.
+// Keeps server methods and Control UI payloads aligned.
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
-import type { SessionEntry } from "../config/sessions.js";
 import type {
+  SessionCompactionCheckpoint,
+  SessionEntry,
+  SessionGoal,
+} from "../config/sessions/types.js";
+import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
+import type { FastModeSource } from "../shared/fast-mode.js";
+import type {
+  GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
+  GatewayThinkingLevelOption,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+// Shared Gateway session response contracts. Server methods, UI adapters, and
+// tests import these types so list/patch/preview payloads evolve together.
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
 };
+
+/** Runtime status surfaced for the latest session run. */
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+
+type SubagentRunState = "active" | "interrupted" | "historical";
+
+export type SessionCompactionCheckpointPreview = Pick<
+  SessionCompactionCheckpoint,
+  "checkpointId" | "createdAt" | "reason"
+>;
 
 export type GatewaySessionRow = {
   key: string;
+  spawnedBy?: string;
+  spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
+  forkedFromParent?: boolean;
+  spawnDepth?: number;
+  subagentRole?: SessionEntry["subagentRole"];
+  subagentControlScope?: SessionEntry["subagentControlScope"];
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
@@ -31,7 +64,15 @@ export type GatewaySessionRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
+  fastMode?: FastMode;
+  effectiveFastMode?: FastMode;
+  effectiveFastModeSource?: FastModeSource;
+  fastAutoOnSeconds?: number;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
@@ -39,14 +80,31 @@ export type GatewaySessionRow = {
   outputTokens?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
+  goal?: SessionGoal;
+  estimatedCostUsd?: number;
+  status?: SessionRunStatus;
+  hasActiveRun?: boolean;
+  subagentRunState?: SubagentRunState;
+  hasActiveSubagentRun?: boolean;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
+  parentSessionKey?: string;
+  childSessions?: string[];
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
+  agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
+  contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;
   lastAccountId?: string;
+  lastThreadId?: SessionEntry["lastThreadId"];
+  compactionCheckpointCount?: number;
+  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
+  pluginExtensions?: PluginSessionExtensionProjection[];
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
@@ -74,5 +132,6 @@ export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   resolved?: {
     modelProvider?: string;
     model?: string;
+    agentRuntime?: GatewayAgentRuntime;
   };
 };

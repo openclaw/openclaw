@@ -1,8 +1,10 @@
+// Shared JSON state helpers for pairing namespaces.
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-export { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+export { createAsyncLock, readJsonIfExists, tryReadJson, writeJson } from "./json-files.js";
 
+/** Resolve pending/paired JSON file locations for one pairing namespace. */
 export function resolvePairingPaths(baseDir: string | undefined, subdir: string) {
   const root = baseDir ?? resolveStateDir();
   const dir = path.join(root, subdir);
@@ -13,6 +15,15 @@ export function resolvePairingPaths(baseDir: string | undefined, subdir: string)
   };
 }
 
+/** Coerce persisted pairing maps, treating malformed arrays/scalars as empty state. */
+export function coercePairingStateRecord<T>(value: unknown): Record<string, T> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, T>;
+}
+
+/** Remove pending requests older than the caller's pairing TTL. */
 export function pruneExpiredPending<T extends { ts: number }>(
   pendingById: Record<string, T>,
   nowMs: number,
@@ -25,25 +36,44 @@ export function pruneExpiredPending<T extends { ts: number }>(
   }
 }
 
+/** Result shape for creating or refreshing a pending pairing request. */
 export type PendingPairingRequestResult<TPending> = {
   status: "pending";
   request: TPending;
   created: boolean;
 };
 
-export async function upsertPendingPairingRequest<TPending extends { requestId: string }>(params: {
+/** Refresh one compatible pending request or replace a superseded request set atomically. */
+export async function reconcilePendingPairingRequests<
+  TPending extends { requestId: string },
+  TIncoming,
+>(params: {
   pendingById: Record<string, TPending>;
-  isExisting: (pending: TPending) => boolean;
-  createRequest: (isRepair: boolean) => TPending;
-  isRepair: boolean;
+  existing: readonly TPending[];
+  incoming: TIncoming;
+  canRefreshSingle: (existing: TPending, incoming: TIncoming) => boolean;
+  refreshSingle: (existing: TPending, incoming: TIncoming) => TPending;
+  buildReplacement: (params: { existing: readonly TPending[]; incoming: TIncoming }) => TPending;
   persist: () => Promise<void>;
 }): Promise<PendingPairingRequestResult<TPending>> {
-  const existing = Object.values(params.pendingById).find(params.isExisting);
-  if (existing) {
-    return { status: "pending", request: existing, created: false };
+  if (
+    params.existing.length === 1 &&
+    params.canRefreshSingle(params.existing[0], params.incoming)
+  ) {
+    const refreshed = params.refreshSingle(params.existing[0], params.incoming);
+    params.pendingById[refreshed.requestId] = refreshed;
+    await params.persist();
+    return { status: "pending", request: refreshed, created: false };
   }
 
-  const request = params.createRequest(params.isRepair);
+  for (const existing of params.existing) {
+    delete params.pendingById[existing.requestId];
+  }
+
+  const request = params.buildReplacement({
+    existing: params.existing,
+    incoming: params.incoming,
+  });
   params.pendingById[request.requestId] = request;
   await params.persist();
   return { status: "pending", request, created: true };

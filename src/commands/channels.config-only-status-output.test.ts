@@ -1,9 +1,88 @@
-import { afterEach, describe, expect, it } from "vitest";
+// Channels config-only status tests cover fallback output when gateway status is unavailable.
+import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { makeDirectPlugin } from "../test-utils/channel-plugin-test-fixtures.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
-import { formatConfigChannelsStatusLines } from "./channels/status.js";
+import { formatConfigChannelsStatusLines } from "./channels/status-config-format.js";
+
+const activeChannelPlugins = vi.hoisted(() => [] as ChannelPlugin[]);
+const listReadOnlyChannelPluginsForConfig = vi.hoisted(() => vi.fn(() => activeChannelPlugins));
+
+vi.mock("../channels/plugins/index.js", () => ({
+  listChannelPlugins: () => activeChannelPlugins,
+  getLoadedChannelPlugin: (id: string) => activeChannelPlugins.find((plugin) => plugin.id === id),
+  getChannelPlugin: (id: string) => activeChannelPlugins.find((plugin) => plugin.id === id),
+}));
+
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig,
+}));
+
+vi.mock("../channels/plugins/status.js", () => ({
+  buildReadOnlySourceChannelAccountSnapshot: async ({
+    accountId,
+    cfg,
+    plugin,
+  }: {
+    accountId: string;
+    cfg: unknown;
+    plugin: ChannelPlugin;
+  }) => {
+    const account = await plugin.config.inspectAccount?.(cfg as never, accountId);
+    return account ? { accountId, ...(account as Record<string, unknown>) } : null;
+  },
+  buildChannelAccountSnapshot: async ({
+    accountId,
+    cfg,
+    plugin,
+  }: {
+    accountId: string;
+    cfg: unknown;
+    plugin: ChannelPlugin;
+  }) => {
+    const account =
+      (await plugin.config.inspectAccount?.(cfg as never, accountId)) ??
+      plugin.config.resolveAccount(cfg as never, accountId);
+    return { accountId, ...(account as Record<string, unknown>) };
+  },
+}));
+
+function registerSingleTestPlugin(_pluginId: string, plugin: ChannelPlugin) {
+  activeChannelPlugins.splice(0, activeChannelPlugins.length, plugin);
+}
+
+async function formatLocalStatusSummary(
+  cfg: unknown,
+  options?: {
+    sourceConfig?: unknown;
+  },
+) {
+  const lines = await formatConfigChannelsStatusLines(
+    cfg as never,
+    { mode: "local" },
+    options?.sourceConfig ? { sourceConfig: options.sourceConfig as never } : undefined,
+  );
+  return lines.join("\n");
+}
+
+function unresolvedTokenAccount() {
+  return {
+    name: "Primary",
+    enabled: true,
+    configured: true,
+    token: "",
+    tokenSource: "config",
+    tokenStatus: "configured_unavailable",
+  } as const;
+}
+
+function tokenOnlyPluginConfig() {
+  return {
+    listAccountIds: () => ["primary"],
+    defaultAccountId: () => "primary",
+    isConfigured: () => true,
+    isEnabled: () => true,
+  } as const;
+}
 
 function makeUnavailableTokenPlugin(): ChannelPlugin {
   return makeDirectPlugin({
@@ -11,18 +90,8 @@ function makeUnavailableTokenPlugin(): ChannelPlugin {
     label: "TokenOnly",
     docsPath: "/channels/token-only",
     config: {
-      listAccountIds: () => ["primary"],
-      defaultAccountId: () => "primary",
-      resolveAccount: () => ({
-        name: "Primary",
-        enabled: true,
-        configured: true,
-        token: "",
-        tokenSource: "config",
-        tokenStatus: "configured_unavailable",
-      }),
-      isConfigured: () => true,
-      isEnabled: () => true,
+      ...tokenOnlyPluginConfig(),
+      resolveAccount: () => unresolvedTokenAccount(),
     },
   });
 }
@@ -33,8 +102,7 @@ function makeResolvedTokenPlugin(): ChannelPlugin {
     label: "TokenOnly",
     docsPath: "/channels/token-only",
     config: {
-      listAccountIds: () => ["primary"],
-      defaultAccountId: () => "primary",
+      ...tokenOnlyPluginConfig(),
       inspectAccount: (cfg) =>
         (cfg as { secretResolved?: boolean }).secretResolved
           ? {
@@ -46,40 +114,17 @@ function makeResolvedTokenPlugin(): ChannelPlugin {
               tokenSource: "config",
               tokenStatus: "available",
             }
-          : {
-              accountId: "primary",
-              name: "Primary",
-              enabled: true,
-              configured: true,
-              token: "",
-              tokenSource: "config",
-              tokenStatus: "configured_unavailable",
-            },
-      resolveAccount: () => ({
-        name: "Primary",
-        enabled: true,
-        configured: true,
-        token: "",
-        tokenSource: "config",
-        tokenStatus: "configured_unavailable",
-      }),
-      isConfigured: () => true,
-      isEnabled: () => true,
+          : { accountId: "primary", ...unresolvedTokenAccount() },
+      resolveAccount: () => unresolvedTokenAccount(),
     },
   });
 }
 
 function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
-  return {
+  return makeDirectPlugin({
     id: "token-only",
-    meta: {
-      id: "token-only",
-      label: "TokenOnly",
-      selectionLabel: "TokenOnly",
-      docsPath: "/channels/token-only",
-      blurb: "test",
-    },
-    capabilities: { chatTypes: ["direct"] },
+    label: "TokenOnly",
+    docsPath: "/channels/token-only",
     config: {
       listAccountIds: () => ["primary"],
       defaultAccountId: () => "primary",
@@ -99,10 +144,7 @@ function makeResolvedTokenPluginWithoutInspectAccount(): ChannelPlugin {
       isConfigured: () => true,
       isEnabled: () => true,
     },
-    actions: {
-      listActions: () => ["send"],
-    },
-  };
+  });
 }
 
 function makeUnavailableHttpSlackPlugin(): ChannelPlugin {
@@ -150,98 +192,67 @@ function expectResolvedTokenStatusSummary(
   }
 }
 
+function requireReadOnlyPluginListCall(): unknown[] {
+  const call = listReadOnlyChannelPluginsForConfig.mock.calls[0];
+  if (!call) {
+    throw new Error("expected listReadOnlyChannelPluginsForConfig call");
+  }
+  return call;
+}
+
 describe("config-only channels status output", () => {
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
+  it("uses setup fallback plugins so configured external channels can be shown", async () => {
+    registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
+    listReadOnlyChannelPluginsForConfig.mockClear();
+    const cfg = { channels: { "token-only": { enabled: true } } };
+
+    await formatLocalStatusSummary(cfg);
+
+    expect(listReadOnlyChannelPluginsForConfig).toHaveBeenCalledOnce();
+    expect(requireReadOnlyPluginListCall()).toStrictEqual([
+      cfg,
+      { activationSourceConfig: cfg, includeSetupFallbackPlugins: true },
+    ]);
   });
 
   it("shows configured-but-unavailable credentials distinctly from not configured", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "token-only",
-          source: "test",
-          plugin: makeUnavailableTokenPlugin(),
-        },
-      ]),
-    );
+    registerSingleTestPlugin("token-only", makeUnavailableTokenPlugin());
 
-    const lines = await formatConfigChannelsStatusLines({ channels: {} } as never, {
-      mode: "local",
-    });
-
-    const joined = lines.join("\n");
+    const joined = await formatLocalStatusSummary({ channels: {} });
     expect(joined).toContain("TokenOnly");
+    expect(joined).toContain("TokenOnly primary");
     expect(joined).toContain("configured, secret unavailable in this command path");
     expect(joined).toContain("token:config (unavailable)");
   });
 
   it("prefers resolved config snapshots when command-local secret resolution succeeds", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "token-only",
-          source: "test",
-          plugin: makeResolvedTokenPlugin(),
-        },
-      ]),
-    );
+    registerSingleTestPlugin("token-only", makeResolvedTokenPlugin());
 
-    const lines = await formatConfigChannelsStatusLines(
-      { secretResolved: true, channels: {} } as never,
+    const joined = await formatLocalStatusSummary(
+      { secretResolved: true, channels: {} },
       {
-        mode: "local",
-      },
-      {
-        sourceConfig: { channels: {} } as never,
+        sourceConfig: { channels: {} },
       },
     );
-
-    const joined = lines.join("\n");
     expectResolvedTokenStatusSummary(joined, { includeUnavailableTokenLine: false });
   });
 
   it("does not resolve raw source config for extension channels without inspectAccount", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "token-only",
-          source: "test",
-          plugin: makeResolvedTokenPluginWithoutInspectAccount(),
-        },
-      ]),
-    );
+    registerSingleTestPlugin("token-only", makeResolvedTokenPluginWithoutInspectAccount());
 
-    const lines = await formatConfigChannelsStatusLines(
-      { secretResolved: true, channels: {} } as never,
+    const joined = await formatLocalStatusSummary(
+      { secretResolved: true, channels: {} },
       {
-        mode: "local",
-      },
-      {
-        sourceConfig: { channels: {} } as never,
+        sourceConfig: { channels: {} },
       },
     );
-
-    const joined = lines.join("\n");
     expectResolvedTokenStatusSummary(joined);
   });
 
   it("renders Slack HTTP signing-secret availability in config-only status", async () => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "slack",
-          source: "test",
-          plugin: makeUnavailableHttpSlackPlugin(),
-        },
-      ]),
-    );
+    registerSingleTestPlugin("slack", makeUnavailableHttpSlackPlugin());
 
-    const lines = await formatConfigChannelsStatusLines({ channels: {} } as never, {
-      mode: "local",
-    });
-
-    const joined = lines.join("\n");
+    const joined = await formatLocalStatusSummary({ channels: {} });
     expect(joined).toContain("Slack");
     expect(joined).toContain("configured, secret unavailable in this command path");
     expect(joined).toContain("mode:http");

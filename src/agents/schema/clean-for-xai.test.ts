@@ -1,47 +1,20 @@
+// xAI schema cleaner tests cover provider-specific keyword stripping for tool
+// schemas before they are sent to Grok/xAI endpoints.
 import { describe, expect, it } from "vitest";
-import { isXaiProvider, stripXaiUnsupportedKeywords } from "./clean-for-xai.js";
+import { stripUnsupportedSchemaKeywords } from "../../plugin-sdk/provider-tools.js";
 
-describe("isXaiProvider", () => {
-  it("matches direct xai provider", () => {
-    expect(isXaiProvider("xai")).toBe(true);
-  });
+const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "minContains",
+  "maxContains",
+]);
 
-  it("matches x-ai provider string", () => {
-    expect(isXaiProvider("x-ai")).toBe(true);
-  });
-
-  it("matches openrouter with x-ai model id", () => {
-    expect(isXaiProvider("openrouter", "x-ai/grok-4.1-fast")).toBe(true);
-  });
-
-  it("does not match openrouter with non-xai model id", () => {
-    expect(isXaiProvider("openrouter", "openai/gpt-4o")).toBe(false);
-  });
-
-  it("does not match openai provider", () => {
-    expect(isXaiProvider("openai")).toBe(false);
-  });
-
-  it("does not match google provider", () => {
-    expect(isXaiProvider("google")).toBe(false);
-  });
-
-  it("handles undefined provider", () => {
-    expect(isXaiProvider(undefined)).toBe(false);
-  });
-
-  it("matches venice provider with grok model id", () => {
-    expect(isXaiProvider("venice", "grok-4.1-fast")).toBe(true);
-  });
-
-  it("matches venice provider with venice/ prefixed grok model id", () => {
-    expect(isXaiProvider("venice", "venice/grok-4.1-fast")).toBe(true);
-  });
-
-  it("does not match venice provider with non-grok model id", () => {
-    expect(isXaiProvider("venice", "llama-3.3-70b")).toBe(false);
-  });
-});
+function stripXaiUnsupportedKeywords(schema: unknown): unknown {
+  return stripUnsupportedSchemaKeywords(schema, XAI_UNSUPPORTED_SCHEMA_KEYWORDS);
+}
 
 describe("stripXaiUnsupportedKeywords", () => {
   it("strips minLength and maxLength from string properties", () => {
@@ -85,10 +58,12 @@ describe("stripXaiUnsupportedKeywords", () => {
     const result = stripXaiUnsupportedKeywords(schema) as Record<string, unknown>;
     expect(result.minContains).toBeUndefined();
     expect(result.maxContains).toBeUndefined();
-    expect(result.contains).toBeDefined();
+    expect(result.contains).toEqual({ type: "string" });
   });
 
   it("strips keywords recursively inside nested objects", () => {
+    // Attachment schemas can contain large string bounds deep in nested objects;
+    // xAI rejects those bounds unless the cleaner recurses.
     const schema = {
       type: "object",
       properties: {

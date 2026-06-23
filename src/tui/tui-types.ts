@@ -1,4 +1,9 @@
+// Defines shared TUI state, backend, and event types.
+import type { SessionGoal } from "../config/sessions/types.js";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+
 export type TuiOptions = {
+  local?: boolean;
   url?: string;
   token?: string;
   password?: string;
@@ -8,27 +13,70 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  /**
+   * Internal CLI guard: after the standalone TUI returns, force the child
+   * process out if imported runtime handles keep the event loop alive.
+   */
+  forceProcessExitOnReturn?: boolean;
+};
+
+export type TuiExitReason = "exit" | "return-to-crestodian";
+
+export type TuiResult = {
+  exitReason: TuiExitReason;
+  crestodianMessage?: string;
 };
 
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
+  agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
+};
+
+export type BtwEvent = {
+  kind: "btw";
+  runId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  question: string;
+  text: string;
+  isError?: boolean;
+  seq?: number;
+  ts?: number;
+};
+
+export type SessionChangedEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  reason?: string;
+  phase?: string;
+  runId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
 };
 
 export type AgentEvent = {
   runId: string;
   stream: string;
   data?: Record<string, unknown>;
+  // Stamped by the gateway on every emitted payload (see infra/agent-events.ts).
+  // Lifecycle events always carry sessionKey, letting the TUI adopt
+  // system-injected runs that never went through the local submit path.
+  sessionKey?: string;
+  agentId?: string;
 };
 
 export type ResponseUsageMode = "on" | "off" | "tokens" | "full";
 
 export type SessionInfo = {
   thinkingLevel?: string;
+  thinkingLevels?: Array<{ id: string; label: string }>;
+  fastMode?: FastMode;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   model?: string;
   modelProvider?: string;
@@ -36,6 +84,13 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
+  /**
+   * True when `totalTokens` is a known-fresh value (e.g. 0 on a brand-new
+   * session) rather than an unknown/stale total. Lets the footer render `0`
+   * instead of `?` for fresh sessions, mirroring the `/status` fix in #93798.
+   */
+  totalTokensFresh?: boolean;
+  goal?: SessionGoal;
   responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
@@ -48,7 +103,16 @@ export type AgentSummary = {
   name?: string;
 };
 
+export type QueuedMessageMode = "steer" | "followUp";
+
+export type QueuedMessage = {
+  runId: string;
+  text: string;
+  mode: QueuedMessageMode;
+};
+
 export type GatewayStatusSummary = {
+  runtimeVersion?: string | null;
   linkChannel?: {
     id?: string;
     label?: string;
@@ -95,6 +159,10 @@ export type TuiStateAccess = {
   currentSessionKey: string;
   currentSessionId: string | null;
   activeChatRunId: string | null;
+  pendingOptimisticUserMessage?: boolean;
+  pendingChatRunId?: string | null;
+  pendingSubmitDraft?: { runId: string; text: string } | null;
+  queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;
   initialSessionApplied: boolean;

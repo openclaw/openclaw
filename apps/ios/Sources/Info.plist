@@ -4,7 +4,7 @@
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>ai.openclaw.ios.bgrefresh</string>
+		<string>$(OPENCLAW_APP_BUNDLE_ID).bgrefresh</string>
 	</array>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
@@ -23,12 +23,12 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2026.3.8</string>
+	<string>$(OPENCLAW_MARKETING_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>ai.openclaw.ios</string>
+			<string>ai.openclawfoundation.app</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>openclaw</string>
@@ -36,20 +36,30 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>20260308</string>
+	<string>$(OPENCLAW_BUILD_VERSION)</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoadsInWebContent</key>
 		<true/>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
 	</dict>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_openclaw-gw._tcp</string>
 	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.</string>
+	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
+	<string>OpenClaw uses your calendars to add events when you enable calendar access.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>OpenClaw can capture photos or short video clips when requested via the gateway.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>OpenClaw uses your contacts so you can search and reference people while using the assistant.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>OpenClaw discovers and connects to your OpenClaw gateway on the local network.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
@@ -57,15 +67,25 @@
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>OpenClaw uses your location when you allow location sharing.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>OpenClaw needs microphone access for voice wake.</string>
+	<string>OpenClaw uses the microphone for realtime chat, voice wake, and push-to-talk.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>OpenClaw may use motion data to support device-aware interactions and automations.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>OpenClaw needs photo library access when you choose existing photos to share with your assistant.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>OpenClaw uses on-device speech recognition for voice wake.</string>
+	<string>OpenClaw uses on-device speech recognition for talk mode and voice wake.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>OpenClawAppGroupIdentifier</key>
+	<string>$(OPENCLAW_APP_GROUP_ID)</string>
+	<key>OpenClawCanonicalVersion</key>
+	<string>$(OPENCLAW_IOS_VERSION)</string>
+	<key>OpenClawPushMode</key>
+	<string>$(OPENCLAW_PUSH_MODE)</string>
+	<key>OpenClawPushRelayBaseURL</key>
+	<string>$(OPENCLAW_PUSH_RELAY_BASE_URL)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -79,13 +99,6 @@
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
-	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>

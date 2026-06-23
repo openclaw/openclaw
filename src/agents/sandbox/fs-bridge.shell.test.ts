@@ -1,14 +1,36 @@
+// Sandbox fs bridge shell tests cover POSIX shell compatibility, path
+// canonicalization, bind reads, and pinned mutation helpers.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   createSandbox,
   createSandboxFsBridge,
+  createSeededSandboxFsBridge,
   getScriptsFromCalls,
   installFsBridgeTestHarness,
   mockedExecDockerRaw,
+  mockedOpenRootFile,
   withTempDir,
 } from "./fs-bridge.test-helpers.js";
+
+function expectNoScriptsContaining(scripts: string[], needle: string) {
+  expect(scripts.join("\n")).not.toContain(needle);
+}
+
+function expectSomeScriptContaining(scripts: string[], needle: string) {
+  expect(scripts.join("\n")).toContain(needle);
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
 
 describe("sandbox fs bridge shell compatibility", () => {
   installFsBridgeTestHarness();
@@ -34,25 +56,25 @@ describe("sandbox fs bridge shell compatibility", () => {
       await bridge.rename({ from: "a.txt", to: "c.txt" });
       await bridge.stat({ filePath: "c.txt" });
 
-      expect(mockedExecDockerRaw).toHaveBeenCalled();
+      expect(mockedExecDockerRaw).toHaveBeenCalledTimes(19);
 
       const scripts = getScriptsFromCalls();
       const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
 
       expect(executables.every((shell) => shell === "sh")).toBe(true);
       expect(scripts.every((script) => /set -eu[;\n]/.test(script))).toBe(true);
-      expect(scripts.some((script) => script.includes("pipefail"))).toBe(false);
+      expectNoScriptsContaining(scripts, "pipefail");
     });
   });
 
-  it("resolveCanonicalContainerPath script is valid POSIX sh (no do; token)", async () => {
+  it("path canonicalization recheck script is valid POSIX sh", async () => {
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
 
-    await bridge.mkdirp({ filePath: "nested" });
+    await bridge.writeFile({ filePath: "b.txt", data: "hello" });
 
     const scripts = getScriptsFromCalls();
     const canonicalScript = scripts.find((script) => script.includes("allow_final"));
-    expect(canonicalScript).toBeDefined();
+    expect(canonicalScript).toContain("allow_final");
     expect(canonicalScript).not.toMatch(/\bdo;/);
     expect(canonicalScript).toMatch(/\bdo\n\s*parent=/);
   });
@@ -124,19 +146,42 @@ describe("sandbox fs bridge shell compatibility", () => {
   });
 
   it("writes via temp file + atomic rename (never direct truncation)", async () => {
+    // Writes must go through the Python mutation helper so validation and
+    // atomic replacement happen together inside the sandbox.
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
 
     await bridge.writeFile({ filePath: "b.txt", data: "hello" });
 
     const scripts = getScriptsFromCalls();
-    expect(scripts.some((script) => script.includes('cat >"$1"'))).toBe(false);
-    expect(scripts.some((script) => script.includes('cat >"$tmp"'))).toBe(true);
-    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(true);
+    expectNoScriptsContaining(scripts, "python3 - \"$@\" <<'PY'");
+    expectSomeScriptContaining(scripts, 'exec "$python_cmd" -c "$python_script" "$@"');
+    expectNoScriptsContaining(scripts, 'cat >"$1"');
+    expectNoScriptsContaining(scripts, 'cat >"$tmp"');
+    expectSomeScriptContaining(scripts, "os.replace(");
   });
 
-  it("re-validates target before final rename and cleans temp file on failure", async () => {
-    const { mockedOpenBoundaryFile } = await import("./fs-bridge.test-helpers.js");
-    mockedOpenBoundaryFile
+  it("routes mkdirp, remove, and rename through the pinned mutation helper", async () => {
+    await withTempDir("openclaw-fs-bridge-shell-write-", async (stateDir) => {
+      const { bridge } = await createSeededSandboxFsBridge(stateDir, {
+        rootFileName: "a.txt",
+      });
+
+      await bridge.mkdirp({ filePath: "nested" });
+      await bridge.remove({ filePath: "nested/file.txt" });
+      await bridge.rename({ from: "a.txt", to: "nested/b.txt" });
+
+      const scripts = getScriptsFromCalls();
+      expect(countMatching(scripts, (script) => script.includes("operation = sys.argv[1]"))).toBe(
+        3,
+      );
+      expectNoScriptsContaining(scripts, 'mkdir -p -- "$2"');
+      expectNoScriptsContaining(scripts, 'rm -f -- "$2"');
+      expectNoScriptsContaining(scripts, 'mv -- "$3" "$2/$4"');
+    });
+  });
+
+  it("re-validates target before the pinned write helper runs", async () => {
+    mockedOpenRootFile
       .mockImplementationOnce(async () => ({ ok: false, reason: "path" }))
       .mockImplementationOnce(async () => ({
         ok: false,
@@ -150,8 +195,6 @@ describe("sandbox fs bridge shell compatibility", () => {
     );
 
     const scripts = getScriptsFromCalls();
-    expect(scripts.some((script) => script.includes("mktemp"))).toBe(true);
-    expect(scripts.some((script) => script.includes('mv -f -- "$1" "$2"'))).toBe(false);
-    expect(scripts.some((script) => script.includes('rm -f -- "$1"'))).toBe(true);
+    expectNoScriptsContaining(scripts, "os.replace(");
   });
 });

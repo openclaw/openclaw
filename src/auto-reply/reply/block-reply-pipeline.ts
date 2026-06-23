@@ -1,8 +1,16 @@
+// Buffers streaming reply blocks before coalesced final delivery.
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  hasOutboundReplyContent,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
+import { getReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
+/** Streaming block reply pipeline that tracks sent content and media. */
 export type BlockReplyPipeline = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
@@ -11,14 +19,18 @@ export type BlockReplyPipeline = {
   didStream: () => boolean;
   isAborted: () => boolean;
   hasSentPayload: (payload: ReplyPayload) => boolean;
+  hasSentExactPayload?: (payload: ReplyPayload) => boolean;
+  getSentMediaUrls: () => readonly string[];
 };
 
-export type BlockReplyBuffer = {
+/** Optional buffering strategy used before payloads enter block delivery. */
+type BlockReplyBuffer = {
   shouldBuffer: (payload: ReplyPayload) => boolean;
   onEnqueue?: (payload: ReplyPayload) => void;
   finalize?: (payload: ReplyPayload) => ReplyPayload;
 };
 
+/** Buffers audio payloads so final delivery can preserve voice presentation. */
 export function createAudioAsVoiceBuffer(params: {
   isAudioPayload: (payload: ReplyPayload) => boolean;
 }): BlockReplyBuffer {
@@ -34,17 +46,32 @@ export function createAudioAsVoiceBuffer(params: {
   };
 }
 
+/** Creates a stable duplicate key for a complete outbound payload. */
 export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
-  const text = payload.text?.trim() ?? "";
-  const mediaList = payload.mediaUrls?.length
-    ? payload.mediaUrls
-    : payload.mediaUrl
-      ? [payload.mediaUrl]
-      : [];
+  const reply = resolveSendableOutboundReplyParts(payload);
   return JSON.stringify({
-    text,
-    mediaList,
+    statusNotice: isReplyPayloadStatusNotice(payload),
+    text: reply.trimmedText,
+    mediaList: reply.mediaUrls,
+    presentation: payload.presentation ?? null,
+    interactive: payload.interactive ?? null,
+    channelData: payload.channelData ?? null,
     replyToId: payload.replyToId ?? null,
+  });
+}
+
+/** Creates a duplicate key that ignores reply target for final suppression. */
+export function createBlockReplyContentKey(payload: ReplyPayload): string {
+  const reply = resolveSendableOutboundReplyParts(payload);
+  // Content-only key used for final-payload suppression after block streaming.
+  // This intentionally ignores replyToId so a streamed threaded payload and the
+  // later final payload still collapse when they carry the same content.
+  return JSON.stringify({
+    text: reply.trimmedText,
+    mediaList: reply.mediaUrls,
+    presentation: payload.presentation ?? null,
+    interactive: payload.interactive ?? null,
+    channelData: payload.channelData ?? null,
   });
 }
 
@@ -69,6 +96,11 @@ const withTimeout = async <T>(
   }
 };
 
+function resolveBlockReplyTimeoutMs(timeoutMs: number): number {
+  return clampPositiveTimerTimeoutMs(timeoutMs) ?? 0;
+}
+
+/** Creates the ordered block reply delivery pipeline for streamed payloads. */
 export function createBlockReplyPipeline(params: {
   onBlockReply: (
     payload: ReplyPayload,
@@ -78,23 +110,37 @@ export function createBlockReplyPipeline(params: {
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
 }): BlockReplyPipeline {
-  const { onBlockReply, timeoutMs, coalescing, buffer } = params;
+  const { onBlockReply, coalescing, buffer } = params;
+  const timeoutMs = resolveBlockReplyTimeoutMs(params.timeoutMs);
   const sentKeys = new Set<string>();
+  const sentContentKeys = new Set<string>();
+  const sentMediaUrls = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
   const bufferedKeys = new Set<string>();
   const bufferedPayloadKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
+  const streamedTextFragmentsByMessage = new Map<number | undefined, string[]>();
+  let bufferedAssistantMessageIndex: number | undefined;
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
   let didLogTimeout = false;
 
-  const sendPayload = (payload: ReplyPayload, bypassSeenCheck: boolean = false) => {
+  const hasSeenOrQueuedPayloadKey = (payloadKey: string) =>
+    seenKeys.has(payloadKey) || sentKeys.has(payloadKey) || pendingKeys.has(payloadKey);
+
+  const flushBufferedAssistantBlock = () => {
+    bufferedAssistantMessageIndex = undefined;
+    void coalescer?.flush({ force: true });
+  };
+
+  const sendPayload = (payload: ReplyPayload, bypassSeenCheck = false) => {
     if (aborted) {
       return;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
+    const contentKey = createBlockReplyContentKey(payload);
     if (!bypassSeenCheck) {
       if (seenKeys.has(payloadKey)) {
         return;
@@ -106,6 +152,7 @@ export function createBlockReplyPipeline(params: {
     }
     pendingKeys.add(payloadKey);
 
+    // Preserve outbound order by chaining sends; abort after timeout to avoid stale blocks.
     const timeoutError = new Error(`block reply delivery timed out after ${timeoutMs}ms`);
     const abortController = new AbortController();
     sendChain = sendChain
@@ -130,9 +177,25 @@ export function createBlockReplyPipeline(params: {
           return;
         }
         sentKeys.add(payloadKey);
-        didStream = true;
+        const isStatusNotice = isReplyPayloadStatusNotice(payload);
+        if (!isStatusNotice) {
+          sentContentKeys.add(contentKey);
+        }
+        const reply = resolveSendableOutboundReplyParts(payload);
+        for (const mediaUrl of reply.mediaUrls) {
+          sentMediaUrls.add(mediaUrl);
+        }
+        if (!isStatusNotice && reply.trimmedText) {
+          const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+          const fragments = streamedTextFragmentsByMessage.get(assistantMessageIndex) ?? [];
+          fragments.push(reply.trimmedText);
+          streamedTextFragmentsByMessage.set(assistantMessageIndex, fragments);
+        }
+        if (!isStatusNotice) {
+          didStream = true;
+        }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (err === timeoutError) {
           abortController.abort();
           aborted = true;
@@ -156,6 +219,7 @@ export function createBlockReplyPipeline(params: {
         config: coalescing,
         shouldAbort: () => aborted,
         onFlush: (payload) => {
+          bufferedAssistantMessageIndex = undefined;
           bufferedKeys.clear();
           sendPayload(payload, /* bypassSeenCheck */ true);
         },
@@ -168,12 +232,7 @@ export function createBlockReplyPipeline(params: {
       return false;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
-    if (
-      seenKeys.has(payloadKey) ||
-      sentKeys.has(payloadKey) ||
-      pendingKeys.has(payloadKey) ||
-      bufferedPayloadKeys.has(payloadKey)
-    ) {
+    if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedPayloadKeys.has(payloadKey)) {
       return true;
     }
     seenKeys.add(payloadKey);
@@ -194,6 +253,32 @@ export function createBlockReplyPipeline(params: {
     bufferedPayloadKeys.clear();
   };
 
+  const enqueueCoalescedPayload = (payload: ReplyPayload) => {
+    if (!coalescer) {
+      return;
+    }
+    const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    if (
+      assistantMessageIndex !== undefined &&
+      bufferedAssistantMessageIndex !== undefined &&
+      assistantMessageIndex !== bufferedAssistantMessageIndex &&
+      coalescer.hasBuffered()
+    ) {
+      // Logical assistant blocks must not be merged together by the generic
+      // coalescer. Force-flush the previous buffered block before starting a
+      // new assistant-message block.
+      flushBufferedAssistantBlock();
+    }
+    const payloadKey = createBlockReplyPayloadKey(payload);
+    if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedKeys.has(payloadKey)) {
+      return;
+    }
+    seenKeys.add(payloadKey);
+    bufferedKeys.add(payloadKey);
+    bufferedAssistantMessageIndex = assistantMessageIndex;
+    coalescer.enqueue(payload);
+  };
+
   const enqueue = (payload: ReplyPayload) => {
     if (aborted) {
       return;
@@ -201,20 +286,22 @@ export function createBlockReplyPipeline(params: {
     if (bufferPayload(payload)) {
       return;
     }
-    const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-    if (hasMedia) {
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const hasNonTextContent = hasOutboundReplyContent(
+      { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },
+      { trimText: true },
+    );
+    if (reply.hasMedia && coalescer && !hasNonTextContent) {
+      enqueueCoalescedPayload(payload);
+      return;
+    }
+    if (reply.hasMedia || hasNonTextContent) {
       void coalescer?.flush({ force: true });
       sendPayload(payload, /* bypassSeenCheck */ false);
       return;
     }
     if (coalescer) {
-      const payloadKey = createBlockReplyPayloadKey(payload);
-      if (seenKeys.has(payloadKey) || pendingKeys.has(payloadKey) || bufferedKeys.has(payloadKey)) {
-        return;
-      }
-      seenKeys.add(payloadKey);
-      bufferedKeys.add(payloadKey);
-      coalescer.enqueue(payload);
+      enqueueCoalescedPayload(payload);
       return;
     }
     sendPayload(payload, /* bypassSeenCheck */ false);
@@ -222,6 +309,7 @@ export function createBlockReplyPipeline(params: {
 
   const flush = async (options?: { force?: boolean }) => {
     await coalescer?.flush(options);
+    bufferedAssistantMessageIndex = undefined;
     flushBuffered();
     await sendChain;
   };
@@ -234,12 +322,31 @@ export function createBlockReplyPipeline(params: {
     enqueue,
     flush,
     stop,
-    hasBuffered: () => Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
+    hasBuffered: () => coalescer?.hasBuffered() || bufferedPayloads.length > 0,
     didStream: () => didStream,
     isAborted: () => aborted,
+    hasSentExactPayload: (payload) => sentContentKeys.has(createBlockReplyContentKey(payload)),
     hasSentPayload: (payload) => {
-      const payloadKey = createBlockReplyPayloadKey(payload);
-      return sentKeys.has(payloadKey);
+      const payloadKey = createBlockReplyContentKey(payload);
+      if (sentContentKeys.has(payloadKey)) {
+        return true;
+      }
+      if (!didStream) {
+        return false;
+      }
+      const reply = resolveSendableOutboundReplyParts(payload);
+      if (reply.hasMedia || !reply.trimmedText) {
+        return false;
+      }
+      const normalize = (text: string) => text.replace(/\s+/g, "");
+      const target = normalize(reply.trimmedText);
+      for (const fragments of streamedTextFragmentsByMessage.values()) {
+        if (fragments.length > 0 && normalize(fragments.join("")) === target) {
+          return true;
+        }
+      }
+      return false;
     },
+    getSentMediaUrls: () => Array.from(sentMediaUrls),
   };
 }

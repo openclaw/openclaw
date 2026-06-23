@@ -1,14 +1,24 @@
+/**
+ * sessions_send helper logic.
+ *
+ * Resolves announcement targets, channel/session routing metadata, and ping-pong guard prompt text.
+ */
 import {
   getChannelPlugin,
   normalizeChannelId as normalizeAnyChannelId,
 } from "../../channels/plugins/index.js";
+import { resolveSessionConversationRef } from "../../channels/plugins/session-conversation.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../../channels/registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
+export {
+  isAnnounceSkip,
+  isNonDeliverableSessionsReply,
+  isReplySkip,
+} from "./sessions-send-tokens.js";
 
-const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
-const REPLY_SKIP_TOKEN = "REPLY_SKIP";
-const DEFAULT_PING_PONG_TURNS = 5;
-const MAX_PING_PONG_TURNS = 5;
+const DEFAULT_AGENTNG_PONG_TURNS = 5;
+const MAX_PING_PONG_TURNS = 20;
 
 export type AnnounceTarget = {
   channel: string;
@@ -17,77 +27,63 @@ export type AnnounceTarget = {
   threadId?: string; // Forum topic/thread ID
 };
 
+/** Resolves a session key into the channel target used for source-reply announcements. */
 export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget | null {
-  const rawParts = sessionKey.split(":").filter(Boolean);
-  const parts = rawParts.length >= 3 && rawParts[0] === "agent" ? rawParts.slice(2) : rawParts;
-  if (parts.length < 3) {
+  const parsed = resolveSessionConversationRef(sessionKey);
+  if (!parsed) {
     return null;
   }
-  const [channelRaw, kind, ...rest] = parts;
-  if (kind !== "group" && kind !== "channel") {
-    return null;
-  }
-
-  // Extract topic/thread ID from rest (supports both :topic: and :thread:)
-  // Telegram uses :topic:, other platforms use :thread:
-  let threadId: string | undefined;
-  const restJoined = rest.join(":");
-  const topicMatch = restJoined.match(/:topic:(\d+)$/);
-  const threadMatch = restJoined.match(/:thread:(\d+)$/);
-  const match = topicMatch || threadMatch;
-
-  if (match) {
-    threadId = match[1]; // Keep as string to match AgentCommandOpts.threadId
-  }
-
-  // Remove :topic:N or :thread:N suffix from ID for target
-  const id = match ? restJoined.replace(/:(topic|thread):\d+$/, "") : restJoined.trim();
-
-  if (!id) {
-    return null;
-  }
-  if (!channelRaw) {
-    return null;
-  }
-  const normalizedChannel = normalizeAnyChannelId(channelRaw) ?? normalizeChatChannelId(channelRaw);
-  const channel = normalizedChannel ?? channelRaw.toLowerCase();
-  const kindTarget = (() => {
-    if (!normalizedChannel) {
-      return id;
-    }
-    if (normalizedChannel === "discord" || normalizedChannel === "slack") {
-      return `channel:${id}`;
-    }
-    return kind === "channel" ? `channel:${id}` : `group:${id}`;
-  })();
-  const normalized = normalizedChannel
-    ? getChannelPlugin(normalizedChannel)?.messaging?.normalizeTarget?.(kindTarget)
-    : undefined;
+  const normalizedChannel =
+    normalizeAnyChannelId(parsed.channel) ?? normalizeChatChannelId(parsed.channel);
+  const channel = normalizedChannel ?? parsed.channel;
+  const plugin = normalizedChannel ? getChannelPlugin(normalizedChannel) : null;
+  const genericTarget = parsed.kind === "channel" ? `channel:${parsed.id}` : `group:${parsed.id}`;
+  // Prefer plugin-owned target normalization so channel-specific IDs and topics survive routing.
+  const normalized =
+    plugin?.messaging?.resolveSessionTarget?.({
+      kind: parsed.kind,
+      id: parsed.id,
+      threadId: parsed.threadId,
+    }) ?? plugin?.messaging?.normalizeTarget?.(genericTarget);
   return {
     channel,
-    to: normalized ?? kindTarget,
-    threadId,
+    to: normalized ?? (normalizedChannel ? genericTarget : parsed.id),
+    threadId: parsed.threadId,
   };
 }
 
+function buildAgentSessionLines(params: {
+  requesterSessionKey?: string;
+  requesterChannel?: string;
+  targetSessionKey: string;
+  targetChannel?: string;
+}): string[] {
+  return [
+    // Session keys are high-cardinality (thread/run ids), so concrete values churn the
+    // system prompt and break provider prompt-cache reuse across A2A turns. Channels are
+    // low-cardinality and inform reply formatting, so they stay concrete.
+    params.requesterSessionKey ? "Agent 1 (requester) session: <REQUESTER_SESSION>." : undefined,
+    params.requesterChannel
+      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
+      : undefined,
+    "Agent 2 (target) session: <TARGET_SESSION>.",
+    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+  ].filter((line): line is string => Boolean(line));
+}
+
+/** Builds the initial prompt context for a sessions_send agent-to-agent request. */
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
 }) {
-  const lines = [
-    "Agent-to-agent message context:",
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
-  ].filter(Boolean);
+  const lines = ["Agent-to-agent message context:", ...buildAgentSessionLines(params)].filter(
+    Boolean,
+  );
   return lines.join("\n");
 }
 
+/** Builds the bounded ping-pong reply prompt for the current A2A participant. */
 export function buildAgentToAgentReplyContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -103,19 +99,13 @@ export function buildAgentToAgentReplyContext(params: {
     "Agent-to-agent reply step:",
     `Current agent: ${currentLabel}.`,
     `Turn ${params.turn} of ${params.maxTurns}.`,
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+    ...buildAgentSessionLines(params),
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
   ].filter(Boolean);
   return lines.join("\n");
 }
 
+/** Builds the final announce prompt that decides whether to post back to the target channel. */
 export function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
   requesterChannel?: string;
@@ -127,14 +117,7 @@ export function buildAgentToAgentAnnounceContext(params: {
 }) {
   const lines = [
     "Agent-to-agent announce step:",
-    params.requesterSessionKey
-      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
-      : undefined,
-    params.requesterChannel
-      ? `Agent 1 (requester) channel: ${params.requesterChannel}.`
-      : undefined,
-    `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) channel: ${params.targetChannel}.` : undefined,
+    ...buildAgentSessionLines(params),
     `Original request: ${params.originalMessage}`,
     params.roundOneReply
       ? `Round 1 reply: ${params.roundOneReply}`
@@ -147,17 +130,10 @@ export function buildAgentToAgentAnnounceContext(params: {
   return lines.join("\n");
 }
 
-export function isAnnounceSkip(text?: string) {
-  return (text ?? "").trim() === ANNOUNCE_SKIP_TOKEN;
-}
-
-export function isReplySkip(text?: string) {
-  return (text ?? "").trim() === REPLY_SKIP_TOKEN;
-}
-
+/** Resolves the configured A2A ping-pong turn limit with a hard runtime cap. */
 export function resolvePingPongTurns(cfg?: OpenClawConfig) {
   const raw = cfg?.session?.agentToAgent?.maxPingPongTurns;
-  const fallback = DEFAULT_PING_PONG_TURNS;
+  const fallback = DEFAULT_AGENTNG_PONG_TURNS;
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
     return fallback;
   }

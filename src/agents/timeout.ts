@@ -1,12 +1,20 @@
-import type { OpenClawConfig } from "../config/config.js";
+/**
+ * Agent run timeout resolver.
+ *
+ * Converts config and per-run overrides into timer-safe millisecond deadlines.
+ */
+import {
+  clampTimerTimeoutMs,
+  MAX_TIMER_TIMEOUT_MS,
+} from "@openclaw/normalization-core/number-coercion";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-const DEFAULT_AGENT_TIMEOUT_SECONDS = 600;
-const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
+const DEFAULT_AGENT_TIMEOUT_SECONDS = 48 * 60 * 60;
 
 const normalizeNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
 
-export function resolveAgentTimeoutSeconds(cfg?: OpenClawConfig): number {
+function resolveAgentTimeoutSeconds(cfg?: OpenClawConfig): number {
   const raw = normalizeNumber(cfg?.agents?.defaults?.timeoutSeconds);
   const seconds = raw ?? DEFAULT_AGENT_TIMEOUT_SECONDS;
   return Math.max(seconds, 1);
@@ -19,11 +27,10 @@ export function resolveAgentTimeoutMs(opts: {
   minMs?: number;
 }): number {
   const minMs = Math.max(normalizeNumber(opts.minMs) ?? 1, 1);
-  const clampTimeoutMs = (valueMs: number) =>
-    Math.min(Math.max(valueMs, minMs), MAX_SAFE_TIMEOUT_MS);
+  const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs, minMs) ?? minMs;
   const defaultMs = clampTimeoutMs(resolveAgentTimeoutSeconds(opts.cfg) * 1000);
   // Use the maximum timer-safe timeout to represent "no timeout" when explicitly set to 0.
-  const NO_TIMEOUT_MS = MAX_SAFE_TIMEOUT_MS;
+  const NO_TIMEOUT_MS = MAX_TIMER_TIMEOUT_MS;
   const overrideMs = normalizeNumber(opts.overrideMs);
   if (overrideMs !== undefined) {
     if (overrideMs === 0) {

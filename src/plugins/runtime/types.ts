@@ -1,15 +1,20 @@
-import type { PluginRuntimeChannel } from "./types-channel.js";
+// Plugin runtime types describe activated plugin capabilities exposed to core execution.
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
+
+type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
 export type SubagentRunParams = {
   sessionKey: string;
   message: string;
+  provider?: string;
+  model?: string;
   extraSystemPrompt?: string;
   lane?: string;
+  lightContext?: boolean;
   deliver?: boolean;
   idempotencyKey?: string;
 };
@@ -48,6 +53,30 @@ export type SubagentDeleteSessionParams = {
   deleteTranscript?: boolean;
 };
 
+export type RuntimeNodeListParams = {
+  connected?: boolean;
+};
+
+export type RuntimeNodeListResult = {
+  nodes: Array<{
+    nodeId: string;
+    displayName?: string;
+    remoteIp?: string;
+    connected?: boolean;
+    caps?: string[];
+    commands?: string[];
+  }>;
+};
+
+export type RuntimeNodeInvokeParams = {
+  nodeId: string;
+  command: string;
+  params?: unknown;
+  timeoutMs?: number;
+  idempotencyKey?: string;
+};
+
+/** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
@@ -59,5 +88,15 @@ export type PluginRuntime = PluginRuntimeCore & {
     getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
+  nodes: {
+    list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
+    invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
+  };
   channel: PluginRuntimeChannel;
+};
+
+export type CreatePluginRuntimeOptions = {
+  subagent?: PluginRuntime["subagent"];
+  nodes?: PluginRuntime["nodes"];
+  allowGatewaySubagentBinding?: boolean;
 };

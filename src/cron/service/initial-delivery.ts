@@ -1,34 +1,15 @@
-import { normalizeLegacyDeliveryInput } from "../legacy-delivery.js";
+/** Resolves create-time default delivery for new cron jobs. */
 import type { CronDelivery, CronJobCreate } from "../types.js";
 
-export function normalizeCronCreateDeliveryInput(input: CronJobCreate): CronJobCreate {
-  const payloadRecord =
-    input.payload && typeof input.payload === "object"
-      ? ({ ...input.payload } as Record<string, unknown>)
-      : null;
-  const deliveryRecord =
-    input.delivery && typeof input.delivery === "object"
-      ? ({ ...input.delivery } as Record<string, unknown>)
-      : null;
-  const normalizedLegacy = normalizeLegacyDeliveryInput({
-    delivery: deliveryRecord,
-    payload: payloadRecord,
-  });
-  if (!normalizedLegacy.mutated) {
-    return input;
-  }
-  return {
-    ...input,
-    payload: payloadRecord ? (payloadRecord as typeof input.payload) : input.payload,
-    delivery: (normalizedLegacy.delivery as CronDelivery | undefined) ?? input.delivery,
-  };
-}
-
+/** Resolves default cron delivery for new jobs when callers omit explicit delivery config. */
 export function resolveInitialCronDelivery(input: CronJobCreate): CronDelivery | undefined {
   if (input.delivery) {
     return input.delivery;
   }
-  if (input.sessionTarget === "isolated" && input.payload.kind === "agentTurn") {
+  if (
+    input.sessionTarget === "isolated" &&
+    (input.payload.kind === "agentTurn" || input.payload.kind === "command")
+  ) {
     return { mode: "announce" };
   }
   return undefined;

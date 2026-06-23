@@ -4,9 +4,13 @@ import OpenClawIPC
 import OpenClawKit
 
 actor MacNodeRuntime {
+    private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
+    private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
+    private let canvasSurfaceUrl: @Sendable () async -> String?
+    private let refreshCanvasSurfaceUrl: @Sendable () async -> String?
     private var cachedMainActorServices: (any MacNodeRuntimeMainActorServices)?
     private var mainSessionKey: String = "main"
     private var eventSender: (@Sendable (String, String?) async -> Void)?
@@ -17,10 +21,16 @@ actor MacNodeRuntime {
         },
         browserProxyRequest: @escaping @Sendable (String?) async throws -> String = { paramsJSON in
             try await MacNodeBrowserProxy.shared.request(paramsJSON: paramsJSON)
-        })
+        },
+        canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
+            await GatewayConnection.shared.canvasPluginSurfaceUrl()
+        },
+        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil })
     {
         self.makeMainActorServices = makeMainActorServices
         self.browserProxyRequest = browserProxyRequest
+        self.canvasSurfaceUrl = canvasSurfaceUrl
+        self.refreshCanvasSurfaceUrl = refreshCanvasSurfaceUrl
     }
 
     func updateMainSessionKey(_ sessionKey: String) {
@@ -63,6 +73,8 @@ actor MacNodeRuntime {
                 return try await self.handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await self.handleLocationInvoke(req)
+            case MacNodeScreenCommand.snapshot.rawValue:
+                return try await self.handleScreenSnapshotInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
                 return try await self.handleScreenRecordInvoke(req)
             case OpenClawSystemCommand.run.rawValue:
@@ -352,6 +364,81 @@ actor MacNodeRuntime {
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
+    private func handleScreenSnapshotInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params: MacNodeScreenSnapshotParams
+        if let paramsJSON = req.paramsJSON {
+            do {
+                params = try Self.decodeParams(MacNodeScreenSnapshotParams.self, from: paramsJSON)
+            } catch {
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: invalid screen snapshot params")
+            }
+        } else {
+            params = MacNodeScreenSnapshotParams()
+        }
+        let services = await self.mainActorServices()
+        let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+        let res: (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+        do {
+            res = try await services.snapshotScreen(
+                screenIndex: params.screenIndex,
+                maxWidth: params.maxWidth,
+                quality: params.quality,
+                format: params.format)
+        } catch let error as ScreenSnapshotService.ScreenSnapshotError {
+            switch error {
+            case .noDisplays:
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: no displays available for screen snapshot")
+            case let .invalidScreenIndex(idx):
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: invalid screen index \(idx)")
+            case .captureFailed, .encodeFailed:
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "UNAVAILABLE: screen snapshot failed")
+            }
+        } catch {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: screen snapshot failed")
+        }
+        if res.data.count > Self.maxScreenSnapshotRawBytesBeforeBase64 {
+            return Self.screenSnapshotPayloadTooLarge(req)
+        }
+        struct ScreenSnapshotPayload: Encodable {
+            var format: String
+            var base64: String
+            var width: Int
+            var height: Int
+            var screenIndex: Int?
+            var capturedAtMs: Int64
+        }
+        let payload = try Self.encodePayload(ScreenSnapshotPayload(
+            format: res.format.rawValue,
+            base64: res.data.base64EncodedString(),
+            width: res.width,
+            height: res.height,
+            screenIndex: params.screenIndex,
+            capturedAtMs: capturedAtMs))
+        if try Self.projectedOuterFrameBytes(
+            forPayloadJSON: payload,
+            requestId: req.id,
+            nodeId: req.nodeId) > Self.maxGatewayPayloadBytes
+        {
+            return Self.screenSnapshotPayloadTooLarge(req)
+        }
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
     private func mainActorServices() async -> any MacNodeRuntimeMainActorServices {
         if let cachedMainActorServices { return cachedMainActorServices }
         let services = await self.makeMainActorServices()
@@ -411,7 +498,7 @@ actor MacNodeRuntime {
 
     private func ensureA2UIHost() async throws {
         if await self.isA2UIReady() { return }
-        guard let a2uiUrl = await self.resolveA2UIHostUrl() else {
+        guard let a2uiUrl = await self.resolveA2UIHostUrlWithCapabilityRefresh() else {
             throw NSError(domain: "Canvas", code: 30, userInfo: [
                 NSLocalizedDescriptionKey: "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
             ])
@@ -421,16 +508,35 @@ actor MacNodeRuntime {
             try CanvasManager.shared.show(sessionKey: sessionKey, path: a2uiUrl)
         }
         if await self.isA2UIReady(poll: true) { return }
+        if let refreshedUrl = await self.resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: true) {
+            _ = try await MainActor.run {
+                try CanvasManager.shared.show(sessionKey: sessionKey, path: refreshedUrl)
+            }
+            if await self.isA2UIReady(poll: true) { return }
+        }
         throw NSError(domain: "Canvas", code: 31, userInfo: [
             NSLocalizedDescriptionKey: "A2UI_HOST_UNAVAILABLE: A2UI host not reachable",
         ])
     }
 
     private func resolveA2UIHostUrl() async -> String? {
-        guard let raw = await GatewayConnection.shared.canvasHostUrl() else { return nil }
+        let canvasSurfaceUrl = await self.canvasSurfaceUrl()
+        return Self.resolveA2UIHostUrl(from: canvasSurfaceUrl)
+    }
+
+    private static func resolveA2UIHostUrl(from raw: String?) -> String? {
+        guard let raw else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let baseUrl = URL(string: trimmed) else { return nil }
         return baseUrl.appendingPathComponent("__openclaw__/a2ui/").absoluteString + "?platform=macos"
+    }
+
+    func resolveA2UIHostUrlWithCapabilityRefresh(forceRefresh: Bool = false) async -> String? {
+        if !forceRefresh, let current = await self.resolveA2UIHostUrl() {
+            return current
+        }
+        let refreshedCanvasSurfaceUrl = await self.refreshCanvasSurfaceUrl()
+        return Self.resolveA2UIHostUrl(from: refreshedCanvasSurfaceUrl)
     }
 
     private func isA2UIReady(poll: Bool = false) async -> Bool {
@@ -464,7 +570,25 @@ actor MacNodeRuntime {
         let sessionKey = (params.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
             ? params.sessionKey!.trimmingCharacters(in: .whitespacesAndNewlines)
             : self.mainSessionKey
-        let runId = UUID().uuidString
+        let providedRunId = params.runId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let runId = providedRunId.isEmpty ? UUID().uuidString : providedRunId
+        let envOverrideDiagnostics = HostEnvSanitizer.inspectOverrides(
+            overrides: params.env,
+            blockPathOverrides: true)
+        if !envOverrideDiagnostics.blockedKeys.isEmpty || !envOverrideDiagnostics.invalidKeys.isEmpty {
+            var details: [String] = []
+            if !envOverrideDiagnostics.blockedKeys.isEmpty {
+                details.append("blocked override keys: \(envOverrideDiagnostics.blockedKeys.joined(separator: ", "))")
+            }
+            if !envOverrideDiagnostics.invalidKeys.isEmpty {
+                details.append(
+                    "invalid non-portable override keys: \(envOverrideDiagnostics.invalidKeys.joined(separator: ", "))")
+            }
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "SYSTEM_RUN_DENIED: environment override rejected (\(details.joined(separator: "; ")))")
+        }
         let evaluation = await ExecApprovalEvaluator.evaluate(
             command: command,
             rawCommand: params.rawCommand,
@@ -507,8 +631,7 @@ actor MacNodeRuntime {
             persistAllowlist: persistAllowlist,
             security: evaluation.security,
             agentId: evaluation.agentId,
-            command: command,
-            allowlistResolutions: evaluation.allowlistResolutions)
+            allowAlwaysPatterns: evaluation.allowAlwaysPatterns)
 
         if evaluation.security == .allowlist, !evaluation.allowlistSatisfied, !evaluation.skillAllow, !approvedByAsk {
             await self.emitExecEvent(
@@ -631,7 +754,7 @@ actor MacNodeRuntime {
         }
 
         if requiresAsk, !approvedByAsk {
-            let decision = await MainActor.run {
+            let promptDecision = await MainActor.run {
                 ExecApprovalsPromptPresenter.prompt(
                     ExecApprovalPromptRequest(
                         command: context.displayCommand,
@@ -641,7 +764,26 @@ actor MacNodeRuntime {
                         ask: context.ask.rawValue,
                         agentId: context.agentId,
                         resolvedPath: context.resolution?.resolvedPath,
-                        sessionKey: context.sessionKey))
+                        sessionKey: context.sessionKey,
+                        allowedDecisions: ExecApprovalPromptRequest.allowedDecisions(
+                            forAsk: context.ask.rawValue)))
+            }
+            guard let decision = promptDecision else {
+                await self.emitExecEvent(
+                    "exec.denied",
+                    payload: ExecEventPayload(
+                        sessionKey: context.sessionKey,
+                        runId: context.runId,
+                        host: "node",
+                        command: context.displayCommand,
+                        reason: "approval-cancelled"))
+                return ExecApprovalOutcome(
+                    approvedByAsk: approvedByAsk,
+                    persistAllowlist: persistAllowlist,
+                    response: Self.errorResponse(
+                        req,
+                        code: .unavailable,
+                        message: "SYSTEM_RUN_DENIED: approval prompt closed without decision"))
             }
             switch decision {
             case .deny:
@@ -795,18 +937,12 @@ extension MacNodeRuntime {
         persistAllowlist: Bool,
         security: ExecSecurity,
         agentId: String?,
-        command: [String],
-        allowlistResolutions: [ExecCommandResolution])
+        allowAlwaysPatterns: [String])
     {
         guard persistAllowlist, security == .allowlist else { return }
         var seenPatterns = Set<String>()
-        for candidate in allowlistResolutions {
-            guard let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: candidate) else {
-                continue
-            }
-            if seenPatterns.insert(pattern).inserted {
-                ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
-            }
+        for pattern in allowAlwaysPatterns where seenPatterns.insert(pattern).inserted {
+            ExecApprovalsStore.addAllowlistEntry(agentId: agentId, pattern: pattern)
         }
     }
 
@@ -934,6 +1070,40 @@ extension MacNodeRuntime {
             ])
         }
         return json
+    }
+
+    static func projectedOuterFrameBytes(
+        forPayloadJSON payloadJSON: String,
+        requestId: String,
+        nodeId: String?) throws -> Int
+    {
+        struct InvokeResultFrame: Encodable {
+            let type = "req"
+            let id = "00000000-0000-0000-0000-000000000000"
+            let method = "node.invoke.result"
+            let params: Params
+
+            struct Params: Encodable {
+                let id: String
+                let nodeId: String
+                let ok: Bool
+                let payloadJSON: String
+            }
+        }
+
+        let frame = InvokeResultFrame(params: InvokeResultFrame.Params(
+            id: requestId,
+            nodeId: nodeId ?? "",
+            ok: true,
+            payloadJSON: payloadJSON))
+        return try JSONEncoder().encode(frame).count
+    }
+
+    private static func screenSnapshotPayloadTooLarge(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {
+        self.errorResponse(
+            req,
+            code: .unavailable,
+            message: "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
     }
 
     private nonisolated static func canvasEnabled() -> Bool {

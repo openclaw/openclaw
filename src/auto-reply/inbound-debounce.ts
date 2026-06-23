@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "../config/config.js";
+// Keyed inbound-message debouncer that preserves same-key delivery order.
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const resolveMs = (value: unknown): number | undefined => {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -18,6 +19,7 @@ const resolveChannelOverride = (params: {
   return resolveMs(params.byChannel[params.channel]);
 };
 
+/** Resolve effective inbound debounce milliseconds from explicit, channel, and global config. */
 export function resolveInboundDebounceMs(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -37,20 +39,32 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  releaseReady: () => void;
+  readyReleased: boolean;
+  task: Promise<void>;
 };
 
+const DEFAULT_MAX_TRACKED_KEYS = 2048;
+
+/** Options for creating a keyed inbound debouncer. */
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
+  maxTrackedKeys?: number;
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
+  serializeImmediate?: boolean;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
+  onCancel?: (items: T[]) => void;
 };
 
+/** Create a keyed debouncer with flush/cancel controls and same-key serialization. */
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
+  const keyChains = new Map<string, Promise<void>>();
   const defaultDebounceMs = Math.max(0, Math.trunc(params.debounceMs));
+  const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
 
   const resolveDebounceMs = (item: T) => {
     const resolved = params.resolveDebounceMs?.(item);
@@ -60,20 +74,97 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return Math.max(0, Math.trunc(resolved));
   };
 
+  const runFlush = async (items: T[]) => {
+    try {
+      await params.onFlush(items);
+    } catch (err) {
+      try {
+        params.onError?.(err, items);
+      } catch {
+        // Flush failures are reported via onError, but this helper stays
+        // non-throwing so keyed chains can continue processing later items.
+      }
+    }
+  };
+
+  const enqueueKeyTask = (key: string, task: () => Promise<void>) => {
+    const previous = keyChains.get(key) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(task);
+    const settled = next.catch(() => undefined);
+    keyChains.set(key, settled);
+    const cleanup = () => {
+      if (keyChains.get(key) === settled) {
+        keyChains.delete(key);
+      }
+    };
+    settled.then(cleanup, cleanup);
+    return next;
+  };
+
+  const runKeyTaskNow = (key: string, task: () => Promise<void>) => {
+    let resolveSettled!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
+    keyChains.set(key, settled);
+    const cleanup = () => {
+      resolveSettled();
+      if (keyChains.get(key) === settled) {
+        keyChains.delete(key);
+      }
+    };
+    let next: Promise<void>;
+    try {
+      next = task();
+    } catch (err) {
+      cleanup();
+      throw err;
+    }
+    next.then(cleanup, cleanup);
+    return next;
+  };
+
+  const enqueueReservedKeyTask = (key: string, task: () => Promise<void>) => {
+    let readyReleased = false;
+    let releaseReady!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      releaseReady = resolve;
+    });
+    return {
+      task: enqueueKeyTask(key, async () => {
+        await ready;
+        await task();
+      }),
+      release: () => {
+        if (readyReleased) {
+          return;
+        }
+        readyReleased = true;
+        releaseReady();
+      },
+    };
+  };
+
+  const releaseBuffer = (buffer: DebounceBuffer<T>) => {
+    if (buffer.readyReleased) {
+      return;
+    }
+    buffer.readyReleased = true;
+    buffer.releaseReady();
+  };
+
   const flushBuffer = async (key: string, buffer: DebounceBuffer<T>) => {
-    buffers.delete(key);
+    if (buffers.get(key) === buffer) {
+      buffers.delete(key);
+    }
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
       buffer.timeout = null;
     }
-    if (buffer.items.length === 0) {
-      return;
-    }
-    try {
-      await params.onFlush(buffer.items);
-    } catch (err) {
-      params.onError?.(err, buffer.items);
-    }
+    // Reserve each key's execution slot as soon as the first buffered item
+    // arrives, so later same-key work cannot overtake a timer-backed flush.
+    releaseBuffer(buffer);
+    await buffer.task;
   };
 
   const flushKey = async (key: string) => {
@@ -82,6 +173,30 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       return;
     }
     await flushBuffer(key, buffer);
+  };
+
+  const cancelKey = (key: string): boolean => {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return false;
+    }
+    if (buffers.get(key) === buffer) {
+      buffers.delete(key);
+    }
+    if (buffer.timeout) {
+      clearTimeout(buffer.timeout);
+      buffer.timeout = null;
+    }
+    const canceledItems = buffer.items;
+    buffer.items = [];
+    try {
+      params.onCancel?.(canceledItems);
+    } catch {
+      // Cancellation observers release caller-owned resources; debounce state
+      // must still drain even if an observer fails.
+    }
+    releaseBuffer(buffer);
+    return true;
   };
 
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
@@ -94,19 +209,49 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     buffer.timeout.unref?.();
   };
 
+  const canTrackKey = (key: string) => {
+    if (buffers.has(key) || keyChains.has(key)) {
+      return true;
+    }
+    return new Set([...buffers.keys(), ...keyChains.keys()]).size < maxTrackedKeys;
+  };
+
   const enqueue = async (item: T) => {
     const key = params.buildKey(item);
     const debounceMs = resolveDebounceMs(item);
     const canDebounce = debounceMs > 0 && (params.shouldDebounce?.(item) ?? true);
 
     if (!canDebounce || !key) {
-      if (key && buffers.has(key)) {
-        await flushKey(key);
-      }
-      try {
-        await params.onFlush([item]);
-      } catch (err) {
-        params.onError?.(err, [item]);
+      if (key) {
+        if (buffers.has(key)) {
+          // Reserve the keyed immediate slot before forcing the pending buffer
+          // to flush so fire-and-forget callers cannot be overtaken.
+          const reservedTask = enqueueReservedKeyTask(key, async () => {
+            await runFlush([item]);
+          });
+          try {
+            await flushKey(key);
+          } finally {
+            reservedTask.release();
+          }
+          await reservedTask.task;
+          return;
+        }
+        if (keyChains.has(key)) {
+          await enqueueKeyTask(key, async () => {
+            await runFlush([item]);
+          });
+          return;
+        }
+        if (params.serializeImmediate) {
+          await runKeyTaskNow(key, async () => {
+            await runFlush([item]);
+          });
+          return;
+        }
+        await runFlush([item]);
+      } else {
+        await runFlush([item]);
       }
       return;
     }
@@ -118,11 +263,31 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       scheduleFlush(key, existing);
       return;
     }
-
-    const buffer: DebounceBuffer<T> = { items: [item], timeout: null, debounceMs };
+    if (!canTrackKey(key)) {
+      // When the debounce map is saturated, fall back to immediate keyed work
+      // instead of buffering, but still preserve same-key ordering.
+      await enqueueKeyTask(key, async () => {
+        await runFlush([item]);
+      });
+      return;
+    }
+    const reservedTask = enqueueReservedKeyTask(key, async () => {
+      if (buffer.items.length === 0) {
+        return;
+      }
+      await runFlush(buffer.items);
+    });
+    const buffer: DebounceBuffer<T> = {
+      items: [item],
+      timeout: null,
+      debounceMs,
+      releaseReady: reservedTask.release,
+      readyReleased: false,
+      task: reservedTask.task,
+    };
     buffers.set(key, buffer);
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  return { enqueue, flushKey, cancelKey };
 }

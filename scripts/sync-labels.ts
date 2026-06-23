@@ -1,3 +1,4 @@
+// Sync Labels script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -5,20 +6,48 @@ import { resolve } from "node:path";
 type RepoLabel = {
   name: string;
   color?: string;
+  description?: string;
 };
 
 const COLOR_BY_PREFIX = new Map<string, string>([
-  ["channel", "1d76db"],
-  ["app", "6f42c1"],
-  ["extensions", "0e8a16"],
-  ["docs", "0075ca"],
-  ["cli", "f9d0c4"],
-  ["gateway", "d4c5f9"],
-  ["size", "fbca04"],
+  ["channel", "0969DA"],
+  ["app", "6E7781"],
+  ["extensions", "6E7781"],
+  ["plugin", "6E7781"],
+  ["docs", "0A3069"],
+  ["cli", "0A3069"],
+  ["gateway", "57606A"],
+  ["commands", "0A3069"],
+  ["scripts", "57606A"],
+  ["docker", "D6E3DA"],
+  ["size", "8C959F"],
+]);
+
+const EXTRA_LABEL_METADATA = new Map<
+  string,
+  {
+    color: string;
+    description?: string;
+  }
+>([
+  [
+    "beta-blocker",
+    {
+      color: "D93F0B",
+      description: "Plugin beta-release blocker pending stable cutoff triage",
+    },
+  ],
 ]);
 
 const configPath = resolve(".github/labeler.yml");
-const EXTRA_LABELS = ["size: XS", "size: S", "size: M", "size: L", "size: XL"] as const;
+const EXTRA_LABELS = [
+  "size: XS",
+  "size: S",
+  "size: M",
+  "size: L",
+  "size: XL",
+  "beta-blocker",
+] as const;
 const labelNames = [
   ...new Set([...extractLabelNames(readFileSync(configPath, "utf8")), ...EXTRA_LABELS]),
 ];
@@ -37,12 +66,21 @@ if (!missing.length) {
 }
 
 for (const label of missing) {
-  const color = pickColor(label);
-  execFileSync(
-    "gh",
-    ["api", "-X", "POST", `repos/${repo}/labels`, "-f", `name=${label}`, "-f", `color=${color}`],
-    { stdio: "inherit" },
-  );
+  const metadata = resolveLabelMetadata(label);
+  const args = [
+    "api",
+    "-X",
+    "POST",
+    `repos/${repo}/labels`,
+    "-f",
+    `name=${label}`,
+    "-f",
+    `color=${metadata.color}`,
+  ];
+  if (metadata.description) {
+    args.push("-f", `description=${metadata.description}`);
+  }
+  execFileSync("gh", args, { stdio: "inherit" });
   console.log(`Created label: ${label}`);
 }
 
@@ -66,9 +104,13 @@ function extractLabelNames(contents: string): string[] {
   return labels;
 }
 
-function pickColor(label: string): string {
+function resolveLabelMetadata(label: string): { color: string; description?: string } {
+  const extraMetadata = EXTRA_LABEL_METADATA.get(label);
+  if (extraMetadata) {
+    return extraMetadata;
+  }
   const prefix = label.includes(":") ? label.split(":", 1)[0].trim() : label.trim();
-  return COLOR_BY_PREFIX.get(prefix) ?? "ededed";
+  return { color: COLOR_BY_PREFIX.get(prefix) ?? "ededed" };
 }
 
 function resolveRepo(): string {
@@ -91,8 +133,8 @@ function resolveRepo(): string {
   throw new Error(`Unsupported GitHub remote: ${remote}`);
 }
 
-function fetchExistingLabels(repo: string): Map<string, RepoLabel> {
-  const raw = execFileSync("gh", ["api", `repos/${repo}/labels?per_page=100`, "--paginate"], {
+function fetchExistingLabels(repoLocal: string): Map<string, RepoLabel> {
+  const raw = execFileSync("gh", ["api", `repos/${repoLocal}/labels?per_page=100`, "--paginate"], {
     encoding: "utf8",
   });
   const labels = JSON.parse(raw) as RepoLabel[];

@@ -1,10 +1,16 @@
-import { discoverOpenClawPlugins } from "./discovery.js";
+// Resolves bundled plugin source metadata from package manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifest } from "./manifest.js";
 
 export type BundledPluginSource = {
   pluginId: string;
   localPath: string;
   npmSpec?: string;
+  version?: string;
+  configSchema?: Record<string, unknown>;
+  requiresConfig?: boolean;
 };
 
 export type BundledPluginLookup =
@@ -32,8 +38,13 @@ export function findBundledPluginSourceInMap(params: {
 
 export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
+  /** Use an explicit env when bundled roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
 }): Map<string, BundledPluginSource> {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: params.workspaceDir });
+  const discovery =
+    params.discovery ??
+    discoverOpenClawPlugins({ workspaceDir: params.workspaceDir, env: params.env });
   const bundled = new Map<string, BundledPluginSource>();
 
   for (const candidate of discovery.candidates) {
@@ -50,27 +61,67 @@ export function resolveBundledPluginSources(params: {
     }
 
     const npmSpec =
-      candidate.packageManifest?.install?.npmSpec?.trim() ||
-      candidate.packageName?.trim() ||
+      normalizeOptionalString(candidate.packageManifest?.install?.npmSpec) ||
+      normalizeOptionalString(candidate.packageName) ||
+      undefined;
+
+    const version =
+      normalizeOptionalString(candidate.packageVersion) ||
+      normalizeOptionalString(manifest.manifest.version) ||
       undefined;
 
     bundled.set(pluginId, {
       pluginId,
       localPath: candidate.rootDir,
       npmSpec,
+      version,
+      ...(isRecord(manifest.manifest.configSchema)
+        ? { configSchema: manifest.manifest.configSchema }
+        : {}),
+      requiresConfig: pluginConfigSchemaHasRequiredFields(manifest.manifest.configSchema),
     });
   }
 
   return bundled;
 }
 
+function pluginConfigSchemaHasRequiredFields(schema: unknown): boolean {
+  if (!isRecord(schema)) {
+    return false;
+  }
+  const required = schema.required;
+  return Array.isArray(required) && required.some((entry) => typeof entry === "string");
+}
+
 export function findBundledPluginSource(params: {
   lookup: BundledPluginLookup;
   workspaceDir?: string;
+  /** Use an explicit env when bundled roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
 }): BundledPluginSource | undefined {
-  const bundled = resolveBundledPluginSources({ workspaceDir: params.workspaceDir });
+  const bundled = resolveBundledPluginSources({
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
   return findBundledPluginSourceInMap({
     bundled,
     lookup: params.lookup,
   });
+}
+
+export function resolveBundledPluginInstallCommandHint(params: {
+  pluginId: string;
+  workspaceDir?: string;
+  /** Use an explicit env when bundled roots should resolve independently from process.env. */
+  env?: NodeJS.ProcessEnv;
+}): string | null {
+  const bundledSource = findBundledPluginSource({
+    lookup: { kind: "pluginId", value: params.pluginId },
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  if (!bundledSource?.localPath) {
+    return null;
+  }
+  return `openclaw plugins install ${bundledSource.localPath}`;
 }

@@ -1,9 +1,12 @@
+// Control UI tests cover agents behavior.
 import { describe, expect, it, vi } from "vitest";
-import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./agents.ts";
+import { loadAgents, loadToolsCatalog, loadToolsEffective, saveAgentsConfig } from "./agents.ts";
 import type { AgentsConfigSaveState, AgentsState } from "./agents.ts";
 
-function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> } {
-  const request = vi.fn();
+type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
+function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
+  const request = vi.fn<TestRequest>();
   const state: AgentsState = {
     client: {
       request,
@@ -16,13 +19,37 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
     toolsCatalogLoading: false,
     toolsCatalogError: null,
     toolsCatalogResult: null,
+    toolsEffectiveLoading: false,
+    toolsEffectiveLoadingKey: null,
+    toolsEffectiveResultKey: null,
+    toolsEffectiveError: null,
+    toolsEffectiveResult: null,
+    sessionKey: "main",
+    sessionsResult: {
+      ts: 0,
+      path: "",
+      count: 1,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 0,
+          model: "gpt-5-mini",
+          modelProvider: "openai",
+        },
+      ],
+    },
+    chatModelOverrides: {},
+    chatModelCatalog: [{ id: "gpt-5-mini", name: "GPT-5 Mini", provider: "openai" }],
+    agentsPanel: "overview",
   };
   return { state, request };
 }
 
 function createSaveState(): {
   state: AgentsConfigSaveState;
-  request: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn<TestRequest>>;
 } {
   const { state, request } = createState();
   return {
@@ -49,10 +76,28 @@ function createSaveState(): {
       configSearchQuery: "",
       configActiveSection: null,
       configActiveSubsection: null,
+      pendingUpdateExpectedVersion: null,
+      pendingUpdateHandoff: false,
+      updateStatusBanner: null,
       lastError: null,
     },
     request,
   };
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
+  const [call] = request.mock.calls;
+  if (!call) {
+    throw new Error("Expected client request call");
+  }
+  return call;
 }
 
 describe("loadAgents", () => {
@@ -146,8 +191,167 @@ describe("loadToolsCatalog", () => {
     await loadToolsCatalog(state, "main");
 
     expect(state.toolsCatalogResult).toBeNull();
-    expect(state.toolsCatalogError).toContain("gateway unavailable");
+    expect(state.toolsCatalogError).toBe("Error: gateway unavailable");
     expect(state.toolsCatalogLoading).toBe(false);
+  });
+
+  it("ignores catalog responses after selected agent changes mid-request", async () => {
+    const { state, request } = createState();
+    const resolvers: Array<(value: unknown) => void> = [];
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const pending = loadToolsCatalog(state, "main");
+    state.agentsSelectedId = "other-agent";
+    resolvers.shift()?.({
+      agentId: "main",
+      profiles: [{ id: "full", label: "Full" }],
+      groups: [],
+    });
+    await pending;
+
+    expect(state.toolsCatalogResult).toBeNull();
+    expect(state.toolsCatalogError).toBeNull();
+    expect(state.toolsCatalogLoading).toBe(false);
+  });
+});
+
+describe("loadToolsEffective", () => {
+  it("loads effective tools for the active session", async () => {
+    const { state, request } = createState();
+    const payload = {
+      agentId: "main",
+      profile: "coding",
+      groups: [
+        {
+          id: "core",
+          label: "Built-in tools",
+          source: "core",
+          tools: [
+            {
+              id: "read",
+              label: "Read",
+              description: "Read files",
+              rawDescription: "Read files",
+              source: "core",
+            },
+          ],
+        },
+      ],
+    };
+    request.mockResolvedValue(payload);
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(request).toHaveBeenCalledWith("tools.effective", {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    expect(state.toolsEffectiveResult).toEqual(payload);
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
+    expect(state.toolsEffectiveError).toBeNull();
+    expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("captures effective-tool request errors", async () => {
+    const { state, request } = createState();
+    request.mockRejectedValue(new Error("gateway unavailable"));
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(state.toolsEffectiveResult).toBeNull();
+    expect(state.toolsEffectiveResultKey).toBeNull();
+    expect(state.toolsEffectiveError).toBe("Error: gateway unavailable");
+    expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("ignores effective-tool responses after selected agent changes mid-request", async () => {
+    const { state, request } = createState();
+    const resolvers: Array<(value: unknown) => void> = [];
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvers.push(resolve);
+        }),
+    );
+
+    const pending = loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+    state.agentsSelectedId = "other-agent";
+    resolvers.shift()?.({
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    });
+    await pending;
+
+    expect(state.toolsEffectiveResult).toBeNull();
+    expect(state.toolsEffectiveResultKey).toBeNull();
+    expect(state.toolsEffectiveError).toBeNull();
+    expect(state.toolsEffectiveLoading).toBe(false);
+  });
+
+  it("uses the catalog provider when the active session reports a stale provider", async () => {
+    const { state, request } = createState();
+    const sessionsResult = state.sessionsResult!;
+    state.sessionsResult = {
+      ts: sessionsResult.ts,
+      path: sessionsResult.path,
+      count: 1,
+      defaults: sessionsResult.defaults,
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 0,
+          model: "deepseek-chat",
+          modelProvider: "zai",
+        },
+      ],
+    };
+    state.chatModelCatalog = [{ id: "deepseek-chat", name: "DeepSeek Chat", provider: "deepseek" }];
+    request.mockResolvedValue({
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    });
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=deepseek/deepseek-chat");
+  });
+
+  it("preserves already-qualified session models when the active session provider is stale and the catalog is empty", async () => {
+    const { state, request } = createState();
+    const sessionsResult = state.sessionsResult!;
+    state.sessionsResult = {
+      ts: sessionsResult.ts,
+      path: sessionsResult.path,
+      count: 1,
+      defaults: sessionsResult.defaults,
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 0,
+          model: "openai/gpt-5-mini",
+          modelProvider: "zai",
+        },
+      ],
+    };
+    state.chatModelCatalog = [];
+    request.mockResolvedValue({
+      agentId: "main",
+      profile: "coding",
+      groups: [],
+    });
+
+    await loadToolsEffective(state, { agentId: "main", sessionKey: "main" });
+
+    expect(state.toolsEffectiveResultKey).toBe("main:main:model=openai/gpt-5-mini");
   });
 });
 
@@ -186,12 +390,11 @@ describe("saveAgentsConfig", () => {
 
     await saveAgentsConfig(state);
 
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "config.set",
-      expect.objectContaining({ baseHash: "hash-1" }),
-    );
-    expect(JSON.parse(request.mock.calls[0]?.[1]?.raw as string)).toEqual({
+    const [method, params] = requireFirstRequestCall(request);
+    const requestParams = requireRecord(params);
+    expect(method).toBe("config.set");
+    expect(requestParams.baseHash).toBe("hash-1");
+    expect(JSON.parse(String(requestParams.raw))).toEqual({
       agents: { list: [{ id: "main" }] },
     });
     expect(request).toHaveBeenNthCalledWith(2, "config.get", {});

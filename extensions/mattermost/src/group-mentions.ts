@@ -1,6 +1,7 @@
-import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/compat";
-import type { ChannelGroupContext } from "openclaw/plugin-sdk/mattermost";
+// Mattermost plugin module implements group mentions behavior.
+import { resolveChannelGroupRequireMention } from "openclaw/plugin-sdk/channel-policy";
 import { resolveMattermostAccount } from "./mattermost/accounts.js";
+import type { ChannelGroupContext } from "./runtime-api.js";
 
 export function resolveMattermostGroupRequireMention(
   params: ChannelGroupContext & { requireMentionOverride?: boolean },

@@ -1,7 +1,9 @@
+// Command gating tests cover channel command allow/deny decisions before agent dispatch.
 import { describe, expect, it } from "vitest";
 import {
   resolveCommandAuthorizedFromAuthorizers,
   resolveControlCommandGate,
+  resolveDualTextControlCommandGate,
 } from "./command-gating.js";
 
 describe("resolveCommandAuthorizedFromAuthorizers", () => {
@@ -92,6 +94,19 @@ describe("resolveControlCommandGate", () => {
       allowTextCommands: false,
       hasControlCommand: true,
     });
+    expect(result.shouldBlock).toBe(false);
+  });
+
+  it("supports the dual-authorizer text gate helper", () => {
+    const result = resolveDualTextControlCommandGate({
+      useAccessGroups: true,
+      primaryConfigured: true,
+      primaryAllowed: false,
+      secondaryConfigured: true,
+      secondaryAllowed: true,
+      hasControlCommand: true,
+    });
+    expect(result.commandAuthorized).toBe(true);
     expect(result.shouldBlock).toBe(false);
   });
 });

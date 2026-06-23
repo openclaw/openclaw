@@ -1,24 +1,31 @@
+/**
+ * Tests Anthropic payload diagnostics redaction.
+ * Ensures request payloads, usage records, errors, and digests are safe before
+ * JSONL logging.
+ */
 import crypto from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { createAnthropicPayloadLogger } from "./anthropic-payload-log.js";
 
 describe("createAnthropicPayloadLogger", () => {
-  it("redacts image base64 payload data before writing logs", async () => {
+  it("sanitizes credential fields and image base64 payload data before writing logs", async () => {
     const lines: string[] = [];
     const logger = createAnthropicPayloadLogger({
       env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
       writer: {
         filePath: "memory",
         write: (line) => lines.push(line),
+        flush: async () => undefined,
       },
     });
-    expect(logger).not.toBeNull();
+    expect(typeof logger?.wrapStreamFn).toBe("function");
 
     const payload = {
       messages: [
         {
           role: "user",
+          authorization: "Bearer sk-secret", // pragma: allowlist secret
           content: [
             {
               type: "image",
@@ -27,23 +34,69 @@ describe("createAnthropicPayloadLogger", () => {
           ],
         },
       ],
+      metadata: {
+        api_key: "sk-test", // pragma: allowlist secret
+        nestedToken: "shh", // pragma: allowlist secret
+        tokenBudget: 1024,
+      },
     };
-    const streamFn: StreamFn = ((_, __, options) => {
-      options?.onPayload?.(payload);
+    const streamFn: StreamFn = ((model, __, options) => {
+      options?.onPayload?.(payload, model);
       return {} as never;
     }) as StreamFn;
 
     const wrapped = logger?.wrapStreamFn(streamFn);
-    await wrapped?.({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
+    expect(typeof wrapped).toBe("function");
+    if (!wrapped) {
+      throw new Error("expected payload logger to wrap stream function");
+    }
+    await wrapped({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
 
     const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
-    const message = ((event.payload as { messages?: unknown[] } | undefined)?.messages ??
-      []) as Array<Record<string, unknown>>;
+    const sanitizedPayload = (event.payload ?? {}) as Record<string, unknown>;
+    const message = ((sanitizedPayload.messages as unknown[] | undefined) ?? []) as Array<
+      Record<string, unknown>
+    >;
     const source = (((message[0]?.content as Array<Record<string, unknown>> | undefined) ?? [])[0]
       ?.source ?? {}) as Record<string, unknown>;
+    const metadata = (sanitizedPayload.metadata ?? {}) as Record<string, unknown>;
+    expect(message[0]).not.toHaveProperty("authorization");
+    expect(metadata).not.toHaveProperty("api_key");
+    expect(metadata).not.toHaveProperty("nestedToken");
+    expect(metadata.tokenBudget).toBe(1024);
     expect(source.data).toBe("<redacted>");
     expect(source.bytes).toBe(4);
     expect(source.sha256).toBe(crypto.createHash("sha256").update("QUJDRA==").digest("hex"));
-    expect(event.payloadDigest).toBeDefined();
+    expect(event.payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("sanitizes usage and error fields before writing logs", () => {
+    const lines: string[] = [];
+    const logger = createAnthropicPayloadLogger({
+      env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+        flush: async () => undefined,
+      },
+    });
+
+    logger?.recordUsage(
+      [
+        {
+          role: "assistant",
+          content: "",
+          usage: {
+            input: 1,
+            authorization: "Bearer sk-secret", // pragma: allowlist secret
+          },
+        } as never,
+      ],
+      new Error("failed with Bearer sk-secret"), // pragma: allowlist secret
+    );
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.error).toBe("failed with Bearer <redacted>");
+    expect(event.usage).toEqual({ input: 1 });
   });
 });

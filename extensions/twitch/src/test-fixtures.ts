@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/twitch";
+// Twitch plugin module implements test fixtures behavior.
 import { afterEach, beforeEach, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 
 export const BASE_TWITCH_TEST_ACCOUNT = {
   username: "testbot",

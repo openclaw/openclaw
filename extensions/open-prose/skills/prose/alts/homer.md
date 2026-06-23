@@ -78,146 +78,17 @@ An alternative register for OpenProse that draws from Greek epic poetry—the Il
 | `prompt`   | `charge` | The quest given     |
 | `model`    | `muse`   | Which muse inspires |
 
-### Unchanged
+### Shared appendix
 
-These keywords already work or are too functional to replace sensibly:
+Use [shared-appendix.md](./shared-appendix.md) for unchanged keywords and the common comparison pattern.
 
-- `**...**` discretion markers — already work
-- `until`, `while` — already work
-- `map`, `filter`, `reduce`, `pmap` — pipeline operators
-- `max` — constraint modifier
-- `as` — aliasing
-- Model names: `sonnet`, `opus`, `haiku` — already poetic
+Recommended Homeric rewrite targets:
 
----
-
-## Side-by-Side Comparison
-
-### Simple Program
-
-```prose
-# Functional
-use "@alice/research" as research
-input topic: "What to investigate"
-
-agent helper:
-  model: sonnet
-
-let findings = session: helper
-  prompt: "Research {topic}"
-
-output summary = session "Summarize"
-  context: findings
-```
-
-```prose
-# Homeric
-invoke "@alice/research" as research
-omen topic: "What to investigate"
-
-hero helper:
-  muse: sonnet
-
-decree findings = trial: helper
-  charge: "Research {topic}"
-
-glory summary = trial "Summarize"
-  tidings: findings
-```
-
-### Parallel Execution
-
-```prose
-# Functional
-parallel:
-  security = session "Check security"
-  perf = session "Check performance"
-  style = session "Check style"
-
-session "Synthesize review"
-  context: { security, perf, style }
-```
-
-```prose
-# Homeric
-host:
-  security = trial "Check security"
-  perf = trial "Check performance"
-  style = trial "Check style"
-
-trial "Synthesize review"
-  tidings: { security, perf, style }
-```
-
-### Loop with Condition
-
-```prose
-# Functional
-loop until **the code is bug-free** (max: 5):
-  session "Find and fix bugs"
-```
-
-```prose
-# Homeric
-ordeal until **the code is bug-free** (max: 5):
-  trial "Find and fix bugs"
-```
-
-### Error Handling
-
-```prose
-# Functional
-try:
-  session "Risky operation"
-catch as err:
-  session "Handle error"
-    context: err
-finally:
-  session "Cleanup"
-```
-
-```prose
-# Homeric
-venture:
-  trial "Risky operation"
-should ruin come as err:
-  trial "Handle error"
-    tidings: err
-in the end:
-  trial "Cleanup"
-```
-
-### Choice Block
-
-```prose
-# Functional
-choice **the severity level**:
-  option "Critical":
-    session "Escalate immediately"
-  option "Minor":
-    session "Log for later"
-```
-
-```prose
-# Homeric
-crossroads **the severity level**:
-  path "Critical":
-    trial "Escalate immediately"
-  path "Minor":
-    trial "Log for later"
-```
-
-### Conditionals
-
-```prose
-# Functional
-if **has security issues**:
-  session "Fix security"
-elif **has performance issues**:
-  session "Optimize"
-else:
-  session "Approve"
-```
+- `session` sample -> `trial`
+- `parallel` sample -> `host`
+- `loop` sample -> `ordeal`
+- `try/catch/finally` sample -> `venture` / `should ruin come` / `in the end`
+- `choice` sample -> `crossroads` / `path`
 
 ```prose
 # Homeric

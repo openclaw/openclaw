@@ -1,5 +1,8 @@
+// Verifies sqlite-vec can load and execute a simple vector query in Node's
+// built-in SQLite runtime.
 import { DatabaseSync } from "node:sqlite";
 import { load, getLoadablePath } from "sqlite-vec";
+import { formatErrorMessage } from "./lib/error-format.mjs";
 
 function vec(values) {
   return Buffer.from(new Float32Array(values).buffer);
@@ -10,7 +13,7 @@ const db = new DatabaseSync(":memory:", { allowExtension: true });
 try {
   load(db);
 } catch (err) {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = formatErrorMessage(err);
   console.error("sqlite-vec load failed:");
   console.error(message);
   console.error("expected extension path:", getLoadablePath());

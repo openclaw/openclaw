@@ -1,6 +1,14 @@
+// Covers TUI submit handler behavior for chat input and slash commands.
+import type { TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
+import { CustomEditor } from "./components/custom-editor.js";
+import { editorTheme } from "./theme/theme.js";
 import { createSubmitHarness } from "./tui-submit-test-helpers.js";
-import { createSubmitBurstCoalescer, shouldEnableWindowsGitBashPasteFallback } from "./tui.js";
+import {
+  createEditorSubmitHandler,
+  createSubmitBurstCoalescer,
+  shouldEnableWindowsGitBashPasteFallback,
+} from "./tui-submit.js";
 
 describe("createEditorSubmitHandler", () => {
   it("routes lines starting with ! to handleBangLine", () => {
@@ -41,6 +49,68 @@ describe("createEditorSubmitHandler", () => {
 
     expect(sendMessage).toHaveBeenCalledWith("hello");
     expect(editor.addToHistory).toHaveBeenCalledWith("hello");
+  });
+
+  it("preserves normal message drafts when chat is busy", () => {
+    const { editor, sendMessage, handleCommand, handleBangLine, onBlockedMessageSubmit, onSubmit } =
+      createSubmitHarness({
+        canSubmitMessage: () => false,
+      });
+
+    onSubmit("  wait, use c++ instead  ");
+
+    expect(editor.setText).toHaveBeenCalledWith("wait, use c++ instead");
+    expect(editor.addToHistory).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
+  });
+
+  it("passes the submitted text to the busy gate", () => {
+    const canSubmitMessage = vi.fn((value: string) => value === "please stop");
+    const { sendMessage, onSubmit } = createSubmitHarness({ canSubmitMessage });
+
+    onSubmit("please stop");
+
+    expect(canSubmitMessage).toHaveBeenCalledWith("please stop");
+    expect(sendMessage).toHaveBeenCalledWith("please stop");
+  });
+
+  it("restores the real editor value after pi-tui clears a busy submit", () => {
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const sendMessage = vi.fn();
+    const onBlockedMessageSubmit = vi.fn();
+    editor.setText("wait, use c++ instead");
+    editor.onSubmit = createEditorSubmitHandler({
+      editor,
+      handleCommand: vi.fn(),
+      sendMessage,
+      handleBangLine: vi.fn(),
+      canSubmitMessage: () => false,
+      onBlockedMessageSubmit,
+    });
+
+    editor.handleInput("\r");
+
+    expect(editor.getText()).toBe("wait, use c++ instead");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
+  });
+
+  it("continues to route slash commands while chat is busy", () => {
+    const { editor, handleCommand, sendMessage, onBlockedMessageSubmit, onSubmit } =
+      createSubmitHarness({
+        canSubmitMessage: () => false,
+      });
+
+    onSubmit("/abort");
+
+    expect(editor.setText).toHaveBeenCalledWith("");
+    expect(handleCommand).toHaveBeenCalledWith("/abort");
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).not.toHaveBeenCalled();
   });
 
   it("preserves internal newlines for multiline messages", () => {

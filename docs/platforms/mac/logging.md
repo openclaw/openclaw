@@ -3,7 +3,7 @@ summary: "OpenClaw logging: rolling diagnostics file log + unified log privacy f
 read_when:
   - Capturing macOS logs or investigating private data logging
   - Debugging voice wake/session lifecycle issues
-title: "macOS Logging"
+title: "macOS logging"
 ---
 
 # Logging (macOS)
@@ -13,14 +13,14 @@ title: "macOS Logging"
 OpenClaw routes macOS app logs through swift-log (unified logging by default) and can write a local, rotating file log to disk when you need a durable capture.
 
 - Verbosity: **Debug pane → Logs → App logging → Verbosity**
-- Enable: **Debug pane → Logs → App logging → “Write rolling diagnostics log (JSONL)”**
+- Enable: **Debug pane → Logs → App logging → "Write rolling diagnostics log (JSONL)"**
 - Location: `~/Library/Logs/OpenClaw/diagnostics.jsonl` (rotates automatically; old files are suffixed with `.1`, `.2`, …)
-- Clear: **Debug pane → Logs → App logging → “Clear”**
+- Clear: **Debug pane → Logs → App logging → "Clear"**
 
 Notes:
 
 - This is **off by default**. Enable only while actively debugging.
-- Treat the file as sensitive; don’t share it without review.
+- Treat the file as sensitive; don't share it without review.
 
 ## Unified logging private data on macOS
 
@@ -55,3 +55,8 @@ sudo install -m 644 -o root -g wheel /tmp/ai.openclaw.plist /Library/Preferences
 - Remove the override: `sudo rm /Library/Preferences/Logging/Subsystems/ai.openclaw.plist`.
 - Optionally run `sudo log config --reload` to force logd to drop the override immediately.
 - Remember this surface can include phone numbers and message bodies; keep the plist in place only while you actively need the extra detail.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [Gateway logging](/gateway/logging)

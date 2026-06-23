@@ -1,7 +1,10 @@
+// Message-action input normalization infers channel/target context and rewrites
+// legacy target fields before dispatch validation.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -9,6 +12,7 @@ import {
 import { applyTargetToParams } from "./channel-target.js";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 
+/** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -16,16 +20,19 @@ export function normalizeMessageActionInput(params: {
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
+  const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
+  const inferredChannel =
+    explicitChannel || normalizeMessageChannel(toolContext?.currentChannelProvider) || "";
 
-  const explicitTarget =
-    typeof normalizedArgs.target === "string" ? normalizedArgs.target.trim() : "";
+  const explicitTarget = normalizeOptionalString(normalizedArgs.target) ?? "";
   const hasLegacyTargetFields =
     typeof normalizedArgs.to === "string" || typeof normalizedArgs.channelId === "string";
   const hasLegacyTarget =
-    (typeof normalizedArgs.to === "string" && normalizedArgs.to.trim().length > 0) ||
-    (typeof normalizedArgs.channelId === "string" && normalizedArgs.channelId.trim().length > 0);
+    (normalizeOptionalString(normalizedArgs.to) ?? "").length > 0 ||
+    (normalizeOptionalString(normalizedArgs.channelId) ?? "").length > 0;
 
   if (explicitTarget && hasLegacyTargetFields) {
+    // Canonical `target` wins over old `to`/`channelId` aliases before validation.
     delete normalizedArgs.to;
     delete normalizedArgs.channelId;
   }
@@ -34,18 +41,19 @@ export function normalizeMessageActionInput(params: {
     !explicitTarget &&
     !hasLegacyTarget &&
     actionRequiresTarget(action) &&
-    !actionHasTarget(action, normalizedArgs)
+    !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
   ) {
-    const inferredTarget = toolContext?.currentChannelId?.trim();
+    const inferredTarget =
+      normalizeOptionalString(toolContext?.currentChannelId) ??
+      normalizeOptionalString(toolContext?.currentMessagingTarget);
     if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
     }
   }
 
   if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
-    const legacyTo = typeof normalizedArgs.to === "string" ? normalizedArgs.to.trim() : "";
-    const legacyChannelId =
-      typeof normalizedArgs.channelId === "string" ? normalizedArgs.channelId.trim() : "";
+    const legacyTo = normalizeOptionalString(normalizedArgs.to) ?? "";
+    const legacyChannelId = normalizeOptionalString(normalizedArgs.channelId) ?? "";
     const legacyTarget = legacyTo || legacyChannelId;
     if (legacyTarget) {
       normalizedArgs.target = legacyTarget;
@@ -54,17 +62,17 @@ export function normalizeMessageActionInput(params: {
     }
   }
 
-  const explicitChannel =
-    typeof normalizedArgs.channel === "string" ? normalizedArgs.channel.trim() : "";
   if (!explicitChannel) {
-    const inferredChannel = normalizeMessageChannel(toolContext?.currentChannelProvider);
     if (inferredChannel && isDeliverableMessageChannel(inferredChannel)) {
       normalizedArgs.channel = inferredChannel;
     }
   }
 
   applyTargetToParams({ action, args: normalizedArgs });
-  if (actionRequiresTarget(action) && !actionHasTarget(action, normalizedArgs)) {
+  if (
+    actionRequiresTarget(action) &&
+    !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
+  ) {
     throw new Error(`Action ${action} requires a target.`);
   }
 

@@ -1,6 +1,12 @@
+// Normalizes SCP remote host and path values.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+
+// SCP host/path normalization rejects shell metacharacters before values are
+// embedded in remote-copy commands.
 const SSH_TOKEN = /^[A-Za-z0-9._-]+$/;
 const BRACKETED_IPV6 = /^\[[0-9A-Fa-f:.%]+\]$/;
 const WHITESPACE = /\s/;
+const SCP_REMOTE_PATH_UNSAFE_CHARS = new Set(["\\", "'", '"', "`", "$", ";", "|", "&", "<", ">"]);
 
 function hasControlOrWhitespace(value: string): boolean {
   for (const char of value) {
@@ -12,11 +18,9 @@ function hasControlOrWhitespace(value: string): boolean {
   return false;
 }
 
+/** Normalize an optional `[user@]host` SCP target or reject unsafe tokens. */
 export function normalizeScpRemoteHost(value: string | null | undefined): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
@@ -57,6 +61,29 @@ export function normalizeScpRemoteHost(value: string | null | undefined): string
   return user ? `${user}@${host}` : host;
 }
 
+/** Return true when a value is safe for the SCP host position. */
 export function isSafeScpRemoteHost(value: string | null | undefined): boolean {
   return normalizeScpRemoteHost(value) !== undefined;
+}
+
+/** Normalize an absolute remote path that is safe for SCP command construction. */
+export function normalizeScpRemotePath(value: string | null | undefined): string | undefined {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed || !trimmed.startsWith("/")) {
+    return undefined;
+  }
+
+  for (const char of trimmed) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f || SCP_REMOTE_PATH_UNSAFE_CHARS.has(char)) {
+      return undefined;
+    }
+  }
+
+  return trimmed;
+}
+
+/** Return true when a value is safe for the SCP remote path position. */
+export function isSafeScpRemotePath(value: string | null | undefined): boolean {
+  return normalizeScpRemotePath(value) !== undefined;
 }

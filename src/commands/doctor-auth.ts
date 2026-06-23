@@ -1,3 +1,12 @@
+/** Doctor notes for auth profile health, OAuth refresh failures, and legacy Codex config. */
+import path from "node:path";
+import { note } from "../../packages/terminal-core/src/note.js";
+import {
+  listAgentIds,
+  resolveAgentDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -5,199 +14,119 @@ import {
 } from "../agents/auth-health.js";
 import {
   type AuthCredentialReasonCode,
-  CLAUDE_CLI_PROFILE_ID,
-  CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
-  repairOAuthProfileIdMismatch,
+  hasAnyAuthProfileStoreSource,
+  hasLocalAuthProfileStoreSource,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { note } from "../terminal/note.js";
+import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  classifyOAuthRefreshFailure,
+  type OAuthRefreshFailureReason,
+} from "../agents/auth-profiles/oauth-refresh-failure.js";
+import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-export async function maybeRepairAnthropicOAuthProfileId(
-  cfg: OpenClawConfig,
-  prompter: DoctorPrompter,
-): Promise<OpenClawConfig> {
-  const store = ensureAuthProfileStore();
-  const repair = repairOAuthProfileIdMismatch({
-    cfg,
-    store,
-    provider: "anthropic",
-    legacyProfileId: "anthropic:default",
-  });
-  if (!repair.migrated || repair.changes.length === 0) {
-    return cfg;
-  }
+const OPENAI_PROVIDER_ID = "openai";
+const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
+const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
+const OPENAI_BASE_URL = "https://api.openai.com/v1";
+const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
+const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
+  [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
+};
 
-  note(repair.changes.map((c) => `- ${c}`).join("\n"), "Auth profiles");
-  const apply = await prompter.confirm({
-    message: "Update Anthropic OAuth profile id in config now?",
-    initialValue: true,
-  });
-  if (!apply) {
-    return cfg;
-  }
-  return repair.config;
+function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
+  return Object.values(cfg.auth?.profiles ?? {}).some(
+    (profile) =>
+      (profile.provider === OPENAI_PROVIDER_ID || profile.provider === LEGACY_CODEX_PROVIDER_ID) &&
+      profile.mode === "oauth",
+  );
 }
 
-function pruneAuthOrder(
-  order: Record<string, string[]> | undefined,
-  profileIds: Set<string>,
-): { next: Record<string, string[]> | undefined; changed: boolean } {
-  if (!order) {
-    return { next: order, changed: false };
-  }
-  let changed = false;
-  const next: Record<string, string[]> = {};
-  for (const [provider, list] of Object.entries(order)) {
-    const filtered = list.filter((id) => !profileIds.has(id));
-    if (filtered.length !== list.length) {
-      changed = true;
-    }
-    if (filtered.length > 0) {
-      next[provider] = filtered;
-    }
-  }
-  return { next: Object.keys(next).length > 0 ? next : undefined, changed };
-}
-
-function pruneAuthProfiles(
-  cfg: OpenClawConfig,
-  profileIds: Set<string>,
-): { next: OpenClawConfig; changed: boolean } {
-  const profiles = cfg.auth?.profiles;
-  const order = cfg.auth?.order;
-  const nextProfiles = profiles ? { ...profiles } : undefined;
-  let changed = false;
-
-  if (nextProfiles) {
-    for (const id of profileIds) {
-      if (id in nextProfiles) {
-        delete nextProfiles[id];
-        changed = true;
-      }
-    }
-  }
-
-  const prunedOrder = pruneAuthOrder(order, profileIds);
-  if (prunedOrder.changed) {
-    changed = true;
-  }
-
-  if (!changed) {
-    return { next: cfg, changed: false };
-  }
-
-  const nextAuth =
-    nextProfiles || prunedOrder.next
-      ? {
-          ...cfg.auth,
-          profiles: nextProfiles && Object.keys(nextProfiles).length > 0 ? nextProfiles : undefined,
-          order: prunedOrder.next,
-        }
-      : undefined;
-
-  return {
-    next: {
-      ...cfg,
-      auth: nextAuth,
-    },
-    changed: true,
-  };
-}
-
-export async function maybeRemoveDeprecatedCliAuthProfiles(
-  cfg: OpenClawConfig,
-  prompter: DoctorPrompter,
-): Promise<OpenClawConfig> {
+function hasStoredCodexOAuthProfile(): boolean {
   const store = ensureAuthProfileStore(undefined, { allowKeychainPrompt: false });
-  const deprecated = new Set<string>();
-  if (store.profiles[CLAUDE_CLI_PROFILE_ID] || cfg.auth?.profiles?.[CLAUDE_CLI_PROFILE_ID]) {
-    deprecated.add(CLAUDE_CLI_PROFILE_ID);
-  }
-  if (store.profiles[CODEX_CLI_PROFILE_ID] || cfg.auth?.profiles?.[CODEX_CLI_PROFILE_ID]) {
-    deprecated.add(CODEX_CLI_PROFILE_ID);
-  }
+  return Object.values(store.profiles).some(
+    (profile) =>
+      (profile.provider === OPENAI_PROVIDER_ID || profile.provider === LEGACY_CODEX_PROVIDER_ID) &&
+      profile.type === "oauth",
+  );
+}
 
-  if (deprecated.size === 0) {
-    return cfg;
+function normalizeCodexOverrideBaseUrl(baseUrl: unknown): string | undefined {
+  if (typeof baseUrl !== "string") {
+    return undefined;
   }
+  return baseUrl.trim().replace(/\/+$/, "");
+}
 
-  const lines = ["Deprecated external CLI auth profiles detected (no longer supported):"];
-  if (deprecated.has(CLAUDE_CLI_PROFILE_ID)) {
-    lines.push(
-      `- ${CLAUDE_CLI_PROFILE_ID} (Anthropic): use setup-token → ${formatCliCommand("openclaw models auth setup-token")}`,
-    );
+function isLegacyCodexTransportShape(value: unknown, inheritedBaseUrl?: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
   }
-  if (deprecated.has(CODEX_CLI_PROFILE_ID)) {
-    lines.push(
-      `- ${CODEX_CLI_PROFILE_ID} (OpenAI Codex): use OAuth → ${formatCliCommand(
-        "openclaw models auth login --provider openai-codex",
-      )}`,
-    );
+  const api = typeof value.api === "string" ? value.api : undefined;
+  if (!api || !LEGACY_CODEX_APIS.has(api)) {
+    return false;
   }
-  note(lines.join("\n"), "Auth profiles");
+  const baseUrl = normalizeCodexOverrideBaseUrl(value.baseUrl ?? inheritedBaseUrl);
+  return !baseUrl || baseUrl === OPENAI_BASE_URL;
+}
 
-  const shouldRemove = await prompter.confirmRepair({
-    message: "Remove deprecated CLI auth profiles now?",
-    initialValue: true,
-  });
-  if (!shouldRemove) {
-    return cfg;
+function hasLegacyCodexTransportOverride(providerOverride: unknown): boolean {
+  if (!isRecord(providerOverride)) {
+    return false;
   }
-
-  await updateAuthProfileStoreWithLock({
-    updater: (nextStore) => {
-      let mutated = false;
-      for (const id of deprecated) {
-        if (nextStore.profiles[id]) {
-          delete nextStore.profiles[id];
-          mutated = true;
-        }
-        if (nextStore.usageStats?.[id]) {
-          delete nextStore.usageStats[id];
-          mutated = true;
-        }
-      }
-      if (nextStore.order) {
-        for (const [provider, list] of Object.entries(nextStore.order)) {
-          const filtered = list.filter((id) => !deprecated.has(id));
-          if (filtered.length !== list.length) {
-            mutated = true;
-            if (filtered.length > 0) {
-              nextStore.order[provider] = filtered;
-            } else {
-              delete nextStore.order[provider];
-            }
-          }
-        }
-      }
-      if (nextStore.lastGood) {
-        for (const [provider, profileId] of Object.entries(nextStore.lastGood)) {
-          if (deprecated.has(profileId)) {
-            delete nextStore.lastGood[provider];
-            mutated = true;
-          }
-        }
-      }
-      return mutated;
-    },
-  });
-
-  const pruned = pruneAuthProfiles(cfg, deprecated);
-  if (pruned.changed) {
-    note(
-      Array.from(deprecated.values())
-        .map((id) => `- removed ${id} from config`)
-        .join("\n"),
-      "Doctor changes",
-    );
+  if (isLegacyCodexTransportShape(providerOverride)) {
+    return true;
   }
-  return pruned.next;
+  const models = providerOverride.models;
+  if (!Array.isArray(models)) {
+    return false;
+  }
+  return models.some((model) => isLegacyCodexTransportShape(model, providerOverride.baseUrl));
+}
+
+function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
+  const lines = [
+    `- models.providers.${LEGACY_CODEX_PROVIDER_ID} contains a legacy transport override while Codex OAuth is configured.`,
+    "- Older OpenAI transport settings can shadow the built-in Codex OAuth provider path.",
+  ];
+  if (isRecord(providerOverride)) {
+    const record = providerOverride;
+    if (typeof record.api === "string") {
+      lines.push(`- models.providers.${LEGACY_CODEX_PROVIDER_ID}.api=${record.api}`);
+    }
+    if (typeof record.baseUrl === "string") {
+      lines.push(`- models.providers.${LEGACY_CODEX_PROVIDER_ID}.baseUrl=${record.baseUrl}`);
+    }
+  }
+  lines.push(
+    `- Remove or rewrite the legacy transport override to restore the built-in Codex OAuth provider path after recent fixes.`,
+  );
+  lines.push(
+    "- Custom proxies and header-only overrides can stay; this warning only targets old OpenAI transport settings.",
+  );
+  return lines.join("\n");
+}
+
+/** Emits a warning when legacy Codex transport overrides can shadow configured Codex OAuth. */
+export function noteLegacyCodexProviderOverride(cfg: OpenClawConfig): void {
+  const providerOverride = cfg.models?.providers?.[LEGACY_CODEX_PROVIDER_ID];
+  if (!providerOverride) {
+    return;
+  }
+  if (!hasLegacyCodexTransportOverride(providerOverride)) {
+    return;
+  }
+  if (!hasConfiguredCodexOAuthProfile(cfg) && !hasStoredCodexOAuthProfile()) {
+    return;
+  }
+  note(buildCodexProviderOverrideWarning(providerOverride), CODEX_OAUTH_WARNING_TITLE);
 }
 
 type AuthIssue = {
@@ -208,6 +137,42 @@ type AuthIssue = {
   remainingMs?: number;
 };
 
+type AuthProfileHealthTarget = {
+  agentId: string;
+  agentDir: string;
+  isDefault: boolean;
+};
+
+function formatAgentNoteTitle(title: string, agentId: string, labelAgents: boolean): string {
+  return labelAgents ? `${title} (agent: ${agentId})` : title;
+}
+
+function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const targets = new Map<string, AuthProfileHealthTarget>();
+  const addTarget = (agentId: string, agentDir: string, isDefault: boolean) => {
+    const key = path.resolve(agentDir);
+    const existing = targets.get(key);
+    if (!existing || isDefault) {
+      targets.set(key, { agentId, agentDir, isDefault: isDefault || existing?.isDefault === true });
+    }
+  };
+
+  addTarget(defaultAgentId, resolveDefaultAgentDir(cfg), true);
+  for (const agentId of listAgentIds(cfg)) {
+    if (agentId === defaultAgentId) {
+      continue;
+    }
+    const agentDir = resolveAgentDir(cfg, agentId);
+    if (hasLocalAuthProfileStoreSource(agentDir)) {
+      addTarget(agentId, agentDir, false);
+    }
+  }
+
+  return [...targets.values()];
+}
+
+/** Returns the short doctor hint for disabled or cooldown auth profiles. */
 export function resolveUnusableProfileHint(params: {
   kind: "cooldown" | "disabled";
   reason?: string;
@@ -223,39 +188,90 @@ export function resolveUnusableProfileHint(params: {
   return "Wait for cooldown or switch provider.";
 }
 
-function formatAuthIssueHint(issue: AuthIssue): string | null {
+function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | null): string {
+  switch (reason) {
+    case "refresh_token_reused":
+      return "refresh_token_reused";
+    case "invalid_grant":
+      return "invalid_grant";
+    case "sign_in_again":
+      return "sign in again";
+    case "invalid_refresh_token":
+      return "invalid refresh token";
+    case "revoked":
+      return "revoked";
+    default:
+      return "refresh failed";
+  }
+}
+
+/** Formats provider OAuth refresh failures as actionable doctor note lines. */
+export function formatOAuthRefreshFailureDoctorLine(params: {
+  profileId: string;
+  provider: string;
+  message: string;
+}): string | null {
+  const classified = classifyOAuthRefreshFailure(params.message);
+  if (!classified) {
+    return null;
+  }
+  const rawProvider = classified.provider ?? params.provider;
+  const provider = rawProvider
+    ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
+    : null;
+  const command = buildOAuthRefreshFailureLoginCommand(provider);
+  if (classified.reason) {
+    return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run \`${command}\`.`;
+  }
+  return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run \`${command}\`.`;
+}
+
+async function resolveAuthIssueHint(
+  issue: AuthIssue,
+  cfg: OpenClawConfig,
+  store: ReturnType<typeof ensureAuthProfileStore>,
+): Promise<string | null> {
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
   }
-  if (issue.provider === "anthropic" && issue.profileId === CLAUDE_CLI_PROFILE_ID) {
-    return `Deprecated profile. Use ${formatCliCommand("openclaw models auth setup-token")} or ${formatCliCommand(
-      "openclaw configure",
-    )}.`;
+  const providerHint = await formatAuthDoctorHint({
+    cfg,
+    store,
+    provider: issue.provider,
+    profileId: issue.profileId,
+  });
+  if (providerHint.trim()) {
+    return providerHint;
   }
-  if (issue.provider === "openai-codex" && issue.profileId === CODEX_CLI_PROFILE_ID) {
-    return `Deprecated profile. Use ${formatCliCommand(
-      "openclaw models auth login --provider openai-codex",
-    )} or ${formatCliCommand("openclaw configure")}.`;
-  }
-  return `Re-auth via \`${formatCliCommand("openclaw configure")}\` or \`${formatCliCommand("openclaw onboard")}\`.`;
+  return buildProviderAuthRecoveryHint({
+    provider: issue.provider,
+  }).replace(/^Run /, "Re-auth via ");
 }
 
-function formatAuthIssueLine(issue: AuthIssue): string {
+async function formatAuthIssueLine(
+  issue: AuthIssue,
+  cfg: OpenClawConfig,
+  store: ReturnType<typeof ensureAuthProfileStore>,
+): Promise<string> {
   const remaining =
     issue.remainingMs !== undefined ? ` (${formatRemainingShort(issue.remainingMs)})` : "";
-  const hint = formatAuthIssueHint(issue);
+  const hint = await resolveAuthIssueHint(issue, cfg, store);
   const reason = issue.reasonCode ? ` [${issue.reasonCode}]` : "";
   return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
 
-export async function noteAuthProfileHealth(params: {
+async function noteAuthProfileHealthForTarget(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
+  target: AuthProfileHealthTarget;
+  labelAgents: boolean;
 }): Promise<void> {
-  const store = ensureAuthProfileStore(undefined, {
+  const store = ensureAuthProfileStore(params.target.agentDir, {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
+  const noteTitle = (title: string) =>
+    formatAgentNoteTitle(title, params.target.agentId, params.labelAgents);
   const unusable = (() => {
     const now = Date.now();
     const out: string[] = [];
@@ -280,13 +296,14 @@ export async function noteAuthProfileHealth(params: {
   })();
 
   if (unusable.length > 0) {
-    note(unusable.join("\n"), "Auth profile cooldowns");
+    note(unusable.join("\n"), noteTitle("Auth profile cooldowns"));
   }
 
   let summary = buildAuthHealthSummary({
     store,
     cfg: params.cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    allowKeychainPrompt: params.allowKeychainPrompt,
   });
 
   const findIssues = () =>
@@ -303,7 +320,7 @@ export async function noteAuthProfileHealth(params: {
     return;
   }
 
-  const shouldRefresh = await params.prompter.confirmRepair({
+  const shouldRefresh = await params.prompter.confirmAutoFix({
     message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
     initialValue: true,
   });
@@ -320,38 +337,76 @@ export async function noteAuthProfileHealth(params: {
           cfg: params.cfg,
           store,
           profileId: profile.profileId,
+          agentDir: params.target.agentDir,
         });
       } catch (err) {
-        errors.push(`- ${profile.profileId}: ${err instanceof Error ? err.message : String(err)}`);
+        const message = formatErrorMessage(err);
+        errors.push(
+          formatOAuthRefreshFailureDoctorLine({
+            profileId: profile.profileId,
+            provider: profile.provider,
+            message,
+          }) ?? `- ${profile.profileId}: ${message}`,
+        );
       }
     }
     if (errors.length > 0) {
-      note(errors.join("\n"), "OAuth refresh errors");
+      note(errors.join("\n"), noteTitle("OAuth refresh errors"));
     }
     summary = buildAuthHealthSummary({
-      store: ensureAuthProfileStore(undefined, {
+      store: ensureAuthProfileStore(params.target.agentDir, {
         allowKeychainPrompt: false,
       }),
       cfg: params.cfg,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      allowKeychainPrompt: false,
     });
     issues = findIssues();
   }
 
   if (issues.length > 0) {
-    note(
-      issues
-        .map((issue) =>
-          formatAuthIssueLine({
+    const issueLines = await Promise.all(
+      issues.map((issue) =>
+        formatAuthIssueLine(
+          {
             profileId: issue.profileId,
             provider: issue.provider,
             status: issue.status,
             reasonCode: issue.reasonCode,
             remainingMs: issue.remainingMs,
-          }),
-        )
-        .join("\n"),
-      "Model auth",
+          },
+          params.cfg,
+          store,
+        ),
+      ),
     );
+    note(issueLines.join("\n"), noteTitle("Model auth"));
+  }
+}
+
+/** Checks configured agent auth stores and emits doctor notes for stale or unusable profiles. */
+export async function noteAuthProfileHealth(params: {
+  cfg: OpenClawConfig;
+  prompter: DoctorPrompter;
+  allowKeychainPrompt: boolean;
+}): Promise<void> {
+  const configuredProfiles = Object.keys(params.cfg.auth?.profiles ?? {}).length > 0;
+  const targets = listAuthProfileHealthTargets(params.cfg);
+  const activeTargets = targets.filter((target) =>
+    target.isDefault
+      ? hasAnyAuthProfileStoreSource(target.agentDir) || configuredProfiles
+      : hasLocalAuthProfileStoreSource(target.agentDir),
+  );
+  if (activeTargets.length === 0) {
+    return;
+  }
+
+  const labelAgents = activeTargets.length > 1;
+  for (const target of activeTargets) {
+    await noteAuthProfileHealthForTarget({
+      ...params,
+      target,
+      labelAgents,
+    });
   }
 }

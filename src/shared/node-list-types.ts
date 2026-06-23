@@ -1,3 +1,4 @@
+/** Node record returned by gateway node-list endpoints. */
 export type NodeListNode = {
   nodeId: string;
   displayName?: string;
@@ -5,6 +6,8 @@ export type NodeListNode = {
   version?: string;
   coreVersion?: string;
   uiVersion?: string;
+  clientId?: string;
+  clientMode?: string;
   remoteIp?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
@@ -12,11 +15,20 @@ export type NodeListNode = {
   caps?: string[];
   commands?: string[];
   permissions?: Record<string, boolean>;
+  approvalState?: "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
+  pendingRequestId?: string;
+  pendingDeclaredCaps?: string[];
+  pendingDeclaredCommands?: string[];
+  pendingDeclaredPermissions?: Record<string, boolean>;
   paired?: boolean;
   connected?: boolean;
   connectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
+  approvedAtMs?: number;
 };
 
+/** Pending pairing/access request shown to operators. */
 export type PendingRequest = {
   requestId: string;
   nodeId: string;
@@ -26,10 +38,12 @@ export type PendingRequest = {
   coreVersion?: string;
   uiVersion?: string;
   remoteIp?: string;
-  isRepair?: boolean;
   ts: number;
+  commands?: string[];
+  requiredApproveScopes?: Array<"operator.pairing" | "operator.write" | "operator.admin">;
 };
 
+/** Persisted paired node entry with optional token and permission metadata. */
 export type PairedNode = {
   nodeId: string;
   token?: string;
@@ -43,8 +57,11 @@ export type PairedNode = {
   createdAtMs?: number;
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
+/** Combined pairing list result used by CLI/UI node approval surfaces. */
 export type PairingList = {
   pending: PendingRequest[];
   paired: PairedNode[];

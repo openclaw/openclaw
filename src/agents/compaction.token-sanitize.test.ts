@@ -1,26 +1,30 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+// Verifies compaction token planning strips private/non-model fields first.
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 
-const piCodingAgentMocks = vi.hoisted(() => ({
+const agentSessionMocks = vi.hoisted(() => ({
   estimateTokens: vi.fn((_message: unknown) => 1),
   generateSummary: vi.fn(async () => "summary"),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
+vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-sessions")>(
+    "openclaw/plugin-sdk/agent-sessions",
   );
   return {
     ...actual,
-    estimateTokens: piCodingAgentMocks.estimateTokens,
-    generateSummary: piCodingAgentMocks.generateSummary,
+    estimateTokens: agentSessionMocks.estimateTokens,
+    generateSummary: agentSessionMocks.generateSummary,
   };
 });
 
+import { sanitizeCompactionMessages } from "./compaction-planning.js";
 import { chunkMessagesByMaxTokens, splitMessagesByTokenShare } from "./compaction.js";
 
 describe("compaction token accounting sanitization", () => {
   it("does not pass toolResult.details into per-message token estimates", () => {
+    // details can contain raw tool payloads or private diagnostics; token
+    // estimates should account only for model-visible message content.
     const messages: AgentMessage[] = [
       {
         role: "toolResult",
@@ -30,7 +34,6 @@ describe("compaction token accounting sanitization", () => {
         content: [{ type: "text", text: "ok" }],
         details: { raw: "x".repeat(50_000) },
         timestamp: 1,
-        // oxlint-disable-next-line typescript/no-explicit-any
       } as any,
       {
         role: "user",
@@ -42,11 +45,44 @@ describe("compaction token accounting sanitization", () => {
     splitMessagesByTokenShare(messages, 2);
     chunkMessagesByMaxTokens(messages, 16);
 
-    const calledWithDetails = piCodingAgentMocks.estimateTokens.mock.calls.some((call) => {
+    const calledWithDetails = agentSessionMocks.estimateTokens.mock.calls.some((call) => {
       const message = call[0] as { details?: unknown } | undefined;
       return Boolean(message?.details);
     });
 
     expect(calledWithDetails).toBe(false);
+  });
+
+  it("projects worker inputs to planning-safe messages before cloning", () => {
+    // Worker input is cloned across threads, so sanitize before clone to remove
+    // hidden runtime context and oversized diagnostic details.
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "browser",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        details: { raw: "x".repeat(50_000) },
+        timestamp: 1,
+      } as any,
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "internal",
+        timestamp: 2,
+      } as any,
+      {
+        role: "user",
+        content: "next",
+        timestamp: 3,
+      },
+    ];
+
+    const sanitized = sanitizeCompactionMessages(messages);
+
+    expect(sanitized).toHaveLength(2);
+    expect(sanitized[0]).not.toHaveProperty("details");
+    expect(sanitized.map((message) => message.role)).toEqual(["toolResult", "user"]);
   });
 });

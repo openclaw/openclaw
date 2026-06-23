@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/mattermost";
+// Mattermost tests cover group mentions plugin behavior.
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 
 describe("resolveMattermostGroupRequireMention", () => {

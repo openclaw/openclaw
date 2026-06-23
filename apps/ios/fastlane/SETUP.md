@@ -14,7 +14,7 @@ Create an App Store Connect API key:
 Recommended (macOS): store the private key in Keychain and write non-secret vars:
 
 ```bash
-scripts/ios-asc-keychain-setup.sh \
+scripts/ios-app-store-connect-keychain-setup.sh \
   --key-path /absolute/path/to/AuthKey_XXXXXXXXXX.p8 \
   --issuer-id YOUR_ISSUER_ID \
   --write-env
@@ -23,26 +23,28 @@ scripts/ios-asc-keychain-setup.sh \
 This writes these auth variables in `apps/ios/fastlane/.env`:
 
 ```bash
-ASC_KEY_ID=YOUR_KEY_ID
-ASC_ISSUER_ID=YOUR_ISSUER_ID
-ASC_KEYCHAIN_SERVICE=openclaw-asc-key
-ASC_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
+APP_STORE_CONNECT_KEY_ID=YOUR_KEY_ID
+APP_STORE_CONNECT_ISSUER_ID=YOUR_ISSUER_ID
+APP_STORE_CONNECT_KEYCHAIN_SERVICE=openclaw-app-store-connect-key
+APP_STORE_CONNECT_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
 ```
+
+Important: `apps/ios/fastlane/.env` is only for Fastlane/App Store Connect auth and optional release-archive settings. It does **not** configure gateway-side direct APNs push delivery for local iOS builds.
 
 Optional app targeting variables (helpful if Fastlane cannot auto-resolve app by bundle):
 
 ```bash
-ASC_APP_IDENTIFIER=ai.openclaw.ios
+APP_STORE_CONNECT_APP_IDENTIFIER=ai.openclawfoundation.app
 # or
-ASC_APP_ID=6760218713
+APP_STORE_CONNECT_APP_ID=YOUR_APP_STORE_CONNECT_APP_ID
 ```
 
 File-based fallback (CI/non-macOS):
 
 ```bash
-ASC_KEY_ID=YOUR_KEY_ID
-ASC_ISSUER_ID=YOUR_ISSUER_ID
-ASC_KEY_PATH=/absolute/path/to/AuthKey_XXXXXXXXXX.p8
+APP_STORE_CONNECT_KEY_ID=YOUR_KEY_ID
+APP_STORE_CONNECT_ISSUER_ID=YOUR_ISSUER_ID
+APP_STORE_CONNECT_KEY_PATH=/absolute/path/to/AuthKey_XXXXXXXXXX.p8
 ```
 
 Code signing variable (optional in `.env`):
@@ -51,7 +53,30 @@ Code signing variable (optional in `.env`):
 IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID
 ```
 
-Tip: run `scripts/ios-team-id.sh` from repo root to print a Team ID for `.env`. The helper prefers the canonical OpenClaw team (`Y5PE65HELJ`) when present locally; otherwise it prefers the first non-personal team from your Xcode account (then personal team if needed). Fastlane uses this helper automatically if `IOS_DEVELOPMENT_TEAM` is missing.
+Tip: run `scripts/ios-team-id.sh --require-canonical` from repo root to verify the canonical OpenClaw iOS team (`FWJYW4S8P8`) is available locally. Fastlane uses the same canonical-only path when `IOS_DEVELOPMENT_TEAM` is missing, and rejects non-canonical teams for release archives.
+
+App Store release signing is manual and profile-pinned. The canonical manifest is `apps/ios/Config/AppStoreSigning.json`, and Fastlane `match` owns the encrypted signing repo and branch named there.
+
+One-time or rotation setup:
+
+```bash
+pnpm ios:release:signing:plan
+pnpm ios:release:signing:check
+pnpm ios:release:signing:setup
+```
+
+`signing:setup` uses Fastlane `produce` and `modify_services` to create Developer Portal bundle IDs and enable required services before running `match`. The main app also requires App Attest, and the main app and share extension both require the shared App Group from `apps/ios/Config/AppStoreSigning.json`; associate that group with both bundle IDs in the Apple Developer Portal before regenerating profiles. If Fastlane does not already have a valid Apple Developer Portal session, run `fastlane spaceauth` for a release-owner Apple ID and export the resulting `FASTLANE_SESSION`.
+
+Shared encrypted signing storage:
+
+```bash
+MATCH_PASSWORD=... pnpm ios:release:signing:sync:push
+MATCH_PASSWORD=... pnpm ios:release:signing:sync:pull
+```
+
+The signing repo is private and encrypted. Store `MATCH_PASSWORD` in the release-owner vault, not in this product repo. `sync:pull` uses Fastlane `match` to decrypt, install profiles, and import the distribution signing identity into the local Keychain.
+
+For local/manual iOS builds that stay on direct APNs, configure the gateway host separately with `OPENCLAW_APNS_TEAM_ID`, `OPENCLAW_APNS_KEY_ID`, and either `OPENCLAW_APNS_PRIVATE_KEY_P8` or `OPENCLAW_APNS_PRIVATE_KEY_PATH`. Those gateway runtime env vars are separate from Fastlane's `.env`.
 
 Validate auth:
 
@@ -60,9 +85,89 @@ cd apps/ios
 fastlane ios auth_check
 ```
 
-Run:
+App Store Connect API auth is required when:
+
+- uploading to App Store Connect
+- auto-resolving the next build number from App Store Connect
+
+If you pass `--build-number` to `pnpm ios:release:archive`, the local archive path does not need App Store Connect API auth.
+
+Archive locally without upload:
+
+```bash
+pnpm ios:release:archive
+```
+
+Generate deterministic App Store screenshots:
+
+```bash
+pnpm ios:screenshots
+```
+
+The screenshot lane runs the app with `--openclaw-screenshot-mode`, which enters the built-in connected screenshot fixture instead of pairing with a live gateway. By default it chooses one available large iPhone simulator and one available 13-inch iPad simulator from the installed Xcode runtime; override devices with a comma-separated `OPENCLAW_SNAPSHOT_DEVICES` value when the requested simulators exist locally.
+
+Upload to App Store Connect:
+
+```bash
+pnpm ios:release:upload
+```
+
+Direct Fastlane TestFlight upload is disabled. Use the package script so the
+release wrapper, App Store push mode, and exported-IPA validation gate all run
+in the same path.
+
+Maintainer recovery path for a fresh clone on the same Mac:
+
+1. Reuse the existing Keychain-backed App Store Connect key on that machine.
+2. Restore or recreate `apps/ios/fastlane/.env` so it contains the non-secret variables:
+
+```bash
+APP_STORE_CONNECT_KEY_ID=YOUR_KEY_ID
+APP_STORE_CONNECT_ISSUER_ID=YOUR_ISSUER_ID
+APP_STORE_CONNECT_KEYCHAIN_SERVICE=openclaw-app-store-connect-key
+APP_STORE_CONNECT_KEYCHAIN_ACCOUNT=YOUR_MAC_USERNAME
+```
+
+3. Re-run auth validation:
 
 ```bash
 cd apps/ios
-fastlane beta
+fastlane ios auth_check
 ```
+
+4. If you are starting a brand-new production release train, pin iOS to the current gateway version:
+
+```bash
+pnpm ios:version:pin -- --from-gateway
+```
+
+5. Upload:
+
+```bash
+pnpm ios:release:upload
+```
+
+Quick verification after upload:
+
+- confirm `apps/ios/build/app-store/OpenClaw-<version>.ipa` exists
+- confirm Fastlane validates the exported IPA before upload
+- confirm Fastlane prints `Uploaded iOS App Store build: version=<version> short=<short> build=<build>`
+- remember that App Store Connect/TestFlight processing can take a few minutes after the upload succeeds
+
+Versioning rules:
+
+- `apps/ios/version.json` is the pinned iOS release version source
+- `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source
+- Supported pinned iOS versions use CalVer: `YYYY.M.D`
+- `pnpm ios:version:pin -- --from-gateway` promotes the current root gateway version into the pinned iOS release version
+- Fastlane uses the pinned iOS version only; changing `package.json.version` alone does not change the iOS app version
+- Fastlane sets `CFBundleShortVersionString` to the pinned iOS version, for example `2026.4.10`
+- Fastlane resolves `CFBundleVersion` as the next integer App Store Connect build number for that short version
+- Run `pnpm ios:version:sync` after changing `apps/ios/version.json` or `apps/ios/CHANGELOG.md`
+- `pnpm ios:version:check` validates that checked-in iOS version artifacts are in sync
+- The release flow regenerates `apps/ios/OpenClaw.xcodeproj` from `apps/ios/project.yml` before archiving
+- Local App Store signing uses a temporary generated xcconfig with profile names from `apps/ios/Config/AppStoreSigning.json` and leaves local development signing overrides untouched
+- App Store release uses `OpenClawPushMode=appStore`, which derives the canonical production hosted relay, production APNs, production relay profile, and `appleStrict` proof. The release lane rejects custom production relay URL overrides.
+- The exported IPA is validated before upload by inspecting its push mode, signed entitlements, and embedded App Store profile.
+- `pnpm ios:release:upload` generates and uploads screenshots and release notes before archiving, then uploads the IPA without submitting it for App Review
+- See `apps/ios/VERSIONING.md` for the detailed workflow

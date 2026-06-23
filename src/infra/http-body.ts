@@ -1,4 +1,9 @@
+// Reads HTTP request bodies with timeout and byte limits.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { formatErrorMessage } from "./errors.js";
+import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -66,8 +71,8 @@ function parseContentLengthHeader(req: IncomingMessage): number | null {
   if (typeof raw !== "string") {
     return null;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return null;
   }
   return parsed;
@@ -84,6 +89,12 @@ type RequestBodyLimitValues = {
   timeoutMs: number;
 };
 
+type RequestBodyChunkProgress = {
+  buffer: Buffer;
+  totalBytes: number;
+  exceeded: boolean;
+};
+
 function resolveRequestBodyLimitValues(options: {
   maxBytes: number;
   timeoutMs?: number;
@@ -92,10 +103,27 @@ function resolveRequestBodyLimitValues(options: {
     ? Math.max(1, Math.floor(options.maxBytes))
     : 1;
   const timeoutMs =
-    typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
-      ? Math.max(1, Math.floor(options.timeoutMs))
-      : DEFAULT_WEBHOOK_BODY_TIMEOUT_MS;
+    options.timeoutMs === undefined
+      ? DEFAULT_WEBHOOK_BODY_TIMEOUT_MS
+      : resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_WEBHOOK_BODY_TIMEOUT_MS);
   return { maxBytes, timeoutMs };
+}
+
+export const testApi = { resolveRequestBodyLimitValues };
+export { testApi as __test__ };
+
+function advanceRequestBodyChunk(
+  chunk: Buffer | string,
+  totalBytes: number,
+  maxBytes: number,
+): RequestBodyChunkProgress {
+  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  const nextTotalBytes = totalBytes + buffer.length;
+  return {
+    buffer,
+    totalBytes: nextTotalBytes,
+    exceeded: nextTotalBytes > maxBytes,
+  };
 }
 
 export async function readRequestBodyWithLimit(
@@ -127,7 +155,7 @@ export async function readRequestBodyWithLimit(
       req.removeListener("end", onEnd);
       req.removeListener("error", onError);
       req.removeListener("close", onClose);
-      clearTimeout(timer);
+      clearNodeTimeout(timer);
     };
 
     const finish = (cb: () => void) => {
@@ -143,7 +171,7 @@ export async function readRequestBodyWithLimit(
       finish(() => reject(error));
     };
 
-    const timer = setTimeout(() => {
+    const timer = setNodeTimeout(() => {
       const error = new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" });
       if (!req.destroyed) {
         req.destroy();
@@ -155,9 +183,9 @@ export async function readRequestBodyWithLimit(
       if (done) {
         return;
       }
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      totalBytes += buffer.length;
-      if (totalBytes > maxBytes) {
+      const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
+      totalBytes = progress.totalBytes;
+      if (progress.exceeded) {
         const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
         if (!req.destroyed) {
           req.destroy();
@@ -165,7 +193,7 @@ export async function readRequestBodyWithLimit(
         fail(error);
         return;
       }
-      chunks.push(buffer);
+      chunks.push(progress.buffer);
     };
 
     const onEnd = () => {
@@ -221,7 +249,7 @@ export async function readJsonBodyWithLimit(
       return {
         ok: false,
         code: "INVALID_JSON",
-        error: error instanceof Error ? error.message : String(error),
+        error: formatErrorMessage(error),
       };
     }
   } catch (error) {
@@ -231,7 +259,7 @@ export async function readJsonBodyWithLimit(
     return {
       ok: false,
       code: "INVALID_JSON",
-      error: error instanceof Error ? error.message : String(error),
+      error: formatErrorMessage(error),
     };
   }
 }
@@ -269,7 +297,7 @@ export function installRequestBodyLimitGuard(
     req.removeListener("end", onEnd);
     req.removeListener("close", onClose);
     req.removeListener("error", onError);
-    clearTimeout(timer);
+    clearNodeTimeout(timer);
   };
 
   const finish = () => {
@@ -313,9 +341,9 @@ export function installRequestBodyLimitGuard(
     if (done) {
       return;
     }
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    totalBytes += buffer.length;
-    if (totalBytes > maxBytes) {
+    const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
+    totalBytes = progress.totalBytes;
+    if (progress.exceeded) {
       trip(new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" }));
     }
   };
@@ -336,7 +364,7 @@ export function installRequestBodyLimitGuard(
     finish();
   };
 
-  const timer = setTimeout(() => {
+  const timer = setNodeTimeout(() => {
     trip(new RequestBodyLimitError({ code: "REQUEST_BODY_TIMEOUT" }));
   }, timeoutMs);
 

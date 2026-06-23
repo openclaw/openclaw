@@ -1,46 +1,46 @@
-import { RateLimitError } from "@buape/carbon";
+// Defines reusable retry envelopes for channel and network operations.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "./retry.js";
 
+/** Runs an async operation with a policy-specific retry wrapper and optional log label. */
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
-export const DISCORD_RETRY_DEFAULTS = {
-  attempts: 3,
-  minDelayMs: 500,
-  maxDelayMs: 30_000,
-  jitter: 0.1,
-};
-
-export const TELEGRAM_RETRY_DEFAULTS = {
+/** Default retry envelope for channel API operations that hit transient network edges. */
+export const CHANNEL_API_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 400,
   maxDelayMs: 30_000,
   jitter: 0.1,
 };
 
-const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
+const CHANNEL_API_RETRY_RE =
+  /429|421|timeout|connect|reset|closed|unavailable|temporarily|misdirected request/i;
 const log = createSubsystemLogger("retry-policy");
 
-function resolveTelegramShouldRetry(params: {
+function resolveChannelApiShouldRetry(params: {
   shouldRetry?: (err: unknown) => boolean;
   strictShouldRetry?: boolean;
 }) {
   if (!params.shouldRetry) {
-    return (err: unknown) => TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+    return (err: unknown) => CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
   }
   if (params.strictShouldRetry) {
     return params.shouldRetry;
   }
+  // Channel APIs often wrap network failures differently by provider. Keep the
+  // fallback regex unless callers opt into strict idempotency control.
   return (err: unknown) =>
-    params.shouldRetry?.(err) || TELEGRAM_RETRY_RE.test(formatErrorMessage(err));
+    params.shouldRetry?.(err) || CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
 }
 
-function getTelegramRetryAfterMs(err: unknown): number | undefined {
+function getChannelApiRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
   const candidate =
+    // Telegram-style clients may expose retry_after on the root error, response,
+    // or nested error object; keep all shapes aligned so rate-limit sleeps match.
     "parameters" in err && err.parameters && typeof err.parameters === "object"
       ? (err.parameters as { retry_after?: unknown }).retry_after
       : "response" in err &&
@@ -58,12 +58,17 @@ function getTelegramRetryAfterMs(err: unknown): number | undefined {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
 }
 
-export function createDiscordRetryRunner(params: {
+/** Creates a generic rate-limit-aware retry runner from explicit retry policy pieces. */
+export function createRateLimitRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
   verbose?: boolean;
+  defaults: Required<RetryConfig>;
+  logLabel: string;
+  shouldRetry: (err: unknown) => boolean;
+  retryAfterMs?: (err: unknown) => number | undefined;
 }): RetryRunner {
-  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, {
+  const retryConfig = resolveRetryConfig(params.defaults, {
     ...params.configRetry,
     ...params.retry,
   });
@@ -71,50 +76,51 @@ export function createDiscordRetryRunner(params: {
     retryAsync(fn, {
       ...retryConfig,
       label,
-      shouldRetry: (err) => err instanceof RateLimitError,
-      retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
+      shouldRetry: params.shouldRetry,
+      retryAfterMs: params.retryAfterMs,
       onRetry: params.verbose
         ? (info) => {
             const labelText = info.label ?? "request";
             const maxRetries = Math.max(1, info.maxAttempts - 1);
             log.warn(
-              `discord ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
+              `${params.logLabel} ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
             );
           }
         : undefined,
     });
 }
 
-export function createTelegramRetryRunner(params: {
+/** Creates the channel API retry runner used by outbound messaging integrations. */
+export function createChannelApiRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;
   verbose?: boolean;
   shouldRetry?: (err: unknown) => boolean;
   /**
    * When true, the custom shouldRetry predicate is used exclusively —
-   * the default TELEGRAM_RETRY_RE fallback regex is NOT OR'd in.
+   * the default channel API fallback regex is NOT OR'd in.
    * Use this for non-idempotent operations (e.g. sendMessage) where
    * the regex fallback would cause duplicate message delivery.
    */
   strictShouldRetry?: boolean;
 }): RetryRunner {
-  const retryConfig = resolveRetryConfig(TELEGRAM_RETRY_DEFAULTS, {
+  const retryConfig = resolveRetryConfig(CHANNEL_API_RETRY_DEFAULTS, {
     ...params.configRetry,
     ...params.retry,
   });
-  const shouldRetry = resolveTelegramShouldRetry(params);
+  const shouldRetry = resolveChannelApiShouldRetry(params);
 
   return <T>(fn: () => Promise<T>, label?: string) =>
     retryAsync(fn, {
       ...retryConfig,
       label,
       shouldRetry,
-      retryAfterMs: getTelegramRetryAfterMs,
+      retryAfterMs: getChannelApiRetryAfterMs,
       onRetry: params.verbose
         ? (info) => {
             const maxRetries = Math.max(1, info.maxAttempts - 1);
             log.warn(
-              `telegram send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+              `channel send retry ${info.attempt}/${maxRetries} for ${info.label ?? label ?? "request"} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
             );
           }
         : undefined,

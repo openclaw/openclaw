@@ -1,16 +1,21 @@
+// Port tests cover CLI port probing and conflict handling.
 import { EventEmitter } from "node:events";
 import net from "node:net";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Hoist the factory so vi.mock can access it.
 const mockCreateServer = vi.hoisted(() => vi.fn());
 
-vi.mock("node:net", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:net")>();
+vi.mock("node:net", async () => {
+  const actual = await vi.importActual<typeof import("node:net")>("node:net");
   return { ...actual, createServer: mockCreateServer };
 });
 
 import { probePortFree, waitForPortBindable } from "./ports.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** Build a minimal fake net.Server that emits a given error code on listen(). */
 function makeErrServer(code: string): net.Server {
@@ -33,6 +38,16 @@ function makeErrServer(code: string): net.Server {
   return fake;
 }
 
+async function expectRejectCode(promise: Promise<unknown>, code: string): Promise<void> {
+  try {
+    await promise;
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe(code);
+    return;
+  }
+  throw new Error(`expected rejection with code ${code}`);
+}
+
 describe("probePortFree", () => {
   it("resolves false (not rejects) when bind returns EADDRINUSE", async () => {
     mockCreateServer.mockReturnValue(makeErrServer("EADDRINUSE"));
@@ -41,17 +56,17 @@ describe("probePortFree", () => {
 
   it("rejects immediately for EADDRNOTAVAIL (non-retryable: host address not on any interface)", async () => {
     mockCreateServer.mockReturnValue(makeErrServer("EADDRNOTAVAIL"));
-    await expect(probePortFree(9999, "192.0.2.1")).rejects.toMatchObject({ code: "EADDRNOTAVAIL" });
+    await expectRejectCode(probePortFree(9999, "192.0.2.1"), "EADDRNOTAVAIL");
   });
 
   it("rejects immediately for EACCES (non-retryable bind error)", async () => {
     mockCreateServer.mockReturnValue(makeErrServer("EACCES"));
-    await expect(probePortFree(80, "0.0.0.0")).rejects.toMatchObject({ code: "EACCES" });
+    await expectRejectCode(probePortFree(80, "0.0.0.0"), "EACCES");
   });
 
   it("rejects immediately for other non-retryable errors", async () => {
     mockCreateServer.mockReturnValue(makeErrServer("EINVAL"));
-    await expect(probePortFree(9999, "0.0.0.0")).rejects.toMatchObject({ code: "EINVAL" });
+    await expectRejectCode(probePortFree(9999, "0.0.0.0"), "EINVAL");
   });
 
   it("resolves true when the port is free", async () => {
@@ -115,10 +130,20 @@ describe("waitForPortBindable", () => {
     // mockCreateServer would be called many times. We assert it's called exactly once.
     mockCreateServer.mockClear();
     mockCreateServer.mockReturnValue(makeErrServer("EACCES"));
-    await expect(
-      waitForPortBindable(80, { timeoutMs: 5000, intervalMs: 50 }),
-    ).rejects.toMatchObject({ code: "EACCES" });
+    await expectRejectCode(waitForPortBindable(80, { timeoutMs: 5000, intervalMs: 50 }), "EACCES");
     // Only one probe should have been attempted — no spinning through the retry loop.
     expect(mockCreateServer).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds oversized bindability intervals by the remaining timeout", async () => {
+    mockCreateServer.mockReturnValue(makeErrServer("EADDRINUSE"));
+
+    await expect(
+      waitForPortBindable(9999, {
+        timeoutMs: 1,
+        intervalMs: Number.MAX_SAFE_INTEGER,
+        host: "127.0.0.1",
+      }),
+    ).rejects.toThrow(/still not bindable after 1ms/);
   });
 });

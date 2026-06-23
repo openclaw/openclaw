@@ -1,10 +1,18 @@
+/**
+ * Local non-interactive onboarding orchestration.
+ *
+ * This entrypoint applies config changes, optionally installs the gateway
+ * daemon, verifies health, and emits machine-readable setup output.
+ */
 import { formatCliCommand } from "../../cli/command-format.js";
-import type { OpenClawConfig } from "../../config/config.js";
-import { resolveGatewayPort, writeConfigFile } from "../../config/config.js";
+import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
+import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { applyOnboardingLocalWorkspaceConfig } from "../onboard-config.js";
+import { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -13,18 +21,141 @@ import {
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
-import { inferAuthChoiceFromFlags } from "./local/auth-choice-inference.js";
+import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
-import { logNonInteractiveOnboardingJson } from "./local/output.js";
+import {
+  type GatewayHealthFailureDiagnostics,
+  logNonInteractiveOnboardingFailure,
+  logNonInteractiveOnboardingJson,
+} from "./local/output.js";
 import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
 import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
 
-export async function runNonInteractiveOnboardingLocal(params: {
+const INSTALL_DAEMON_HEALTH_DEADLINE_MS = 45_000;
+const ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS = 15_000;
+const INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS = 10_000;
+const WINDOWS_INSTALL_DAEMON_HEALTH_DEADLINE_MS = 90_000;
+const WINDOWS_INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS = 15_000;
+const INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 10_000;
+const WINDOWS_INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 90_000;
+
+/** Returns platform-specific health timing for managed daemon installs. */
+export function resolveInstallDaemonGatewayHealthTiming(
+  platform: NodeJS.Platform = process.platform,
+): {
+  deadlineMs: number;
+  probeTimeoutMs: number;
+  healthCommandTimeoutMs: number;
+} {
+  if (platform === "win32") {
+    return {
+      deadlineMs: WINDOWS_INSTALL_DAEMON_HEALTH_DEADLINE_MS,
+      probeTimeoutMs: WINDOWS_INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS,
+      healthCommandTimeoutMs: WINDOWS_INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS,
+    };
+  }
+  return {
+    deadlineMs: INSTALL_DAEMON_HEALTH_DEADLINE_MS,
+    probeTimeoutMs: INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS,
+    healthCommandTimeoutMs: INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS,
+  };
+}
+
+async function collectGatewayHealthFailureDiagnostics(): Promise<
+  GatewayHealthFailureDiagnostics | undefined
+> {
+  const diagnostics: GatewayHealthFailureDiagnostics = {};
+
+  try {
+    // Load daemon diagnostics only on failure; successful setup should not pay
+    // the service/log inspection cost or import daemon-specific modules.
+    const { resolveGatewayService } = await import("../../daemon/service.js");
+    const service = resolveGatewayService();
+    const env = process.env as Record<string, string | undefined>;
+    const [loaded, runtime] = await Promise.all([
+      service.isLoaded({ env }).catch(() => false),
+      service.readRuntime(env).catch(() => undefined),
+    ]);
+    diagnostics.service = {
+      label: service.label,
+      loaded,
+      loadedText: service.loadedText,
+      runtimeStatus: runtime?.status,
+      state: runtime?.state,
+      pid: runtime?.pid,
+      lastExitStatus: runtime?.lastExitStatus,
+      lastExitReason: runtime?.lastExitReason,
+    };
+  } catch (err) {
+    diagnostics.inspectError = `service diagnostics failed: ${String(err)}`;
+  }
+
+  try {
+    const { readLastGatewayErrorLine } = await import("../../daemon/diagnostics.js");
+    diagnostics.lastGatewayError = (await readLastGatewayErrorLine(process.env)) ?? undefined;
+  } catch (err) {
+    diagnostics.inspectError = diagnostics.inspectError
+      ? `${diagnostics.inspectError}; log diagnostics failed: ${String(err)}`
+      : `log diagnostics failed: ${String(err)}`;
+  }
+
+  return diagnostics.service || diagnostics.lastGatewayError || diagnostics.inspectError
+    ? diagnostics
+    : undefined;
+}
+
+/** Resolves the auth material used by the post-setup gateway health probe. */
+export async function resolveGatewayHealthProbeToken(
+  nextConfig: OpenClawConfig,
+): Promise<{ token?: string; password?: string; unresolvedRefReason?: string }> {
+  if (nextConfig.gateway?.auth?.mode === "password") {
+    // Password mode uses the configured password directly; token fallback must
+    // stay disabled or the probe can validate the wrong auth mode.
+    const resolved = await resolveConfiguredSecretInputString({
+      config: nextConfig,
+      env: process.env,
+      value: nextConfig.gateway.auth.password,
+      path: "gateway.auth.password",
+      unresolvedReasonStyle: "detailed",
+    });
+    return {
+      password: resolved.value,
+      unresolvedRefReason: resolved.unresolvedRefReason,
+    };
+  }
+
+  const resolved = await resolveGatewayAuthToken({
+    cfg: nextConfig,
+    env: process.env,
+    envFallback: "no-secret-ref",
+    unresolvedReasonStyle: "detailed",
+  });
+  const probeAuth: { token?: string; unresolvedRefReason?: string } = {};
+  if (resolved.token) {
+    probeAuth.token = resolved.token;
+  }
+  if (resolved.unresolvedRefReason) {
+    probeAuth.unresolvedRefReason = resolved.unresolvedRefReason;
+  }
+  return probeAuth;
+}
+
+function formatGatewayHealthFailureDetail(params: {
+  probeDetail?: string;
+  unresolvedRefReason?: string;
+}): string | undefined {
+  const detail = [params.probeDetail, params.unresolvedRefReason].filter(Boolean).join("\n");
+  return detail || undefined;
+}
+
+/** Runs local non-interactive setup from config mutation through health verification. */
+export async function runNonInteractiveLocalSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
   baseConfig: OpenClawConfig;
+  baseHash?: string;
 }) {
-  const { opts, runtime, baseConfig } = params;
+  const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "local" as const;
 
   const workspaceDir = resolveNonInteractiveWorkspaceDir({
@@ -33,13 +164,24 @@ export async function runNonInteractiveOnboardingLocal(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
 
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  if (opts.skipBootstrap) {
+    nextConfig = applySkipBootstrapConfig(nextConfig);
+  }
 
-  const inferredAuthChoice = inferAuthChoiceFromFlags(opts);
-  if (!opts.authChoice && inferredAuthChoice.matches.length > 1) {
+  const inferredAuthChoice = opts.authChoice
+    ? undefined
+    : (await import("./local/auth-choice-inference.js")).inferAuthChoiceFromFlags(opts, {
+        config: nextConfig,
+        workspaceDir,
+        env: process.env,
+      });
+  if (!opts.authChoice && inferredAuthChoice && inferredAuthChoice.matches.length > 1) {
+    // Multiple provider flags make implicit auth selection ambiguous; require a
+    // single explicit --auth-choice rather than choosing by flag order.
     runtime.error(
       [
-        "Multiple API key flags were provided for non-interactive onboarding.",
+        "Multiple API key flags were provided for non-interactive setup.",
         "Use a single provider flag or pass --auth-choice explicitly.",
         `Flags: ${inferredAuthChoice.matches.map((match) => match.label).join(", ")}`,
       ].join("\n"),
@@ -47,8 +189,10 @@ export async function runNonInteractiveOnboardingLocal(params: {
     runtime.exit(1);
     return;
   }
-  const authChoice = opts.authChoice ?? inferredAuthChoice.choice ?? "skip";
+  const authChoice = opts.authChoice ?? inferredAuthChoice?.choice ?? "skip";
   if (authChoice !== "skip") {
+    // Auth-choice handling is loaded only when needed so skip-only onboarding
+    // avoids provider plugin discovery and credential helper imports.
     const { applyNonInteractiveAuthChoice } = await import("./local/auth-choice.js");
     const nextConfigAfterAuth = await applyNonInteractiveAuthChoice({
       nextConfig,
@@ -78,24 +222,77 @@ export async function runNonInteractiveOnboardingLocal(params: {
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await writeConfigFile(nextConfig);
+  nextConfig = await commitNonInteractiveOnboardConfig({
+    nextConfig,
+    baseConfig,
+    baseHash,
+    reset: opts.reset,
+  });
   logConfigUpdated(runtime);
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
 
+  const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  let daemonInstallStatus:
+    | {
+        requested: boolean;
+        installed: boolean;
+        skippedReason?: "systemd-user-unavailable";
+      }
+    | undefined;
   if (opts.installDaemon) {
     const { installGatewayDaemonNonInteractive } = await import("./local/daemon-install.js");
-    await installGatewayDaemonNonInteractive({
+    const daemonInstall = await installGatewayDaemonNonInteractive({
       nextConfig,
       opts,
       runtime,
       port: gatewayResult.port,
     });
+    daemonInstallStatus = daemonInstall.installed
+      ? {
+          requested: true,
+          installed: true,
+        }
+      : {
+          requested: true,
+          installed: false,
+          skippedReason: daemonInstall.skippedReason,
+        };
+    if (!daemonInstall.installed && !opts.skipHealth) {
+      // Treat a failed requested daemon install as setup failure when health is
+      // expected; otherwise later probes would fail with less actionable output.
+      logNonInteractiveOnboardingFailure({
+        opts,
+        runtime,
+        mode,
+        phase: "daemon-install",
+        message:
+          daemonInstall.skippedReason === "systemd-user-unavailable"
+            ? "Gateway service install is unavailable because systemd user services are not reachable in this Linux session."
+            : "Gateway service install did not complete successfully.",
+        installDaemon: true,
+        daemonInstall: {
+          requested: true,
+          installed: false,
+          skippedReason: daemonInstall.skippedReason,
+        },
+        daemonRuntime: daemonRuntimeRaw,
+        hints:
+          daemonInstall.skippedReason === "systemd-user-unavailable"
+            ? [
+                "Fix: rerun without `--install-daemon` for one-shot setup, or enable a working user-systemd session and retry.",
+                "If your auth profile uses env-backed refs, keep those env vars set in the shell that runs `openclaw gateway run` or `openclaw agent --local`.",
+              ]
+            : [`Run \`${formatCliCommand("openclaw gateway status --deep")}\` for more detail.`],
+      });
+      runtime.exit(1);
+      return;
+    }
   }
 
-  const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!opts.skipHealth) {
     const { healthCommand } = await import("../health.js");
     const links = resolveControlUiLinks({
@@ -103,13 +300,71 @@ export async function runNonInteractiveOnboardingLocal(params: {
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    await waitForGatewayReachable({
+    const installDaemonGatewayHealthTiming = resolveInstallDaemonGatewayHealthTiming();
+    const probeAuth = await resolveGatewayHealthProbeToken(nextConfig);
+    const probe = await waitForGatewayReachable({
       url: links.wsUrl,
-      token: gatewayResult.gatewayToken,
-      deadlineMs: 15_000,
+      token: probeAuth.token,
+      password: probeAuth.password,
+      deadlineMs: opts.installDaemon
+        ? installDaemonGatewayHealthTiming.deadlineMs
+        : ATTACH_EXISTING_GATEWAY_HEALTH_DEADLINE_MS,
+      probeTimeoutMs: opts.installDaemon
+        ? installDaemonGatewayHealthTiming.probeTimeoutMs
+        : undefined,
     });
-    await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+    if (!probe.ok) {
+      // Non-daemon setup attaches to an existing gateway, so collect expensive
+      // daemon diagnostics only when this run was responsible for installing it.
+      const detail = formatGatewayHealthFailureDetail({
+        probeDetail: probe.detail,
+        unresolvedRefReason: probeAuth.unresolvedRefReason,
+      });
+      const diagnostics = opts.installDaemon
+        ? await collectGatewayHealthFailureDiagnostics()
+        : undefined;
+      logNonInteractiveOnboardingFailure({
+        opts,
+        runtime,
+        mode,
+        phase: "gateway-health",
+        message: `Gateway did not become reachable at ${links.wsUrl}.`,
+        detail,
+        gateway: {
+          wsUrl: links.wsUrl,
+          httpUrl: links.httpUrl,
+        },
+        installDaemon: Boolean(opts.installDaemon),
+        daemonInstall: daemonInstallStatus,
+        daemonRuntime: opts.installDaemon ? daemonRuntimeRaw : undefined,
+        diagnostics,
+        hints: !opts.installDaemon
+          ? [
+              "Non-interactive local setup only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`.",
+              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run \`${formatCliCommand("openclaw onboard --install-daemon")}\`, or use \`${formatCliCommand("openclaw onboard --skip-health")}\`.`,
+              process.platform === "win32"
+                ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
+                : undefined,
+            ].filter((value): value is string => Boolean(value))
+          : [`Run \`${formatCliCommand("openclaw gateway status --deep")}\` for more detail.`],
+      });
+      runtime.exit(1);
+      return;
+    }
+    await healthCommand(
+      {
+        json: false,
+        timeoutMs: opts.installDaemon
+          ? installDaemonGatewayHealthTiming.healthCommandTimeoutMs
+          : 10_000,
+        config: nextConfig,
+        token: probeAuth.token,
+        password: probeAuth.password,
+      },
+      runtime,
+    );
   }
 
   logNonInteractiveOnboardingJson({
@@ -125,6 +380,7 @@ export async function runNonInteractiveOnboardingLocal(params: {
       tailscaleMode: gatewayResult.tailscaleMode,
     },
     installDaemon: Boolean(opts.installDaemon),
+    daemonInstall: daemonInstallStatus,
     daemonRuntime: opts.installDaemon ? daemonRuntimeRaw : undefined,
     skipSkills: Boolean(opts.skipSkills),
     skipHealth: Boolean(opts.skipHealth),

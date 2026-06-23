@@ -1,7 +1,9 @@
+// Resolves config, state, cache, and runtime filesystem paths.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expandHomePrefix, resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**
@@ -15,13 +17,13 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
   return env.OPENCLAW_NIX_MODE === "1";
 }
 
-export const isNixMode = resolveIsNixMode();
+export let isNixMode = resolveIsNixMode();
 
-// Support historical (and occasionally misspelled) legacy state dirs.
-const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
+// Support the remaining legacy pre-rebrand state dir.
+const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
 const CONFIG_FILENAME = "openclaw.json";
-const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
+const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
@@ -38,10 +40,6 @@ function legacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[
 
 function newStateDir(homedir: () => string = resolveDefaultHomeDir): string {
   return path.join(homedir(), NEW_STATE_DIRNAME);
-}
-
-export function resolveLegacyStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return legacyStateDirs(homedir)[0] ?? newStateDir(homedir);
 }
 
 export function resolveLegacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
@@ -62,7 +60,7 @@ export function resolveStateDir(
   homedir: () => string = envHomedir(env),
 ): string {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const override = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const override = env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
   }
@@ -88,30 +86,66 @@ export function resolveStateDir(
   return newDir;
 }
 
+export function normalizeStateDirEnv(env: NodeJS.ProcessEnv = process.env): void {
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, envHomedir(env));
+  const openclawOverride = env.OPENCLAW_STATE_DIR?.trim();
+  if (openclawOverride) {
+    env.OPENCLAW_STATE_DIR = resolveUserPath(openclawOverride, env, effectiveHomedir);
+  }
+}
+
 function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredHomeDir(env, homedir),
-      env,
-      homedir,
-    });
-    return path.resolve(expanded);
-  }
-  return path.resolve(trimmed);
+  return resolveHomeRelativePath(input, { env, homedir });
 }
 
-export const STATE_DIR = resolveStateDir();
+/**
+ * Optional allowlist of directories that `$include` directives may resolve
+ * outside the config directory. Set via `OPENCLAW_INCLUDE_ROOTS` as a
+ * platform-delimited path list (`:` on POSIX, `;` on Windows).
+ *
+ * Each entry is tilde-expanded and resolved to an absolute path. Entries that
+ * cannot be resolved or that are not absolute after expansion are dropped.
+ *
+ * Returns an empty array when the var is unset or contains no usable entries,
+ * preserving the historical behavior where `$include` is confined to the
+ * directory containing `openclaw.json`.
+ */
+export function resolveIncludeRoots(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = envHomedir(env),
+): string[] {
+  const raw = env.OPENCLAW_INCLUDE_ROOTS?.trim();
+  if (!raw) {
+    return [];
+  }
+  const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
+  const seen = new Set<string>();
+  const roots: string[] = [];
+  for (const entry of raw.split(path.delimiter)) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const resolved = path.resolve(
+      resolveHomeRelativePath(trimmed, { env, homedir: effectiveHomedir }),
+    );
+    if (!path.isAbsolute(resolved) || seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    roots.push(resolved);
+  }
+  return roots;
+}
+
+export let STATE_DIR = resolveStateDir();
 
 /**
- * Config file path (JSON5).
+ * Config file path (JSON or JSON5).
  * Can be overridden via OPENCLAW_CONFIG_PATH.
  * Default: ~/.openclaw/openclaw.json (or $OPENCLAW_STATE_DIR/openclaw.json)
  */
@@ -119,7 +153,7 @@ export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
-  const override = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
+  const override = env.OPENCLAW_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
@@ -191,7 +225,24 @@ export function resolveConfigPath(
   return path.join(stateDir, CONFIG_FILENAME);
 }
 
-export const CONFIG_PATH = resolveConfigPathCandidate();
+export let CONFIG_PATH = resolveConfigPathCandidate();
+
+/**
+ * Re-pins process-stable runtime paths after an early startup selector changes the environment.
+ *
+ * Gateway startup must call this before importing runtime modules that derive their own constants
+ * from these live bindings, otherwise one process can split reads and writes across two targets.
+ */
+export function pinRuntimePaths(env: NodeJS.ProcessEnv = process.env): {
+  configPath: string;
+  stateDir: string;
+} {
+  normalizeStateDirEnv(env);
+  isNixMode = resolveIsNixMode(env);
+  STATE_DIR = resolveStateDir(env);
+  CONFIG_PATH = resolveConfigPathCandidate(env);
+  return { configPath: CONFIG_PATH, stateDir: STATE_DIR };
+}
 
 /**
  * Resolve default config path candidates across default locations.
@@ -202,13 +253,13 @@ export function resolveDefaultConfigCandidates(
   homedir: () => string = envHomedir(env),
 ): string[] {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const explicit = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
+  const explicit = env.OPENCLAW_CONFIG_PATH?.trim();
   if (explicit) {
     return [resolveUserPath(explicit, env, effectiveHomedir)];
   }
 
   const candidates: string[] = [];
-  const openclawStateDir = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
+  const openclawStateDir = env.OPENCLAW_STATE_DIR?.trim();
   if (openclawStateDir) {
     const resolved = resolveUserPath(openclawStateDir, env, effectiveHomedir);
     candidates.push(path.join(resolved, CONFIG_FILENAME));
@@ -263,16 +314,42 @@ export function resolveOAuthPath(
   return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
+function parseGatewayPortEnvValue(raw: string | undefined): number | null {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^\d+$/.test(trimmed)) {
+    return parseTcpPort(trimmed);
+  }
+
+  // Docker Compose publish strings can leak into host CLI env loading via repo `.env`,
+  // for example `127.0.0.1:18789` or `[::1]:18789`. Accept only explicit host:port forms.
+  const bracketedIpv6Match = trimmed.match(/^\[[^\]]+\]:(\d+)$/);
+  if (bracketedIpv6Match?.[1]) {
+    return parseTcpPort(bracketedIpv6Match[1]);
+  }
+
+  const firstColon = trimmed.indexOf(":");
+  const lastColon = trimmed.lastIndexOf(":");
+  if (firstColon <= 0 || firstColon !== lastColon) {
+    return null;
+  }
+  const suffix = trimmed.slice(firstColon + 1);
+  if (!/^\d+$/.test(suffix)) {
+    return null;
+  }
+  return parseTcpPort(suffix);
+}
+
 export function resolveGatewayPort(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim() || env.CLAWDBOT_GATEWAY_PORT?.trim();
-  if (envRaw) {
-    const parsed = Number.parseInt(envRaw, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
-    }
+  const envRaw = env.OPENCLAW_GATEWAY_PORT?.trim();
+  const envPort = parseGatewayPortEnvValue(envRaw);
+  if (envPort !== null) {
+    return envPort;
   }
   const configPort = cfg?.gateway?.port;
   if (typeof configPort === "number" && Number.isFinite(configPort)) {

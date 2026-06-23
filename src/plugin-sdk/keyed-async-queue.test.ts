@@ -1,20 +1,14 @@
+/**
+ * Tests keyed async queue serialization and cancellation behavior.
+ */
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../test-utils/deferred.js";
 import { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 describe("enqueueKeyedTask", () => {
   it("serializes tasks per key and keeps different keys independent", async () => {
     const tails = new Map<string, Promise<void>>();
-    const gate = deferred<void>();
+    const gate = createDeferred();
     const order: string[] = [];
 
     const first = enqueueKeyedTask({
@@ -43,10 +37,10 @@ describe("enqueueKeyedTask", () => {
       },
     });
 
-    await vi.waitFor(() => {
-      expect(order).toContain("a1:start");
-      expect(order).toContain("b1:start");
-    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(order).toContain("a1:start");
+    expect(order).toContain("b1:start");
     expect(order).not.toContain("a2:start");
 
     gate.resolve();
@@ -57,23 +51,53 @@ describe("enqueueKeyedTask", () => {
 
   it("keeps queue alive after task failures", async () => {
     const tails = new Map<string, Promise<void>>();
-    await expect(
-      enqueueKeyedTask({
-        tails,
-        key: "a",
-        task: async () => {
-          throw new Error("boom");
-        },
-      }),
-    ).rejects.toThrow("boom");
+    const runs = [
+      () =>
+        enqueueKeyedTask({
+          tails,
+          key: "a",
+          task: async () => {
+            throw new Error("boom");
+          },
+        }),
+      () =>
+        enqueueKeyedTask({
+          tails,
+          key: "a",
+          task: async () => "ok",
+        }),
+    ];
 
-    await expect(
-      enqueueKeyedTask({
-        tails,
-        key: "a",
-        task: async () => "ok",
-      }),
-    ).resolves.toBe("ok");
+    await expect(runs[0]()).rejects.toThrow("boom");
+    await expect(runs[1]()).resolves.toBe("ok");
+  });
+
+  it("does not leak unhandled rejections when a task failure is already awaited", async () => {
+    const tails = new Map<string, Promise<void>>();
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      await expect(
+        enqueueKeyedTask({
+          tails,
+          key: "a",
+          task: async () => {
+            throw new Error("boom");
+          },
+        }),
+      ).rejects.toThrow("boom");
+
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandled).toStrictEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
+    }
   });
 
   it("runs enqueue/settle hooks once per task", async () => {
@@ -94,7 +118,7 @@ describe("enqueueKeyedTask", () => {
 describe("KeyedAsyncQueue", () => {
   it("exposes tail map for observability", async () => {
     const queue = new KeyedAsyncQueue();
-    const gate = deferred<void>();
+    const gate = createDeferred();
     const run = queue.enqueue("actor", async () => {
       await gate.promise;
       return 1;

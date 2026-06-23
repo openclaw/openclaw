@@ -1,5 +1,16 @@
+// Feishu tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
+
+function expectSchemaIssue(
+  result: ReturnType<typeof FeishuConfigSchema.safeParse>,
+  issuePath: string,
+) {
+  expect(result.success).toBe(false);
+  if (!result.success) {
+    expect(result.error.issues.map((issue) => issue.path.join("."))).toContain(issuePath);
+  }
+}
 
 describe("FeishuConfigSchema webhook validation", () => {
   it("applies top-level defaults", () => {
@@ -9,7 +20,10 @@ describe("FeishuConfigSchema webhook validation", () => {
     expect(result.webhookPath).toBe("/feishu/events");
     expect(result.dmPolicy).toBe("pairing");
     expect(result.groupPolicy).toBe("allowlist");
-    expect(result.requireMention).toBe(true);
+    // requireMention has no schema-level default now — it is resolved at runtime
+    // through shared channel group-policy resolution, with an open-group override
+    // that defaults to false only when requireMention is otherwise unset.
+    expect(result.requireMention).toBeUndefined();
   });
 
   it("does not force top-level policy defaults into account config", () => {
@@ -39,18 +53,25 @@ describe("FeishuConfigSchema webhook validation", () => {
       appSecret: "secret_top", // pragma: allowlist secret
     });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(
-        result.error.issues.some((issue) => issue.path.join(".") === "verificationToken"),
-      ).toBe(true);
-    }
+    expectSchemaIssue(result, "verificationToken");
   });
 
-  it("accepts top-level webhook mode with verificationToken", () => {
+  it("rejects top-level webhook mode without encryptKey", () => {
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
       verificationToken: "token_top",
+      appId: "cli_top",
+      appSecret: "secret_top", // pragma: allowlist secret
+    });
+
+    expectSchemaIssue(result, "encryptKey");
+  });
+
+  it("accepts top-level webhook mode with verificationToken and encryptKey", () => {
+    const result = FeishuConfigSchema.safeParse({
+      connectionMode: "webhook",
+      verificationToken: "token_top",
+      encryptKey: "encrypt_top",
       appId: "cli_top",
       appSecret: "secret_top", // pragma: allowlist secret
     });
@@ -69,19 +90,28 @@ describe("FeishuConfigSchema webhook validation", () => {
       },
     });
 
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(
-        result.error.issues.some(
-          (issue) => issue.path.join(".") === "accounts.main.verificationToken",
-        ),
-      ).toBe(true);
-    }
+    expectSchemaIssue(result, "accounts.main.verificationToken");
   });
 
-  it("accepts account webhook mode inheriting top-level verificationToken", () => {
+  it("rejects account webhook mode without encryptKey", () => {
+    const result = FeishuConfigSchema.safeParse({
+      accounts: {
+        main: {
+          connectionMode: "webhook",
+          verificationToken: "token_main",
+          appId: "cli_main",
+          appSecret: "secret_main", // pragma: allowlist secret
+        },
+      },
+    });
+
+    expectSchemaIssue(result, "accounts.main.encryptKey");
+  });
+
+  it("accepts account webhook mode inheriting top-level verificationToken and encryptKey", () => {
     const result = FeishuConfigSchema.safeParse({
       verificationToken: "token_top",
+      encryptKey: "encrypt_top",
       accounts: {
         main: {
           connectionMode: "webhook",
@@ -101,6 +131,31 @@ describe("FeishuConfigSchema webhook validation", () => {
         source: "env",
         provider: "default",
         id: "FEISHU_VERIFICATION_TOKEN",
+      },
+      encryptKey: "encrypt_top",
+      appId: "cli_top",
+      appSecret: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_APP_SECRET",
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts SecretRef encryptKey in webhook mode", () => {
+    const result = FeishuConfigSchema.safeParse({
+      connectionMode: "webhook",
+      verificationToken: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_VERIFICATION_TOKEN",
+      },
+      encryptKey: {
+        source: "env",
+        provider: "default",
+        id: "FEISHU_ENCRYPT_KEY",
       },
       appId: "cli_top",
       appSecret: {
@@ -152,6 +207,20 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.resolveSenderNames).toBe(true);
   });
 
+  it("accepts top-level and account-level block streaming", () => {
+    const result = FeishuConfigSchema.parse({
+      blockStreaming: true,
+      accounts: {
+        main: {
+          blockStreaming: false,
+        },
+      },
+    });
+
+    expect(result.blockStreaming).toBe(true);
+    expect(result.accounts?.main?.blockStreaming).toBe(false);
+  });
+
   it("accepts account-level optimization flags", () => {
     const result = FeishuConfigSchema.parse({
       accounts: {
@@ -163,6 +232,70 @@ describe("FeishuConfigSchema optimization flags", () => {
     });
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+  });
+});
+
+describe("FeishuConfigSchema TTS overrides", () => {
+  it("accepts top-level and account-level TTS overrides", () => {
+    const result = FeishuConfigSchema.parse({
+      tts: {
+        auto: "always",
+        provider: "openai",
+        providers: {
+          openai: {
+            voice: "alloy",
+          },
+        },
+      },
+      accounts: {
+        english: {
+          tts: {
+            providers: {
+              openai: {
+                voice: "shimmer",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.tts).toEqual({
+      auto: "always",
+      provider: "openai",
+      providers: {
+        openai: {
+          voice: "alloy",
+        },
+      },
+    });
+    expect(result.accounts?.english?.tts).toEqual({
+      providers: {
+        openai: {
+          voice: "shimmer",
+        },
+      },
+    });
+  });
+});
+
+describe("FeishuConfigSchema actions", () => {
+  it("accepts top-level reactions action gate", () => {
+    const result = FeishuConfigSchema.parse({
+      actions: { reactions: false },
+    });
+    expect(result.actions?.reactions).toBe(false);
+  });
+
+  it("accepts account-level reactions action gate", () => {
+    const result = FeishuConfigSchema.parse({
+      accounts: {
+        main: {
+          actions: { reactions: false },
+        },
+      },
+    });
+    expect(result.accounts?.main?.actions?.reactions).toBe(false);
   });
 });
 
@@ -188,9 +321,7 @@ describe("FeishuConfigSchema defaultAccount", () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.path.join(".") === "defaultAccount")).toBe(
-        true,
-      );
+      expect(result.error.issues.map((issue) => issue.path.join("."))).toContain("defaultAccount");
     }
   });
 });

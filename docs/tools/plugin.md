@@ -1,360 +1,166 @@
 ---
-summary: "OpenClaw plugins/extensions: discovery, config, and safety"
+summary: "Install, configure, and manage OpenClaw plugins"
 read_when:
-  - Adding or modifying plugins/extensions
-  - Documenting plugin install or load rules
+  - Installing or configuring plugins
+  - Understanding plugin discovery and load rules
+  - Working with Codex/Claude-compatible plugin bundles
 title: "Plugins"
+sidebarTitle: "Getting Started"
+doc-schema-version: 1
 ---
 
-# Plugins (Extensions)
+Plugins extend OpenClaw with channels, model providers, agent harnesses, tools,
+skills, speech, realtime transcription, voice, media understanding, generation,
+web fetch, web search, and other runtime capabilities.
 
-## Quick start (new to plugins?)
+Use this page when you want to install a plugin, restart the Gateway, verify
+that the runtime loaded it, and route common setup failures. For command-only
+examples, see [Manage plugins](/plugins/manage-plugins). For the full generated
+inventory of bundled, official external, and source-only plugins, see
+[Plugin inventory](/plugins/plugin-inventory).
 
-A plugin is just a **small code module** that extends OpenClaw with extra
-features (commands, tools, and Gateway RPC).
+## Requirements
 
-Most of the time, you’ll use plugins when you want a feature that’s not built
-into core OpenClaw yet (or you want to keep optional features out of your main
-install).
+Before installing a plugin, make sure you have:
 
-Fast path:
+- an OpenClaw checkout or installation with the `openclaw` CLI available
+- network access to the selected source, such as ClawHub, npm, or a git host
+- any plugin-specific credentials, config keys, or operating-system tools named
+  by that plugin's setup docs
+- permission for the Gateway that serves your channels to reload or restart
 
-1. See what’s already loaded:
-
-```bash
-openclaw plugins list
-```
-
-2. Install an official plugin (example: Voice Call):
-
-```bash
-openclaw plugins install @openclaw/voice-call
-```
-
-Npm specs are **registry-only** (package name + optional **exact version** or
-**dist-tag**). Git/URL/file specs and semver ranges are rejected.
-
-Bare specs and `@latest` stay on the stable track. If npm resolves either of
-those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a
-prerelease tag such as `@beta`/`@rc` or an exact prerelease version.
-
-3. Restart the Gateway, then configure under `plugins.entries.<id>.config`.
-
-See [Voice Call](/plugins/voice-call) for a concrete example plugin.
-Looking for third-party listings? See [Community plugins](/plugins/community).
-
-## Available plugins (official)
-
-- Microsoft Teams is plugin-only as of 2026.1.15; install `@openclaw/msteams` if you use Teams.
-- Memory (Core) — bundled memory search plugin (enabled by default via `plugins.slots.memory`)
-- Memory (LanceDB) — bundled long-term memory plugin (auto-recall/capture; set `plugins.slots.memory = "memory-lancedb"`)
-- [Voice Call](/plugins/voice-call) — `@openclaw/voice-call`
-- [Zalo Personal](/plugins/zalouser) — `@openclaw/zalouser`
-- [Matrix](/channels/matrix) — `@openclaw/matrix`
-- [Nostr](/channels/nostr) — `@openclaw/nostr`
-- [Zalo](/channels/zalo) — `@openclaw/zalo`
-- [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
-- Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
-- Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
-- Qwen OAuth (provider auth) — bundled as `qwen-portal-auth` (disabled by default)
-- Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
-
-OpenClaw plugins are **TypeScript modules** loaded at runtime via jiti. **Config
-validation does not execute plugin code**; it uses the plugin manifest and JSON
-Schema instead. See [Plugin manifest](/plugins/manifest).
-
-Plugins can register:
-
-- Gateway RPC methods
-- Gateway HTTP routes
-- Agent tools
-- CLI commands
-- Background services
-- Context engines
-- Optional config validation
-- **Skills** (by listing `skills` directories in the plugin manifest)
-- **Auto-reply commands** (execute without invoking the AI agent)
-
-Plugins run **in‑process** with the Gateway, so treat them as trusted code.
-Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).
-
-## Runtime helpers
-
-Plugins can access selected core helpers via `api.runtime`. For telephony TTS:
-
-```ts
-const result = await api.runtime.tts.textToSpeechTelephony({
-  text: "Hello from OpenClaw",
-  cfg: api.config,
-});
-```
-
-Notes:
-
-- Uses core `messages.tts` configuration (OpenAI or ElevenLabs).
-- Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
-- Edge TTS is not supported for telephony.
-
-For STT/transcription, plugins can call:
-
-```ts
-const { text } = await api.runtime.stt.transcribeAudioFile({
-  filePath: "/tmp/inbound-audio.ogg",
-  cfg: api.config,
-  // Optional when MIME cannot be inferred reliably:
-  mime: "audio/ogg",
-});
-```
-
-Notes:
-
-- Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
-- Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
-
-## Gateway HTTP routes
-
-Plugins can expose HTTP endpoints with `api.registerHttpRoute(...)`.
-
-```ts
-api.registerHttpRoute({
-  path: "/acme/webhook",
-  auth: "plugin",
-  match: "exact",
-  handler: async (_req, res) => {
-    res.statusCode = 200;
-    res.end("ok");
-    return true;
-  },
-});
-```
-
-Route fields:
-
-- `path`: route path under the gateway HTTP server.
-- `auth`: required. Use `"gateway"` to require normal gateway auth, or `"plugin"` for plugin-managed auth/webhook verification.
-- `match`: optional. `"exact"` (default) or `"prefix"`.
-- `replaceExisting`: optional. Allows the same plugin to replace its own existing route registration.
-- `handler`: return `true` when the route handled the request.
-
-Notes:
-
-- `api.registerHttpHandler(...)` is obsolete. Use `api.registerHttpRoute(...)`.
-- Plugin routes must declare `auth` explicitly.
-- Exact `path + match` conflicts are rejected unless `replaceExisting: true`, and one plugin cannot replace another plugin's route.
-- Overlapping routes with different `auth` levels are rejected. Keep `exact`/`prefix` fallthrough chains on the same auth level only.
-
-## Plugin SDK import paths
-
-Use SDK subpaths instead of the monolithic `openclaw/plugin-sdk` import when
-authoring plugins:
-
-- `openclaw/plugin-sdk/core` for generic plugin APIs, provider auth types, and shared helpers.
-- `openclaw/plugin-sdk/compat` for bundled/internal plugin code that needs broader shared runtime helpers than `core`.
-- `openclaw/plugin-sdk/telegram` for Telegram channel plugins.
-- `openclaw/plugin-sdk/discord` for Discord channel plugins.
-- `openclaw/plugin-sdk/slack` for Slack channel plugins.
-- `openclaw/plugin-sdk/signal` for Signal channel plugins.
-- `openclaw/plugin-sdk/imessage` for iMessage channel plugins.
-- `openclaw/plugin-sdk/whatsapp` for WhatsApp channel plugins.
-- `openclaw/plugin-sdk/line` for LINE channel plugins.
-- `openclaw/plugin-sdk/msteams` for the bundled Microsoft Teams plugin surface.
-- Bundled extension-specific subpaths are also available:
-  `openclaw/plugin-sdk/acpx`, `openclaw/plugin-sdk/bluebubbles`,
-  `openclaw/plugin-sdk/copilot-proxy`, `openclaw/plugin-sdk/device-pair`,
-  `openclaw/plugin-sdk/diagnostics-otel`, `openclaw/plugin-sdk/diffs`,
-  `openclaw/plugin-sdk/feishu`,
-  `openclaw/plugin-sdk/google-gemini-cli-auth`, `openclaw/plugin-sdk/googlechat`,
-  `openclaw/plugin-sdk/irc`, `openclaw/plugin-sdk/llm-task`,
-  `openclaw/plugin-sdk/lobster`, `openclaw/plugin-sdk/matrix`,
-  `openclaw/plugin-sdk/mattermost`, `openclaw/plugin-sdk/memory-core`,
-  `openclaw/plugin-sdk/memory-lancedb`,
-  `openclaw/plugin-sdk/minimax-portal-auth`,
-  `openclaw/plugin-sdk/nextcloud-talk`, `openclaw/plugin-sdk/nostr`,
-  `openclaw/plugin-sdk/open-prose`, `openclaw/plugin-sdk/phone-control`,
-  `openclaw/plugin-sdk/qwen-portal-auth`, `openclaw/plugin-sdk/synology-chat`,
-  `openclaw/plugin-sdk/talk-voice`, `openclaw/plugin-sdk/test-utils`,
-  `openclaw/plugin-sdk/thread-ownership`, `openclaw/plugin-sdk/tlon`,
-  `openclaw/plugin-sdk/twitch`, `openclaw/plugin-sdk/voice-call`,
-  `openclaw/plugin-sdk/zalo`, and `openclaw/plugin-sdk/zalouser`.
-
-Compatibility note:
-
-- `openclaw/plugin-sdk` remains supported for existing external plugins.
-- New and migrated bundled plugins should use channel or extension-specific
-  subpaths; use `core` for generic surfaces and `compat` only when broader
-  shared helpers are required.
-
-## Read-only channel inspection
-
-If your plugin registers a channel, prefer implementing
-`plugin.config.inspectAccount(cfg, accountId)` alongside `resolveAccount(...)`.
-
-Why:
-
-- `resolveAccount(...)` is the runtime path. It is allowed to assume credentials
-  are fully materialized and can fail fast when required secrets are missing.
-- Read-only command paths such as `openclaw status`, `openclaw status --all`,
-  `openclaw channels status`, `openclaw channels resolve`, and doctor/config
-  repair flows should not need to materialize runtime credentials just to
-  describe configuration.
-
-Recommended `inspectAccount(...)` behavior:
-
-- Return descriptive account state only.
-- Preserve `enabled` and `configured`.
-- Include credential source/status fields when relevant, such as:
-  - `tokenSource`, `tokenStatus`
-  - `botTokenSource`, `botTokenStatus`
-  - `appTokenSource`, `appTokenStatus`
-  - `signingSecretSource`, `signingSecretStatus`
-- You do not need to return raw token values just to report read-only
-  availability. Returning `tokenStatus: "available"` (and the matching source
-  field) is enough for status-style commands.
-- Use `configured_unavailable` when a credential is configured via SecretRef but
-  unavailable in the current command path.
-
-This lets read-only commands report “configured but unavailable in this command
-path” instead of crashing or misreporting the account as not configured.
-
-Performance note:
-
-- Plugin discovery and manifest metadata use short in-process caches to reduce
-  bursty startup/reload work.
-- Set `OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE=1` or
-  `OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE=1` to disable these caches.
-- Tune cache windows with `OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS` and
-  `OPENCLAW_PLUGIN_MANIFEST_CACHE_MS`.
-
-## Discovery & precedence
-
-OpenClaw scans, in order:
-
-1. Config paths
-
-- `plugins.load.paths` (file or directory)
-
-2. Workspace extensions
-
-- `<workspace>/.openclaw/extensions/*.ts`
-- `<workspace>/.openclaw/extensions/*/index.ts`
-
-3. Global extensions
-
-- `~/.openclaw/extensions/*.ts`
-- `~/.openclaw/extensions/*/index.ts`
-
-4. Bundled extensions (shipped with OpenClaw, mostly disabled by default)
-
-- `<openclaw>/extensions/*`
-
-Most bundled plugins must be enabled explicitly via
-`plugins.entries.<id>.enabled` or `openclaw plugins enable <id>`.
-
-Default-on bundled plugin exceptions:
-
-- `device-pair`
-- `phone-control`
-- `talk-voice`
-- active memory slot plugin (default slot: `memory-core`)
-
-Installed plugins are enabled by default, but can be disabled the same way.
-
-Hardening notes:
-
-- If `plugins.allow` is empty and non-bundled plugins are discoverable, OpenClaw logs a startup warning with plugin ids and sources.
-- Candidate paths are safety-checked before discovery admission. OpenClaw blocks candidates when:
-  - extension entry resolves outside plugin root (including symlink/path traversal escapes),
-  - plugin root/source path is world-writable,
-  - path ownership is suspicious for non-bundled plugins (POSIX owner is neither current uid nor root).
-- Loaded non-bundled plugins without install/load-path provenance emit a warning so you can pin trust (`plugins.allow`) or install tracking (`plugins.installs`).
-
-Each plugin must include a `openclaw.plugin.json` file in its root. If a path
-points at a file, the plugin root is the file's directory and must contain the
-manifest.
-
-If multiple plugins resolve to the same id, the first match in the order above
-wins and lower-precedence copies are ignored.
-
-### Package packs
-
-A plugin directory may include a `package.json` with `openclaw.extensions`:
-
-```json
-{
-  "name": "my-pack",
-  "openclaw": {
-    "extensions": ["./src/safety.ts", "./src/tools.ts"]
-  }
-}
-```
-
-Each entry becomes a plugin. If the pack lists multiple extensions, the plugin id
-becomes `name/<fileBase>`.
-
-If your plugin imports npm deps, install them in that directory so
-`node_modules` is available (`npm install` / `pnpm install`).
-
-Security guardrail: every `openclaw.extensions` entry must stay inside the plugin
-directory after symlink resolution. Entries that escape the package directory are
-rejected.
-
-Security note: `openclaw plugins install` installs plugin dependencies with
-`npm install --ignore-scripts` (no lifecycle scripts). Keep plugin dependency
-trees "pure JS/TS" and avoid packages that require `postinstall` builds.
-
-### Channel catalog metadata
-
-Channel plugins can advertise onboarding metadata via `openclaw.channel` and
-install hints via `openclaw.install`. This keeps the core catalog data-free.
-
-Example:
-
-```json
-{
-  "name": "@openclaw/nextcloud-talk",
-  "openclaw": {
-    "extensions": ["./index.ts"],
-    "channel": {
-      "id": "nextcloud-talk",
-      "label": "Nextcloud Talk",
-      "selectionLabel": "Nextcloud Talk (self-hosted)",
-      "docsPath": "/channels/nextcloud-talk",
-      "docsLabel": "nextcloud-talk",
-      "blurb": "Self-hosted chat via Nextcloud Talk webhook bots.",
-      "order": 65,
-      "aliases": ["nc-talk", "nc"]
-    },
-    "install": {
-      "npmSpec": "@openclaw/nextcloud-talk",
-      "localPath": "extensions/nextcloud-talk",
-      "defaultChoice": "npm"
-    }
-  }
-}
-```
-
-OpenClaw can also merge **external channel catalogs** (for example, an MPM
-registry export). Drop a JSON file at one of:
-
-- `~/.openclaw/mpm/plugins.json`
-- `~/.openclaw/mpm/catalog.json`
-- `~/.openclaw/plugins/catalog.json`
-
-Or point `OPENCLAW_PLUGIN_CATALOG_PATHS` (or `OPENCLAW_MPM_CATALOG_PATHS`) at
-one or more JSON files (comma/semicolon/`PATH`-delimited). Each file should
-contain `{ "entries": [ { "name": "@scope/pkg", "openclaw": { "channel": {...}, "install": {...} } } ] }`.
-
-## Plugin IDs
-
-Default plugin ids:
-
-- Package packs: `package.json` `name`
-- Standalone file: file base name (`~/.../voice-call.ts` → `voice-call`)
-
-If a plugin exports `id`, OpenClaw uses it but warns when it doesn’t match the
-configured id.
-
-## Config
+## Quick start
+
+<Steps>
+  <Step title="Find the plugin">
+    Search [ClawHub](/clawhub) for public plugin packages:
+
+    ```bash
+    openclaw plugins search "calendar"
+    ```
+
+    ClawHub is the primary discovery surface for community plugins. During the
+    launch cutover, ordinary bare package specs still install from npm unless
+    they match an official plugin id. Raw `@openclaw/*` package specs that match
+    bundled plugins use the bundled copy from the current OpenClaw build. Use an
+    explicit prefix when you need one source.
+
+  </Step>
+
+  <Step title="Install the plugin">
+    ```bash
+    # From ClawHub.
+    openclaw plugins install clawhub:<package>
+
+    # From npm.
+    openclaw plugins install npm:<package>
+
+    # From git.
+    openclaw plugins install git:github.com/<owner>/<repo>@<ref>
+
+    # From a local development checkout.
+    openclaw plugins install ./my-plugin
+    openclaw plugins install --link ./my-plugin
+    ```
+
+    Treat plugin installs like running code. Prefer pinned versions when you
+    need reproducible production installs.
+
+  </Step>
+
+  <Step title="Configure and enable it">
+    Configure plugin-specific settings under `plugins.entries.<id>.config`.
+    Enable the plugin when it is not already enabled:
+
+    ```bash
+    openclaw plugins enable <plugin-id>
+    ```
+
+    If your config uses a restrictive `plugins.allow` list, the installed plugin
+    id must be present there before the plugin can load.
+    `openclaw plugins install` adds the installed id to an existing
+    `plugins.allow` list and removes the same id from `plugins.deny` so the
+    explicit install can load after restart.
+
+  </Step>
+
+  <Step title="Let the Gateway reload">
+    Installing, updating, or uninstalling plugin code requires a Gateway
+    restart. When a managed Gateway is already running with config reload
+    enabled, OpenClaw detects the changed plugin install record and restarts the
+    Gateway automatically. If the Gateway is not managed or reload is disabled,
+    restart it yourself:
+
+    ```bash
+    openclaw gateway restart
+    ```
+
+    Enable and disable operations update config and refresh the cold registry.
+    A runtime inspect is still the clearest verification path for live runtime
+    surfaces.
+
+  </Step>
+
+  <Step title="Verify runtime registration">
+    ```bash
+    openclaw plugins inspect <plugin-id> --runtime --json
+    ```
+
+    Use `--runtime` when you need to prove registered tools, hooks, services,
+    Gateway methods, or plugin-owned CLI commands. Plain `inspect` is a cold
+    manifest and registry check.
+
+  </Step>
+</Steps>
+
+## Configuration
+
+### Choose an install source
+
+| Source      | Use when                                                                       | Example                                                        |
+| ----------- | ------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| ClawHub     | You want OpenClaw-native discovery, scans, version metadata, and install hints | `openclaw plugins install clawhub:<package>`                   |
+| npm         | You need direct npm registry or dist-tag workflows                             | `openclaw plugins install npm:<package>`                       |
+| git         | You need a branch, tag, or commit from a repository                            | `openclaw plugins install git:github.com/<owner>/<repo>@<ref>` |
+| local path  | You are developing or testing a plugin on the same machine                     | `openclaw plugins install --link ./my-plugin`                  |
+| marketplace | You are installing a Claude-compatible marketplace plugin                      | `openclaw plugins install <plugin> --marketplace <source>`     |
+
+Bare package specs have special compatibility behavior. If the bare name matches
+a bundled plugin id, OpenClaw uses that bundled source. If it matches an
+official external plugin id, OpenClaw uses the official package catalog. Other
+ordinary bare package specs install through npm during the launch cutover. Raw
+`@openclaw/*` package specs that match bundled plugins also resolve to the
+bundled copy before npm fallback. Use `npm:@openclaw/<plugin>@<version>` when
+you deliberately want the external npm package instead of the image-owned
+bundled copy. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` when you need
+deterministic source selection. See [`openclaw plugins`](/cli/plugins#install)
+for the full command contract.
+
+For npm installs, unpinned package specs and `@latest` choose the newest stable
+package that advertises compatibility with this OpenClaw build. If npm's
+current latest release declares a newer `openclaw.compat.pluginApi` or
+`openclaw.install.minHostVersion`, OpenClaw scans older stable package versions
+and installs the newest one that fits. Exact versions and explicit channel tags
+such as `@beta` stay pinned to the selected package and fail when incompatible.
+
+### Operator install policy
+
+Configure `security.installPolicy` to run a trusted local policy command before
+plugin install or update proceeds. The policy receives metadata plus the staged
+source path and can allow or block the install. It covers CLI and Gateway-backed
+plugin install/update paths. Plugin `before_install` hooks run later only in
+OpenClaw processes where plugin hooks are loaded, so use `security.installPolicy`
+for operator-owned install decisions. The deprecated
+`--dangerously-force-unsafe-install` flag is accepted for compatibility but does
+not bypass install policy or OpenClaw's built-in plugin dependency denylist.
+
+See [Skills config](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+for the shared `security.installPolicy` exec schema used by both skills and
+plugins.
+
+### Configure plugin policy
+
+The common plugin config shape is:
 
 ```json5
 {
@@ -362,7 +168,8 @@ configured id.
     enabled: true,
     allow: ["voice-call"],
     deny: ["untrusted-plugin"],
-    load: { paths: ["~/Projects/oss/voice-call-extension"] },
+    load: { paths: ["~/Projects/oss/voice-call-plugin"] },
+    slots: { memory: "memory-core" },
     entries: {
       "voice-call": { enabled: true, config: { provider: "twilio" } },
     },
@@ -370,593 +177,217 @@ configured id.
 }
 ```
 
-Fields:
+Key policy rules:
 
-- `enabled`: master toggle (default: true)
-- `allow`: allowlist (optional)
-- `deny`: denylist (optional; deny wins)
-- `load.paths`: extra plugin files/dirs
-- `slots`: exclusive slot selectors such as `memory` and `contextEngine`
-- `entries.<id>`: per‑plugin toggles + config
+- `plugins.enabled: false` disables all plugins and skips plugin discovery/load
+  work. Stale plugin references are inert while this is active; re-enable
+  plugins before running doctor cleanup when you want stale ids removed.
+- `plugins.deny` wins over allow and per-plugin enablement.
+- `plugins.allow` is an exclusive allowlist. Plugin-owned tools outside the
+  allowlist stay unavailable, even when `tools.allow` includes `"*"`.
+- `plugins.entries.<id>.enabled: false` disables one plugin while preserving its
+  config.
+- `plugins.load.paths` adds explicit local plugin files or directories. Managed
+  `plugins install` local paths must be plugin directories or archives; use
+  `plugins.load.paths` for standalone plugin files.
+- Workspace-origin plugins are disabled by default; explicitly enable or
+  allowlist them before using local workspace code.
+- Bundled plugins follow their built-in default-on/default-off metadata unless
+  config explicitly overrides them.
+- `plugins.slots.<slot>` chooses one plugin for exclusive categories such as
+  memory and context engines. Slot selection force-enables the selected plugin
+  for that slot by counting as explicit activation; it can load even when it
+  would otherwise be opt-in. `plugins.deny` and
+  `plugins.entries.<id>.enabled: false` still block it.
+- Bundled opt-in plugins can auto-activate when config names one of their owned
+  surfaces, such as a provider/model ref, channel config, CLI backend, or agent
+  harness runtime.
+- OpenAI-family Codex routing keeps provider and runtime plugin boundaries
+  separate: legacy Codex model refs are legacy config repaired by doctor, while the bundled
+  `codex` plugin owns Codex app-server runtime for canonical `openai/*` agent
+  refs, explicit `agentRuntime.id: "codex"`, and legacy `codex/*` refs.
 
-Config changes **require a gateway restart**.
+When `plugins.allow` is unset and non-bundled plugins are auto-discovered from
+the workspace or global plugin roots, startup logs
+`plugins.allow is empty; discovered non-bundled plugins may auto-load: ...`.
+The warning includes discovered plugin ids and, for short lists, a minimal
+`plugins.allow` snippet. Run
+[`openclaw plugins list --enabled --verbose`](/cli/plugins#list) or
+[`openclaw plugins inspect <id>`](/cli/plugins#inspect) with the listed plugin
+id before copying trusted plugins into `openclaw.json`. The same trust-pinning
+guidance applies when diagnostics say a plugin loaded
+`without install/load-path provenance`: inspect that plugin id, then pin the
+trusted id in `plugins.allow` or reinstall from a trusted source so OpenClaw
+records install provenance.
 
-Validation rules (strict):
+Run `openclaw doctor` or `openclaw doctor --fix` when config validation reports
+stale plugin ids, allowlist/tool mismatches, or legacy bundled plugin paths.
 
-- Unknown plugin ids in `entries`, `allow`, `deny`, or `slots` are **errors**.
-- Unknown `channels.<id>` keys are **errors** unless a plugin manifest declares
-  the channel id.
-- Plugin config is validated using the JSON Schema embedded in
-  `openclaw.plugin.json` (`configSchema`).
-- If a plugin is disabled, its config is preserved and a **warning** is emitted.
+## Understand plugin formats
 
-## Plugin slots (exclusive categories)
+OpenClaw recognizes two plugin formats:
 
-Some plugin categories are **exclusive** (only one active at a time). Use
-`plugins.slots` to select which plugin owns the slot:
+| Format                 | How it loads                                                                 | Use when                                                               |
+| ---------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Native OpenClaw plugin | `openclaw.plugin.json` plus a runtime module loaded in process               | You are installing or building OpenClaw-specific runtime capabilities  |
+| Compatible bundle      | Codex, Claude, or Cursor plugin layout mapped into OpenClaw plugin inventory | You are reusing compatible skills, commands, hooks, or bundle metadata |
 
-```json5
-{
-  plugins: {
-    slots: {
-      memory: "memory-core", // or "none" to disable memory plugins
-      contextEngine: "legacy", // or a plugin id such as "lossless-claw"
-    },
-  },
-}
-```
-
-Supported exclusive slots:
-
-- `memory`: active memory plugin (`"none"` disables memory plugins)
-- `contextEngine`: active context engine plugin (`"legacy"` is the built-in default)
-
-If multiple plugins declare `kind: "memory"` or `kind: "context-engine"`, only
-the selected plugin loads for that slot. Others are disabled with diagnostics.
-
-### Context engine plugins
-
-Context engine plugins own session context orchestration for ingest, assembly,
-and compaction. Register them from your plugin with
-`api.registerContextEngine(id, factory)`, then select the active engine with
-`plugins.slots.contextEngine`.
-
-Use this when your plugin needs to replace or extend the default context
-pipeline rather than just add memory search or hooks.
-
-## Control UI (schema + labels)
-
-The Control UI uses `config.schema` (JSON Schema + `uiHints`) to render better forms.
-
-OpenClaw augments `uiHints` at runtime based on discovered plugins:
-
-- Adds per-plugin labels for `plugins.entries.<id>` / `.enabled` / `.config`
-- Merges optional plugin-provided config field hints under:
-  `plugins.entries.<id>.config.<field>`
-
-If you want your plugin config fields to show good labels/placeholders (and mark secrets as sensitive),
-provide `uiHints` alongside your JSON Schema in the plugin manifest.
-
-Example:
-
-```json
-{
-  "id": "my-plugin",
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {
-      "apiKey": { "type": "string" },
-      "region": { "type": "string" }
-    }
-  },
-  "uiHints": {
-    "apiKey": { "label": "API Key", "sensitive": true },
-    "region": { "label": "Region", "placeholder": "us-east-1" }
-  }
-}
-```
-
-## CLI
-
-```bash
-openclaw plugins list
-openclaw plugins info <id>
-openclaw plugins install <path>                 # copy a local file/dir into ~/.openclaw/extensions/<id>
-openclaw plugins install ./extensions/voice-call # relative path ok
-openclaw plugins install ./plugin.tgz           # install from a local tarball
-openclaw plugins install ./plugin.zip           # install from a local zip
-openclaw plugins install -l ./extensions/voice-call # link (no copy) for dev
-openclaw plugins install @openclaw/voice-call # install from npm
-openclaw plugins install @openclaw/voice-call --pin # store exact resolved name@version
-openclaw plugins update <id>
-openclaw plugins update --all
-openclaw plugins enable <id>
-openclaw plugins disable <id>
-openclaw plugins doctor
-```
-
-`plugins update` only works for npm installs tracked under `plugins.installs`.
-If stored integrity metadata changes between updates, OpenClaw warns and asks for confirmation (use global `--yes` to bypass prompts).
-
-Plugins may also register their own top‑level commands (example: `openclaw voicecall`).
-
-## Plugin API (overview)
-
-Plugins export either:
-
-- A function: `(api) => { ... }`
-- An object: `{ id, name, configSchema, register(api) { ... } }`
-
-Context engine plugins can also register a runtime-owned context manager:
-
-```ts
-export default function (api) {
-  api.registerContextEngine("lossless-claw", () => ({
-    info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
-    async ingest() {
-      return { ingested: true };
-    },
-    async assemble({ messages }) {
-      return { messages, estimatedTokens: 0 };
-    },
-    async compact() {
-      return { ok: true, compacted: false };
-    },
-  }));
-}
-```
-
-Then enable it in config:
-
-```json5
-{
-  plugins: {
-    slots: {
-      contextEngine: "lossless-claw",
-    },
-  },
-}
-```
+Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
+`openclaw plugins enable`, and `openclaw plugins disable`. See
+[Plugin bundles](/plugins/bundles) for the bundle compatibility boundary and
+[Building plugins](/plugins/building-plugins) for native plugin authoring.
 
 ## Plugin hooks
 
-Plugins can register hooks at runtime. This lets a plugin bundle event-driven
-automation without a separate hook pack install.
+Plugins can register hooks at runtime, but there are two different APIs with
+different jobs.
 
-### Example
+- Use typed hooks via `api.on(...)` for runtime lifecycle hooks. This is the
+  preferred surface for middleware, policy, message rewriting, prompt shaping,
+  and tool control.
+- Use `api.registerHook(...)` only when you want to participate in the internal
+  hook system described in [Hooks](/automation/hooks). This is mainly for coarse
+  command/lifecycle side effects and compatibility with existing HOOK-style
+  automation.
 
-```ts
-export default function register(api) {
-  api.registerHook(
-    "command:new",
-    async () => {
-      // Hook logic here.
-    },
-    {
-      name: "my-plugin.command-new",
-      description: "Runs when /new is invoked",
-    },
-  );
-}
+Quick rule:
+
+- If the handler needs priority, merge semantics, or block/cancel behavior, use
+  typed plugin hooks.
+- If the handler just reacts to `command:new`, `command:reset`, `message:sent`,
+  or similar coarse events, `api.registerHook(...)` is fine.
+
+Plugin-managed internal hooks show up in `openclaw hooks list` with
+`plugin:<id>`. You cannot enable or disable them through `openclaw hooks`;
+enable or disable the plugin instead.
+
+## Verify the active Gateway
+
+`openclaw plugins list` and plain `openclaw plugins inspect` read cold config,
+manifest, and registry state. They do not prove that an already-running Gateway
+has imported the same plugin code.
+
+When a plugin appears installed but live chat traffic does not use it:
+
+```bash
+openclaw gateway status --deep --require-rpc
+openclaw plugins inspect <plugin-id> --runtime --json
+openclaw gateway restart
 ```
 
-Notes:
+Managed Gateways restart automatically after plugin install, update, and
+uninstall changes that alter plugin source. On VPS or container installs, make
+sure any manual restart targets the actual `openclaw gateway run` child that
+serves your channels, not only a wrapper or supervisor.
 
-- Register hooks explicitly via `api.registerHook(...)`.
-- Hook eligibility rules still apply (OS/bins/env/config requirements).
-- Plugin-managed hooks show up in `openclaw hooks list` with `plugin:<id>`.
-- You cannot enable/disable plugin-managed hooks via `openclaw hooks`; enable/disable the plugin instead.
+## Troubleshooting
 
-### Agent lifecycle hooks (`api.on`)
+| Symptom                                                        | Check                                                                                                                                      | Fix                                                                                                     |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| Plugin appears in `plugins list` but runtime hooks do not run  | Use `openclaw plugins inspect <id> --runtime --json` and confirm the active Gateway with `gateway status --deep --require-rpc`             | Restart the live Gateway after install, update, config, or source changes                               |
+| Duplicate channel or tool ownership diagnostics appear         | Run `openclaw plugins list --enabled --verbose`, inspect each suspected plugin with `--runtime --json`, and compare channel/tool ownership | Disable one owner, remove stale installs, or use manifest `preferOver` for intentional replacement      |
+| Config says a plugin is missing                                | Check [Plugin inventory](/plugins/plugin-inventory) for whether it is bundled, official external, or source-only                           | Install the external package, enable the bundled plugin, or remove stale config                         |
+| Config is invalid during install                               | Read the validation message and run `openclaw doctor --fix` when it points to stale plugin state                                           | Doctor can quarantine invalid plugin config by disabling the entry and removing the invalid payload     |
+| Plugin path is blocked for suspicious ownership or permissions | Inspect the diagnostic before the config error                                                                                             | Fix filesystem ownership/permissions, then run `openclaw plugins registry --refresh`                    |
+| `OPENCLAW_NIX_MODE=1` blocks lifecycle commands                | Confirm the install is managed by Nix                                                                                                      | Change plugin selection in the Nix source instead of using plugin mutator commands                      |
+| Dependency import fails at runtime                             | Check whether the plugin was installed through npm/git/ClawHub or loaded from a local path                                                 | Run `openclaw plugins update <id>`, reinstall the source, or install local plugin dependencies yourself |
 
-For typed runtime lifecycle hooks, use `api.on(...)`:
+When stale plugin config still names a no-longer-discoverable channel plugin,
+Gateway startup skips that plugin-backed channel instead of blocking every
+other channel. Run `openclaw doctor --fix` to remove stale plugin and channel
+entries. Unknown channel keys without stale-plugin evidence still fail
+validation so typos stay visible.
 
-```ts
-export default function register(api) {
-  api.on(
-    "before_prompt_build",
-    (event, ctx) => {
-      return {
-        prependSystemContext: "Follow company style guide.",
-      };
-    },
-    { priority: 10 },
-  );
-}
+For intentional channel replacement, the preferred plugin should declare
+`channelConfigs.<channel-id>.preferOver` with the legacy or lower-priority
+plugin id. If both plugins are explicitly enabled, OpenClaw keeps that request
+and reports duplicate channel or tool diagnostics instead of silently choosing
+one owner.
+
+If an installed package reports that it `requires compiled runtime output for
+TypeScript entry ...`, the package was published without the JavaScript files
+OpenClaw needs at runtime. Update or reinstall after the publisher ships
+compiled JavaScript, or disable/uninstall the plugin until then.
+
+### Blocked plugin path ownership
+
+If plugin diagnostics say
+`blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)`
+and config validation follows with `plugin present but blocked`, OpenClaw found
+plugin files owned by a different Unix user than the process that is loading
+them. Keep the plugin config in place; fix the filesystem ownership or run
+OpenClaw as the same user that owns the state directory.
+
+For Docker installs, the official image runs as `node` (uid `1000`), so the
+host bind-mounted OpenClaw config and workspace directories should normally be
+owned by uid `1000`:
+
+```bash
+sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
 ```
 
-Important hooks for prompt construction:
+If you intentionally run OpenClaw as root, repair the managed plugin root to
+root ownership instead:
 
-- `before_model_resolve`: runs before session load (`messages` are not available). Use this to deterministically override `modelOverride` or `providerOverride`.
-- `before_prompt_build`: runs after session load (`messages` are available). Use this to shape prompt input.
-- `before_agent_start`: legacy compatibility hook. Prefer the two explicit hooks above.
-
-Core-enforced hook policy:
-
-- Operators can disable prompt mutation hooks per plugin via `plugins.entries.<id>.hooks.allowPromptInjection: false`.
-- When disabled, OpenClaw blocks `before_prompt_build` and ignores prompt-mutating fields returned from legacy `before_agent_start` while preserving legacy `modelOverride` and `providerOverride`.
-
-`before_prompt_build` result fields:
-
-- `prependContext`: prepends text to the user prompt for this run. Best for turn-specific or dynamic content.
-- `systemPrompt`: full system prompt override.
-- `prependSystemContext`: prepends text to the current system prompt.
-- `appendSystemContext`: appends text to the current system prompt.
-
-Prompt build order in embedded runtime:
-
-1. Apply `prependContext` to the user prompt.
-2. Apply `systemPrompt` override when provided.
-3. Apply `prependSystemContext + current system prompt + appendSystemContext`.
-
-Merge and precedence notes:
-
-- Hook handlers run by priority (higher first).
-- For merged context fields, values are concatenated in execution order.
-- `before_prompt_build` values are applied before legacy `before_agent_start` fallback values.
-
-Migration guidance:
-
-- Move static guidance from `prependContext` to `prependSystemContext` (or `appendSystemContext`) so providers can cache stable system-prefix content.
-- Keep `prependContext` for per-turn dynamic context that should stay tied to the user message.
-
-## Provider plugins (model auth)
-
-Plugins can register **model provider auth** flows so users can run OAuth or
-API-key setup inside OpenClaw (no external scripts needed).
-
-Register a provider via `api.registerProvider(...)`. Each provider exposes one
-or more auth methods (OAuth, API key, device code, etc.). These methods power:
-
-- `openclaw models auth login --provider <id> [--method <id>]`
-
-Example:
-
-```ts
-api.registerProvider({
-  id: "acme",
-  label: "AcmeAI",
-  auth: [
-    {
-      id: "oauth",
-      label: "OAuth",
-      kind: "oauth",
-      run: async (ctx) => {
-        // Run OAuth flow and return auth profiles.
-        return {
-          profiles: [
-            {
-              profileId: "acme:default",
-              credential: {
-                type: "oauth",
-                provider: "acme",
-                access: "...",
-                refresh: "...",
-                expires: Date.now() + 3600 * 1000,
-              },
-            },
-          ],
-          defaultModel: "acme/opus-1",
-        };
-      },
-    },
-  ],
-});
+```bash
+sudo chown -R root:root /path/to/openclaw-config/npm
 ```
 
-Notes:
+After fixing ownership, rerun `openclaw doctor --fix` or
+`openclaw plugins registry --refresh` so the persisted plugin registry matches
+the repaired files.
 
-- `run` receives a `ProviderAuthContext` with `prompter`, `runtime`,
-  `openUrl`, and `oauth.createVpsAwareHandlers` helpers.
-- Return `configPatch` when you need to add default models or provider config.
-- Return `defaultModel` so `--set-default` can update agent defaults.
+### Slow plugin tool setup
 
-### Register a messaging channel
+If agent turns appear to stall while preparing tools, enable trace logging and
+check for plugin tool factory timing lines:
 
-Plugins can register **channel plugins** that behave like built‑in channels
-(WhatsApp, Telegram, etc.). Channel config lives under `channels.<id>` and is
-validated by your channel plugin code.
-
-```ts
-const myChannel = {
-  id: "acmechat",
-  meta: {
-    id: "acmechat",
-    label: "AcmeChat",
-    selectionLabel: "AcmeChat (API)",
-    docsPath: "/channels/acmechat",
-    blurb: "demo channel plugin.",
-    aliases: ["acme"],
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
-    resolveAccount: (cfg, accountId) =>
-      cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? {
-        accountId,
-      },
-  },
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async () => ({ ok: true }),
-  },
-};
-
-export default function (api) {
-  api.registerChannel({ plugin: myChannel });
-}
+```bash
+openclaw config set logging.level trace
+openclaw logs --follow
 ```
 
-Notes:
+Look for:
 
-- Put config under `channels.<id>` (not `plugins.entries`).
-- `meta.label` is used for labels in CLI/UI lists.
-- `meta.aliases` adds alternate ids for normalization and CLI inputs.
-- `meta.preferOver` lists channel ids to skip auto-enable when both are configured.
-- `meta.detailLabel` and `meta.systemImage` let UIs show richer channel labels/icons.
-
-### Channel onboarding hooks
-
-Channel plugins can define optional onboarding hooks on `plugin.onboarding`:
-
-- `configure(ctx)` is the baseline setup flow.
-- `configureInteractive(ctx)` can fully own interactive setup for both configured and unconfigured states.
-- `configureWhenConfigured(ctx)` can override behavior only for already configured channels.
-
-Hook precedence in the wizard:
-
-1. `configureInteractive` (if present)
-2. `configureWhenConfigured` (only when channel status is already configured)
-3. fallback to `configure`
-
-Context details:
-
-- `configureInteractive` and `configureWhenConfigured` receive:
-  - `configured` (`true` or `false`)
-  - `label` (user-facing channel name used by prompts)
-  - plus the shared config/runtime/prompter/options fields
-- Returning `"skip"` leaves selection and account tracking unchanged.
-- Returning `{ cfg, accountId? }` applies config updates and records account selection.
-
-### Write a new messaging channel (step‑by‑step)
-
-Use this when you want a **new chat surface** (a "messaging channel"), not a model provider.
-Model provider docs live under `/providers/*`.
-
-1. Pick an id + config shape
-
-- All channel config lives under `channels.<id>`.
-- Prefer `channels.<id>.accounts.<accountId>` for multi‑account setups.
-
-2. Define the channel metadata
-
-- `meta.label`, `meta.selectionLabel`, `meta.docsPath`, `meta.blurb` control CLI/UI lists.
-- `meta.docsPath` should point at a docs page like `/channels/<id>`.
-- `meta.preferOver` lets a plugin replace another channel (auto-enable prefers it).
-- `meta.detailLabel` and `meta.systemImage` are used by UIs for detail text/icons.
-
-3. Implement the required adapters
-
-- `config.listAccountIds` + `config.resolveAccount`
-- `capabilities` (chat types, media, threads, etc.)
-- `outbound.deliveryMode` + `outbound.sendText` (for basic send)
-
-4. Add optional adapters as needed
-
-- `setup` (wizard), `security` (DM policy), `status` (health/diagnostics)
-- `gateway` (start/stop/login), `mentions`, `threading`, `streaming`
-- `actions` (message actions), `commands` (native command behavior)
-
-5. Register the channel in your plugin
-
-- `api.registerChannel({ plugin })`
-
-Minimal config example:
-
-```json5
-{
-  channels: {
-    acmechat: {
-      accounts: {
-        default: { token: "ACME_TOKEN", enabled: true },
-      },
-    },
-  },
-}
+```text
+[trace:plugin-tools] factory timings ...
 ```
 
-Minimal channel plugin (outbound‑only):
+The summary lists total factory time and the slowest plugin tool factories,
+including plugin id, declared tool names, result shape, and whether the tool is
+optional. Slow lines are promoted to warnings when a single factory takes at
+least 1s or total plugin tool factory prep takes at least 5s.
 
-```ts
-const plugin = {
-  id: "acmechat",
-  meta: {
-    id: "acmechat",
-    label: "AcmeChat",
-    selectionLabel: "AcmeChat (API)",
-    docsPath: "/channels/acmechat",
-    blurb: "AcmeChat messaging channel.",
-    aliases: ["acme"],
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: (cfg) => Object.keys(cfg.channels?.acmechat?.accounts ?? {}),
-    resolveAccount: (cfg, accountId) =>
-      cfg.channels?.acmechat?.accounts?.[accountId ?? "default"] ?? {
-        accountId,
-      },
-  },
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async ({ text }) => {
-      // deliver `text` to your channel here
-      return { ok: true };
-    },
-  },
-};
+OpenClaw caches successful plugin tool factory results for repeated resolutions
+with the same effective request context. The cache key includes the effective
+runtime config, workspace, agent/session ids, sandbox policy, browser settings,
+delivery context, requester identity, and ownership state, so factories that
+depend on those trusted fields are re-run when the context changes. If timings
+stay high, the plugin may be doing expensive work before returning its tool
+definitions.
 
-export default function (api) {
-  api.registerChannel({ plugin });
-}
+If one plugin dominates the timing, inspect its runtime registrations:
+
+```bash
+openclaw plugins inspect <plugin-id> --runtime --json
 ```
 
-Load the plugin (extensions dir or `plugins.load.paths`), restart the gateway,
-then configure `channels.<id>` in your config.
+Then update, reinstall, or disable that plugin. Plugin authors should move
+expensive dependency loading behind the tool execution path instead of doing it
+inside the tool factory.
 
-### Agent tools
+For dependency roots, package metadata validation, registry records, startup
+reload behavior, and legacy cleanup, see
+[Plugin dependency resolution](/plugins/dependency-resolution).
 
-See the dedicated guide: [Plugin agent tools](/plugins/agent-tools).
+## Related
 
-### Register a gateway RPC method
-
-```ts
-export default function (api) {
-  api.registerGatewayMethod("myplugin.status", ({ respond }) => {
-    respond(true, { ok: true });
-  });
-}
-```
-
-### Register CLI commands
-
-```ts
-export default function (api) {
-  api.registerCli(
-    ({ program }) => {
-      program.command("mycmd").action(() => {
-        console.log("Hello");
-      });
-    },
-    { commands: ["mycmd"] },
-  );
-}
-```
-
-### Register auto-reply commands
-
-Plugins can register custom slash commands that execute **without invoking the
-AI agent**. This is useful for toggle commands, status checks, or quick actions
-that don't need LLM processing.
-
-```ts
-export default function (api) {
-  api.registerCommand({
-    name: "mystatus",
-    description: "Show plugin status",
-    handler: (ctx) => ({
-      text: `Plugin is running! Channel: ${ctx.channel}`,
-    }),
-  });
-}
-```
-
-Command handler context:
-
-- `senderId`: The sender's ID (if available)
-- `channel`: The channel where the command was sent
-- `isAuthorizedSender`: Whether the sender is an authorized user
-- `args`: Arguments passed after the command (if `acceptsArgs: true`)
-- `commandBody`: The full command text
-- `config`: The current OpenClaw config
-
-Command options:
-
-- `name`: Command name (without the leading `/`)
-- `nativeNames`: Optional native-command aliases for slash/menu surfaces. Use `default` for all native providers, or provider-specific keys like `discord`
-- `description`: Help text shown in command lists
-- `acceptsArgs`: Whether the command accepts arguments (default: false). If false and arguments are provided, the command won't match and the message falls through to other handlers
-- `requireAuth`: Whether to require authorized sender (default: true)
-- `handler`: Function that returns `{ text: string }` (can be async)
-
-Example with authorization and arguments:
-
-```ts
-api.registerCommand({
-  name: "setmode",
-  description: "Set plugin mode",
-  acceptsArgs: true,
-  requireAuth: true,
-  handler: async (ctx) => {
-    const mode = ctx.args?.trim() || "default";
-    await saveMode(mode);
-    return { text: `Mode set to: ${mode}` };
-  },
-});
-```
-
-Notes:
-
-- Plugin commands are processed **before** built-in commands and the AI agent
-- Commands are registered globally and work across all channels
-- Command names are case-insensitive (`/MyStatus` matches `/mystatus`)
-- Command names must start with a letter and contain only letters, numbers, hyphens, and underscores
-- Reserved command names (like `help`, `status`, `reset`, etc.) cannot be overridden by plugins
-- Duplicate command registration across plugins will fail with a diagnostic error
-
-### Register background services
-
-```ts
-export default function (api) {
-  api.registerService({
-    id: "my-service",
-    start: () => api.logger.info("ready"),
-    stop: () => api.logger.info("bye"),
-  });
-}
-```
-
-## Naming conventions
-
-- Gateway methods: `pluginId.action` (example: `voicecall.status`)
-- Tools: `snake_case` (example: `voice_call`)
-- CLI commands: kebab or camel, but avoid clashing with core commands
-
-## Skills
-
-Plugins can ship a skill in the repo (`skills/<name>/SKILL.md`).
-Enable it with `plugins.entries.<id>.enabled` (or other config gates) and ensure
-it’s present in your workspace/managed skills locations.
-
-## Distribution (npm)
-
-Recommended packaging:
-
-- Main package: `openclaw` (this repo)
-- Plugins: separate npm packages under `@openclaw/*` (example: `@openclaw/voice-call`)
-
-Publishing contract:
-
-- Plugin `package.json` must include `openclaw.extensions` with one or more entry files.
-- Entry files can be `.js` or `.ts` (jiti loads TS at runtime).
-- `openclaw plugins install <npm-spec>` uses `npm pack`, extracts into `~/.openclaw/extensions/<id>/`, and enables it in config.
-- Config key stability: scoped packages are normalized to the **unscoped** id for `plugins.entries.*`.
-
-## Example plugin: Voice Call
-
-This repo includes a voice‑call plugin (Twilio or log fallback):
-
-- Source: `extensions/voice-call`
-- Skill: `skills/voice-call`
-- CLI: `openclaw voicecall start|status`
-- Tool: `voice_call`
-- RPC: `voicecall.start`, `voicecall.status`
-- Config (twilio): `provider: "twilio"` + `twilio.accountSid/authToken/from` (optional `statusCallbackUrl`, `twimlUrl`)
-- Config (dev): `provider: "log"` (no network)
-
-See [Voice Call](/plugins/voice-call) and `extensions/voice-call/README.md` for setup and usage.
-
-## Safety notes
-
-Plugins run in-process with the Gateway. Treat them as trusted code:
-
-- Only install plugins you trust.
-- Prefer `plugins.allow` allowlists.
-- Restart the Gateway after changes.
-
-## Testing plugins
-
-Plugins can (and should) ship tests:
-
-- In-repo plugins can keep Vitest tests under `src/**` (example: `src/plugins/voice-call.plugin.test.ts`).
-- Separately published plugins should run their own CI (lint/build/test) and validate `openclaw.extensions` points at the built entrypoint (`dist/index.js`).
+- [Manage plugins](/plugins/manage-plugins) - command examples for list, install, update, uninstall, and publish
+- [`openclaw plugins`](/cli/plugins) - full CLI reference
+- [Plugin inventory](/plugins/plugin-inventory) - generated bundled and external plugin list
+- [Plugin reference](/plugins/reference) - generated per-plugin reference pages
+- [Community plugins](/plugins/community) - ClawHub discovery and docs PR policy
+- [Plugin dependency resolution](/plugins/dependency-resolution) - install roots, registry records, and runtime boundaries
+- [Building plugins](/plugins/building-plugins) - native plugin authoring guide
+- [Plugin SDK overview](/plugins/sdk-overview) - runtime registration, hooks, and API fields
+- [Plugin manifest](/plugins/manifest) - manifest and package metadata

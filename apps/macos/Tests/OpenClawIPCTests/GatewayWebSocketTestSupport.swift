@@ -28,6 +28,23 @@ enum GatewayWebSocketTestSupport {
         return obj["id"] as? String
     }
 
+    static func connectRequestParams(from message: URLSessionWebSocketTask.Message) -> [String: Any]? {
+        guard let obj = self.requestFrameObject(from: message) else { return nil }
+        guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
+            return nil
+        }
+        return obj["params"] as? [String: Any]
+    }
+
+    static func connectScopes(from message: URLSessionWebSocketTask.Message) -> [String]? {
+        guard let obj = self.requestFrameObject(from: message) else { return nil }
+        guard (obj["type"] as? String) == "req", (obj["method"] as? String) == "connect" else {
+            return nil
+        }
+        let params = obj["params"] as? [String: Any]
+        return params?["scopes"] as? [String]
+    }
+
     static func connectOkData(id: String) -> Data {
         let json = """
         {
@@ -45,7 +62,42 @@ enum GatewayWebSocketTestSupport {
               "stateVersion": { "presence": 0, "health": 0 },
               "uptimeMs": 0
             },
+            "auth": { "role": "operator", "scopes": [] },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
+          }
+        }
+        """
+        return Data(json.utf8)
+    }
+
+    static func connectAuthFailureData(
+        id: String,
+        detailCode: String,
+        message: String = "gateway auth rejected",
+        canRetryWithDeviceToken: Bool = false,
+        recommendedNextStep: String? = nil) -> Data
+    {
+        let recommendedNextStepJson = if let recommendedNextStep {
+            """
+            ,
+                          "recommendedNextStep": "\(recommendedNextStep)"
+            """
+        } else {
+            ""
+        }
+        let json = """
+        {
+          "type": "res",
+          "id": "\(id)",
+          "ok": false,
+          "error": {
+            "code": "INVALID_REQUEST",
+            "message": "\(message)",
+            "details": {
+              "code": "\(detailCode)",
+              "canRetryWithDeviceToken": \(canRetryWithDeviceToken ? "true" : "false")
+              \(recommendedNextStepJson)
+            }
           }
         }
         """

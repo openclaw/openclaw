@@ -1,42 +1,37 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/googlechat";
+// Googlechat plugin module implements monitor behavior.
 import {
-  createWebhookInFlightLimiter,
-  createReplyPrefixOptions,
-  registerWebhookTargetWithPluginRoute,
+  recordChannelBotPairLoopAndCheckSuppression,
+  type ChannelBotLoopProtectionFacts,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { OpenClawConfig } from "../runtime-api.js";
+import {
   resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveWebhookPath,
-} from "openclaw/plugin-sdk/googlechat";
-import { type ResolvedGoogleChatAccount } from "./accounts.js";
+} from "../runtime-api.js";
+import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
+import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
+import type { GoogleChatAudienceType } from "./auth.js";
+import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
+import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
+import { deliverGoogleChatReply } from "./monitor-reply-delivery.js";
 import {
-  downloadGoogleChatMedia,
-  deleteGoogleChatMessage,
-  sendGoogleChatMessage,
-  updateGoogleChatMessage,
-} from "./api.js";
-import { type GoogleChatAudienceType } from "./auth.js";
-import { applyGoogleChatInboundAccessPolicy, isSenderAllowed } from "./monitor-access.js";
+  registerGoogleChatWebhookTarget,
+  setGoogleChatWebhookEventProcessor,
+} from "./monitor-routing.js";
 import type {
   GoogleChatCoreRuntime,
   GoogleChatMonitorOptions,
   GoogleChatRuntimeEnv,
   WebhookTarget,
 } from "./monitor-types.js";
-import { createGoogleChatWebhookRequestHandler } from "./monitor-webhook.js";
+import { warnAppPrincipalMisconfiguration } from "./monitor-webhook.js";
 import { getGoogleChatRuntime } from "./runtime.js";
-import type { GoogleChatAttachment, GoogleChatEvent } from "./types.js";
-export type { GoogleChatMonitorOptions, GoogleChatRuntimeEnv } from "./monitor-types.js";
-export { isSenderAllowed };
+import type { GoogleChatAttachment, GoogleChatEvent, GoogleChatSpace } from "./types.js";
 
-const webhookTargets = new Map<string, WebhookTarget[]>();
-const webhookInFlightLimiter = createWebhookInFlightLimiter();
-const googleChatWebhookRequestHandler = createGoogleChatWebhookRequestHandler({
-  webhookTargets,
-  webhookInFlightLimiter,
-  processEvent: async (event, target) => {
-    await processGoogleChatEvent(event, target);
-  },
-});
+setGoogleChatWebhookEventProcessor(processGoogleChatEvent);
 
 function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, message: string) {
   if (core.logging.shouldLogVerbose()) {
@@ -44,31 +39,8 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
   }
 }
 
-export function registerGoogleChatWebhookTarget(target: WebhookTarget): () => void {
-  return registerWebhookTargetWithPluginRoute({
-    targetsByPath: webhookTargets,
-    target,
-    route: {
-      auth: "plugin",
-      match: "exact",
-      pluginId: "googlechat",
-      source: "googlechat-webhook",
-      accountId: target.account.accountId,
-      log: target.runtime.log,
-      handler: async (req, res) => {
-        const handled = await handleGoogleChatWebhookRequest(req, res);
-        if (!handled && !res.headersSent) {
-          res.statusCode = 404;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.end("Not Found");
-        }
-      },
-    },
-  }).unregister;
-}
-
 function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | undefined {
-  const normalized = value?.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "app-url" || normalized === "app_url" || normalized === "app") {
     return "app-url";
   }
@@ -82,15 +54,92 @@ function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | 
   return undefined;
 }
 
-export async function handleGoogleChatWebhookRequest(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<boolean> {
-  return await googleChatWebhookRequestHandler(req, res);
+function resolveGoogleChatTimestampMs(eventTime?: string): number | undefined {
+  if (!eventTime) {
+    return undefined;
+  }
+  const parsed = Date.parse(eventTime);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isGoogleChatGroupSpace(space: GoogleChatSpace): boolean {
+  const spaceType = (space.spaceType ?? "").toUpperCase();
+  // Google Chat deprecates `type` in favor of `spaceType`; known modern
+  // values must win if the fields disagree. Fall back to the bot-DM flag and
+  // legacy type so incomplete payloads retain their existing direct routing.
+  if (spaceType === "DIRECT_MESSAGE") {
+    return false;
+  }
+  if (spaceType === "SPACE" || spaceType === "GROUP_CHAT") {
+    return true;
+  }
+  return space.singleUserBotDm !== true && (space.type ?? "").toUpperCase() !== "DM";
+}
+
+function resolveGoogleChatBotLoopProtection(params: {
+  allowBots: boolean;
+  isBotSender: boolean;
+  senderId: string;
+  appUserId: string;
+  accountId: string;
+  conversationId: string;
+  config?: ChannelBotLoopProtectionFacts["config"];
+  defaultsConfig?: ChannelBotLoopProtectionFacts["defaultsConfig"];
+  eventTime?: string;
+}): ChannelBotLoopProtectionFacts | undefined {
+  if (
+    !params.allowBots ||
+    !params.isBotSender ||
+    !params.senderId ||
+    params.senderId === params.appUserId
+  ) {
+    return undefined;
+  }
+  return {
+    scopeId: params.accountId,
+    conversationId: params.conversationId,
+    senderId: params.senderId,
+    receiverId: params.appUserId,
+    config: params.config,
+    defaultsConfig: params.defaultsConfig,
+    defaultEnabled: true,
+    nowMs: resolveGoogleChatTimestampMs(params.eventTime),
+  };
+}
+
+function resolveGoogleChatBotLoopProtectionConfig(params: {
+  accountConfig?: ChannelBotLoopProtectionFacts["config"];
+  groupConfig?: ChannelBotLoopProtectionFacts["config"];
+}): ChannelBotLoopProtectionFacts["config"] {
+  return mergePairLoopGuardConfig(params.accountConfig, params.groupConfig);
+}
+
+function shouldSuppressGoogleChatBotLoop(params: {
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
+  core: GoogleChatCoreRuntime;
+  runtime: GoogleChatRuntimeEnv;
+}): boolean {
+  if (!params.botLoopProtection) {
+    return false;
+  }
+  const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection);
+  if (!botLoopResult.suppressed) {
+    return false;
+  }
+  logVerbose(
+    params.core,
+    params.runtime,
+    `skip bot-to-bot loop in ${params.botLoopProtection.conversationId}`,
+  );
+  return true;
 }
 
 async function processGoogleChatEvent(event: GoogleChatEvent, target: WebhookTarget) {
   const eventType = event.type ?? (event as { eventType?: string }).eventType;
+  if (eventType === "CARD_CLICKED") {
+    await maybeHandleGoogleChatApprovalCardClick({ event, target });
+    return;
+  }
   if (eventType !== "MESSAGE") {
     return;
   }
@@ -151,16 +200,17 @@ async function processMessageWithPipeline(params: {
   if (!spaceId) {
     return;
   }
-  const spaceType = (space.type ?? "").toUpperCase();
-  const isGroup = spaceType !== "DM";
+  const isGroup = isGoogleChatGroupSpace(space);
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
   const senderEmail = sender?.email ?? undefined;
+  const isBotSender = sender?.type?.toUpperCase() === "BOT";
+  const appUserId = account.config.botUser?.trim() || "users/app";
 
   const allowBots = account.config.allowBots === true;
   if (!allowBots) {
-    if (sender?.type?.toUpperCase() === "BOT") {
+    if (isBotSender) {
       logVerbose(core, runtime, `skip bot-authored message (${senderId || "unknown"})`);
       return;
     }
@@ -190,12 +240,30 @@ async function processMessageWithPipeline(params: {
     senderEmail,
     rawBody,
     statusSink,
-    logVerbose: (message) => logVerbose(core, runtime, message),
+    logVerbose: (messageLocal) => logVerbose(core, runtime, messageLocal),
   });
   if (!access.ok) {
     return;
   }
-  const { commandAuthorized, effectiveWasMentioned, groupSystemPrompt } = access;
+  const { commandAuthorized, effectiveWasMentioned, groupBotLoopProtection, groupSystemPrompt } =
+    access;
+  const botLoopProtection = resolveGoogleChatBotLoopProtection({
+    allowBots,
+    isBotSender,
+    senderId,
+    appUserId,
+    accountId: account.accountId,
+    conversationId: spaceId,
+    config: resolveGoogleChatBotLoopProtectionConfig({
+      accountConfig: account.config.botLoopProtection,
+      groupConfig: groupBotLoopProtection,
+    }),
+    defaultsConfig: config.channels?.defaults?.botLoopProtection,
+    eventTime: event.eventTime,
+  });
+  if (shouldSuppressGoogleChatBotLoop({ botLoopProtection, core, runtime })) {
+    return;
+  }
 
   const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
     cfg: config,
@@ -223,53 +291,70 @@ async function processMessageWithPipeline(params: {
   const fromLabel = isGroup
     ? space.displayName || `space:${spaceId}`
     : senderName || `user:${senderId}`;
+  const timestampMs = resolveGoogleChatTimestampMs(event.eventTime);
   const { storePath, body } = buildEnvelope({
     channel: "Google Chat",
     from: fromLabel,
-    timestamp: event.eventTime ? Date.parse(event.eventTime) : undefined,
+    timestamp: timestampMs,
     body: rawBody,
   });
 
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
-    BodyForAgent: rawBody,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    From: `googlechat:${senderId}`,
-    To: `googlechat:${spaceId}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: isGroup ? "channel" : "direct",
-    ConversationLabel: fromLabel,
-    SenderName: senderName || undefined,
-    SenderId: senderId,
-    SenderUsername: senderEmail,
-    WasMentioned: isGroup ? effectiveWasMentioned : undefined,
-    CommandAuthorized: commandAuthorized,
-    Provider: "googlechat",
-    Surface: "googlechat",
-    MessageSid: message.name,
-    MessageSidFull: message.name,
-    ReplyToId: message.thread?.name,
-    ReplyToIdFull: message.thread?.name,
-    MediaPath: mediaPath,
-    MediaType: mediaType,
-    MediaUrl: mediaPath,
-    GroupSpace: isGroup ? (space.displayName ?? undefined) : undefined,
-    GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
-    OriginatingChannel: "googlechat",
-    OriginatingTo: `googlechat:${spaceId}`,
+  const replyThreadName = isGroup ? message.thread?.name : undefined;
+  const ctxPayload = core.channel.inbound.buildContext({
+    channel: "googlechat",
+    accountId: route.accountId,
+    messageId: message.name,
+    messageIdFull: message.name,
+    timestamp: timestampMs,
+    from: `googlechat:${senderId}`,
+    sender: {
+      id: senderId,
+      name: senderName || undefined,
+      username: senderEmail,
+    },
+    conversation: {
+      kind: isGroup ? "channel" : "direct",
+      id: spaceId,
+      label: fromLabel,
+    },
+    route: {
+      agentId: route.agentId,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+    },
+    reply: {
+      to: `googlechat:${spaceId}`,
+      originatingTo: `googlechat:${spaceId}`,
+      replyToId: replyThreadName,
+      replyToIdFull: replyThreadName,
+    },
+    message: {
+      body,
+      bodyForAgent: rawBody,
+      rawBody,
+      commandBody: rawBody,
+    },
+    media:
+      mediaPath || mediaType
+        ? [
+            {
+              path: mediaPath,
+              url: mediaPath,
+              contentType: mediaType,
+            },
+          ]
+        : undefined,
+    supplemental: {
+      groupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+    },
+    extra: {
+      ChatType: isGroup ? "channel" : "direct",
+      WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+      CommandAuthorized: commandAuthorized,
+      GroupSubject: undefined,
+      GroupSpace: isGroup ? (space.displayName ?? undefined) : undefined,
+    },
   });
-
-  void core.channel.session
-    .recordSessionMetaFromInbound({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-      ctx: ctxPayload,
-    })
-    .catch((err) => {
-      runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
-    });
 
   // Typing indicator setup
   // Note: Reaction mode requires user OAuth, not available with service account auth.
@@ -295,7 +380,7 @@ async function processMessageWithPipeline(params: {
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: message.thread?.name,
+        thread: replyThreadName,
       });
       typingMessageName = result?.messageName;
     } catch (err) {
@@ -303,43 +388,78 @@ async function processMessageWithPipeline(params: {
     }
   }
 
-  const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg: config,
-    agentId: route.agentId,
+  await core.channel.inbound.run({
     channel: "googlechat",
     accountId: route.accountId,
-  });
-
-  await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
-    ctx: ctxPayload,
-    cfg: config,
-    dispatcherOptions: {
-      ...prefixOptions,
-      deliver: async (payload) => {
-        await deliverGoogleChatReply({
-          payload,
-          account,
-          spaceId,
-          runtime,
-          core,
-          config,
-          statusSink,
-          typingMessageName,
-        });
-        // Only use typing message for first delivery
-        typingMessageName = undefined;
-      },
-      onError: (err, info) => {
-        runtime.error?.(
-          `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
-        );
-      },
-    },
-    replyOptions: {
-      onModelSelected,
+    raw: message,
+    adapter: {
+      ingest: () => ({
+        id: message.name ?? spaceId,
+        timestamp: timestampMs,
+        rawText: rawBody,
+        textForAgent: rawBody,
+        textForCommands: rawBody,
+        raw: message,
+      }),
+      resolveTurn: () => ({
+        cfg: config,
+        channel: "googlechat",
+        accountId: route.accountId,
+        agentId: route.agentId,
+        routeSessionKey: route.sessionKey,
+        storePath,
+        ctxPayload,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          durable: (payload, info) =>
+            resolveGoogleChatDurableReplyOptions({
+              payload,
+              infoKind: info.kind,
+              spaceId,
+              typingMessageName,
+            }),
+          deliver: async (payload) => {
+            await deliverGoogleChatReply({
+              payload,
+              account,
+              spaceId,
+              runtime,
+              core,
+              config,
+              statusSink,
+              typingMessageName,
+            });
+            // Only use typing message for first delivery
+            typingMessageName = undefined;
+          },
+          onDelivered: () => {
+            statusSink?.({ lastOutboundAt: Date.now() });
+          },
+          onError: (err, info) => {
+            runtime.error?.(
+              `[${account.accountId}] Google Chat ${info.kind} reply failed: ${String(err)}`,
+            );
+          },
+        },
+        replyPipeline: {},
+        record: {
+          onRecordError: (err) => {
+            runtime.error?.(`googlechat: failed updating session meta: ${String(err)}`);
+          },
+        },
+      }),
     },
   });
 }
+
+export const testing = {
+  processMessageWithPipeline,
+  resolveGoogleChatBotLoopProtection,
+  resolveGoogleChatBotLoopProtectionConfig,
+  shouldSuppressGoogleChatBotLoop,
+};
 
 async function downloadAttachment(
   attachment: GoogleChatAttachment,
@@ -363,136 +483,7 @@ async function downloadAttachment(
   return { path: saved.path, contentType: saved.contentType };
 }
 
-async function deliverGoogleChatReply(params: {
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string };
-  account: ResolvedGoogleChatAccount;
-  spaceId: string;
-  runtime: GoogleChatRuntimeEnv;
-  core: GoogleChatCoreRuntime;
-  config: OpenClawConfig;
-  statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-  typingMessageName?: string;
-}): Promise<void> {
-  const { payload, account, spaceId, runtime, core, config, statusSink, typingMessageName } =
-    params;
-  const mediaList = payload.mediaUrls?.length
-    ? payload.mediaUrls
-    : payload.mediaUrl
-      ? [payload.mediaUrl]
-      : [];
-
-  if (mediaList.length > 0) {
-    let suppressCaption = false;
-    if (typingMessageName) {
-      try {
-        await deleteGoogleChatMessage({
-          account,
-          messageName: typingMessageName,
-        });
-      } catch (err) {
-        runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
-        const fallbackText = payload.text?.trim()
-          ? payload.text
-          : mediaList.length > 1
-            ? "Sent attachments."
-            : "Sent attachment.";
-        try {
-          await updateGoogleChatMessage({
-            account,
-            messageName: typingMessageName,
-            text: fallbackText,
-          });
-          suppressCaption = Boolean(payload.text?.trim());
-        } catch (updateErr) {
-          runtime.error?.(`Google Chat typing update failed: ${String(updateErr)}`);
-        }
-      }
-    }
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const caption = first && !suppressCaption ? payload.text : undefined;
-      first = false;
-      try {
-        const loaded = await core.channel.media.fetchRemoteMedia({
-          url: mediaUrl,
-          maxBytes: (account.config.mediaMaxMb ?? 20) * 1024 * 1024,
-        });
-        const upload = await uploadAttachmentForReply({
-          account,
-          spaceId,
-          buffer: loaded.buffer,
-          contentType: loaded.contentType,
-          filename: loaded.fileName ?? "attachment",
-        });
-        if (!upload.attachmentUploadToken) {
-          throw new Error("missing attachment upload token");
-        }
-        await sendGoogleChatMessage({
-          account,
-          space: spaceId,
-          text: caption,
-          thread: payload.replyToId,
-          attachments: [
-            { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
-          ],
-        });
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Google Chat attachment send failed: ${String(err)}`);
-      }
-    }
-    return;
-  }
-
-  if (payload.text) {
-    const chunkLimit = account.config.textChunkLimit ?? 4000;
-    const chunkMode = core.channel.text.resolveChunkMode(config, "googlechat", account.accountId);
-    const chunks = core.channel.text.chunkMarkdownTextWithMode(payload.text, chunkLimit, chunkMode);
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      try {
-        // Edit typing message with first chunk if available
-        if (i === 0 && typingMessageName) {
-          await updateGoogleChatMessage({
-            account,
-            messageName: typingMessageName,
-            text: chunk,
-          });
-        } else {
-          await sendGoogleChatMessage({
-            account,
-            space: spaceId,
-            text: chunk,
-            thread: payload.replyToId,
-          });
-        }
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Google Chat message send failed: ${String(err)}`);
-      }
-    }
-  }
-}
-
-async function uploadAttachmentForReply(params: {
-  account: ResolvedGoogleChatAccount;
-  spaceId: string;
-  buffer: Buffer;
-  contentType?: string;
-  filename: string;
-}) {
-  const { account, spaceId, buffer, contentType, filename } = params;
-  const { uploadGoogleChatAttachment } = await import("./api.js");
-  return await uploadGoogleChatAttachment({
-    account,
-    space: spaceId,
-    filename,
-    buffer,
-    contentType,
-  });
-}
-
-export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): () => void {
+function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): () => void {
   const core = getGoogleChatRuntime();
   const webhookPath = resolveWebhookPath({
     webhookPath: options.webhookPath,
@@ -507,6 +498,13 @@ export function monitorGoogleChatProvider(options: GoogleChatMonitorOptions): ()
   const audienceType = normalizeAudienceType(options.account.config.audienceType);
   const audience = options.account.config.audience?.trim();
   const mediaMaxMb = options.account.config.mediaMaxMb ?? 20;
+
+  warnAppPrincipalMisconfiguration({
+    accountId: options.account.accountId,
+    audienceType,
+    appPrincipal: options.account.config.appPrincipal,
+    log: options.runtime.log,
+  });
 
   const unregisterTarget = registerGoogleChatWebhookTarget({
     account: options.account,
@@ -542,7 +540,4 @@ export function resolveGoogleChatWebhookPath(params: {
     }) ?? "/googlechat"
   );
 }
-
-export function computeGoogleChatMediaMaxMb(params: { account: ResolvedGoogleChatAccount }) {
-  return params.account.config.mediaMaxMb ?? 20;
-}
+export { testing as __testing };

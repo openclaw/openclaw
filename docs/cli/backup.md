@@ -3,12 +3,12 @@ summary: "CLI reference for `openclaw backup` (create local backup archives)"
 read_when:
   - You want a first-class backup archive for local OpenClaw state
   - You want to preview which paths would be included before reset or uninstall
-title: "backup"
+title: "Backup"
 ---
 
 # `openclaw backup`
 
-Create a local backup archive for OpenClaw state, config, credentials, sessions, and optionally workspaces.
+Create a local backup archive for OpenClaw state, config, auth profiles, channel/provider credentials, sessions, and optionally workspaces.
 
 ```bash
 openclaw backup create
@@ -17,13 +17,14 @@ openclaw backup create --dry-run --json
 openclaw backup create --verify
 openclaw backup create --no-include-workspace
 openclaw backup create --only-config
-openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
+openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
 ```
 
 ## Notes
 
 - The archive includes a `manifest.json` file with the resolved source paths and archive layout.
 - Default output is a timestamped `.tar.gz` archive in the current working directory.
+- Timestamped backup filenames use your machine's local timezone and include the UTC offset.
 - If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten.
 - Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
@@ -37,14 +38,30 @@ openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 
 - The state directory returned by OpenClaw's local state resolver, usually `~/.openclaw`
 - The active config file path
-- The OAuth / credentials directory
+- The resolved `credentials/` directory when it exists outside the state directory
 - Workspace directories discovered from the current config, unless you pass `--no-include-workspace`
 
-If you use `--only-config`, OpenClaw skips state, credentials, and workspace discovery and archives only the active config file path.
+Model auth profiles are already part of the state directory under
+`agents/<agentId>/agent/auth-profiles.json`, so they are normally covered by the
+state backup entry.
 
-OpenClaw canonicalizes paths before building the archive. If config, credentials, or a workspace already live inside the state directory, they are not duplicated as separate top-level backup sources. Missing paths are skipped.
+If you use `--only-config`, OpenClaw skips state, credentials-directory, and workspace discovery and archives only the active config file path.
+
+OpenClaw canonicalizes paths before building the archive. If config, the
+credentials directory, or a workspace already live inside the state directory,
+they are not duplicated as separate top-level backup sources. Missing paths are
+skipped.
 
 The archive payload stores file contents from those source trees, and the embedded `manifest.json` records the resolved absolute source paths plus the archive layout used for each asset.
+
+During archive creation, OpenClaw skips known live-mutation files that do not have restoration value, including active agent session transcripts, cron run logs, rolling logs, delivery queues, socket/pid/temp files under the state directory, and related durable-queue temp files. The JSON result includes `skippedVolatileCount` so automation can see how many files were intentionally omitted.
+
+Installed plugin source and manifest files under the state directory's
+`extensions/` tree are included, but their nested `node_modules/` dependency
+trees are skipped. Those dependencies are rebuildable install artifacts; after
+restoring an archive, use `openclaw plugins update <id>` or reinstall the plugin
+with `openclaw plugins install <spec> --force` when a restored plugin reports
+missing dependencies.
 
 ## Invalid config behavior
 
@@ -56,7 +73,8 @@ If you still want a partial backup in that situation, rerun:
 openclaw backup create --no-include-workspace
 ```
 
-That keeps state, config, and credentials in scope while skipping workspace discovery entirely.
+That keeps state, config, and the external credentials directory in scope while
+skipping workspace discovery entirely.
 
 If you only need a copy of the config file itself, `--only-config` also works when the config is malformed because it does not rely on parsing the config for workspace discovery.
 
@@ -74,3 +92,7 @@ Practical limits come from the local machine and destination filesystem:
 Large workspaces are usually the main driver of archive size. If you want a smaller or faster backup, use `--no-include-workspace`.
 
 For the smallest archive, use `--only-config`.
+
+## Related
+
+- [CLI reference](/cli)

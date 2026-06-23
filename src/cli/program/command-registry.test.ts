@@ -1,3 +1,4 @@
+// Command registry tests cover CLI command descriptor registry behavior.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
@@ -5,9 +6,14 @@ import type { ProgramContext } from "./context.js";
 // Perf: `registerCoreCliByName(...)` dynamically imports registrar modules.
 // Mock the heavy registrars so this suite stays focused on command-registry wiring.
 vi.mock("./register.agent.js", () => ({
-  registerAgentCommands: (program: Command) => {
-    program.command("agent");
+  registerAgentsCommands: (program: Command) => {
     program.command("agents");
+  },
+}));
+
+vi.mock("./register.agent-turn.js", () => ({
+  registerAgentTurnCommand: (program: Command) => {
+    program.command("agent");
   },
 }));
 
@@ -27,20 +33,29 @@ vi.mock("./register.maintenance.js", () => ({
   },
 }));
 
-const {
-  getCoreCliCommandNames,
-  getCoreCliCommandsWithSubcommands,
-  registerCoreCliByName,
-  registerCoreCliCommands,
-} = await import("./command-registry.js");
-
 vi.mock("./register.status-health-sessions.js", () => ({
   registerStatusHealthSessionsCommands: (program: Command) => {
     program.command("status");
     program.command("health");
     program.command("sessions");
+    program.command("commitments");
+    const tasks = program.command("tasks");
+    tasks.command("show");
   },
 }));
+
+vi.mock("./register.crestodian.js", () => ({
+  registerCrestodianCommand: (program: Command) => {
+    program.command("crestodian");
+  },
+}));
+
+import {
+  getCoreCliCommandNames,
+  getCoreCliCommandsWithSubcommands,
+  registerCoreCliByName,
+  registerCoreCliCommands,
+} from "./command-registry.js";
 
 const testProgramContext: ProgramContext = {
   programVersion: "0.0.0-test",
@@ -65,6 +80,8 @@ describe("command-registry", () => {
 
   it("includes both agent and agents in core CLI command names", () => {
     const names = getCoreCliCommandNames();
+    expect(names).toContain("crestodian");
+    expect(names).toContain("mcp");
     expect(names).toContain("agent");
     expect(names).toContain("agents");
   });
@@ -72,25 +89,29 @@ describe("command-registry", () => {
   it("returns only commands that support subcommands", () => {
     const names = getCoreCliCommandsWithSubcommands();
     expect(names).toContain("config");
-    expect(names).toContain("memory");
     expect(names).toContain("agents");
     expect(names).toContain("backup");
-    expect(names).toContain("browser");
+    expect(names).toContain("mcp");
     expect(names).toContain("sessions");
+    expect(names).toContain("commitments");
+    expect(names).toContain("tasks");
     expect(names).not.toContain("agent");
+    expect(names).not.toContain("crestodian");
     expect(names).not.toContain("status");
     expect(names).not.toContain("doctor");
   });
 
-  it("registerCoreCliByName resolves agents to the agent entry", async () => {
+  it("registerCoreCliByName resolves agent and agents separately", async () => {
     const program = createProgram();
     const found = await registerCoreCliByName(program, testProgramContext, "agents");
     expect(found).toBe(true);
-    const agentsCmd = program.commands.find((c) => c.name() === "agents");
-    expect(agentsCmd).toBeDefined();
-    // The registrar also installs the singular "agent" command from the same entry.
-    const agentCmd = program.commands.find((c) => c.name() === "agent");
-    expect(agentCmd).toBeDefined();
+    expect(program.commands.map((command) => command.name())).toEqual(["agents"]);
+
+    const agentProgram = createProgram();
+    await expect(registerCoreCliByName(agentProgram, testProgramContext, "agent")).resolves.toBe(
+      true,
+    );
+    expect(agentProgram.commands.map((command) => command.name())).toEqual(["agent"]);
   });
 
   it("registerCoreCliByName returns false for unknown commands", async () => {
@@ -106,9 +127,16 @@ describe("command-registry", () => {
     expect(namesOf(program)).toEqual(["doctor"]);
   });
 
-  it("does not narrow to the primary command when help is requested", () => {
+  it("narrows to the primary command when command help is requested", () => {
     const program = createProgram();
     registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor", "--help"]);
+
+    expect(namesOf(program)).toEqual(["doctor"]);
+  });
+
+  it("keeps all placeholders for root help", () => {
+    const program = createProgram();
+    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "--help"]);
 
     const names = namesOf(program);
     expect(names).toContain("doctor");
@@ -141,6 +169,22 @@ describe("command-registry", () => {
     expect(names).toContain("status");
     expect(names).toContain("health");
     expect(names).toContain("sessions");
+    expect(names).toContain("commitments");
+    expect(names).toContain("tasks");
+  });
+
+  it("can eagerly register the status/session command group repeatedly for completion", async () => {
+    const program = createProgram();
+
+    for (const name of ["status", "health", "sessions", "commitments", "tasks"]) {
+      await expect(registerCoreCliByName(program, testProgramContext, name)).resolves.toBe(true);
+    }
+
+    const names = namesOf(program);
+    const countName = (target: string) =>
+      names.reduce((count, name) => count + (name === target ? 1 : 0), 0);
+    expect(countName("commitments")).toBe(1);
+    expect(countName("tasks")).toBe(1);
   });
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {

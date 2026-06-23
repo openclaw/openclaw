@@ -1,13 +1,36 @@
+// System gateway methods expose device identity, heartbeat controls, system
+// presence snapshots, and normalized system events.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../../infra/device-identity.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Gateway handlers for identity, heartbeat toggles, and system presence events. */
 export const systemHandlers: GatewayRequestHandlers = {
+  "gateway.identity.get": ({ respond }) => {
+    const identity = loadOrCreateDeviceIdentity();
+    respond(
+      true,
+      {
+        deviceId: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      },
+      undefined,
+    );
+  },
   "last-heartbeat": ({ respond }) => {
     respond(true, getLastHeartbeatEvent(), undefined);
   },
@@ -32,27 +55,28 @@ export const systemHandlers: GatewayRequestHandlers = {
     respond(true, presence, undefined);
   },
   "system-event": ({ params, respond, context }) => {
-    const text = typeof params.text === "string" ? params.text.trim() : "";
+    // System events come from mixed RPC clients; normalize fields before
+    // presence state decides whether this event should fan out or be elided.
+    const text = normalizeOptionalString(params.text) ?? "";
     if (!text) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "text required"));
       return;
     }
     const sessionKey = resolveMainSessionKeyFromConfig();
-    const deviceId = typeof params.deviceId === "string" ? params.deviceId : undefined;
-    const instanceId = typeof params.instanceId === "string" ? params.instanceId : undefined;
-    const host = typeof params.host === "string" ? params.host : undefined;
-    const ip = typeof params.ip === "string" ? params.ip : undefined;
-    const mode = typeof params.mode === "string" ? params.mode : undefined;
-    const version = typeof params.version === "string" ? params.version : undefined;
-    const platform = typeof params.platform === "string" ? params.platform : undefined;
-    const deviceFamily = typeof params.deviceFamily === "string" ? params.deviceFamily : undefined;
-    const modelIdentifier =
-      typeof params.modelIdentifier === "string" ? params.modelIdentifier : undefined;
+    const deviceId = readStringValue(params.deviceId);
+    const instanceId = readStringValue(params.instanceId);
+    const host = readStringValue(params.host);
+    const ip = readStringValue(params.ip);
+    const mode = readStringValue(params.mode);
+    const version = readStringValue(params.version);
+    const platform = readStringValue(params.platform);
+    const deviceFamily = readStringValue(params.deviceFamily);
+    const modelIdentifier = readStringValue(params.modelIdentifier);
     const lastInputSeconds =
       typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
         ? params.lastInputSeconds
         : undefined;
-    const reason = typeof params.reason === "string" ? params.reason : undefined;
+    const reason = readStringValue(params.reason);
     const roles =
       Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
         ? params.roles
@@ -84,10 +108,12 @@ export const systemHandlers: GatewayRequestHandlers = {
     });
     const isNodePresenceLine = text.startsWith("Node:");
     if (isNodePresenceLine) {
+      // Node presence heartbeats are noisy; only enqueue user-visible system
+      // events when routing context or meaningful node metadata changes.
       const next = presenceUpdate.next;
       const changed = new Set(presenceUpdate.changedKeys);
       const reasonValue = next.reason ?? reason;
-      const normalizedReason = (reasonValue ?? "").toLowerCase();
+      const normalizedReason = normalizeLowercaseStringOrEmpty(reasonValue);
       const ignoreReason =
         normalizedReason.startsWith("periodic") || normalizedReason === "heartbeat";
       const hostChanged = changed.has("host");
@@ -99,19 +125,21 @@ export const systemHandlers: GatewayRequestHandlers = {
       if (hasChanges) {
         const contextChanged = isSystemEventContextChanged(sessionKey, presenceUpdate.key);
         const parts: string[] = [];
+        // Re-state node identity only when the line would otherwise lose
+        // routing context or the host/IP changed.
         if (contextChanged || hostChanged || ipChanged) {
-          const hostLabel = next.host?.trim() || "Unknown";
-          const ipLabel = next.ip?.trim();
+          const hostLabel = normalizeOptionalString(next.host) ?? "Unknown";
+          const ipLabel = normalizeOptionalString(next.ip);
           parts.push(`Node: ${hostLabel}${ipLabel ? ` (${ipLabel})` : ""}`);
         }
         if (versionChanged) {
-          parts.push(`app ${next.version?.trim() || "unknown"}`);
+          parts.push(`app ${normalizeOptionalString(next.version) ?? "unknown"}`);
         }
         if (modeChanged) {
-          parts.push(`mode ${next.mode?.trim() || "unknown"}`);
+          parts.push(`mode ${normalizeOptionalString(next.mode) ?? "unknown"}`);
         }
         if (reasonChanged) {
-          parts.push(`reason ${reasonValue?.trim() || "event"}`);
+          parts.push(`reason ${normalizeOptionalString(reasonValue) ?? "event"}`);
         }
         const deltaText = parts.join(" · ");
         if (deltaText) {
@@ -124,6 +152,8 @@ export const systemHandlers: GatewayRequestHandlers = {
     } else {
       enqueueSystemEvent(text, { sessionKey });
     }
+    // Presence changes are observable even when noisy node heartbeat text is
+    // suppressed from the transcript-style system event queue.
     broadcastPresenceSnapshot({
       broadcast: context.broadcast,
       incrementPresenceVersion: context.incrementPresenceVersion,

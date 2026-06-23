@@ -1,8 +1,10 @@
-import fs from "node:fs";
+// Resolves and checks packaged Control UI assets.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import * as controlUiFsRuntime from "./control-ui-assets.fs.runtime.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
 const CONTROL_UI_DIST_PATH_SEGMENTS = ["dist", "control-ui", "index.html"] as const;
@@ -11,7 +13,7 @@ export function resolveControlUiDistIndexPathForRoot(root: string): string {
   return path.join(root, ...CONTROL_UI_DIST_PATH_SEGMENTS);
 }
 
-export type ControlUiDistIndexHealth = {
+type ControlUiDistIndexHealth = {
   indexPath: string | null;
   exists: boolean;
 };
@@ -31,7 +33,7 @@ export async function resolveControlUiDistIndexHealth(
       });
   return {
     indexPath,
-    exists: Boolean(indexPath && fs.existsSync(indexPath)),
+    exists: Boolean(indexPath && controlUiFsRuntime.existsSync(indexPath)),
   };
 }
 
@@ -46,7 +48,7 @@ export function resolveControlUiRepoRoot(
   const srcIndex = parts.lastIndexOf("src");
   if (srcIndex !== -1) {
     const root = parts.slice(0, srcIndex).join(path.sep);
-    if (fs.existsSync(path.join(root, "ui", "vite.config.ts"))) {
+    if (controlUiFsRuntime.existsSync(path.join(root, "ui", "vite.config.ts"))) {
       return root;
     }
   }
@@ -54,8 +56,8 @@ export function resolveControlUiRepoRoot(
   let dir = path.dirname(normalized);
   for (let i = 0; i < 8; i++) {
     if (
-      fs.existsSync(path.join(dir, "package.json")) &&
-      fs.existsSync(path.join(dir, "ui", "vite.config.ts"))
+      controlUiFsRuntime.existsSync(path.join(dir, "package.json")) &&
+      controlUiFsRuntime.existsSync(path.join(dir, "ui", "vite.config.ts"))
     ) {
       return dir;
     }
@@ -81,7 +83,7 @@ export async function resolveControlUiDistIndexPath(
   const normalized = path.resolve(argv1);
   const entrypointCandidates = [normalized];
   try {
-    const realpathEntrypoint = fs.realpathSync(normalized);
+    const realpathEntrypoint = controlUiFsRuntime.realpathSync(normalized);
     if (realpathEntrypoint !== normalized) {
       entrypointCandidates.push(realpathEntrypoint);
     }
@@ -113,12 +115,12 @@ export async function resolveControlUiDistIndexPath(
     for (let i = 0; i < 8; i++) {
       const pkgJsonPath = path.join(dir, "package.json");
       const indexPath = path.join(dir, "dist", "control-ui", "index.html");
-      if (fs.existsSync(pkgJsonPath)) {
+      if (controlUiFsRuntime.existsSync(pkgJsonPath)) {
         try {
-          const raw = fs.readFileSync(pkgJsonPath, "utf-8");
+          const raw = controlUiFsRuntime.readFileSync(pkgJsonPath, "utf-8");
           const parsed = JSON.parse(raw) as { name?: unknown };
           if (parsed.name === "openclaw") {
-            return fs.existsSync(indexPath) ? indexPath : null;
+            return controlUiFsRuntime.existsSync(indexPath) ? indexPath : null;
           }
           // Stop at the first package boundary to avoid resolving through unrelated ancestors.
           break;
@@ -138,7 +140,7 @@ export async function resolveControlUiDistIndexPath(
   return null;
 }
 
-export type ControlUiRootResolveOptions = {
+type ControlUiRootResolveOptions = {
   argv1?: string;
   moduleUrl?: string;
   cwd?: string;
@@ -149,12 +151,12 @@ function pathsMatchByRealpathOrResolve(left: string, right: string): boolean {
   let realLeft: string;
   let realRight: string;
   try {
-    realLeft = fs.realpathSync(left);
+    realLeft = controlUiFsRuntime.realpathSync(left);
   } catch {
     realLeft = path.resolve(left);
   }
   try {
-    realRight = fs.realpathSync(right);
+    realRight = controlUiFsRuntime.realpathSync(right);
   } catch {
     realRight = path.resolve(right);
   }
@@ -171,13 +173,13 @@ function addCandidate(candidates: Set<string>, value: string | null) {
 export function resolveControlUiRootOverrideSync(rootOverride: string): string | null {
   const resolved = path.resolve(rootOverride);
   try {
-    const stats = fs.statSync(resolved);
+    const stats = controlUiFsRuntime.statSync(resolved);
     if (stats.isFile()) {
       return path.basename(resolved) === "index.html" ? path.dirname(resolved) : null;
     }
     if (stats.isDirectory()) {
       const indexPath = path.join(resolved, "index.html");
-      return fs.existsSync(indexPath) ? resolved : null;
+      return controlUiFsRuntime.existsSync(indexPath) ? resolved : null;
     }
   } catch {
     return null;
@@ -196,7 +198,7 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
       return null;
     }
     try {
-      return path.dirname(fs.realpathSync(path.resolve(argv1)));
+      return path.dirname(controlUiFsRuntime.realpathSync(path.resolve(argv1)));
     } catch {
       return null;
     }
@@ -204,7 +206,7 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
   const execDir = (() => {
     try {
       const execPath = opts.execPath ?? process.execPath;
-      return path.dirname(fs.realpathSync(execPath));
+      return path.dirname(controlUiFsRuntime.realpathSync(execPath));
     } catch {
       return null;
     }
@@ -215,7 +217,8 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
     cwd,
   });
 
-  // Packaged app: control-ui lives alongside the executable.
+  // Packaged app: prefer bundled resources, then support legacy alongside-executable layout.
+  addCandidate(candidates, execDir ? path.join(execDir, "../Resources/control-ui") : null);
   addCandidate(candidates, execDir ? path.join(execDir, "control-ui") : null);
   if (moduleDir) {
     // dist/<bundle>.js -> dist/control-ui
@@ -242,7 +245,7 @@ export function resolveControlUiRootSync(opts: ControlUiRootResolveOptions = {})
 
   for (const dir of candidates) {
     const indexPath = path.join(dir, "index.html");
-    if (fs.existsSync(indexPath)) {
+    if (controlUiFsRuntime.existsSync(indexPath)) {
       return dir;
     }
   }
@@ -267,17 +270,14 @@ export function isPackageProvenControlUiRootSync(
   return pathsMatchByRealpathOrResolve(root, packageDistRoot);
 }
 
-export type EnsureControlUiAssetsResult = {
+type EnsureControlUiAssetsResult = {
   ok: boolean;
   built: boolean;
   message?: string;
 };
 
 function summarizeCommandOutput(text: string): string | undefined {
-  const lines = text
-    .split(/\r?\n/g)
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/g));
   if (!lines.length) {
     return undefined;
   }
@@ -311,12 +311,12 @@ export async function ensureControlUiAssetsBuilt(
   }
 
   const indexPath = resolveControlUiDistIndexPathForRoot(repoRoot);
-  if (fs.existsSync(indexPath)) {
+  if (controlUiFsRuntime.existsSync(indexPath)) {
     return { ok: true, built: false };
   }
 
   const uiScript = path.join(repoRoot, "scripts", "ui.js");
-  if (!fs.existsSync(uiScript)) {
+  if (!controlUiFsRuntime.existsSync(uiScript)) {
     return {
       ok: false,
       built: false,
@@ -338,7 +338,7 @@ export async function ensureControlUiAssetsBuilt(
     };
   }
 
-  if (!fs.existsSync(indexPath)) {
+  if (!controlUiFsRuntime.existsSync(indexPath)) {
     return {
       ok: false,
       built: true,

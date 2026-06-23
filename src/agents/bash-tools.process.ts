@@ -1,5 +1,8 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+/**
+ * Process-control tool factory.
+ * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
+ * and removes background exec sessions.
+ */
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -15,21 +18,35 @@ import {
   markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
-import { deriveSessionName, pad, sliceLogLines, truncateMiddle } from "./bash-tools.shared.js";
+import { describeProcessTool } from "./bash-tools.descriptions.js";
+import { handleProcessSendKeys, type WritableStdin } from "./bash-tools.process-send-keys.js";
+import { processSchema } from "./bash-tools.schemas.js";
+import {
+  clampWithDefault,
+  deriveSessionName,
+  pad,
+  readEnvInt,
+  sliceLogLines,
+  truncateMiddle,
+} from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
-import { encodeKeySequence, encodePaste } from "./pty-keys.js";
+import { encodePaste } from "./pty-keys.js";
+import type { AgentToolResult } from "./runtime/index.js";
+import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
+import type { AgentToolWithMeta } from "./tools/common.js";
 
+/** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
   cleanupMs?: number;
+  hasCronTool?: boolean;
+  inputWaitIdleMs?: number;
   scopeKey?: string;
 };
 
-type WritableStdin = {
-  write: (data: string, cb?: (err?: Error | null) => void) => void;
-  end: () => void;
-  destroyed?: boolean;
-};
 const DEFAULT_LOG_TAIL_LINES = 200;
+const DEFAULT_INPUT_WAIT_IDLE_MS = 15_000;
+const MIN_INPUT_WAIT_IDLE_MS = 1_000;
+const MAX_INPUT_WAIT_IDLE_MS = 10 * 60 * 1000;
 
 function resolveLogSliceWindow(offset?: number, limit?: number) {
   const usingDefaultTail = offset === undefined && limit === undefined;
@@ -49,37 +66,45 @@ function defaultTailNote(totalLines: number, usingDefaultTail: boolean) {
   return `\n\n[showing last ${DEFAULT_LOG_TAIL_LINES} of ${totalLines} lines; pass offset/limit to page]`;
 }
 
-const processSchema = Type.Object({
-  action: Type.String({ description: "Process action" }),
-  sessionId: Type.Optional(Type.String({ description: "Session id for actions other than list" })),
-  data: Type.Optional(Type.String({ description: "Data to write for write" })),
-  keys: Type.Optional(
-    Type.Array(Type.String(), { description: "Key tokens to send for send-keys" }),
-  ),
-  hex: Type.Optional(Type.Array(Type.String(), { description: "Hex bytes to send for send-keys" })),
-  literal: Type.Optional(Type.String({ description: "Literal string for send-keys" })),
-  text: Type.Optional(Type.String({ description: "Text to paste for paste" })),
-  bracketed: Type.Optional(Type.Boolean({ description: "Wrap paste in bracketed mode" })),
-  eof: Type.Optional(Type.Boolean({ description: "Close stdin after write" })),
-  offset: Type.Optional(Type.Number({ description: "Log offset" })),
-  limit: Type.Optional(Type.Number({ description: "Log length" })),
-  timeout: Type.Optional(
-    Type.Number({
-      description: "For poll: wait up to this many milliseconds before returning",
-      minimum: 0,
-    }),
-  ),
-});
+const MAX_POLL_WAIT_MS = 30_000;
 
-const MAX_POLL_WAIT_MS = 120_000;
+type RunningSessionRuntime = {
+  stdinWritable: boolean;
+  waitingForInput: boolean;
+  idleMs: number;
+  lastOutputAt: number;
+};
+
+function resolveSessionStdin(session: ProcessSession): WritableStdin | undefined {
+  return (session.stdin ?? session.child?.stdin) as WritableStdin | undefined;
+}
+
+function isWritableStdin(stdin: WritableStdin | undefined): stdin is WritableStdin {
+  if (!stdin || stdin.destroyed) {
+    return false;
+  }
+  if (stdin.writable === false || stdin.writableEnded === true || stdin.writableFinished === true) {
+    return false;
+  }
+  return true;
+}
+
+function runningSessionInputDetails(runtime: RunningSessionRuntime) {
+  return {
+    stdinWritable: runtime.stdinWritable,
+    waitingForInput: runtime.waitingForInput,
+    idleMs: runtime.idleMs,
+    lastOutputAt: runtime.lastOutputAt,
+  };
+}
 
 function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
   }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
+  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed)) {
       return Math.max(0, Math.min(MAX_POLL_WAIT_MS, parsed));
     }
   }
@@ -116,17 +141,80 @@ function resetPollRetrySuggestion(sessionId: string): void {
   }
 }
 
+function createAbortError(reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  const error = new Error(typeof reason === "string" ? reason : "Aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    throw createAbortError(signal.reason);
+  }
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = () => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (onAbort) {
+        signal?.removeEventListener("abort", onAbort);
+      }
+    };
+    const onResolve = () => {
+      cleanup();
+      resolve();
+    };
+    const onAbort: (() => void) | undefined = () => {
+      cleanup();
+      reject(createAbortError(signal?.reason));
+    };
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
+    timer.unref?.();
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
-  // oxlint-disable-next-line typescript/no-explicit-any
-): AgentTool<any, unknown> {
+): AgentToolWithMeta<typeof processSchema, unknown> {
   if (defaults?.cleanupMs !== undefined) {
     setJobTtlMs(defaults.cleanupMs);
   }
   const scopeKey = defaults?.scopeKey;
   const supervisor = getProcessSupervisor();
+  const inputWaitIdleMs = clampWithDefault(
+    defaults?.inputWaitIdleMs ?? readEnvInt("OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS"),
+    DEFAULT_INPUT_WAIT_IDLE_MS,
+    MIN_INPUT_WAIT_IDLE_MS,
+    MAX_INPUT_WAIT_IDLE_MS,
+  );
   const isInScope = (session?: { scopeKey?: string } | null) =>
     !scopeKey || session?.scopeKey === scopeKey;
+
+  const describeRunningSession = (session: ProcessSession): RunningSessionRuntime => {
+    const record = supervisor.getRecord(session.id);
+    const lastOutputAt = record?.lastOutputAtMs ?? session.startedAt;
+    const idleMs = Math.max(0, Date.now() - lastOutputAt);
+    const stdinWritable = isWritableStdin(resolveSessionStdin(session));
+    return {
+      stdinWritable,
+      waitingForInput: stdinWritable && idleMs >= inputWaitIdleMs,
+      idleMs,
+      lastOutputAt,
+    };
+  };
+
+  const buildInputWaitHint = (runtime: RunningSessionRuntime | undefined) => {
+    if (!runtime?.waitingForInput) {
+      return "";
+    }
+    const idle = formatDurationCompact(runtime.idleMs) ?? `${runtime.idleMs}ms`;
+    return `\n\nNo new output for ${idle}; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.`;
+  };
 
   const cancelManagedSession = (sessionId: string) => {
     const record = supervisor.getRecord(sessionId);
@@ -149,10 +237,10 @@ export function createProcessTool(
   return {
     name: "process",
     label: "process",
-    description:
-      "Manage running exec sessions: list, poll, log, write, send-keys, submit, paste, kill.",
+    displaySummary: PROCESS_TOOL_DISPLAY_SUMMARY,
+    description: describeProcessTool({ hasCronTool: defaults?.hasCronTool === true }),
     parameters: processSchema,
-    execute: async (_toolCallId, args, _signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
+    execute: async (_toolCallId, args, signal, _onUpdate): Promise<AgentToolResult<unknown>> => {
       const params = args as {
         action:
           | "list"
@@ -181,18 +269,25 @@ export function createProcessTool(
       if (params.action === "list") {
         const running = listRunningSessions()
           .filter((s) => isInScope(s))
-          .map((s) => ({
-            sessionId: s.id,
-            status: "running",
-            pid: s.pid ?? undefined,
-            startedAt: s.startedAt,
-            runtimeMs: Date.now() - s.startedAt,
-            cwd: s.cwd,
-            command: s.command,
-            name: deriveSessionName(s.command),
-            tail: s.tail,
-            truncated: s.truncated,
-          }));
+          .map((s) => {
+            const runtime = describeRunningSession(s);
+            return {
+              sessionId: s.id,
+              status: "running",
+              pid: s.pid ?? undefined,
+              startedAt: s.startedAt,
+              runtimeMs: Date.now() - s.startedAt,
+              cwd: s.cwd,
+              command: s.command,
+              name: deriveSessionName(s.command),
+              tail: s.tail,
+              truncated: s.truncated,
+              stdinWritable: runtime.stdinWritable,
+              waitingForInput: runtime.waitingForInput,
+              idleMs: runtime.idleMs,
+              lastOutputAt: runtime.lastOutputAt,
+            };
+          });
         const finished = listFinishedSessions()
           .filter((s) => isInScope(s))
           .map((s) => ({
@@ -213,7 +308,10 @@ export function createProcessTool(
           .toSorted((a, b) => b.startedAt - a.startedAt)
           .map((s) => {
             const label = s.name ? truncateMiddle(s.name, 80) : truncateMiddle(s.command, 120);
-            return `${s.sessionId} ${pad(s.status, 9)} ${formatDurationCompact(s.runtimeMs) ?? "n/a"} :: ${label}`;
+            const marker = "waitingForInput" in s && s.waitingForInput ? " [input-wait]" : "";
+            return `${s.sessionId} ${pad(s.status, 9)} ${
+              formatDurationCompact(s.runtimeMs) ?? "n/a"
+            }${marker} :: ${label}`;
           });
         return {
           content: [
@@ -256,14 +354,14 @@ export function createProcessTool(
             result: failedResult(`Session ${params.sessionId} is not backgrounded.`),
           };
         }
-        const stdin = scopedSession.stdin ?? scopedSession.child?.stdin;
-        if (!stdin || stdin.destroyed) {
+        const stdin = resolveSessionStdin(scopedSession);
+        if (!isWritableStdin(stdin)) {
           return {
             ok: false as const,
             result: failedResult(`Session ${params.sessionId} stdin is not writable.`),
           };
         }
-        return { ok: true as const, session: scopedSession, stdin: stdin as WritableStdin };
+        return { ok: true as const, session: scopedSession, stdin };
       };
 
       const writeToStdin = async (stdin: WritableStdin, data: string) => {
@@ -279,14 +377,14 @@ export function createProcessTool(
       };
 
       const runningSessionResult = (
-        session: ProcessSession,
+        sessionLocal: ProcessSession,
         text: string,
       ): AgentToolResult<unknown> => ({
         content: [{ type: "text", text }],
         details: {
           status: "running",
           sessionId: params.sessionId,
-          name: deriveSessionName(session.command),
+          name: deriveSessionName(sessionLocal.command),
         },
       });
 
@@ -330,9 +428,7 @@ export function createProcessTool(
           if (pollWaitMs > 0 && !scopedSession.exited) {
             const deadline = Date.now() + pollWaitMs;
             while (!scopedSession.exited && Date.now() < deadline) {
-              await new Promise((resolve) =>
-                setTimeout(resolve, Math.max(0, Math.min(250, deadline - Date.now()))),
-              );
+              await sleepPollInterval(Math.max(0, Math.min(250, deadline - Date.now())), signal);
             }
           }
           const { stdout, stderr } = drainSession(scopedSession);
@@ -361,6 +457,7 @@ export function createProcessTool(
           if (exited) {
             resetPollRetrySuggestion(params.sessionId);
           }
+          const runtime = exited ? undefined : describeRunningSession(scopedSession);
           return {
             content: [
               {
@@ -371,7 +468,7 @@ export function createProcessTool(
                     ? `\n\nProcess exited with ${
                         exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
                       }.`
-                    : "\n\nProcess still running."),
+                    : buildInputWaitHint(runtime) || "\n\nProcess still running."),
               },
             ],
             details: {
@@ -380,6 +477,7 @@ export function createProcessTool(
               exitCode: exited ? exitCode : undefined,
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
+              ...(runtime ? runningSessionInputDetails(runtime) : {}),
               ...(typeof retryInMs === "number" ? { retryInMs } : {}),
             },
           };
@@ -404,9 +502,16 @@ export function createProcessTool(
               window.effectiveOffset,
               window.effectiveLimit,
             );
+            const runtime = describeRunningSession(scopedSession);
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
-              content: [{ type: "text", text: (slice || "(no output yet)") + logDefaultTailNote }],
+              content: [
+                {
+                  type: "text",
+                  text:
+                    (slice || "(no output yet)") + logDefaultTailNote + buildInputWaitHint(runtime),
+                },
+              ],
               details: {
                 status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,
@@ -415,6 +520,7 @@ export function createProcessTool(
                 totalChars,
                 truncated: scopedSession.truncated,
                 name: deriveSessionName(scopedSession.command),
+                ...runningSessionInputDetails(runtime),
               },
             };
           }
@@ -477,28 +583,14 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          const { data, warnings } = encodeKeySequence({
+          return await handleProcessSendKeys({
+            sessionId: params.sessionId,
+            session: resolved.session,
+            stdin: resolved.stdin,
             keys: params.keys,
             hex: params.hex,
             literal: params.literal,
           });
-          if (!data) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text: "No key data provided.",
-                },
-              ],
-              details: { status: "failed" },
-            };
-          }
-          await writeToStdin(resolved.stdin, data);
-          return runningSessionResult(
-            resolved.session,
-            `Sent ${data.length} bytes to session ${params.sessionId}.` +
-              (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
-          );
         }
 
         case "submit": {
@@ -652,4 +744,5 @@ export function createProcessTool(
   };
 }
 
+/** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();

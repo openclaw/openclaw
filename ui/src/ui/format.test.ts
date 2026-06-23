@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { formatRelativeTimestamp, stripThinkingTags } from "./format.ts";
+// Control UI tests cover format behavior.
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  formatDateTimeMs,
+  formatDateMs,
+  formatMs,
+  formatRelativeTimestamp,
+  formatTimeMs,
+  formatUnknownText,
+  parseSessionKeyParts,
+  setUiTimeFormatPreference,
+  stripThinkingTags,
+} from "./format.ts";
 
 describe("formatAgo", () => {
   it("returns 'in <1m' for timestamps less than 60s in the future", () => {
@@ -32,6 +43,63 @@ describe("formatAgo", () => {
   });
 });
 
+describe("formatMs", () => {
+  it("formats epoch timestamps", () => {
+    expect(formatMs(0)).not.toBe("n/a");
+  });
+
+  it("returns n/a for Date-invalid timestamps", () => {
+    expect(formatMs(8_640_000_000_000_001)).toBe("n/a");
+    expect(formatMs(Number.POSITIVE_INFINITY)).toBe("n/a");
+  });
+});
+
+describe("date/time millisecond formatters", () => {
+  it("return fallback text for Date-invalid timestamps", () => {
+    expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
+    expect(formatDateTimeMs(Number.NEGATIVE_INFINITY, undefined, "")).toBe("");
+    expect(formatTimeMs(Number.POSITIVE_INFINITY, undefined, "")).toBe("");
+  });
+});
+
+describe("agents.defaults.timeFormat preference", () => {
+  // 19:30 UTC: 24-hour renders "19:30", 12-hour renders "7:30 PM".
+  const ts = Date.UTC(2026, 0, 15, 19, 30);
+  const opts: Intl.DateTimeFormatOptions = {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  };
+
+  afterEach(() => {
+    setUiTimeFormatPreference("auto");
+  });
+
+  it("forces a 24-hour clock when preference is 24", () => {
+    setUiTimeFormatPreference("24");
+    expect(formatTimeMs(ts, opts, "")).toBe("19:30");
+  });
+
+  it("forces a 12-hour clock when preference is 12", () => {
+    setUiTimeFormatPreference("12");
+    const formatted = formatTimeMs(ts, opts, "");
+    expect(formatted).toContain("7:30");
+    expect(formatted).toMatch(/PM/i);
+  });
+
+  it("lets the caller override the resolved hour cycle", () => {
+    setUiTimeFormatPreference("24");
+    expect(formatTimeMs(ts, { ...opts, hour12: true }, "")).toMatch(/PM/i);
+  });
+
+  it("leaves rendering to the browser locale default for auto", () => {
+    setUiTimeFormatPreference("auto");
+    const auto = formatDateTimeMs(ts, opts, "");
+    const native = new Date(ts).toLocaleString([], opts);
+    expect(auto).toBe(native);
+  });
+});
+
 describe("stripThinkingTags", () => {
   it("strips <think>…</think> segments", () => {
     const input = ["<think>", "secret", "</think>", "", "Hello"].join("\n");
@@ -46,6 +114,12 @@ describe("stripThinkingTags", () => {
   it("keeps text when tags are unpaired", () => {
     expect(stripThinkingTags("<think>\nsecret\nHello")).toBe("secret\nHello");
     expect(stripThinkingTags("Hello\n</think>")).toBe("Hello\n");
+  });
+
+  it("drops malformed reasoning before orphan close tags when final text follows", () => {
+    expect(stripThinkingTags("private chain of thought </think> Visible answer")).toBe(
+      "Visible answer",
+    );
   });
 
   it("returns original text when no tags exist", () => {
@@ -97,5 +171,49 @@ describe("stripThinkingTags", () => {
   it("hides unfinished <relevant-memories> block tails", () => {
     const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
     expect(stripThinkingTags(input)).toBe("Hello\n");
+  });
+});
+
+describe("formatUnknownText", () => {
+  it("stringifies plain objects without throwing", () => {
+    expect(formatUnknownText({ ok: true })).toBe('{"ok":true}');
+  });
+
+  it("falls back to object tags for non-serializable values", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(formatUnknownText(circular)).toBe("[object Object]");
+  });
+
+  it("formats symbols without relying on object coercion", () => {
+    expect(formatUnknownText(Symbol("agent"))).toBe("Symbol(agent)");
+  });
+});
+
+describe("parseSessionKeyParts", () => {
+  it("parses a standard agent session key", () => {
+    expect(parseSessionKeyParts("agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN")).toEqual({
+      agentId: "data-expert",
+      channel: "dingtalk",
+      accountId: "cidzg6sF43NZMy52Rnk8EN",
+    });
+  });
+
+  it("parses account ids containing separators", () => {
+    expect(parseSessionKeyParts("agent:main:telegram:user:12345:extra")).toEqual({
+      agentId: "main",
+      channel: "telegram",
+      accountId: "user:12345:extra",
+    });
+  });
+
+  it("returns null for non-agent or malformed keys", () => {
+    expect(parseSessionKeyParts("global:default")).toBeNull();
+    expect(parseSessionKeyParts("direct:some-key")).toBeNull();
+    expect(parseSessionKeyParts("")).toBeNull();
+    expect(parseSessionKeyParts("agent:")).toBeNull();
+    expect(parseSessionKeyParts("agent:main")).toBeNull();
+    expect(parseSessionKeyParts("agent:main:")).toBeNull();
+    expect(parseSessionKeyParts("agent:main:telegram")).toBeNull();
   });
 });

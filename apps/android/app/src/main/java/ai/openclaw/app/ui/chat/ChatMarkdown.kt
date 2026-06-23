@@ -1,5 +1,11 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.ui.mobileAccent
+import ai.openclaw.app.ui.mobileCallout
+import ai.openclaw.app.ui.mobileCaption1
+import ai.openclaw.app.ui.mobileCodeBg
+import ai.openclaw.app.ui.mobileCodeText
+import ai.openclaw.app.ui.mobileTextSecondary
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,22 +30,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.ui.mobileAccent
-import ai.openclaw.app.ui.mobileCallout
-import ai.openclaw.app.ui.mobileCaption1
-import ai.openclaw.app.ui.mobileCodeBg
-import ai.openclaw.app.ui.mobileCodeText
-import ai.openclaw.app.ui.mobileTextSecondary
 import org.commonmark.Extension
 import org.commonmark.ext.autolink.AutolinkExtension
 import org.commonmark.ext.gfm.strikethrough.Strikethrough
@@ -58,11 +61,10 @@ import org.commonmark.node.Code
 import org.commonmark.node.Document
 import org.commonmark.node.Emphasis
 import org.commonmark.node.FencedCodeBlock
-import org.commonmark.node.Heading
 import org.commonmark.node.HardLineBreak
+import org.commonmark.node.Heading
 import org.commonmark.node.HtmlBlock
 import org.commonmark.node.HtmlInline
-import org.commonmark.node.Image as MarkdownImage
 import org.commonmark.node.IndentedCodeBlock
 import org.commonmark.node.Link
 import org.commonmark.node.ListItem
@@ -71,11 +73,15 @@ import org.commonmark.node.OrderedList
 import org.commonmark.node.Paragraph
 import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.StrongEmphasis
-import org.commonmark.node.Text as MarkdownTextNode
 import org.commonmark.node.ThematicBreak
 import org.commonmark.parser.Parser
+import java.net.URI
+import java.util.Locale
+import org.commonmark.node.Image as MarkdownImage
+import org.commonmark.node.Text as MarkdownTextNode
 
 private const val LIST_INDENT_DP = 14
+private const val DATA_IMAGE_HEADER_MAX_CHARS = 64
 private val dataImageRegex = Regex("^data:image/([a-zA-Z0-9+.-]+);base64,([A-Za-z0-9+/=\\n\\r]+)$")
 
 private val markdownParser: Parser by lazy {
@@ -86,15 +92,21 @@ private val markdownParser: Parser by lazy {
       TablesExtension.create(),
       TaskListItemsExtension.create(),
     )
-  Parser.builder()
+  Parser
+    .builder()
     .extensions(extensions)
     .build()
 }
 
+/** Renders gateway/chat Markdown using the restricted mobile-safe feature set. */
 @Composable
-fun ChatMarkdown(text: String, textColor: Color) {
+fun ChatMarkdown(
+  text: String,
+  textColor: Color,
+) {
   val document = remember(text) { markdownParser.parse(text) as Document }
-  val inlineStyles = InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText)
+  val inlineStyles =
+    InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText, linkColor = mobileAccent, baseCallout = mobileCallout)
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     RenderMarkdownBlocks(
@@ -124,7 +136,7 @@ private fun RenderMarkdownBlocks(
         val headingText = remember(current) { buildInlineMarkdown(current.firstChild, inlineStyles) }
         Text(
           text = headingText,
-          style = headingStyle(current.level),
+          style = headingStyle(current.level, inlineStyles.baseCallout),
           color = textColor,
         )
       }
@@ -140,18 +152,20 @@ private fun RenderMarkdownBlocks(
       }
       is BlockQuote -> {
         Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min)
-            .padding(vertical = 2.dp),
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .height(IntrinsicSize.Min)
+              .padding(vertical = 2.dp),
           horizontalArrangement = Arrangement.spacedBy(8.dp),
           verticalAlignment = Alignment.Top,
         ) {
           Box(
-            modifier = Modifier
-              .width(2.dp)
-              .fillMaxHeight()
-              .background(mobileTextSecondary.copy(alpha = 0.35f)),
+            modifier =
+              Modifier
+                .width(2.dp)
+                .fillMaxHeight()
+                .background(mobileTextSecondary.copy(alpha = 0.35f)),
           )
           Column(
             modifier = Modifier.weight(1f),
@@ -191,10 +205,11 @@ private fun RenderMarkdownBlocks(
       }
       is ThematicBreak -> {
         Box(
-          modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .background(mobileTextSecondary.copy(alpha = 0.25f)),
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .height(1.dp)
+              .background(mobileTextSecondary.copy(alpha = 0.25f)),
         )
       }
       is HtmlBlock -> {
@@ -220,6 +235,7 @@ private fun RenderParagraph(
 ) {
   val standaloneImage = remember(paragraph) { standaloneDataImage(paragraph) }
   if (standaloneImage != null) {
+    // Render a paragraph that is only a data image as media, not as an inline alt label.
     InlineBase64Image(base64 = standaloneImage.base64, mimeType = standaloneImage.mimeType)
     return
   }
@@ -231,7 +247,7 @@ private fun RenderParagraph(
 
   Text(
     text = annotated,
-    style = mobileCallout,
+    style = inlineStyles.baseCallout,
     color = textColor,
   )
 }
@@ -315,7 +331,7 @@ private fun RenderListItem(
   ) {
     Text(
       text = marker,
-      style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
+      style = inlineStyles.baseCallout.copy(fontWeight = FontWeight.SemiBold),
       color = textColor,
       modifier = Modifier.width(24.dp),
     )
@@ -347,10 +363,11 @@ private fun RenderTableBlock(
   val scrollState = rememberScrollState()
 
   Column(
-    modifier = Modifier
-      .fillMaxWidth()
-      .horizontalScroll(scrollState)
-      .border(1.dp, mobileTextSecondary.copy(alpha = 0.25f)),
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .horizontalScroll(scrollState)
+        .border(1.dp, mobileTextSecondary.copy(alpha = 0.25f)),
   ) {
     for (row in rows) {
       Row(
@@ -360,12 +377,13 @@ private fun RenderTableBlock(
           val cell = row.cells.getOrNull(index) ?: AnnotatedString("")
           Text(
             text = cell,
-            style = if (row.isHeader) mobileCaption1.copy(fontWeight = FontWeight.SemiBold) else mobileCallout,
+            style = if (row.isHeader) mobileCaption1.copy(fontWeight = FontWeight.SemiBold) else inlineStyles.baseCallout,
             color = textColor,
-            modifier = Modifier
-              .border(1.dp, mobileTextSecondary.copy(alpha = 0.22f))
-              .padding(horizontal = 8.dp, vertical = 6.dp)
-              .width(160.dp),
+            modifier =
+              Modifier
+                .border(1.dp, mobileTextSecondary.copy(alpha = 0.22f))
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .width(160.dp),
           )
         }
       }
@@ -373,7 +391,10 @@ private fun RenderTableBlock(
   }
 }
 
-private fun buildTableRows(table: TableBlock, inlineStyles: InlineStyles): List<TableRenderRow> {
+private fun buildTableRows(
+  table: TableBlock,
+  inlineStyles: InlineStyles,
+): List<TableRenderRow> {
   val rows = mutableListOf<TableRenderRow>()
   var child = table.firstChild
   while (child != null) {
@@ -387,7 +408,11 @@ private fun buildTableRows(table: TableBlock, inlineStyles: InlineStyles): List<
   return rows
 }
 
-private fun readTableSection(section: Node, isHeader: Boolean, inlineStyles: InlineStyles): List<TableRenderRow> {
+private fun readTableSection(
+  section: Node,
+  isHeader: Boolean,
+  inlineStyles: InlineStyles,
+): List<TableRenderRow> {
   val rows = mutableListOf<TableRenderRow>()
   var row = section.firstChild
   while (row != null) {
@@ -399,7 +424,11 @@ private fun readTableSection(section: Node, isHeader: Boolean, inlineStyles: Inl
   return rows
 }
 
-private fun readTableRow(row: TableRow, isHeader: Boolean, inlineStyles: InlineStyles): TableRenderRow {
+private fun readTableRow(
+  row: TableRow,
+  isHeader: Boolean,
+  inlineStyles: InlineStyles,
+): TableRenderRow {
   val cells = mutableListOf<AnnotatedString>()
   var cellNode = row.firstChild
   while (cellNode != null) {
@@ -411,20 +440,24 @@ private fun readTableRow(row: TableRow, isHeader: Boolean, inlineStyles: InlineS
   return TableRenderRow(isHeader = isHeader, cells = cells)
 }
 
-private fun buildInlineMarkdown(start: Node?, inlineStyles: InlineStyles): AnnotatedString {
-  return buildAnnotatedString {
+private fun buildInlineMarkdown(
+  start: Node?,
+  inlineStyles: InlineStyles,
+): AnnotatedString =
+  buildAnnotatedString {
     appendInlineNode(
       node = start,
       inlineCodeBg = inlineStyles.inlineCodeBg,
       inlineCodeColor = inlineStyles.inlineCodeColor,
+      linkColor = inlineStyles.linkColor,
     )
   }
-}
 
 private fun AnnotatedString.Builder.appendInlineNode(
   node: Node?,
   inlineCodeBg: Color,
   inlineCodeColor: Color,
+  linkColor: Color,
 ) {
   var current = node
   while (current != null) {
@@ -445,28 +478,41 @@ private fun AnnotatedString.Builder.appendInlineNode(
       }
       is Emphasis -> {
         withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-          appendInlineNode(current.firstChild, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor)
+          appendInlineNode(
+            current.firstChild,
+            inlineCodeBg = inlineCodeBg,
+            inlineCodeColor = inlineCodeColor,
+            linkColor = linkColor,
+          )
         }
       }
       is StrongEmphasis -> {
         withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) {
-          appendInlineNode(current.firstChild, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor)
+          appendInlineNode(
+            current.firstChild,
+            inlineCodeBg = inlineCodeBg,
+            inlineCodeColor = inlineCodeColor,
+            linkColor = linkColor,
+          )
         }
       }
       is Strikethrough -> {
         withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) {
-          appendInlineNode(current.firstChild, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor)
+          appendInlineNode(
+            current.firstChild,
+            inlineCodeBg = inlineCodeBg,
+            inlineCodeColor = inlineCodeColor,
+            linkColor = linkColor,
+          )
         }
       }
       is Link -> {
-        withStyle(
-          SpanStyle(
-            color = mobileAccent,
-            textDecoration = TextDecoration.Underline,
-          ),
-        ) {
-          appendInlineNode(current.firstChild, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor)
-        }
+        appendLinkNode(
+          link = current,
+          inlineCodeBg = inlineCodeBg,
+          inlineCodeColor = inlineCodeColor,
+          linkColor = linkColor,
+        )
       }
       is MarkdownImage -> {
         val alt = buildPlainText(current.firstChild)
@@ -482,11 +528,77 @@ private fun AnnotatedString.Builder.appendInlineNode(
         }
       }
       else -> {
-        appendInlineNode(current.firstChild, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor)
+        appendInlineNode(
+          current.firstChild,
+          inlineCodeBg = inlineCodeBg,
+          inlineCodeColor = inlineCodeColor,
+          linkColor = linkColor,
+        )
       }
     }
     current = current.next
   }
+}
+
+private fun AnnotatedString.Builder.appendLinkNode(
+  link: Link,
+  inlineCodeBg: Color,
+  inlineCodeColor: Color,
+  linkColor: Color,
+) {
+  val destination = link.destination?.trim().orEmpty()
+  val linkStyle =
+    SpanStyle(
+      color = linkColor,
+      textDecoration = TextDecoration.Underline,
+    )
+  if (destination.isEmpty() || !isSafeMarkdownLinkDestination(destination)) {
+    // Drop unsafe schemes while preserving visible link text.
+    appendInlineNode(
+      link.firstChild,
+      inlineCodeBg = inlineCodeBg,
+      inlineCodeColor = inlineCodeColor,
+      linkColor = linkColor,
+    )
+    return
+  }
+
+  withLink(LinkAnnotation.Url(url = destination, styles = TextLinkStyles(style = linkStyle))) {
+    appendInlineNode(
+      link.firstChild,
+      inlineCodeBg = inlineCodeBg,
+      inlineCodeColor = inlineCodeColor,
+      linkColor = linkColor,
+    )
+  }
+}
+
+private fun isSafeMarkdownLinkDestination(destination: String): Boolean {
+  val scheme =
+    runCatching { URI(destination).scheme?.lowercase(Locale.US) }
+      .getOrNull()
+      ?: return false
+  // Chat markdown links are user/model supplied; keep navigation limited to
+  // browser-safe web URLs instead of custom Android intents or file URLs.
+  return scheme == "http" || scheme == "https"
+}
+
+/** Builds styled inline markdown for compact chat labels and preview text. */
+internal fun buildChatInlineMarkdown(
+  text: String,
+  linkColor: Color = Color.Blue,
+): AnnotatedString {
+  val document = markdownParser.parse(text) as Document
+  val paragraph = document.firstChild as? Paragraph ?: return AnnotatedString("")
+  return buildInlineMarkdown(
+    paragraph.firstChild,
+    InlineStyles(
+      inlineCodeBg = Color.Transparent,
+      inlineCodeColor = Color.Unspecified,
+      linkColor = linkColor,
+      baseCallout = TextStyle.Default,
+    ),
+  )
 }
 
 private fun buildPlainText(start: Node?): String {
@@ -509,29 +621,47 @@ private fun standaloneDataImage(paragraph: Paragraph): ParsedDataImage? {
   return parseDataImageDestination(only.destination)
 }
 
-private fun parseDataImageDestination(destination: String?): ParsedDataImage? {
+/** Parses a data:image Markdown destination when it is safe to render inline. */
+internal fun parseDataImageDestination(destination: String?): ParsedDataImage? {
   val raw = destination?.trim().orEmpty()
   if (raw.isEmpty()) return null
+  // Bound the full URI before regex parsing so pasted data images cannot allocate huge match buffers.
+  if (raw.length > CHAT_IMAGE_MAX_BASE64_CHARS + DATA_IMAGE_HEADER_MAX_CHARS) return null
   val match = dataImageRegex.matchEntire(raw) ?: return null
-  val subtype = match.groupValues.getOrNull(1)?.trim()?.ifEmpty { "png" } ?: "png"
-  val base64 = match.groupValues.getOrNull(2)?.replace("\n", "")?.replace("\r", "")?.trim().orEmpty()
+  val subtype =
+    match.groupValues
+      .getOrNull(1)
+      ?.trim()
+      ?.ifEmpty { "png" } ?: "png"
+  val base64 =
+    match.groupValues
+      .getOrNull(2)
+      ?.replace("\n", "")
+      ?.replace("\r", "")
+      ?.trim()
+      .orEmpty()
   if (base64.isEmpty()) return null
+  if (base64.length > CHAT_IMAGE_MAX_BASE64_CHARS) return null
   return ParsedDataImage(mimeType = "image/$subtype", base64 = base64)
 }
 
-private fun headingStyle(level: Int): TextStyle {
-  return when (level.coerceIn(1, 6)) {
-    1 -> mobileCallout.copy(fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold)
-    2 -> mobileCallout.copy(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold)
-    3 -> mobileCallout.copy(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
-    4 -> mobileCallout.copy(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold)
-    else -> mobileCallout.copy(fontWeight = FontWeight.SemiBold)
+private fun headingStyle(
+  level: Int,
+  baseCallout: TextStyle,
+): TextStyle =
+  when (level.coerceIn(1, 6)) {
+    1 -> baseCallout.copy(fontSize = 22.sp, lineHeight = 28.sp, fontWeight = FontWeight.Bold)
+    2 -> baseCallout.copy(fontSize = 20.sp, lineHeight = 26.sp, fontWeight = FontWeight.Bold)
+    3 -> baseCallout.copy(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+    4 -> baseCallout.copy(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.SemiBold)
+    else -> baseCallout.copy(fontWeight = FontWeight.SemiBold)
   }
-}
 
 private data class InlineStyles(
   val inlineCodeBg: Color,
   val inlineCodeColor: Color,
+  val linkColor: Color,
+  val baseCallout: TextStyle,
 )
 
 private data class TableRenderRow(
@@ -539,19 +669,25 @@ private data class TableRenderRow(
   val cells: List<AnnotatedString>,
 )
 
-private data class ParsedDataImage(
+/**
+ * Parsed bounded data-image payload for chat markdown rendering.
+ */
+internal data class ParsedDataImage(
   val mimeType: String,
   val base64: String,
 )
 
 @Composable
-private fun InlineBase64Image(base64: String, mimeType: String?) {
+private fun InlineBase64Image(
+  base64: String,
+  mimeType: String?,
+) {
   val imageState = rememberBase64ImageState(base64)
   val image = imageState.image
 
   if (image != null) {
     Image(
-      bitmap = image!!,
+      bitmap = image,
       contentDescription = mimeType ?: "image",
       contentScale = ContentScale.Fit,
       modifier = Modifier.fillMaxWidth(),

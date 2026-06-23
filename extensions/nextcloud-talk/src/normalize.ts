@@ -1,4 +1,5 @@
-export function normalizeNextcloudTalkMessagingTarget(raw: string): string | undefined {
+// Nextcloud Talk helper module supports normalize behavior.
+export function stripNextcloudTalkTargetPrefix(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
@@ -22,7 +23,12 @@ export function normalizeNextcloudTalkMessagingTarget(raw: string): string | und
     return undefined;
   }
 
-  return `nextcloud-talk:${normalized}`.toLowerCase();
+  return normalized;
+}
+
+export function normalizeNextcloudTalkMessagingTarget(raw: string): string | undefined {
+  const normalized = stripNextcloudTalkTargetPrefix(raw);
+  return normalized ? `nextcloud-talk:${normalized}`.toLowerCase() : undefined;
 }
 
 export function looksLikeNextcloudTalkTargetId(raw: string): boolean {

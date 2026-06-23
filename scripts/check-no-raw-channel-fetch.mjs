@@ -1,67 +1,68 @@
 #!/usr/bin/env node
 
+// Blocks new raw fetch callsites in channel and plugin runtime sources.
 import ts from "typescript";
+import { bundledPluginCallsite } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mjs";
-import { runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
+import {
+  collectCallExpressionLines,
+  runAsScript,
+  unwrapExpression,
+} from "./lib/ts-guard-utils.mjs";
 
-const sourceRoots = [
-  "src/telegram",
-  "src/discord",
-  "src/slack",
-  "src/signal",
-  "src/imessage",
-  "src/web",
-  "src/channels",
-  "src/routing",
-  "src/line",
-  "extensions",
-];
+const sourceRoots = ["src/channels", "src/routing", "src/line", "extensions"];
 
 // Temporary allowlist for legacy callsites. New raw fetch callsites in channel/plugin runtime
 // code should be rejected and migrated to fetchWithSsrFGuard/shared channel helpers.
 const allowedRawFetchCallsites = new Set([
-  "extensions/bluebubbles/src/types.ts:133",
-  "extensions/feishu/src/streaming-card.ts:31",
-  "extensions/feishu/src/streaming-card.ts:101",
-  "extensions/feishu/src/streaming-card.ts:143",
-  "extensions/feishu/src/streaming-card.ts:199",
-  "extensions/google-gemini-cli-auth/oauth.ts:372",
-  "extensions/google-gemini-cli-auth/oauth.ts:408",
-  "extensions/google-gemini-cli-auth/oauth.ts:447",
-  "extensions/google-gemini-cli-auth/oauth.ts:507",
-  "extensions/google-gemini-cli-auth/oauth.ts:575",
-  "extensions/googlechat/src/api.ts:22",
-  "extensions/googlechat/src/api.ts:43",
-  "extensions/googlechat/src/api.ts:63",
-  "extensions/googlechat/src/api.ts:188",
-  "extensions/googlechat/src/auth.ts:82",
-  "extensions/matrix/src/directory-live.ts:41",
-  "extensions/matrix/src/matrix/client/config.ts:171",
-  "extensions/mattermost/src/mattermost/client.ts:211",
-  "extensions/mattermost/src/mattermost/monitor.ts:230",
-  "extensions/mattermost/src/mattermost/probe.ts:27",
-  "extensions/minimax-portal-auth/oauth.ts:71",
-  "extensions/minimax-portal-auth/oauth.ts:112",
-  "extensions/msteams/src/graph.ts:39",
-  "extensions/nextcloud-talk/src/room-info.ts:92",
-  "extensions/nextcloud-talk/src/send.ts:107",
-  "extensions/nextcloud-talk/src/send.ts:198",
-  "extensions/qwen-portal-auth/oauth.ts:46",
-  "extensions/qwen-portal-auth/oauth.ts:80",
-  "extensions/talk-voice/index.ts:27",
-  "extensions/thread-ownership/index.ts:105",
-  "extensions/voice-call/src/providers/plivo.ts:95",
-  "extensions/voice-call/src/providers/telnyx.ts:61",
-  "extensions/voice-call/src/providers/tts-openai.ts:111",
-  "extensions/voice-call/src/providers/twilio/api.ts:23",
-  "src/channels/telegram/api.ts:8",
-  "src/discord/send.outbound.ts:347",
-  "src/discord/voice-message.ts:264",
-  "src/discord/voice-message.ts:308",
-  "src/slack/monitor/media.ts:64",
-  "src/slack/monitor/media.ts:68",
-  "src/slack/monitor/media.ts:82",
-  "src/slack/monitor/media.ts:108",
+  bundledPluginCallsite("browser", "src/browser/cdp.helpers.ts", 268),
+  bundledPluginCallsite("browser", "src/browser/client-fetch.ts", 192),
+  bundledPluginCallsite("chutes", "models.ts", 536),
+  bundledPluginCallsite("chutes", "models.ts", 543),
+  bundledPluginCallsite("discord", "src/monitor/gateway-plugin.ts", 417),
+  bundledPluginCallsite("discord", "src/monitor/gateway-plugin.ts", 483),
+  bundledPluginCallsite("discord", "src/voice-message.ts", 298),
+  bundledPluginCallsite("discord", "src/voice-message.ts", 333),
+  bundledPluginCallsite("elevenlabs", "speech-provider.ts", 295),
+  bundledPluginCallsite("elevenlabs", "tts.ts", 74),
+  bundledPluginCallsite("feishu", "src/monitor.webhook.test-helpers.ts", 25),
+  bundledPluginCallsite("github-copilot", "login.ts", 80),
+  bundledPluginCallsite("github-copilot", "login.ts", 112),
+  bundledPluginCallsite("googlechat", "src/auth.ts", 83),
+  bundledPluginCallsite("huggingface", "models.ts", 143),
+  bundledPluginCallsite("kilocode", "provider-models.ts", 130),
+  bundledPluginCallsite("matrix", "src/matrix/sdk/transport.ts", 112),
+  bundledPluginCallsite("microsoft-foundry", "onboard.ts", 479),
+  bundledPluginCallsite("microsoft", "speech-provider.ts", 140),
+  bundledPluginCallsite("minimax", "oauth.ts", 82),
+  bundledPluginCallsite("minimax", "oauth.ts", 123),
+  bundledPluginCallsite("minimax", "tts.ts", 52),
+  bundledPluginCallsite("msteams", "src/graph.ts", 47),
+  bundledPluginCallsite("msteams", "src/sdk.ts", 400),
+  bundledPluginCallsite("msteams", "src/sdk.ts", 441),
+  bundledPluginCallsite("ollama", "src/stream.ts", 649),
+  bundledPluginCallsite("openai", "tts.ts", 149),
+  bundledPluginCallsite("qa-channel", "src/bus-client.ts", 41),
+  bundledPluginCallsite("qa-channel", "src/bus-client.ts", 221),
+  bundledPluginCallsite("qa-lab", "src/docker-up.runtime.ts", 274),
+  bundledPluginCallsite("qa-lab", "src/gateway-child.ts", 489),
+  bundledPluginCallsite("qa-lab", "src/suite.ts", 330),
+  bundledPluginCallsite("qa-lab", "src/suite.ts", 341),
+  bundledPluginCallsite("qa-lab", "web/src/app.ts", 23),
+  bundledPluginCallsite("qa-lab", "web/src/app.ts", 31),
+  bundledPluginCallsite("qa-lab", "web/src/app.ts", 39),
+  bundledPluginCallsite("qqbot", "src/engine/api/api-client.ts", 124),
+  bundledPluginCallsite("qqbot", "src/engine/api/media-chunked.ts", 554),
+  bundledPluginCallsite("qqbot", "src/engine/api/token.ts", 211),
+  bundledPluginCallsite("qqbot", "src/engine/tools/channel-api.ts", 178),
+  bundledPluginCallsite("qqbot", "src/engine/utils/stt.ts", 87),
+  bundledPluginCallsite("signal", "src/install-signal-cli.ts", 224),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 106),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 125),
+  bundledPluginCallsite("slack", "src/monitor/media.ts", 130),
+  bundledPluginCallsite("venice", "models.ts", 552),
+  bundledPluginCallsite("vercel-ai-gateway", "models.ts", 181),
+  bundledPluginCallsite("voice-call", "src/providers/twilio/api.ts", 23),
 ]);
 
 function isRawFetchCall(expression) {
@@ -79,25 +80,26 @@ function isRawFetchCall(expression) {
   return false;
 }
 
+/**
+ * Finds raw `fetch(...)` and `globalThis.fetch(...)` call lines.
+ */
 export function findRawFetchCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const lines = [];
-  const visit = (node) => {
-    if (ts.isCallExpression(node) && isRawFetchCall(node.expression)) {
-      lines.push(toLine(sourceFile, node.expression));
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(sourceFile);
-  return lines;
+  return collectCallExpressionLines(ts, sourceFile, (node) =>
+    isRawFetchCall(node.expression) ? node.expression : null,
+  );
 }
 
+/**
+ * Runs the raw channel/plugin fetch guard.
+ */
 export async function main() {
   await runCallsiteGuard({
     importMetaUrl: import.meta.url,
     sourceRoots,
     extraTestSuffixes: [".browser.test.ts", ".node.test.ts"],
     findCallLines: findRawFetchCallLines,
+    skipRelativePath: (relPath) => relPath.includes("/test-support/"),
     allowCallsite: (callsite) => allowedRawFetchCallsites.has(callsite),
     header: "Found raw fetch() usage in channel/plugin runtime sources outside allowlist:",
     footer: "Use fetchWithSsrFGuard() or existing channel/plugin SDK wrappers for network calls.",

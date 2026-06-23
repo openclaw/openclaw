@@ -1,8 +1,15 @@
-import type { OpenClawConfig, HumanDelayConfig, IdentityConfig } from "../config/config.js";
+/**
+ * Agent identity and message-prefix resolution.
+ * Applies account, channel, global, and per-agent precedence for reactions,
+ * prefixes, and human-delay settings.
+ */
+import type { HumanDelayConfig, IdentityConfig } from "../config/types.base.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
 const DEFAULT_ACK_REACTION = "👀";
 
+/** Resolve the configured identity block for one agent. */
 export function resolveAgentIdentity(
   cfg: OpenClawConfig,
   agentId: string,
@@ -10,6 +17,7 @@ export function resolveAgentIdentity(
   return resolveAgentConfig(cfg, agentId)?.identity;
 }
 
+/** Resolve the acknowledgement reaction using account, channel, global, then identity fallback. */
 export function resolveAckReaction(
   cfg: OpenClawConfig,
   agentId: string,
@@ -45,6 +53,7 @@ export function resolveAckReaction(
   return emoji || DEFAULT_ACK_REACTION;
 }
 
+/** Build the automatic `[name]` prefix for an agent identity. */
 export function resolveIdentityNamePrefix(
   cfg: OpenClawConfig,
   agentId: string,
@@ -56,11 +65,7 @@ export function resolveIdentityNamePrefix(
   return `[${name}]`;
 }
 
-/** Returns just the identity name (without brackets) for template context. */
-export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): string | undefined {
-  return resolveAgentIdentity(cfg, agentId)?.name?.trim() || undefined;
-}
-
+/** Resolve the outbound message prefix, preserving explicit empty prefixes. */
 export function resolveMessagePrefix(
   cfg: OpenClawConfig,
   agentId: string,
@@ -91,6 +96,7 @@ function getChannelConfig(
     : undefined;
 }
 
+/** Resolve the optional response prefix, expanding `auto` to the identity name prefix. */
 export function resolveResponsePrefix(
   cfg: OpenClawConfig,
   agentId: string,
@@ -132,6 +138,7 @@ export function resolveResponsePrefix(
   return undefined;
 }
 
+/** Resolve message and response prefix values together for channel delivery. */
 export function resolveEffectiveMessagesConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -154,6 +161,7 @@ export function resolveEffectiveMessagesConfig(
   };
 }
 
+/** Resolve per-agent human-delay settings over global agent defaults. */
 export function resolveHumanDelayConfig(
   cfg: OpenClawConfig,
   agentId: string,

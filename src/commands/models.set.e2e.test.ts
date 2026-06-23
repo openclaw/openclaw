@@ -1,27 +1,38 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Models set e2e tests cover persisted model selection updates through command handlers.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const readConfigFileSnapshot = vi.fn();
-const writeConfigFile = vi.fn().mockResolvedValue(undefined);
-const loadConfig = vi.fn().mockReturnValue({});
-
-vi.mock("../config/config.js", () => ({
-  CONFIG_PATH: "/tmp/openclaw.json",
-  readConfigFileSnapshot,
-  writeConfigFile,
-  loadConfig,
+const mocks = vi.hoisted(() => ({
+  currentConfig: {} as Record<string, unknown>,
+  writtenConfig: undefined as Record<string, unknown> | undefined,
 }));
 
+vi.mock("./models/shared.js", async () => {
+  const actual = await vi.importActual<typeof import("./models/shared.js")>("./models/shared.js");
+  return {
+    ...actual,
+    updateConfig: async (
+      mutator: (
+        cfg: Record<string, unknown>,
+        context: {
+          runtimeConfig: Record<string, unknown>;
+        },
+      ) => Record<string, unknown>,
+    ) => {
+      const sourceConfig = structuredClone(mocks.currentConfig);
+      const runtimeConfig = structuredClone(mocks.currentConfig);
+      const next = mutator(sourceConfig, { runtimeConfig });
+      mocks.writtenConfig = next;
+      return next;
+    },
+  };
+});
+
+import { modelsFallbacksAddCommand } from "./models/fallbacks.js";
+import { modelsSetCommand } from "./models/set.js";
+
 function mockConfigSnapshot(config: Record<string, unknown> = {}) {
-  readConfigFileSnapshot.mockResolvedValue({
-    path: "/tmp/openclaw.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    valid: true,
-    config,
-    issues: [],
-    legacyIssues: [],
-  });
+  mocks.currentConfig = config;
+  mocks.writtenConfig = undefined;
 }
 
 function makeRuntime() {
@@ -29,11 +40,13 @@ function makeRuntime() {
 }
 
 function getWrittenConfig() {
-  return writeConfigFile.mock.calls[0]?.[0] as Record<string, unknown>;
+  if (!mocks.writtenConfig) {
+    throw new Error("expected config write");
+  }
+  return mocks.writtenConfig;
 }
 
 function expectWrittenPrimaryModel(model: string) {
-  expect(writeConfigFile).toHaveBeenCalledTimes(1);
   const written = getWrittenConfig();
   expect(written.agents).toEqual({
     defaults: {
@@ -43,18 +56,10 @@ function expectWrittenPrimaryModel(model: string) {
   });
 }
 
-let modelsSetCommand: typeof import("./models/set.js").modelsSetCommand;
-let modelsFallbacksAddCommand: typeof import("./models/fallbacks.js").modelsFallbacksAddCommand;
-
 describe("models set + fallbacks", () => {
-  beforeAll(async () => {
-    ({ modelsSetCommand } = await import("./models/set.js"));
-    ({ modelsFallbacksAddCommand } = await import("./models/fallbacks.js"));
-  });
-
   beforeEach(() => {
-    readConfigFileSnapshot.mockClear();
-    writeConfigFile.mockClear();
+    mocks.currentConfig = {};
+    mocks.writtenConfig = undefined;
   });
 
   it("normalizes z.ai provider in models set", async () => {
@@ -72,7 +77,6 @@ describe("models set + fallbacks", () => {
 
     await modelsFallbacksAddCommand("z-ai/glm-4.7", runtime);
 
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
@@ -88,7 +92,6 @@ describe("models set + fallbacks", () => {
 
     await modelsFallbacksAddCommand("anthropic/claude-opus-4-6", runtime);
 
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {
@@ -110,13 +113,59 @@ describe("models set + fallbacks", () => {
     expectWrittenPrimaryModel("zai/glm-4.7");
   });
 
+  it("keeps canonical OpenRouter native ids in models set", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("openrouter/hunter-alpha", runtime);
+
+    expectWrittenPrimaryModel("openrouter/hunter-alpha");
+  });
+
+  it("normalizes retired Google Gemini preview ids in models set", async () => {
+    mockConfigSnapshot({});
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("google/gemini-3-pro-preview", runtime);
+
+    expectWrittenPrimaryModel("google/gemini-3.1-pro-preview");
+  });
+
+  it("migrates legacy duplicated OpenRouter keys on write", async () => {
+    mockConfigSnapshot({
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/openrouter/hunter-alpha": {
+              params: { thinking: "high" },
+            },
+          },
+        },
+      },
+    });
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("openrouter/hunter-alpha", runtime);
+
+    const written = getWrittenConfig();
+    expect(written.agents).toEqual({
+      defaults: {
+        model: { primary: "openrouter/hunter-alpha" },
+        models: {
+          "openrouter/hunter-alpha": {
+            params: { thinking: "high" },
+          },
+        },
+      },
+    });
+  });
+
   it("rewrites string defaults.model to object form when setting primary", async () => {
     mockConfigSnapshot({ agents: { defaults: { model: "openai/gpt-4.1-mini" } } });
     const runtime = makeRuntime();
 
     await modelsSetCommand("anthropic/claude-opus-4-6", runtime);
 
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
     const written = getWrittenConfig();
     expect(written.agents).toEqual({
       defaults: {

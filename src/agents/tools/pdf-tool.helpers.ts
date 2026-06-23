@@ -1,30 +1,52 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
+/**
+ * PDF tool parsing and response helpers.
+ *
+ * Normalizes PDF inputs, page ranges, provider native support, model config, and assistant text output.
+ */
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
-import { extractAssistantText } from "../pi-embedded-utils.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AssistantMessage } from "../../llm/types.js";
+import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
+import { extractAssistantText } from "../embedded-agent-utils.js";
 
-export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
+/** Normalized PDF model preference used by tool registration and execution. */
+type PdfModelConfig = { primary?: string; fallbacks?: string[] };
 
-/**
- * Providers known to support native PDF document input.
- * When the model's provider is in this set, the tool sends raw PDF bytes
- * via provider-specific API calls instead of extracting text/images first.
- */
-export const NATIVE_PDF_PROVIDERS = new Set(["anthropic", "google"]);
+/** Reads `pdf` and `pdfs` tool arguments into a trimmed, de-duplicated PDF input list. */
+export function resolvePdfInputs(record: Record<string, unknown>): string[] {
+  const pdfCandidates: string[] = [];
+  if (typeof record.pdf === "string") {
+    pdfCandidates.push(record.pdf);
+  }
+  if (Array.isArray(record.pdfs)) {
+    pdfCandidates.push(...record.pdfs.filter((v): v is string => typeof v === "string"));
+  }
 
-/**
- * Check whether a provider supports native PDF document input.
- */
-export function providerSupportsNativePdf(provider: string): boolean {
-  return NATIVE_PDF_PROVIDERS.has(provider.toLowerCase().trim());
+  const seenPdfs = new Set<string>();
+  const pdfInputs: string[] = [];
+  for (const candidate of pdfCandidates) {
+    const trimmed = candidate.trim();
+    if (!trimmed || seenPdfs.has(trimmed)) {
+      continue;
+    }
+    seenPdfs.add(trimmed);
+    pdfInputs.push(trimmed);
+  }
+  if (pdfInputs.length === 0) {
+    throw new Error("pdf required: provide a path or URL to a PDF document");
+  }
+  return pdfInputs;
 }
 
-/**
- * Parse a page range string (e.g. "1-5", "3", "1-3,7-9") into an array of 1-based page numbers.
- */
+/** Checks whether a provider supports native PDF document input. */
+export function providerSupportsNativePdf(provider: string): boolean {
+  return providerSupportsNativePdfDocument({ providerId: provider });
+}
+
+/** Parses a page range string into sorted, unique, 1-based page numbers within `maxPages`. */
 export function parsePageRange(range: string, maxPages: number): number[] {
   const pages = new Set<number>();
   const parts = range.split(",").map((p) => p.trim());
@@ -55,6 +77,7 @@ export function parsePageRange(range: string, maxPages: number): number[] {
   return Array.from(pages).toSorted((a, b) => a - b);
 }
 
+/** Converts a provider assistant message into PDF text or throws a model-labelled failure. */
 export function coercePdfAssistantText(params: {
   message: AssistantMessage;
   provider: string;
@@ -81,6 +104,7 @@ export function coercePdfAssistantText(params: {
   throw new Error(`PDF model returned no text (${label}).`);
 }
 
+/** Reads configured PDF primary/fallback models from agent defaults. */
 export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   const primary = resolveAgentModelPrimaryValue(cfg?.agents?.defaults?.pdfModel);
   const fallbacks = resolveAgentModelFallbackValues(cfg?.agents?.defaults?.pdfModel);
@@ -94,6 +118,7 @@ export function coercePdfModelConfig(cfg?: OpenClawConfig): PdfModelConfig {
   return modelConfig;
 }
 
+/** Caps requested PDF response tokens to the selected model's advertised maximum. */
 export function resolvePdfToolMaxTokens(
   modelMaxTokens: number | undefined,
   requestedMaxTokens = 4096,

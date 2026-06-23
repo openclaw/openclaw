@@ -1,7 +1,17 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
-import { setAbortMemory } from "./abort.js";
+// Builds message body text from session state and reply metadata.
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { setAbortMemory } from "./abort-primitives.js";
 
+const sessionAccessorRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-accessor.js"),
+);
+
+function loadSessionAccessorRuntime() {
+  return sessionAccessorRuntimeLoader.load();
+}
+
+/** Applies one-shot session hints to the agent-visible body and clears consumed flags. */
 export async function applySessionHints(params: {
   baseBody: string;
   abortedLastRun: boolean;
@@ -17,23 +27,26 @@ export async function applySessionHints(params: {
     : "";
   if (abortedHint) {
     prefixedBodyBase = `${abortedHint}\n\n${prefixedBodyBase}`;
+    // The abort hint is one-shot; clear durable state once it is added.
     if (params.sessionEntry && params.sessionStore && params.sessionKey) {
+      const updatedAt = Date.now();
       params.sessionEntry.abortedLastRun = false;
-      params.sessionEntry.updatedAt = Date.now();
+      params.sessionEntry.updatedAt = updatedAt;
       params.sessionStore[params.sessionKey] = params.sessionEntry;
       if (params.storePath) {
         const sessionKey = params.sessionKey;
-        await updateSessionStore(params.storePath, (store) => {
-          const entry = store[sessionKey] ?? params.sessionEntry;
-          if (!entry) {
-            return;
-          }
-          store[sessionKey] = {
-            ...entry,
+        const { patchSessionEntry } = await loadSessionAccessorRuntime();
+        await patchSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey,
+          },
+          () => ({
             abortedLastRun: false,
-            updatedAt: Date.now(),
-          };
-        });
+            updatedAt,
+          }),
+          { fallbackEntry: params.sessionEntry },
+        );
       }
     } else if (params.abortKey) {
       setAbortMemory(params.abortKey, false);

@@ -1,18 +1,10 @@
+// Tests path boundary enforcement for safe file access.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
+import { resolveRootPath, resolveRootPathSync } from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
-
-async function withTempRoot<T>(prefix: string, run: (root: string) => Promise<T>): Promise<T> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await run(root);
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-}
 
 function createSeededRandom(seed: number): () => number {
   let state = seed >>> 0;
@@ -22,13 +14,13 @@ function createSeededRandom(seed: number): () => number {
   };
 }
 
-describe("resolveBoundaryPath", () => {
+describe("resolveRootPath", () => {
   it("resolves symlink parents with non-existent leafs inside root", async () => {
     if (process.platform === "win32") {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const targetDir = path.join(root, "target-dir");
       const linkPath = path.join(root, "alias");
@@ -36,7 +28,7 @@ describe("resolveBoundaryPath", () => {
       await fs.symlink(targetDir, linkPath);
 
       const unresolved = path.join(linkPath, "missing.txt");
-      const result = await resolveBoundaryPath({
+      const result = await resolveRootPath({
         absolutePath: unresolved,
         rootPath: root,
         boundaryLabel: "sandbox root",
@@ -55,7 +47,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const linkPath = path.join(root, "alias-out");
@@ -65,14 +57,14 @@ describe("resolveBoundaryPath", () => {
       const dangling = path.join(linkPath, "missing.txt");
 
       await expect(
-        resolveBoundaryPath({
+        resolveRootPath({
           absolutePath: dangling,
           rootPath: root,
           boundaryLabel: "sandbox root",
         }),
       ).rejects.toThrow(/Symlink escapes sandbox root/i);
       expect(() =>
-        resolveBoundaryPathSync({
+        resolveRootPathSync({
           absolutePath: dangling,
           rootPath: root,
           boundaryLabel: "sandbox root",
@@ -86,7 +78,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const outsideFile = path.join(outside, "target.txt");
@@ -97,14 +89,14 @@ describe("resolveBoundaryPath", () => {
       await fs.symlink(outsideFile, linkPath);
 
       await expect(
-        resolveBoundaryPath({
+        resolveRootPath({
           absolutePath: linkPath,
           rootPath: root,
           boundaryLabel: "sandbox root",
         }),
       ).rejects.toThrow(/Symlink escapes sandbox root/i);
 
-      const allowed = await resolveBoundaryPath({
+      const allowed = await resolveRootPath({
         absolutePath: linkPath,
         rootPath: root,
         boundaryLabel: "sandbox root",
@@ -122,7 +114,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const aliasRoot = path.join(base, "workspace-alias");
       const fileName = "plugin.js";
@@ -130,7 +122,7 @@ describe("resolveBoundaryPath", () => {
       await fs.writeFile(path.join(root, fileName), "export default {}", "utf8");
       await fs.symlink(root, aliasRoot);
 
-      const resolved = await resolveBoundaryPath({
+      const resolved = await resolveRootPath({
         absolutePath: path.join(aliasRoot, fileName),
         rootPath: await fs.realpath(root),
         boundaryLabel: "plugin root",
@@ -138,7 +130,7 @@ describe("resolveBoundaryPath", () => {
       expect(resolved.exists).toBe(true);
       expect(isPathInside(resolved.rootCanonicalPath, resolved.canonicalPath)).toBe(true);
 
-      const resolvedSync = resolveBoundaryPathSync({
+      const resolvedSync = resolveRootPathSync({
         absolutePath: path.join(aliasRoot, fileName),
         rootPath: await fs.realpath(root),
         boundaryLabel: "plugin root",
@@ -153,7 +145,7 @@ describe("resolveBoundaryPath", () => {
       return;
     }
 
-    await withTempRoot("openclaw-boundary-path-fuzz-", async (base) => {
+    await withTempDir({ prefix: "openclaw-boundary-path-fuzz-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const safeTarget = path.join(root, "safe-target");
@@ -176,7 +168,7 @@ describe("resolveBoundaryPath", () => {
         const useLink = rand() > 0.5;
         const safeBase = useLink ? safeLinkBase : safeRealBase;
         const safeCandidate = path.join(safeBase, `new-${token}.txt`);
-        const safeResolved = await resolveBoundaryPath({
+        const safeResolved = await resolveRootPath({
           absolutePath: safeCandidate,
           rootPath: root,
           boundaryLabel: "sandbox root",
@@ -185,7 +177,7 @@ describe("resolveBoundaryPath", () => {
 
         const unsafeCandidate = path.join(escapeLink, `new-${token}.txt`);
         await expect(
-          resolveBoundaryPath({
+          resolveRootPath({
             absolutePath: unsafeCandidate,
             rootPath: root,
             boundaryLabel: "sandbox root",

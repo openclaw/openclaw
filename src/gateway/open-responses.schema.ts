@@ -90,15 +90,26 @@ export type ContentPart = z.infer<typeof ContentPartSchema>;
 
 export const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
 
-export type MessageItemRole = z.infer<typeof MessageItemRoleSchema>;
+export const AssistantPhaseSchema = z.enum(["commentary", "final_answer"]);
+export type AssistantPhase = z.infer<typeof AssistantPhaseSchema>;
 
 export const MessageItemSchema = z
   .object({
     type: z.literal("message"),
     role: MessageItemRoleSchema,
     content: z.union([z.string(), z.array(ContentPartSchema)]),
+    phase: AssistantPhaseSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.phase !== undefined && value.role !== "assistant") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["phase"],
+        message: "`phase` is only valid on assistant messages.",
+      });
+    }
+  });
 
 export const FunctionCallItemSchema = z
   .object({
@@ -148,18 +159,18 @@ export type ItemParam = z.infer<typeof ItemParamSchema>;
 // Tool Definitions
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Responses API tool definition uses a flat format (not the Chat Completions
+// wrapped-function format). Fields are at the top level alongside `type`.
 export const FunctionToolDefinitionSchema = z
   .object({
     type: z.literal("function"),
-    function: z.object({
-      name: z.string().min(1, "Tool name cannot be empty"),
-      description: z.string().optional(),
-      parameters: z.record(z.string(), z.unknown()).optional(),
-    }),
+    name: z.string().min(1, "Tool name cannot be empty"),
+    description: z.string().optional(),
+    parameters: z.record(z.string(), z.unknown()).optional(),
+    strict: z.boolean().optional(),
   })
   .strict();
 
-// OpenResponses tool definitions match internal ToolDefinition structure
 export const ToolDefinitionSchema = FunctionToolDefinitionSchema;
 
 export type ToolDefinition = z.infer<typeof ToolDefinitionSchema>;
@@ -172,10 +183,18 @@ export const ToolChoiceSchema = z.union([
   z.literal("auto"),
   z.literal("none"),
   z.literal("required"),
-  z.object({
-    type: z.literal("function"),
-    function: z.object({ name: z.string() }),
-  }),
+  z
+    .object({
+      type: z.literal("function"),
+      name: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("function"),
+      function: z.object({ name: z.string().min(1) }),
+    })
+    .strict(),
 ]);
 
 export const CreateResponseBodySchema = z
@@ -189,9 +208,10 @@ export const CreateResponseBodySchema = z
     max_output_tokens: z.number().int().positive().optional(),
     max_tool_calls: z.number().int().positive().optional(),
     user: z.string().optional(),
-    // Phase 1: ignore but accept these fields
-    temperature: z.number().optional(),
-    top_p: z.number().optional(),
+    // Sampling overrides forwarded to provider (best-effort; some backends like
+    // ChatGPT Codex Responses strip these — see openai-transport-stream.ts).
+    temperature: z.number().min(0).max(2).optional(),
+    top_p: z.number().min(0).max(1).optional(),
     metadata: z.record(z.string(), z.string()).optional(),
     store: z.boolean().optional(),
     previous_response_id: z.string().optional(),
@@ -228,6 +248,7 @@ export const OutputItemSchema = z.discriminatedUnion("type", [
       id: z.string(),
       role: z.literal("assistant"),
       content: z.array(OutputTextContentPartSchema),
+      phase: AssistantPhaseSchema.optional(),
       status: z.enum(["in_progress", "completed"]).optional(),
     })
     .strict(),

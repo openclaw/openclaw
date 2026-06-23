@@ -1,4 +1,5 @@
-import { buildMediaPayload } from "openclaw/plugin-sdk/msteams";
+// Msteams plugin module implements payload behavior.
+import { buildMediaPayload } from "../../runtime-api.js";
 
 export function buildMSTeamsMediaPayload(
   mediaList: Array<{ path: string; contentType?: string }>,

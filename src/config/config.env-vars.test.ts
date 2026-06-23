@@ -1,14 +1,17 @@
+// Covers environment-variable config metadata and parsing.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import {
   applyConfigEnvVars,
+  collectDurableServiceEnvVars,
   collectConfigRuntimeEnvVars,
   createConfigRuntimeEnv,
+  readStateDirDotEnvVars,
 } from "./env-vars.js";
-import { withEnvOverride, withTempHome } from "./test-helpers.js";
+import { withEnvOverride, withTempHome, writeStateDirDotEnv } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("config env vars", () => {
@@ -26,10 +29,98 @@ describe("config env vars", () => {
     });
   });
 
+  it("overrides only exact lower-precedence env values", () => {
+    const config = {
+      env: { vars: { OPENROUTER_API_KEY: "config-key" } },
+    } as OpenClawConfig;
+    const lowerPrecedenceEnv = { OPENROUTER_API_KEY: "shell-key" };
+    const shellEnv = { OPENROUTER_API_KEY: "shell-key" };
+    const changedEnv = { OPENROUTER_API_KEY: "changed-key" };
+
+    applyConfigEnvVars(config, shellEnv, { lowerPrecedenceEnv });
+    applyConfigEnvVars(config, changedEnv, { lowerPrecedenceEnv });
+
+    expect(shellEnv.OPENROUTER_API_KEY).toBe("config-key");
+    expect(changedEnv.OPENROUTER_API_KEY).toBe("changed-key");
+  });
+
+  it("applies config env above normalized lower-precedence aliases", () => {
+    const onLowerPrecedenceKeysReplaced = vi.fn();
+    const env = { ZAI_API_KEY: "shell-key" };
+
+    applyConfigEnvVars({ env: { vars: { Z_AI_API_KEY: "config-key" } } } as OpenClawConfig, env, {
+      lowerPrecedenceEnv: { ZAI_API_KEY: "shell-key" },
+      onLowerPrecedenceKeysReplaced,
+    });
+
+    expect(env).toEqual({
+      ZAI_API_KEY: "config-key",
+      Z_AI_API_KEY: "config-key",
+    });
+    expect(onLowerPrecedenceKeysReplaced).toHaveBeenCalledWith(["ZAI_API_KEY"]);
+  });
+
+  it("preserves a higher-precedence normalized alias", () => {
+    const env = {
+      ZAI_API_KEY: "shell-key",
+      Z_AI_API_KEY: "invocation-key",
+    };
+
+    applyConfigEnvVars({ env: { vars: { ZAI_API_KEY: "config-key" } } } as OpenClawConfig, env, {
+      lowerPrecedenceEnv: { ZAI_API_KEY: "shell-key" },
+    });
+
+    expect(env).toEqual({
+      ZAI_API_KEY: "invocation-key",
+      Z_AI_API_KEY: "invocation-key",
+    });
+  });
+
+  it("mirrors a higher-precedence canonical value into a config-declared alias", () => {
+    const env = { ZAI_API_KEY: "invocation-key" };
+
+    applyConfigEnvVars({ env: { vars: { Z_AI_API_KEY: "config-key" } } } as OpenClawConfig, env);
+
+    expect(env).toEqual({
+      ZAI_API_KEY: "invocation-key",
+      Z_AI_API_KEY: "invocation-key",
+    });
+  });
+
+  it.runIf(process.platform !== "win32")("keeps unrelated POSIX env casing distinct", () => {
+    const env = { FOO: "host-key" };
+
+    applyConfigEnvVars({ env: { vars: { foo: "config-key" } } } as OpenClawConfig, env);
+
+    expect(env).toEqual({
+      FOO: "host-key",
+      foo: "config-key",
+    });
+  });
+
   it("applies env vars from env.vars when missing", async () => {
     await withEnvOverride({ GROQ_API_KEY: undefined }, async () => {
       applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as OpenClawConfig);
       expect(process.env.GROQ_API_KEY).toBe("gsk-config");
+    });
+  });
+
+  it("skips non-string env.vars values from runtime JSON configs", async () => {
+    await withEnvOverride({ API_TOKEN: undefined, PORT: undefined, DEBUG: undefined }, async () => {
+      const cfg = JSON.parse(`{
+        "env": {
+          "vars": {
+            "API_TOKEN": "sk-test-123",
+            "PORT": 8080,
+            "DEBUG": true
+          }
+        }
+      }`);
+
+      expect(applyConfigEnvVars(cfg)).toBeUndefined();
+      expect(process.env.API_TOKEN).toBe("sk-test-123");
+      expect(process.env.PORT).toBeUndefined();
+      expect(process.env.DEBUG).toBeUndefined();
     });
   });
 
@@ -43,6 +134,21 @@ describe("config env vars", () => {
     });
   });
 
+  it("preserves Windows case-insensitive env precedence in merged runtime env", () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const merged = createConfigRuntimeEnv(
+        { env: { vars: { OPENCLAW_LOAD_SHELL_ENV: "1" } } } as OpenClawConfig,
+        { OpenClaw_Load_Shell_Env: "0" },
+      );
+
+      expect(merged.OPENCLAW_LOAD_SHELL_ENV).toBe("0");
+      expect(Object.keys(merged)).toEqual(["OpenClaw_Load_Shell_Env"]);
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("blocks dangerous startup env vars from config env", async () => {
     await withEnvOverride(
       {
@@ -50,6 +156,9 @@ describe("config env vars", () => {
         SHELL: undefined,
         HOME: undefined,
         ZDOTDIR: undefined,
+        OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: undefined,
+        OPENCLAW_INCLUDE_ROOTS: undefined,
+        openclaw_allow_older_binary_destructive_actions: undefined,
         OPENROUTER_API_KEY: undefined,
       },
       async () => {
@@ -60,6 +169,9 @@ describe("config env vars", () => {
               SHELL: "/tmp/evil-shell",
               HOME: "/tmp/evil-home",
               ZDOTDIR: "/tmp/evil-zdotdir",
+              OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
+              OPENCLAW_INCLUDE_ROOTS: "/tmp/evil-include-root",
+              openclaw_allow_older_binary_destructive_actions: "1",
               OPENROUTER_API_KEY: "config-key",
             },
           },
@@ -69,6 +181,9 @@ describe("config env vars", () => {
         expect(entries.SHELL).toBeUndefined();
         expect(entries.HOME).toBeUndefined();
         expect(entries.ZDOTDIR).toBeUndefined();
+        expect(entries.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+        expect(entries.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
+        expect(entries.openclaw_allow_older_binary_destructive_actions).toBeUndefined();
         expect(entries.OPENROUTER_API_KEY).toBe("config-key");
 
         applyConfigEnvVars(config as OpenClawConfig);
@@ -76,6 +191,9 @@ describe("config env vars", () => {
         expect(process.env.SHELL).toBeUndefined();
         expect(process.env.HOME).toBeUndefined();
         expect(process.env.ZDOTDIR).toBeUndefined();
+        expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+        expect(process.env.OPENCLAW_INCLUDE_ROOTS).toBeUndefined();
+        expect(process.env.openclaw_allow_older_binary_destructive_actions).toBeUndefined();
         expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
       },
     );
@@ -97,6 +215,51 @@ describe("config env vars", () => {
       expect(entries[" BAD KEY"]).toBeUndefined();
       expect(entries["NOT-PORTABLE"]).toBeUndefined();
     });
+  });
+
+  it("drops unresolved env references from config env", async () => {
+    const entries = collectConfigRuntimeEnvVars({
+      env: {
+        vars: {
+          OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+          BRAVE_API_KEY: "config-key",
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(entries.OPENROUTER_API_KEY).toBeUndefined();
+    expect(entries.BRAVE_API_KEY).toBe("config-key");
+  });
+
+  it("drops unresolved env references from top-level config env", async () => {
+    const entries = collectConfigRuntimeEnvVars({
+      env: {
+        OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+        BRAVE_API_KEY: "config-key",
+      },
+    } as OpenClawConfig);
+
+    expect(entries.OPENROUTER_API_KEY).toBeUndefined();
+    expect(entries.BRAVE_API_KEY).toBe("config-key");
+  });
+
+  it("keeps resolved env references from config env", async () => {
+    const resolvedConfig = resolveConfigEnvVars(
+      {
+        env: {
+          vars: {
+            OPENROUTER_API_KEY: "${OPENROUTER_API_KEY}",
+            BRAVE_API_KEY: "config-key",
+          },
+        },
+      },
+      { OPENROUTER_API_KEY: "resolved-key" },
+    ) as OpenClawConfig;
+
+    const entries = collectConfigRuntimeEnvVars(resolvedConfig);
+
+    expect(entries.OPENROUTER_API_KEY).toBe("resolved-key");
+    expect(entries.BRAVE_API_KEY).toBe("config-key");
   });
 
   it("loads ${VAR} substitutions from ~/.openclaw/.env on repeated runtime loads", async () => {
@@ -128,6 +291,71 @@ describe("config env vars", () => {
         const second = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
         expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
       });
+    });
+  });
+
+  it("reads key-value pairs from the state-dir .env file", async () => {
+    await withTempHome(async (_home) => {
+      await writeStateDirDotEnv("BRAVE_API_KEY=BSA-test-key\nDISCORD_BOT_TOKEN=discord-tok\n", {
+        env: process.env,
+      });
+      const vars = readStateDirDotEnvVars(process.env);
+      expect(vars.BRAVE_API_KEY).toBe("BSA-test-key");
+      expect(vars.DISCORD_BOT_TOKEN).toBe("discord-tok");
+    });
+  });
+
+  it("returns empty record when the state-dir .env file is missing", async () => {
+    await withTempHome(async (_home) => {
+      expect(readStateDirDotEnvVars(process.env)).toStrictEqual({});
+    });
+  });
+
+  it("drops dangerous and empty values from the state-dir .env file", async () => {
+    await withTempHome(async (_home) => {
+      await writeStateDirDotEnv(
+        "NODE_OPTIONS=--require /tmp/evil.js\nOPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1\nEMPTY=\nVALID=ok\n",
+        { env: process.env },
+      );
+      const vars = readStateDirDotEnvVars(process.env);
+      expect(vars.NODE_OPTIONS).toBeUndefined();
+      expect(vars.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+      expect(vars.EMPTY).toBeUndefined();
+      expect(vars.VALID).toBe("ok");
+    });
+  });
+
+  it("respects OPENCLAW_STATE_DIR when reading state-dir .env vars", async () => {
+    await withTempHome(async (_home) => {
+      const customStateDir = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "custom-state");
+      await writeStateDirDotEnv("CUSTOM_KEY=from-override\n", {
+        stateDir: customStateDir,
+      });
+      expect(
+        readStateDirDotEnvVars({
+          OPENCLAW_STATE_DIR: customStateDir,
+        }).CUSTOM_KEY,
+      ).toBe("from-override");
+    });
+  });
+
+  it("lets config service env vars override state-dir .env vars", async () => {
+    await withTempHome(async (_home) => {
+      await writeStateDirDotEnv("MY_KEY=from-dotenv\n", {
+        env: process.env,
+      });
+      expect(
+        collectDurableServiceEnvVars({
+          env: process.env,
+          config: {
+            env: {
+              vars: {
+                MY_KEY: "from-config",
+              },
+            },
+          } as OpenClawConfig,
+        }).MY_KEY,
+      ).toBe("from-config");
     });
   });
 });

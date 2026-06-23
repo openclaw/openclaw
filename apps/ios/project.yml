@@ -1,6 +1,6 @@
 name: OpenClaw
 options:
-  bundleIdPrefix: ai.openclaw
+  bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "16.0"
@@ -14,7 +14,10 @@ packages:
   OpenClawKit:
     path: ../shared/OpenClawKit
   Swabble:
-    path: ../../Swabble
+    path: ../swabble
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    exactVersion: 147.0.0
 
 schemes:
   OpenClaw:
@@ -34,6 +37,19 @@ schemes:
     test:
       targets:
         - OpenClawLogicTests
+  OpenClawUITests:
+    shared: true
+    build:
+      targets:
+        OpenClawUITests: all
+    test:
+      targets:
+        - OpenClawUITests
+  OpenClawWatchApp:
+    shared: true
+    build:
+      targets:
+        OpenClawWatchApp: all
 
 targets:
   OpenClaw:
@@ -49,6 +65,8 @@ targets:
         embed: true
       - target: OpenClawActivityWidget
         embed: true
+      # A companion watch application belongs in the standard Watch bundle location.
+      # PlugIns is for extension products and breaks paired watch installation.
       - target: OpenClawWatchApp
       - package: OpenClawKit
       - package: OpenClawKit
@@ -57,6 +75,7 @@ targets:
         product: OpenClawProtocol
       - package: Swabble
         product: SwabbleKit
+      - package: WebRTC
       - sdk: AppIntents.framework
     preBuildScripts:
       - name: SwiftFormat (lint)
@@ -70,7 +89,8 @@ targets:
             echo "error: swiftformat not found (brew install swiftformat)" >&2
             exit 1
           fi
-          swiftformat --lint --config "$SRCROOT/../../.swiftformat" \
+          swiftformat --lint --config "$SRCROOT/../../config/swiftformat" \
+            --unexclude "$SRCROOT/Sources,$SRCROOT/ShareExtension,$SRCROOT/ActivityWidget,$SRCROOT/WatchApp,$SRCROOT/../shared/OpenClawKit,$SRCROOT/../swabble" \
             --filelist "$SRCROOT/SwiftSources.input.xcfilelist"
       - name: SwiftLint
         basedOnDependencyAnalysis: false
@@ -86,29 +106,42 @@ targets:
           swiftlint lint --config "$SRCROOT/.swiftlint.yml" --use-script-input-file-lists
     settings:
       base:
-        CODE_SIGN_IDENTITY: "Apple Development"
-        CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
+        CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
+        CODE_SIGN_ENTITLEMENTS: "$(OPENCLAW_CODE_SIGN_ENTITLEMENTS)"
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID)"
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_APP_PROFILE)"
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         SUPPORTS_LIVE_ACTIVITIES: YES
         ENABLE_APPINTENTS_METADATA: NO
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
+      configs:
+        Debug:
+          OPENCLAW_CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
+          OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT: development
+          OPENCLAW_PUSH_MODE: localSandbox
+          OPENCLAW_PUSH_RELAY_BASE_URL: ""
+        Release:
+          OPENCLAW_CODE_SIGN_ENTITLEMENTS: Sources/OpenClaw.entitlements
+          OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT: production
+          OPENCLAW_PUSH_MODE: localProduction
+          OPENCLAW_PUSH_RELAY_BASE_URL: ""
     info:
       path: Sources/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
         CFBundleIconName: AppIcon
         CFBundleURLTypes:
-          - CFBundleURLName: ai.openclaw.ios
+          - CFBundleURLName: ai.openclawfoundation.app
             CFBundleURLSchemes:
               - openclaw
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        OpenClawCanonicalVersion: "$(OPENCLAW_IOS_VERSION)"
+        OpenClawAppGroupIdentifier: "$(OPENCLAW_APP_GROUP_ID)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -116,32 +149,34 @@ targets:
           - audio
           - remote-notification
         BGTaskSchedulerPermittedIdentifiers:
-          - ai.openclaw.ios.bgrefresh
+          - "$(OPENCLAW_APP_BUNDLE_ID).bgrefresh"
         NSLocalNetworkUsageDescription: OpenClaw discovers and connects to your OpenClaw gateway on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
+          NSAllowsLocalNetworking: true
         NSBonjourServices:
           - _openclaw-gw._tcp
         NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
+        NSCalendarsUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
+        NSCalendarsFullAccessUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
+        NSCalendarsWriteOnlyAccessUsageDescription: OpenClaw uses your calendars to add events when you enable calendar access.
+        NSContactsUsageDescription: OpenClaw uses your contacts so you can search and reference people while using the assistant.
         NSLocationWhenInUseUsageDescription: OpenClaw uses your location when you allow location sharing.
         NSLocationAlwaysAndWhenInUseUsageDescription: OpenClaw can share your location in the background when you enable Always.
-        NSMicrophoneUsageDescription: OpenClaw needs microphone access for voice wake.
+        NSMicrophoneUsageDescription: OpenClaw uses the microphone for realtime chat, voice wake, and push-to-talk.
         NSMotionUsageDescription: OpenClaw may use motion data to support device-aware interactions and automations.
         NSPhotoLibraryUsageDescription: OpenClaw needs photo library access when you choose existing photos to share with your assistant.
-        NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for voice wake.
+        NSRemindersFullAccessUsageDescription: OpenClaw uses your reminders to list, add, and complete tasks when you enable reminders access.
+        NSSpeechRecognitionUsageDescription: OpenClaw uses on-device speech recognition for talk mode and voice wake.
         NSSupportsLiveActivities: true
         ITSAppUsesNonExemptEncryption: false
+        OpenClawPushMode: "$(OPENCLAW_PUSH_MODE)"
+        OpenClawPushRelayBaseURL: "$(OPENCLAW_PUSH_RELAY_BASE_URL)"
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
-
   OpenClawShareExtension:
     type: app-extension
     platform: iOS
@@ -155,21 +190,24 @@ targets:
       - sdk: AppIntents.framework
     settings:
       base:
-        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
+        CODE_SIGN_ENTITLEMENTS: ShareExtension/OpenClawShareExtension.entitlements
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         ENABLE_APPINTENTS_METADATA: NO
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_SHARE_BUNDLE_ID)"
         PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_SHARE_PROFILE)"
+        TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
     info:
       path: ShareExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Share
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        OpenClawAppGroupIdentifier: "$(OPENCLAW_APP_GROUP_ID)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
           NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).ShareViewController"
@@ -194,10 +232,12 @@ targets:
       - sdk: ActivityKit.framework
     settings:
       base:
-        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
         PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_ACTIVITY_WIDGET_BUNDLE_ID)"
+        PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_ACTIVITY_WIDGET_PROFILE)"
+        TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         SUPPORTS_LIVE_ACTIVITIES: YES
@@ -205,43 +245,20 @@ targets:
       path: ActivityWidget/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Activity
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
         NSSupportsLiveActivities: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
   OpenClawWatchApp:
-    type: application.watchapp2
+    type: application
     platform: watchOS
     deploymentTarget: "11.0"
     sources:
       - path: WatchApp
-    dependencies:
-      - target: OpenClawWatchExtension
-    configFiles:
-      Debug: Config/Signing.xcconfig
-      Release: Config/Signing.xcconfig
-    settings:
-      base:
-        ENABLE_APPINTENTS_METADATA: NO
-        ENABLE_APP_INTENTS_METADATA_GENERATION: NO
-        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
-    info:
-      path: WatchApp/Info.plist
-      properties:
-        CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
-        WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
-        WKWatchKitApp: true
-
-  OpenClawWatchExtension:
-    type: watchkit2-extension
-    platform: watchOS
-    deploymentTarget: "11.0"
-    sources:
-      - path: WatchExtension/Sources
+        excludes:
+          - Info.plist
     dependencies:
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework
@@ -249,19 +266,29 @@ targets:
     configFiles:
       Debug: Config/Signing.xcconfig
       Release: Config/Signing.xcconfig
+    attributes:
+      DevelopmentTeam: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+      ProvisioningStyle: "$(OPENCLAW_CODE_SIGN_STYLE)"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_EXTENSION_BUNDLE_ID)"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
+        CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
+        DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+        ENABLE_APPINTENTS_METADATA: NO
+        ENABLE_APP_INTENTS_METADATA_GENERATION: NO
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
+        PROVISIONING_PROFILE_SPECIFIER: "$(OPENCLAW_WATCH_APP_PROFILE)"
+        SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_VERSION: "6.0"
     info:
-      path: WatchExtension/Info.plist
+      path: WatchApp/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
-        NSExtension:
-          NSExtensionAttributes:
-            WKAppBundleIdentifier: "$(OPENCLAW_WATCH_APP_BUNDLE_ID)"
-          NSExtensionPointIdentifier: com.apple.watchkit
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
+        WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
+        WKApplication: true
 
   OpenClawTests:
     type: bundle.unit-test
@@ -280,10 +307,10 @@ targets:
       - sdk: AppIntents.framework
     settings:
       base:
-        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
-        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID).tests"
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
@@ -293,8 +320,8 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
 
   OpenClawLogicTests:
     type: bundle.unit-test
@@ -308,16 +335,46 @@ targets:
       - package: OpenClawKit
     settings:
       base:
-        CODE_SIGN_IDENTITY: "Apple Development"
+        CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
         CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
         DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
-        PRODUCT_BUNDLE_IDENTIFIER: ai.openclaw.ios.logic-tests
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID).logic-tests"
         ENABLE_APP_INTENTS_METADATA_GENERATION: NO
+        SWIFT_EMIT_CONST_VALUE_PROTOCOLS: ""
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
     info:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawLogicTests
-        CFBundleShortVersionString: "2026.3.8"
-        CFBundleVersion: "20260308"
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"
+
+  OpenClawUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    sources:
+      - path: UITests
+    dependencies:
+      - target: OpenClaw
+    settings:
+      base:
+        CODE_SIGN_IDENTITY: "$(OPENCLAW_CODE_SIGN_IDENTITY)"
+        CODE_SIGN_STYLE: "$(OPENCLAW_CODE_SIGN_STYLE)"
+        DEVELOPMENT_TEAM: "$(OPENCLAW_DEVELOPMENT_TEAM)"
+        PRODUCT_BUNDLE_IDENTIFIER: "$(OPENCLAW_APP_BUNDLE_ID).ui-tests"
+        SDKROOT: iphoneos
+        SUPPORTED_PLATFORMS: "iphonesimulator iphoneos"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+        TEST_TARGET_NAME: OpenClaw
+        SWIFT_VERSION: "5.0"
+    info:
+      path: UITests/Info.plist
+      properties:
+        CFBundleDisplayName: OpenClawUITests
+        CFBundleShortVersionString: "$(OPENCLAW_MARKETING_VERSION)"
+        CFBundleVersion: "$(OPENCLAW_BUILD_VERSION)"

@@ -1,10 +1,11 @@
+// Binds system-run approval requests to stable command identities.
 import crypto from "node:crypto";
 import type {
   SystemRunApprovalBinding,
   SystemRunApprovalFileOperand,
   SystemRunApprovalPlan,
 } from "./exec-approvals.js";
-import { normalizeEnvVarKey } from "./host-env-security.js";
+import { normalizeHostOverrideEnvVarKey } from "./host-env-security.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
 type NormalizedSystemRunEnvEntry = [key: string, value: string];
@@ -50,10 +51,16 @@ export function normalizeSystemRunApprovalPlan(value: unknown): SystemRunApprova
   if (candidate.mutableFileOperand !== undefined && mutableFileOperand === null) {
     return null;
   }
+  const commandText =
+    normalizeNonEmptyString(candidate.commandText) ?? normalizeNonEmptyString(candidate.rawCommand);
+  if (!commandText) {
+    return null;
+  }
   return {
     argv,
     cwd: normalizeNonEmptyString(candidate.cwd),
-    rawCommand: normalizeNonEmptyString(candidate.rawCommand),
+    commandText,
+    commandPreview: normalizeNonEmptyString(candidate.commandPreview),
     agentId: normalizeNonEmptyString(candidate.agentId),
     sessionKey: normalizeNonEmptyString(candidate.sessionKey),
     mutableFileOperand: mutableFileOperand ?? undefined,
@@ -69,7 +76,7 @@ function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry
     if (typeof rawValue !== "string") {
       continue;
     }
-    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    const key = normalizeHostOverrideEnvVarKey(rawKey);
     if (!key) {
       continue;
     }
@@ -156,6 +163,16 @@ export function matchSystemRunApprovalEnvHash(params: {
   actualEnvHash: string | null;
   actualEnvKeys: string[];
 }): SystemRunApprovalMatchResult {
+  // Fail closed if callers provide inconsistent hash/key state. This guards against
+  // normalization drift between approval and execution paths.
+  if (!params.expectedEnvHash && !params.actualEnvHash && params.actualEnvKeys.length > 0) {
+    return {
+      ok: false,
+      code: "APPROVAL_ENV_BINDING_MISSING",
+      message: "approval id missing env binding for requested env overrides",
+      details: { envKeys: params.actualEnvKeys },
+    };
+  }
   if (!params.expectedEnvHash && !params.actualEnvHash) {
     return { ok: true };
   }

@@ -1,19 +1,27 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/discord";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/discord";
-import { discordPlugin } from "./src/channel.js";
-import { setDiscordRuntime } from "./src/runtime.js";
-import { registerDiscordSubagentHooks } from "./src/subagent-hooks.js";
+// Discord plugin entrypoint registers its OpenClaw integration.
+import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
+import { registerDiscordSubagentHooks } from "./subagent-hooks-api.js";
+import { discordVoiceTranscriptsSourceProvider } from "./transcripts-source-api.js";
 
-const plugin = {
+export default defineBundledChannelEntry({
   id: "discord",
   name: "Discord",
   description: "Discord channel plugin",
-  configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
-    setDiscordRuntime(api.runtime);
-    api.registerChannel({ plugin: discordPlugin });
-    registerDiscordSubagentHooks(api);
+  importMetaUrl: import.meta.url,
+  plugin: {
+    specifier: "./channel-plugin-api.js",
+    exportName: "discordPlugin",
   },
-};
-
-export default plugin;
+  runtime: {
+    specifier: "./runtime-setter-api.js",
+    exportName: "setDiscordRuntime",
+  },
+  accountInspect: {
+    specifier: "./account-inspect-api.js",
+    exportName: "inspectDiscordReadOnlyAccount",
+  },
+  registerFull(api) {
+    registerDiscordSubagentHooks(api);
+    api.registerTranscriptSourceProvider(discordVoiceTranscriptsSourceProvider);
+  },
+});

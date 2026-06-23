@@ -1,13 +1,9 @@
+// Loads provider usage snapshots from built-in and plugin providers.
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveFetch } from "./fetch.js";
+import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
-import {
-  fetchClaudeUsage,
-  fetchCodexUsage,
-  fetchCopilotUsage,
-  fetchGeminiUsage,
-  fetchMinimaxUsage,
-  fetchZaiUsage,
-} from "./provider-usage.fetch.js";
 import {
   DEFAULT_TIMEOUT_MS,
   ignoredErrors,
@@ -21,21 +17,83 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
+// Built-in fallback intentionally reports unsupported until a plugin supplies usage behavior.
+async function fetchProviderUsageSnapshotFallback(params: {
+  auth: ProviderAuth;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+}): Promise<ProviderUsageSnapshot> {
+  void params.timeoutMs;
+  void params.fetchFn;
+  return {
+    provider: params.auth.provider,
+    displayName: PROVIDER_LABELS[params.auth.provider] ?? params.auth.provider,
+    windows: [],
+    error: "Unsupported provider",
+  };
+}
+
 type UsageSummaryOptions = {
   now?: number;
   timeoutMs?: number;
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
   agentDir?: string;
+  workspaceDir?: string;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
+  skipPluginAuthWithoutCredentialSource?: boolean;
 };
 
+async function fetchProviderUsageSnapshot(params: {
+  auth: ProviderAuth;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentDir?: string;
+  workspaceDir?: string;
+  timeoutMs: number;
+  fetchFn: typeof fetch;
+}): Promise<ProviderUsageSnapshot> {
+  const pluginSnapshot = await resolveProviderUsageSnapshotWithPlugin({
+    provider: params.auth.hookProvider ?? params.auth.provider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    context: {
+      config: params.config,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      provider: params.auth.provider,
+      token: params.auth.token,
+      accountId: params.auth.accountId,
+      authProfileId: params.auth.authProfileId,
+      timeoutMs: params.timeoutMs,
+      fetchFn: params.fetchFn,
+    },
+  });
+  if (pluginSnapshot) {
+    return pluginSnapshot;
+  }
+  return await fetchProviderUsageSnapshotFallback({
+    auth: params.auth,
+    timeoutMs: params.timeoutMs,
+    fetchFn: params.fetchFn,
+  });
+}
+
+/** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const fetchFn = resolveFetch(opts.fetch);
+  const config = opts.config ?? getRuntimeConfig();
+  const env = opts.env ?? process.env;
+  const fetchFn = opts.fetch
+    ? resolveFetch(opts.fetch)
+    : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
   if (!fetchFn) {
     throw new Error("fetch is not available");
   }
@@ -44,42 +102,31 @@ export async function loadProviderUsageSummary(
     providers: opts.providers ?? usageProviders,
     auth: opts.auth,
     agentDir: opts.agentDir,
+    config,
+    env,
+    skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
   });
   if (auths.length === 0) {
     return { updatedAt: now, providers: [] };
   }
 
-  const tasks = auths.map((auth) =>
-    withTimeout(
-      (async (): Promise<ProviderUsageSnapshot> => {
-        switch (auth.provider) {
-          case "anthropic":
-            return await fetchClaudeUsage(auth.token, timeoutMs, fetchFn);
-          case "github-copilot":
-            return await fetchCopilotUsage(auth.token, timeoutMs, fetchFn);
-          case "google-gemini-cli":
-            return await fetchGeminiUsage(auth.token, timeoutMs, fetchFn, auth.provider);
-          case "openai-codex":
-            return await fetchCodexUsage(auth.token, auth.accountId, timeoutMs, fetchFn);
-          case "minimax":
-            return await fetchMinimaxUsage(auth.token, timeoutMs, fetchFn);
-          case "xiaomi":
-            return {
-              provider: "xiaomi",
-              displayName: PROVIDER_LABELS.xiaomi,
-              windows: [],
-            };
-          case "zai":
-            return await fetchZaiUsage(auth.token, timeoutMs, fetchFn);
-          default:
-            return {
-              provider: auth.provider,
-              displayName: PROVIDER_LABELS[auth.provider],
-              windows: [],
-              error: "Unsupported provider",
-            };
-        }
-      })(),
+  const tasks = auths.map((auth) => {
+    const failureSnapshot = (error: string): ProviderUsageSnapshot => ({
+      provider: auth.provider,
+      displayName: PROVIDER_LABELS[auth.provider] ?? auth.provider,
+      windows: [],
+      error,
+    });
+    return withTimeout(
+      fetchProviderUsageSnapshot({
+        auth,
+        config,
+        env,
+        agentDir: opts.agentDir,
+        workspaceDir: opts.workspaceDir,
+        timeoutMs,
+        fetchFn,
+      }),
       timeoutMs + 1000,
       {
         provider: auth.provider,
@@ -87,12 +134,18 @@ export async function loadProviderUsageSummary(
         windows: [],
         error: "Timeout",
       },
-    ),
-  );
+    ).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      return failureSnapshot(message.trim() || "Fetch failed");
+    });
+  });
 
   const snapshots = await Promise.all(tasks);
   const providers = snapshots.filter((entry) => {
     if (entry.windows.length > 0) {
+      return true;
+    }
+    if (entry.summary?.trim()) {
       return true;
     }
     if (!entry.error) {

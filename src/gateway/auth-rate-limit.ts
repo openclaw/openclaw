@@ -16,6 +16,7 @@
  *   {@link createAuthRateLimiter} and pass it where needed.
  */
 
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isLoopbackAddress, resolveClientIp } from "./net.js";
 
 // ---------------------------------------------------------------------------
@@ -38,9 +39,25 @@ export interface RateLimitConfig {
 export const AUTH_RATE_LIMIT_SCOPE_DEFAULT = "default";
 export const AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET = "shared-secret";
 export const AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN = "device-token";
+// Per-IP gate for node-role pairing requests created during WebSocket connect.
+// The request path enters the node-pairing storage lock, so bursts must be
+// throttled before they queue behind that lock and delay operator actions.
+export const AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING = "node-pairing";
+// Paired-node approval-surface changes use a dedicated limiter so reconnect
+// storms cannot queue unbounded writes behind the shared pairing-state lock.
+export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
+// Per-IP gate for the pre-auth bootstrap-token verify path.
+// `verifyDeviceBootstrapToken` is `withLock`-serialized in
+// `device-bootstrap.ts` and runs fs read + fs write on every attempt;
+// without a scope-specific limiter, attackers presenting a valid
+// device signature can queue the bootstrap-pairing flow behind their
+// requests, blocking legitimate node onboarding during the attack.
+export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
+const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
+const IDENTITY_RATE_LIMIT_KEY_PREFIX = "identity:";
 
-export interface RateLimitEntry {
+interface RateLimitEntry {
   /** Timestamps (epoch ms) of recent failed attempts inside the window. */
   attempts: number[];
   /** If set, requests from this IP are blocked until this epoch-ms instant. */
@@ -89,15 +106,37 @@ const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
  * share one representation (including IPv4-mapped IPv6 forms).
  */
 export function normalizeRateLimitClientIp(ip: string | undefined): string {
+  if (
+    typeof ip === "string" &&
+    (ip.startsWith(BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX) ||
+      ip.startsWith(IDENTITY_RATE_LIMIT_KEY_PREFIX))
+  ) {
+    return ip;
+  }
   return resolveClientIp({ remoteAddr: ip }) ?? "unknown";
+}
+
+/** Build an opaque limiter identity that is not subject to loopback IP exemptions. */
+export function buildRateLimitIdentityKey(namespace: string, identity: string): string {
+  return `${IDENTITY_RATE_LIMIT_KEY_PREFIX}${namespace}:${identity}`;
+}
+
+function resolvePruneIntervalMs(value: number | undefined): number {
+  if (value === undefined) {
+    return PRUNE_INTERVAL_MS;
+  }
+  if (Number.isFinite(value) && value <= 0) {
+    return 0;
+  }
+  return resolveTimerTimeoutMs(value, PRUNE_INTERVAL_MS);
 }
 
 export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter {
   const maxAttempts = config?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
-  const windowMs = config?.windowMs ?? DEFAULT_WINDOW_MS;
-  const lockoutMs = config?.lockoutMs ?? DEFAULT_LOCKOUT_MS;
+  const windowMs = resolveTimerTimeoutMs(config?.windowMs, DEFAULT_WINDOW_MS, 0);
+  const lockoutMs = resolveTimerTimeoutMs(config?.lockoutMs, DEFAULT_LOCKOUT_MS, 0);
   const exemptLoopback = config?.exemptLoopback ?? true;
-  const pruneIntervalMs = config?.pruneIntervalMs ?? PRUNE_INTERVAL_MS;
+  const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
 
   const entries = new Map<string, RateLimitEntry>();
 

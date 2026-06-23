@@ -25,6 +25,7 @@ class OpenClawProtocolConstantsTest {
     assertEquals("canvas", OpenClawCapability.Canvas.rawValue)
     assertEquals("camera", OpenClawCapability.Camera.rawValue)
     assertEquals("voiceWake", OpenClawCapability.VoiceWake.rawValue)
+    assertEquals("talk", OpenClawCapability.Talk.rawValue)
     assertEquals("location", OpenClawCapability.Location.rawValue)
     assertEquals("sms", OpenClawCapability.Sms.rawValue)
     assertEquals("device", OpenClawCapability.Device.rawValue)
@@ -34,6 +35,7 @@ class OpenClawProtocolConstantsTest {
     assertEquals("contacts", OpenClawCapability.Contacts.rawValue)
     assertEquals("calendar", OpenClawCapability.Calendar.rawValue)
     assertEquals("motion", OpenClawCapability.Motion.rawValue)
+    assertEquals("callLog", OpenClawCapability.CallLog.rawValue)
   }
 
   @Test
@@ -55,6 +57,7 @@ class OpenClawProtocolConstantsTest {
     assertEquals("device.info", OpenClawDeviceCommand.Info.rawValue)
     assertEquals("device.permissions", OpenClawDeviceCommand.Permissions.rawValue)
     assertEquals("device.health", OpenClawDeviceCommand.Health.rawValue)
+    assertEquals("device.apps", OpenClawDeviceCommand.Apps.rawValue)
   }
 
   @Test
@@ -83,5 +86,24 @@ class OpenClawProtocolConstantsTest {
   fun motionCommandsUseStableStrings() {
     assertEquals("motion.activity", OpenClawMotionCommand.Activity.rawValue)
     assertEquals("motion.pedometer", OpenClawMotionCommand.Pedometer.rawValue)
+  }
+
+  @Test
+  fun smsCommandsUseStableStrings() {
+    assertEquals("sms.send", OpenClawSmsCommand.Send.rawValue)
+    assertEquals("sms.search", OpenClawSmsCommand.Search.rawValue)
+  }
+
+  @Test
+  fun talkCommandsUseStableStrings() {
+    assertEquals("talk.ptt.start", OpenClawTalkCommand.PttStart.rawValue)
+    assertEquals("talk.ptt.stop", OpenClawTalkCommand.PttStop.rawValue)
+    assertEquals("talk.ptt.cancel", OpenClawTalkCommand.PttCancel.rawValue)
+    assertEquals("talk.ptt.once", OpenClawTalkCommand.PttOnce.rawValue)
+  }
+
+  @Test
+  fun callLogCommandsUseStableStrings() {
+    assertEquals("callLog.search", OpenClawCallLogCommand.Search.rawValue)
   }
 }

@@ -1,7 +1,9 @@
+/** Tests environment sanitization for node-host command execution. */
 import { describe, expect, it } from "vitest";
+import { parseWindowsCodePage } from "../infra/windows-encoding.js";
 import { withEnv } from "../test-utils/env.js";
-import { decodeCapturedOutputBuffer, parseWindowsCodePage, sanitizeEnv } from "./invoke.js";
-import { buildNodeInvokeResultParams } from "./runner.js";
+import { decodeCapturedOutputBuffer, sanitizeEnv } from "./invoke.js";
+import { buildNodeEventParams, buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
   it("ignores PATH overrides", () => {
@@ -49,6 +51,13 @@ describe("node-host sanitizeEnv", () => {
       const env = sanitizeEnv(undefined);
       expect(env.PATH).toBe("/usr/bin:/bin");
       expect(env.BASH_ENV).toBeUndefined();
+    });
+  });
+
+  it("preserves inherited non-portable Windows-style env keys", () => {
+    withEnv({ "ProgramFiles(x86)": "C:\\Program Files (x86)" }, () => {
+      const env = sanitizeEnv(undefined);
+      expect(env["ProgramFiles(x86)"]).toBe("C:\\Program Files (x86)");
     });
   });
 });
@@ -111,5 +120,30 @@ describe("buildNodeInvokeResultParams", () => {
     );
 
     expect(params.payload).toEqual({ reason: "bad" });
+  });
+});
+
+describe("buildNodeEventParams", () => {
+  it("serializes explicit falsy event payloads", () => {
+    expect(buildNodeEventParams("node.test", undefined)).toEqual({
+      event: "node.test",
+      payloadJSON: null,
+    });
+    expect(buildNodeEventParams("node.test", null)).toEqual({
+      event: "node.test",
+      payloadJSON: "null",
+    });
+    expect(buildNodeEventParams("node.test", false)).toEqual({
+      event: "node.test",
+      payloadJSON: "false",
+    });
+    expect(buildNodeEventParams("node.test", 0)).toEqual({
+      event: "node.test",
+      payloadJSON: "0",
+    });
+    expect(buildNodeEventParams("node.test", "")).toEqual({
+      event: "node.test",
+      payloadJSON: '""',
+    });
   });
 });

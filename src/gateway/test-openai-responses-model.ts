@@ -1,4 +1,9 @@
-export function buildOpenAiResponsesTestModel(id = "gpt-5.2") {
+/**
+ * Mock OpenAI Responses provider used by gateway compatibility tests.
+ */
+const MOCK_OPENAI_RESPONSES_PROVIDER_ID = "mock-openai";
+
+function buildOpenAiResponsesTestModel(id = "gpt-5.4") {
   return {
     id,
     name: id,
@@ -11,11 +16,21 @@ export function buildOpenAiResponsesTestModel(id = "gpt-5.2") {
   } as const;
 }
 
-export function buildOpenAiResponsesProviderConfig(baseUrl: string, modelId = "gpt-5.2") {
+function buildOpenAiResponsesProviderConfig(baseUrl: string, modelId = "gpt-5.4") {
   return {
     baseUrl,
     apiKey: "test",
     api: "openai-responses",
     models: [buildOpenAiResponsesTestModel(modelId)],
+  } as const;
+}
+
+/** Builds provider config and model refs for local OpenAI-compatible HTTP tests. */
+export function buildMockOpenAiResponsesProvider(baseUrl: string, modelId = "gpt-5.4") {
+  return {
+    providerId: MOCK_OPENAI_RESPONSES_PROVIDER_ID,
+    modelId,
+    modelRef: `${MOCK_OPENAI_RESPONSES_PROVIDER_ID}/${modelId}`,
+    config: buildOpenAiResponsesProviderConfig(baseUrl, modelId),
   } as const;
 }

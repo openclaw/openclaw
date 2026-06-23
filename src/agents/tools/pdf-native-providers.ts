@@ -1,15 +1,22 @@
 /**
  * Direct SDK/HTTP calls for providers that support native PDF document input.
- * This bypasses pi-ai's content type system which does not have a "document" type.
+ * This bypasses shared model runtime's content type system which does not have a "document" type.
  */
 
+import { readResponseBodySnippet } from "../../infra/http-error-body.js";
+import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
+import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
 
 type PdfInput = {
   base64: string;
   filename?: string;
 };
+
+const NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS = 120_000;
+const NATIVE_PDF_ERROR_BODY_MAX_BYTES = 8 * 1024;
+const NATIVE_PDF_ERROR_BODY_MAX_CHARS = 400;
 
 // ---------------------------------------------------------------------------
 // Anthropic – native PDF via Messages API
@@ -59,8 +66,7 @@ export async function anthropicAnalyzePdf(params: {
   }
   content.push({ type: "text", text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");
-  const res = await fetch(`${baseUrl}/v1/messages`, {
+  const res = await fetch(resolveAnthropicMessagesUrl(params.baseUrl), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -73,12 +79,16 @@ export async function anthropicAnalyzePdf(params: {
       max_tokens: params.maxTokens ?? 4096,
       messages: [{ role: "user", content }],
     }),
+    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
+    const body = await readResponseBodySnippet(res, {
+      maxBytes: NATIVE_PDF_ERROR_BODY_MAX_BYTES,
+      maxChars: NATIVE_PDF_ERROR_BODY_MAX_CHARS,
+    });
     throw new Error(
-      `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
+      `Anthropic PDF request failed (${res.status} ${res.statusText})${body ? `: ${body}` : ""}`,
     );
   }
 
@@ -137,24 +147,36 @@ export async function geminiAnalyzePdf(params: {
   }
   parts.push({ text: params.prompt });
 
-  const baseUrl = (params.baseUrl ?? "https://generativelanguage.googleapis.com").replace(
-    /\/+$/,
+  const transport = normalizeProviderTransportWithPlugin({
+    provider: "google",
+    context: {
+      provider: "google",
+      api: "google-generative-ai",
+      baseUrl: params.baseUrl,
+    },
+  }) ?? { baseUrl: params.baseUrl };
+  const baseUrl = (transport.baseUrl ?? "https://generativelanguage.googleapis.com/v1beta").replace(
+    /\/v1beta$/i,
     "",
   );
-  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const url = `${baseUrl}/v1beta/models/${encodeURIComponent(params.modelId)}:generateContent`;
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify({
       contents: [{ role: "user", parts }],
     }),
+    signal: AbortSignal.timeout(NATIVE_PDF_PROVIDER_FETCH_TIMEOUT_MS),
   });
 
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
+    const body = await readResponseBodySnippet(res, {
+      maxBytes: NATIVE_PDF_ERROR_BODY_MAX_BYTES,
+      maxChars: NATIVE_PDF_ERROR_BODY_MAX_CHARS,
+    });
     throw new Error(
-      `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body.slice(0, 400)}` : ""}`,
+      `Gemini PDF request failed (${res.status} ${res.statusText})${body ? `: ${body}` : ""}`,
     );
   }
 
