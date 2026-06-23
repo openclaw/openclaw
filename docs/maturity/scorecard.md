@@ -24,7 +24,7 @@ The current scorecard covers 50 surfaces and 281 capability areas.
 
 | Label        | Score range |
 | ------------ | ----------- |
-| Lovable      | 95-100%     |
+| Clawesome    | 95-100%     |
 | Stable       | 80-95%      |
 | Beta         | 70-80%      |
 | Alpha        | 50-70%      |

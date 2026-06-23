@@ -16,7 +16,7 @@ This page explains the product areas and capability groups behind the maturity s
 | `M2`  | Alpha        | Real users can try it, but breaking changes and incomplete UX are expected.                 | Documented setup, basic tests, known caveats, and at least one real-environment proof.                                 |
 | `M3`  | Beta         | Public path exists and the main workflow is usable with bounded caveats.                    | Install/update docs, regression tests, support runbook, and successful scenario proof across the expected environment. |
 | `M4`  | Stable       | Recommended path for normal users. Failures are treated as regressions.                     | Release gate, doctor/troubleshooting path, broad docs, and repeated real-world proof.                                  |
-| `M5`  | Lovable      | Polished, delightful, well-instrumented, and competitive with the best comparable workflow. | Stable plus user scorecard pass across representative users.                                                           |
+| `M5`  | Clawesome    | Polished, delightful, well-instrumented, and competitive with the best comparable workflow. | Stable plus user scorecard pass across representative users.                                                           |
 
 ## Product areas
 
