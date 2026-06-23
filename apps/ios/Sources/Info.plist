@@ -86,8 +86,12 @@
 	<string>$(OPENCLAW_PUSH_APNS_ENVIRONMENT)</string>
 	<key>OpenClawPushDistribution</key>
 	<string>$(OPENCLAW_PUSH_DISTRIBUTION)</string>
+	<key>OpenClawPushProofPolicy</key>
+	<string>$(OPENCLAW_PUSH_PROOF_POLICY)</string>
 	<key>OpenClawPushRelayBaseURL</key>
 	<string>$(OPENCLAW_PUSH_RELAY_BASE_URL)</string>
+	<key>OpenClawPushRelayProfile</key>
+	<string>$(OPENCLAW_PUSH_RELAY_PROFILE)</string>
 	<key>OpenClawPushTransport</key>
 	<string>$(OPENCLAW_PUSH_TRANSPORT)</string>
 	<key>UIApplicationSceneManifest</key>
