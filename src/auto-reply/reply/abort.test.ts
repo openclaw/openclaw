@@ -1,10 +1,10 @@
 // Tests abort request handling, cutoff persistence, and active run cleanup.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   testing as abortTesting,
   getAbortMemory,
@@ -83,7 +83,17 @@ vi.mock("../../acp/control-plane/manager.js", () => ({
   }),
 }));
 
+const suiteTempDirs = createSuiteTempRootTracker({ prefix: "openclaw-abort-" });
+
 describe("abort detection", () => {
+  beforeAll(async () => {
+    await suiteTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await suiteTempDirs.cleanup();
+  });
+
   async function writeSessionStore(
     storePath: string,
     sessionIdsByKey: Record<string, string>,
@@ -103,7 +113,7 @@ describe("abort detection", () => {
     sessionIdsByKey?: Record<string, string>;
     nowMs?: number;
   }) {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
+    const root = await suiteTempDirs.make("case");
     const storePath = path.join(root, "sessions.json");
     const cfg = {
       session: { store: storePath },
