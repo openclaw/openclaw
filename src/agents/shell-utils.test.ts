@@ -220,23 +220,46 @@ describe("resolveShellFromPath", () => {
     expect(resolveShellFromPath("bash")).toBeUndefined();
   });
 
-  if (isWin) {
-    return;
+  // These tests use chmod to set executable bits and are only meaningful on
+  // Unix-like platforms where X_OK matches the file permission model.
+  if (!isWin) {
+    it("returns the first executable match from PATH", () => {
+      const notExecutable = createTempCommandDir(tempDirs, [{ name: "bash", executable: false }]);
+      const executable = createTempCommandDir(tempDirs, [{ name: "bash", executable: true }]);
+      process.env.PATH = [notExecutable, executable].join(path.delimiter);
+      expect(resolveShellFromPath("bash")).toBe(path.join(executable, "bash"));
+    });
+
+    it("returns undefined when command does not exist on PATH", () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-empty-"));
+      tempDirs.push(dir);
+      process.env.PATH = dir;
+      expect(resolveShellFromPath("bash")).toBeUndefined();
+    });
   }
 
-  it("returns the first executable match from PATH", () => {
-    const notExecutable = createTempCommandDir(tempDirs, [{ name: "bash", executable: false }]);
-    const executable = createTempCommandDir(tempDirs, [{ name: "bash", executable: true }]);
-    process.env.PATH = [notExecutable, executable].join(path.delimiter);
-    expect(resolveShellFromPath("bash")).toBe(path.join(executable, "bash"));
-  });
+  if (isWin) {
+    it("falls back to where.exe when accessSync loop finds nothing on Windows", () => {
+      const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-empty-"));
+      tempDirs.push(emptyDir);
+      // Pass env as second arg so the accessSync loop sees a restricted PATH
+      // without mutating process.env, which would break spawnSync finding where.exe.
+      const result = resolveShellFromPath("notepad", { PATH: emptyDir });
+      expect(result).toBeDefined();
+      expect(result!.toLowerCase()).toContain("notepad");
+    });
 
-  it("returns undefined when command does not exist", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-empty-"));
-    tempDirs.push(dir);
-    process.env.PATH = dir;
-    expect(resolveShellFromPath("bash")).toBeUndefined();
-  });
+    it("returns the first where.exe result that passes accessSync(F_OK)", () => {
+      const result = resolveShellFromPath("cmd");
+      expect(result).toBeDefined();
+      expect(() => fs.accessSync(result!, fs.constants.F_OK)).not.toThrow();
+    });
+
+    it("returns undefined when where.exe fails to find the command", () => {
+      // where.exe returns non-zero for non-existent commands
+      expect(resolveShellFromPath("this-command-does-not-exist-xyz123")).toBeUndefined();
+    });
+  }
 });
 
 describe("resolveShellFromWhich", () => {
