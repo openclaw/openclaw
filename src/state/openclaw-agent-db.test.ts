@@ -357,7 +357,46 @@ describe("openclaw agent database", () => {
     });
   });
 
-  it("refuses to open newer per-agent schema versions", () => {
+  it("opens schema-v2 agent databases when known tables are rollback-compatible", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env,
+    });
+    const databasePath = database.path;
+    closeOpenClawAgentDatabasesForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      PRAGMA user_version = 2;
+      UPDATE schema_meta
+      SET schema_version = 2
+      WHERE meta_key = 'primary';
+    `);
+    db.close();
+
+    const reopened = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env,
+    });
+    const agentDb = getNodeSqliteKysely<AgentDbTestDatabase>(reopened.db);
+
+    expect(readSqliteNumberPragma(reopened.db, "user_version")).toBe(1);
+    expect(
+      executeSqliteQueryTakeFirstSync(
+        reopened.db,
+        agentDb.selectFrom("schema_meta").select(["role", "schema_version", "agent_id"]),
+      ),
+    ).toEqual({
+      role: "agent",
+      schema_version: 1,
+      agent_id: "worker-1",
+    });
+  });
+
+  it("refuses incompatible schema-v2 agent databases", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(
       stateDir,
@@ -378,5 +417,28 @@ describe("openclaw agent database", () => {
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
     ).toThrow(/newer schema version 2/);
+  });
+
+  it("refuses to open newer per-agent schema versions", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(
+      stateDir,
+      "agents",
+      "worker-1",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec("PRAGMA user_version = 3;");
+    db.close();
+
+    expect(() =>
+      openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toThrow(/newer schema version 3/);
   });
 });

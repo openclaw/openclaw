@@ -35,6 +35,7 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * OpenClaw state database for discovery and maintenance.
  */
 const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
+const OPENCLAW_AGENT_ROLLBACK_COMPAT_SCHEMA_VERSION = 2;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 
@@ -70,18 +71,84 @@ type ExistingSchemaMeta = {
   role: string | null;
 };
 
+type RequiredAgentTable = {
+  name: string;
+  columns: readonly string[];
+};
+
+const REQUIRED_ROLLBACK_COMPAT_AGENT_TABLES: readonly RequiredAgentTable[] = [
+  {
+    name: "schema_meta",
+    columns: [
+      "meta_key",
+      "role",
+      "schema_version",
+      "agent_id",
+      "app_version",
+      "created_at",
+      "updated_at",
+    ],
+  },
+  {
+    name: "auth_profile_store",
+    columns: ["store_key", "store_json", "updated_at"],
+  },
+  {
+    name: "auth_profile_state",
+    columns: ["state_key", "state_json", "updated_at"],
+  },
+];
+
+function quoteSqliteIdentifier(identifier: string): string {
+  return `"${identifier.replaceAll('"', '""')}"`;
+}
+
 function readSqliteUserVersion(db: DatabaseSync): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
   return Number(row?.user_version ?? 0);
 }
 
+function readSqliteTableColumns(db: DatabaseSync, table: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${quoteSqliteIdentifier(table)})`).all() as Array<{
+    name?: unknown;
+  }>;
+  return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+}
+
+function hasRequiredColumns(columns: Set<string>, required: readonly string[]): boolean {
+  return required.every((column) => columns.has(column));
+}
+
+function hasRollbackCompatibleAgentSchema(db: DatabaseSync): boolean {
+  for (const table of REQUIRED_ROLLBACK_COMPAT_AGENT_TABLES) {
+    const columns = readSqliteTableColumns(db, table.name);
+    if (table.name === "schema_meta" && columns.size === 0) {
+      return false;
+    }
+    if (columns.size > 0 && !hasRequiredColumns(columns, table.columns)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
-  if (userVersion > OPENCLAW_AGENT_SCHEMA_VERSION) {
-    throw new Error(
-      `OpenClaw agent database ${pathname} uses newer schema version ${userVersion}; this OpenClaw build supports ${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
-    );
+  if (userVersion <= OPENCLAW_AGENT_SCHEMA_VERSION) {
+    return;
   }
+  // Schema 2 was briefly used for additive agent-local cache tables. If the
+  // owner and auth tables remain compatible, doctor can migrate auth JSON and
+  // stamp the DB back to the rollback-safe schema version.
+  if (
+    userVersion <= OPENCLAW_AGENT_ROLLBACK_COMPAT_SCHEMA_VERSION &&
+    hasRollbackCompatibleAgentSchema(db)
+  ) {
+    return;
+  }
+  throw new Error(
+    `OpenClaw agent database ${pathname} uses newer schema version ${userVersion}; this OpenClaw build supports ${OPENCLAW_AGENT_SCHEMA_VERSION}.`,
+  );
 }
 
 function ensureOpenClawAgentDatabasePermissions(
