@@ -328,7 +328,7 @@ describe("session accessor file-backed seam", () => {
       expectedRevision: snapshot.revision,
       previousEntry: snapshot.currentEntry,
       sessionEntry: {
-        ...(snapshot.currentEntry ?? {}),
+        ...snapshot.currentEntry,
         sessionFile: snapshot.currentEntry?.sessionFile,
         sessionId: "next-rotation",
         updatedAt: 20,
