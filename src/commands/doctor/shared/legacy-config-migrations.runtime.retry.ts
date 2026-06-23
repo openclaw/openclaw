@@ -12,8 +12,36 @@ const RETRY_JITTER_RULE: LegacyConfigRule = {
   path: ["retry", "jitter"],
   message:
     'retry.jitter must be a number in [0, 1]; boolean values (true/false) are legacy. Run "openclaw doctor --fix" to coerce (true → 0.1, false → 0).',
-  match: (value) => value === true || value === false,
+  // Match root-level retry.jitter OR any nested retry.jitter (e.g.
+  // channels.telegram.retry.jitter) by walking the config tree.
+  match: (value, root) => {
+    if (value === true || value === false) {
+      return true;
+    }
+    return hasAnyNestedBooleanRetryJitter(root);
+  },
 };
+
+/** Walk the config tree and return true if any retry.jitter is a boolean. */
+function hasAnyNestedBooleanRetryJitter(node: unknown): boolean {
+  const record = getRecord(node);
+  if (!record) {
+    return false;
+  }
+  for (const key of Object.keys(record)) {
+    const child = record[key];
+    if (key === "retry") {
+      const retry = getRecord(child);
+      if (retry && (retry.jitter === true || retry.jitter === false)) {
+        return true;
+      }
+    }
+    if (hasAnyNestedBooleanRetryJitter(child)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 /** Coerce a legacy boolean jitter to its numeric equivalent. */
 function coerceLegacyBooleanJitter(value: unknown): number | null {

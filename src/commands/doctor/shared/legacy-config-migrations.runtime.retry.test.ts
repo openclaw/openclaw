@@ -115,5 +115,28 @@ describe("retry.jitter boolean migration (#52130)", () => {
     expect(result.next?.models?.providers?.anthropic?.retry?.jitter).toBe(0.25);
     expect(result.next?.models?.providers?.deepseek?.retry?.jitter).toBe(0);
   });
+
+  it("coerces nested channel retry.jitter (channels.telegram.retry.jitter) (#52130)", () => {
+    const raw = {
+      channels: {
+        telegram: { retry: { jitter: true, attempts: 3 } },
+      },
+    };
+    const result = applyLegacyDoctorMigrations(raw);
+    expect(result.next?.channels?.telegram?.retry?.jitter).toBe(0.1);
+    expect(result.next?.channels?.telegram?.retry?.attempts).toBe(3);
+    expect(result.changes.some((c) => c.includes("retry.jitter"))).toBe(true);
+  });
+
+  it("detects nested boolean jitter in legacy rule even when root retry.jitter is absent", () => {
+    // The legacy rule should trigger for nested paths, not just root-level retry.jitter.
+    const raw = {
+      channels: {
+        slack: { retry: { jitter: false } },
+      },
+    };
+    const result = applyLegacyDoctorMigrations(raw);
+    expect(result.next?.channels?.slack?.retry?.jitter).toBe(0);
+  });
 });
 
