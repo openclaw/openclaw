@@ -228,7 +228,6 @@ describe("installScheduledTask", () => {
         OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
       });
       const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
-      const script = await fs.readFile(scriptPath, "utf8");
       const launcher = await fs.readFile(launcherPath, "utf8");
 
       expectInitialTaskQueries();
