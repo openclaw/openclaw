@@ -107,6 +107,7 @@ describe("session accessor boundary guard", () => {
         "src/auto-reply/reply/body.ts",
         "src/auto-reply/reply/commands-acp/lifecycle.ts",
         "src/auto-reply/reply/commands-reset.ts",
+        "src/auto-reply/reply/commands-session-store.ts",
         "src/auto-reply/reply/directive-handling.impl.ts",
         "src/auto-reply/reply/directive-handling.persist.ts",
         "src/auto-reply/reply/dispatch-from-config.runtime.ts",

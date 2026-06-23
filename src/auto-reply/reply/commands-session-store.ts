@@ -1,10 +1,14 @@
 // Shared session-store helpers for command handlers that mutate sessions.
 import { resolveSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
+import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type CommandParams = Parameters<CommandHandler>[0];
+type PersistSessionEntryParams = Pick<
+  CommandParams,
+  "sessionEntry" | "sessionStore" | "sessionKey" | "storePath"
+>;
 
 /** Resolves a command target entry through canonical and legacy session keys. */
 export function resolveCommandSessionEntryForKey(
@@ -24,25 +28,23 @@ export function resolveCommandSessionEntryForKey(
   };
 }
 
-export async function persistSessionEntry(params: CommandParams): Promise<boolean> {
+export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<boolean> {
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
     return false;
   }
-  params.sessionEntry.updatedAt = Date.now();
-  params.sessionStore[params.sessionKey] = params.sessionEntry;
+  const sessionEntry = params.sessionEntry;
+  sessionEntry.updatedAt = Date.now();
+  params.sessionStore[params.sessionKey] = sessionEntry;
   if (params.storePath) {
     // Slash commands mutate one known session entry; skipping global session
     // maintenance avoids scanning the whole sessions directory for simple
     // command-only writes.
-    await updateSessionStore(
-      params.storePath,
-      (store) => {
-        store[params.sessionKey] = params.sessionEntry as SessionEntry;
-        return params.sessionEntry as SessionEntry;
-      },
+    await patchSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      () => sessionEntry,
       {
-        resolveSingleEntryPersistence: (entry) =>
-          entry ? { sessionKey: params.sessionKey, entry } : null,
+        fallbackEntry: sessionEntry,
+        replaceEntry: true,
         skipMaintenance: true,
       },
     );
@@ -68,22 +70,18 @@ export async function persistAbortTargetEntry(params: {
   sessionStore[key] = entry;
 
   if (storePath) {
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        const nextEntry = store[key] ?? entry;
-        if (!nextEntry) {
-          return undefined;
-        }
+    await patchSessionEntry(
+      { storePath, sessionKey: key },
+      (nextEntry) => {
         nextEntry.abortedLastRun = true;
         applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
         nextEntry.updatedAt = Date.now();
-        store[key] = nextEntry;
         return nextEntry;
       },
       {
-        resolveSingleEntryPersistence: (updated) =>
-          updated ? { sessionKey: key, entry: updated } : null,
+        fallbackEntry: entry,
+        replaceEntry: true,
+        skipMaintenance: true,
       },
     );
   }
