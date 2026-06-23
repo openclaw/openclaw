@@ -19,6 +19,7 @@ import {
   resolveRequiredCompletionDeliveryFailureTerminalResult,
   type RequiredCompletionTerminalResult,
 } from "../../tasks/task-completion-contract.js";
+import { markTaskDeliveringByRunId } from "../../tasks/task-registry.js";
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
@@ -456,6 +457,28 @@ export function scheduleMediaGenerationTaskCompletion<
         error,
       });
     }
+
+    // Mark the task as "delivering" so the prompt-context guard stops blocking
+    // new, distinct media-generation requests while delivery confirmation is pending.
+    // The task record will be finalized as "succeeded" after delivery completes.
+    if (params.handle) {
+      try {
+        markTaskDeliveringByRunId({
+          runId: params.handle.runId,
+          runtime: "cli",
+          sessionKey: params.handle.requesterSessionKey,
+          lastEventAt: Date.now(),
+          progressSummary: "Generated media; delivering completion",
+        });
+      } catch (error) {
+        params.onWakeFailure(`${params.toolName} delivery phase update failed`, {
+          taskId: params.handle?.taskId,
+          runId: params.handle?.runId,
+          error,
+        });
+      }
+    }
+
     let terminalResult: RequiredCompletionTerminalResult | undefined;
     try {
       const completionDelivered = await params.lifecycle.wakeTaskCompletion({

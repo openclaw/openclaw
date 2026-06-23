@@ -297,7 +297,7 @@ type AcpSubagentEnvelopeState = {
 };
 
 function isActiveTaskStatus(status: string | undefined): boolean {
-  return status === "queued" || status === "running";
+  return status === "queued" || status === "running" || status === "delivering";
 }
 
 function countUntrackedActiveAcpRunsForOwner(ownerKey: string | undefined): number {

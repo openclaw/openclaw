@@ -165,7 +165,8 @@ export function listTaskFlowAuditFindings(
     const ageMs = Math.max(0, now - referenceAt);
     const linkedTasks = getLinkedTasks(flow.flowId);
     const activeTasks = linkedTasks.filter(
-      (task) => task.status === "queued" || task.status === "running",
+      (task) =>
+        task.status === "queued" || task.status === "running" || task.status === "delivering",
     );
 
     if (flow.status === "running" && ageMs >= staleRunningMs) {

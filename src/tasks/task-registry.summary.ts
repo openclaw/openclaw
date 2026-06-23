@@ -45,7 +45,7 @@ export function summarizeTaskRecords(records: Iterable<TaskRecord>): TaskRegistr
     summary.total += 1;
     summary.byStatus[task.status] += 1;
     summary.byRuntime[task.runtime] += 1;
-    if (task.status === "queued" || task.status === "running") {
+    if (task.status === "queued" || task.status === "running" || task.status === "delivering") {
       summary.active += 1;
     } else {
       summary.terminal += 1;

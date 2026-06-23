@@ -232,7 +232,7 @@ type RunTaskInFlowResult = {
 };
 
 function isActiveTaskStatus(status: TaskStatus): boolean {
-  return status === "queued" || status === "running";
+  return status === "queued" || status === "running" || status === "delivering";
 }
 
 function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {

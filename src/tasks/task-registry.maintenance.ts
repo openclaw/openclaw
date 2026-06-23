@@ -317,7 +317,7 @@ function findTaskSessionEntry(
 }
 
 function isActiveTask(task: TaskRecord): boolean {
-  return task.status === "queued" || task.status === "running";
+  return task.status === "queued" || task.status === "running" || task.status === "delivering";
 }
 
 function isTerminalTask(task: TaskRecord): boolean {

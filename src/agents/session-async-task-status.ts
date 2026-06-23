@@ -6,7 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { listTasksForOwnerKey } from "../tasks/runtime-internal.js";
 import type { TaskRecord, TaskRuntime, TaskStatus } from "../tasks/task-registry.types.js";
 
-const DEFAULT_ACTIVE_STATUSES = new Set<TaskStatus>(["queued", "running"]);
+const DEFAULT_ACTIVE_STATUSES = new Set<TaskStatus>(["queued", "running", "delivering"]);
 
 /** Find the active queued/running task that matches a session and optional filters. */
 export function findActiveSessionTask(params: {

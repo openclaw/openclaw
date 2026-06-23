@@ -7,7 +7,7 @@ import {
 import { truncateUtf16Safe } from "../utils.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
-const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
+const ACTIVE_TASK_STATUSES = new Set(["queued", "running", "delivering"]);
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
 /** Window for showing recently completed tasks in compact status output. */
 const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
@@ -128,7 +128,7 @@ export function formatTaskStatusTitle(task: TaskRecord): string {
 }
 
 export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
-  if (task.status === "running" || task.status === "queued") {
+  if (task.status === "running" || task.status === "queued" || task.status === "delivering") {
     return (
       sanitizeTaskStatusText(task.progressSummary, { maxChars: TASK_STATUS_DETAIL_MAX_CHARS }) ||
       undefined

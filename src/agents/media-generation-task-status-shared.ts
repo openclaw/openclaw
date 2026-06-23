@@ -87,6 +87,10 @@ function isTaskStillBlockingDuplicateGuard(task: TaskRecord): boolean {
   return task.status === "queued" || task.status === "running";
 }
 
+function isTaskDelivering(task: TaskRecord): boolean {
+  return task.status === "delivering";
+}
+
 function isTaskRecentSuccessfulDuplicate(params: {
   task: TaskRecord;
   requestKey?: string;
@@ -321,7 +325,8 @@ export function listActiveMediaGenerationTasksForSession(params: {
       task.runtime !== "cli" ||
       task.scopeKind !== "session" ||
       task.taskKind !== params.taskKind ||
-      !isTaskStillBlockingDuplicateGuard(task)
+      !isTaskStillBlockingDuplicateGuard(task) ||
+      isTaskDelivering(task)
     ) {
       return false;
     }
@@ -405,17 +410,22 @@ export function buildMediaGenerationTaskStatusText(params: {
   const active =
     params.task.status === "queued" ||
     params.task.status === "running" ||
+    params.task.status === "delivering" ||
     params.task.terminalOutcome === "blocked";
   const lines = [
     active
-      ? `${params.nounLabel} task ${params.task.taskId} is already ${params.task.status}${provider ? ` with ${provider}` : ""}.`
+      ? params.task.status === "delivering"
+        ? `${params.nounLabel} task ${params.task.taskId} is delivering the generated ${params.completionLabel}${provider ? ` via ${provider}` : ""}.`
+        : `${params.nounLabel} task ${params.task.taskId} is already ${params.task.status}${provider ? ` with ${provider}` : ""}.`
       : `${params.nounLabel} task ${params.task.taskId} recently ${params.task.status}${provider ? ` with ${provider}` : ""}.`,
     params.task.progressSummary ? `Progress: ${params.task.progressSummary}.` : null,
     params.duplicateGuard
-      ? active
+      ? active && params.task.status !== "delivering"
         ? `Do not call ${params.toolName} again for this request. Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here.`
         : `Do not call ${params.toolName} again for the same request; this recent ${params.completionLabel} generation already completed.`
-      : `Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
+      : params.task.status === "delivering"
+        ? `The ${params.completionLabel} delivery is in progress; you may start a new request for different content.`
+        : `Wait for the completion event; the completion agent will send the finished ${params.completionLabel} here when it's ready.`,
   ].filter((entry): entry is string => Boolean(entry));
   return lines.join("\n");
 }

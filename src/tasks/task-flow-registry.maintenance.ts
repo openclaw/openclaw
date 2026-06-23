@@ -33,7 +33,7 @@ function isTerminalFlow(flow: TaskFlowRecord): boolean {
 
 function hasActiveLinkedTasks(flowId: string): boolean {
   return listTasksForFlowId(flowId).some(
-    (task) => task.status === "queued" || task.status === "running",
+    (task) => task.status === "queued" || task.status === "running" || task.status === "delivering",
   );
 }
 

@@ -7,6 +7,7 @@ export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
 export type TaskStatus =
   | "queued"
   | "running"
+  | "delivering"
   | "succeeded"
   | "failed"
   | "timed_out"
@@ -34,6 +35,7 @@ const TASK_RUNTIMES = new Set<TaskRuntime>(["subagent", "acp", "cli", "cron"]);
 const TASK_STATUSES = new Set<TaskStatus>([
   "queued",
   "running",
+  "delivering",
   "succeeded",
   "failed",
   "timed_out",
