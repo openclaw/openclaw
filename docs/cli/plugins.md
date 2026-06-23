@@ -307,13 +307,13 @@ dependencies.
 
 If startup logs `plugins.allow is empty; discovered non-bundled plugins may auto-load: ...`,
 run `openclaw plugins list --enabled --verbose` or
-`openclaw plugins inspect --all` to confirm the plugin ids and copy trusted ids
-into `plugins.allow` in `openclaw.json`. When the warning can list every
-discovered plugin, it prints a ready-to-paste `plugins.allow` snippet that
-already includes those ids. If a plugin loads without install/load-path
-provenance, inspect the full plugin list, then either pin the trusted id in
-`plugins.allow` or reinstall the plugin from a trusted source so OpenClaw
-records install provenance.
+`openclaw plugins inspect <id>` with a listed plugin id to confirm the plugin
+ids and copy trusted ids into `plugins.allow` in `openclaw.json`. When the
+warning can list every discovered plugin, it prints a ready-to-paste
+`plugins.allow` snippet that already includes those ids. If a plugin loads
+without install/load-path provenance, inspect that plugin id, then either pin
+the trusted id in `plugins.allow` or reinstall the plugin from a trusted source
+so OpenClaw records install provenance.
 
 `plugins search` is a remote ClawHub catalog lookup. It does not inspect local
 state, mutate config, install packages, or load plugin runtime code. Search

@@ -8749,7 +8749,7 @@ module.exports = {
     expect(openAllowWarning).toContain('"warn-open-allow-remediation"');
     expect(openAllowWarning).toContain('"plugins": { "allow": [');
     expect(openAllowWarning).toContain("openclaw plugins list --enabled --verbose");
-    expect(openAllowWarning).toContain("openclaw plugins inspect --all");
+    expect(openAllowWarning).toContain("openclaw plugins inspect warn-open-allow-remediation");
   });
 
   it("includes actionable plugins.allow remediation hints in the untracked-provenance warning", () => {
@@ -8783,9 +8783,8 @@ module.exports = {
       );
       expect(untrackedWarning).toBeDefined();
       expect(untrackedWarning).toContain('"warn-untracked-remediation"');
-      expect(untrackedWarning).toContain("openclaw plugins inspect --all");
+      expect(untrackedWarning).toContain("openclaw plugins inspect warn-untracked-remediation");
       expect(untrackedWarning).toContain("reinstall from a trusted source");
-      expect(untrackedWarning).not.toContain("openclaw plugins inspect <id>");
 
       const diagnostic = registry.diagnostics.find(
         (entry) =>
@@ -8793,9 +8792,8 @@ module.exports = {
           entry.message.includes("loaded without install/load-path provenance"),
       );
       expect(diagnostic?.message).toContain('"warn-untracked-remediation"');
-      expect(diagnostic?.message).toContain("openclaw plugins inspect --all");
+      expect(diagnostic?.message).toContain("openclaw plugins inspect warn-untracked-remediation");
       expect(diagnostic?.message).toContain("reinstall from a trusted source");
-      expect(diagnostic?.message).not.toContain("openclaw plugins inspect <id>");
     });
   });
 
@@ -8827,7 +8825,7 @@ module.exports = {
     expect(message).toContain("(+2 more)");
     expect(message).not.toContain('"plugins": { "allow": [');
     expect(message).toContain("openclaw plugins list --enabled --verbose");
-    expect(message).toContain("openclaw plugins inspect --all");
+    expect(message).toContain("openclaw plugins inspect <id>");
   });
 
   it("handles workspace-discovered plugins according to trust and precedence", () => {

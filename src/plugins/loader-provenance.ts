@@ -1,5 +1,6 @@
 // Tracks plugin loader provenance for diagnostics and policy checks.
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
 import { isBundledPluginInsideDevSourceRoot } from "./dev-source-root.js";
@@ -65,6 +66,10 @@ function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
     return true;
   }
   return matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath));
+}
+
+function formatPluginInspectCommand(pluginId: string): string {
+  return `openclaw plugins inspect ${quoteCliArg(pluginId)}`;
 }
 
 /** Builds provenance matchers from configured load paths and install records. */
@@ -246,14 +251,17 @@ export function warnWhenAllowlistIsOpen(params: {
     .join(", ");
   const truncated = autoDiscoverable.length > 6;
   const extra = truncated ? ` (+${autoDiscoverable.length - 6} more)` : "";
+  const inspectCommands = autoDiscoverable
+    .map((entry) => `'${formatPluginInspectCommand(entry.id)}'`)
+    .join(", ");
   // Skip the snippet when truncated: a previewed-only allowlist would silently disable the rest
   const remediation = truncated
-    ? "Run 'openclaw plugins list --enabled --verbose' to enumerate every discovered plugin id and add the ones you trust to plugins.allow in openclaw.json. Run 'openclaw plugins inspect --all' for per-plugin details."
+    ? "Run 'openclaw plugins list --enabled --verbose' to enumerate every discovered plugin id, inspect trusted ids with 'openclaw plugins inspect <id>', and add the ones you trust to plugins.allow in openclaw.json."
     : `To trust them explicitly, set plugins.allow in openclaw.json (e.g. "plugins": { "allow": [${autoDiscoverable
         .map((entry) => JSON.stringify(entry.id))
         .join(
           ", ",
-        )}] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect --all' to confirm plugin ids.`;
+        )}] }). Run 'openclaw plugins list --enabled --verbose' or ${inspectCommands} to confirm plugin ids.`;
   params.warningCache.recordOpenAllowlistWarning(params.warningCacheKey);
   if (!hasConfiguredAllowlist) {
     params.logger.warn(
@@ -300,7 +308,7 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     ) {
       continue;
     }
-    const message = `loaded without install/load-path provenance; treat as untracked local code. Verify source with 'openclaw plugins inspect --all', then pin trust via plugins.allow (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }) or reinstall from a trusted source so OpenClaw records install provenance.`;
+    const message = `loaded without install/load-path provenance; treat as untracked local code. Verify source with '${formatPluginInspectCommand(plugin.id)}', then pin trust via plugins.allow (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }) or reinstall from a trusted source so OpenClaw records install provenance.`;
     params.registry.diagnostics.push({
       level: "warn",
       pluginId: plugin.id,
