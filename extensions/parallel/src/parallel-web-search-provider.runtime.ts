@@ -43,7 +43,7 @@ const PARALLEL_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 // (web-search upstream) and untrusted. Cap the successful JSON read so a
 // hostile or malfunctioning endpoint streaming an unbounded body cannot force
 // the runtime to buffer the whole payload before parsing. 16 MiB matches the
-// shared provider JSON cap (readProviderJsonResponse default / #95218).
+// shared provider JSON cap (readProviderJsonResponse default).
 const PARALLEL_SEARCH_RESPONSE_LIMIT_BYTES = 16 * 1024 * 1024;
 
 const require = createRequire(import.meta.url);
