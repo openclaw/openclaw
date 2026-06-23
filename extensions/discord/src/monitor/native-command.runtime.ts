@@ -2,7 +2,13 @@
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
 import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  loadSessionStore,
+  resolveAndPersistSessionFile,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 
 export const nativeCommandRuntime = {
@@ -12,6 +18,10 @@ export const nativeCommandRuntime = {
   resolveDirectStatusReplyForSession,
   resolveDiscordNativeInteractionRouteState,
   getSessionEntry,
+  loadSessionStore,
+  resolveAndPersistSessionFile,
+  resolveSessionStoreEntry,
+  resolveStorePath,
 };
 
 export const testing = {
@@ -53,6 +63,30 @@ export const testing = {
   setGetSessionEntry(next: typeof getSessionEntry): typeof getSessionEntry {
     const previous = nativeCommandRuntime.getSessionEntry;
     nativeCommandRuntime.getSessionEntry = next;
+    return previous;
+  },
+  setLoadSessionStore(next: typeof loadSessionStore): typeof loadSessionStore {
+    const previous = nativeCommandRuntime.loadSessionStore;
+    nativeCommandRuntime.loadSessionStore = next;
+    return previous;
+  },
+  setResolveAndPersistSessionFile(
+    next: typeof resolveAndPersistSessionFile,
+  ): typeof resolveAndPersistSessionFile {
+    const previous = nativeCommandRuntime.resolveAndPersistSessionFile;
+    nativeCommandRuntime.resolveAndPersistSessionFile = next;
+    return previous;
+  },
+  setResolveSessionStoreEntry(
+    next: typeof resolveSessionStoreEntry,
+  ): typeof resolveSessionStoreEntry {
+    const previous = nativeCommandRuntime.resolveSessionStoreEntry;
+    nativeCommandRuntime.resolveSessionStoreEntry = next;
+    return previous;
+  },
+  setResolveStorePath(next: typeof resolveStorePath): typeof resolveStorePath {
+    const previous = nativeCommandRuntime.resolveStorePath;
+    nativeCommandRuntime.resolveStorePath = next;
     return previous;
   },
 };

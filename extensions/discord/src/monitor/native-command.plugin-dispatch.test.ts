@@ -18,7 +18,13 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  loadSessionStore,
+  resolveAndPersistSessionFile,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
@@ -36,6 +42,10 @@ const runtimeModuleMocks = vi.hoisted(() => ({
   dispatchReplyWithDispatcher: vi.fn(),
   resolveDirectStatusReplyForSession: vi.fn(),
   getSessionEntry: vi.fn(),
+  loadSessionStore: vi.fn(),
+  resolveAndPersistSessionFile: vi.fn(),
+  resolveSessionStoreEntry: vi.fn(),
+  resolveStorePath: vi.fn(),
 }));
 
 function createConfig(): OpenClawConfig {
@@ -416,6 +426,10 @@ describe("Discord native plugin command dispatch", () => {
       resolveDiscordNativeInteractionRouteState,
     );
     discordNativeCommandTesting.setGetSessionEntry(getSessionEntry);
+    discordNativeCommandTesting.setLoadSessionStore(loadSessionStore);
+    discordNativeCommandTesting.setResolveAndPersistSessionFile(resolveAndPersistSessionFile);
+    discordNativeCommandTesting.setResolveSessionStoreEntry(resolveSessionStoreEntry);
+    discordNativeCommandTesting.setResolveStorePath(resolveStorePath);
   });
 
   beforeEach(() => {
@@ -441,6 +455,28 @@ describe("Discord native plugin command dispatch", () => {
     });
     runtimeModuleMocks.getSessionEntry.mockReset();
     runtimeModuleMocks.getSessionEntry.mockReturnValue(undefined);
+    runtimeModuleMocks.loadSessionStore.mockReset();
+    runtimeModuleMocks.loadSessionStore.mockReturnValue({});
+    runtimeModuleMocks.resolveAndPersistSessionFile.mockReset();
+    runtimeModuleMocks.resolveAndPersistSessionFile.mockResolvedValue({
+      sessionFile: "/tmp/openclaw-discord-plugin-command-test/session.jsonl",
+      sessionEntry: {
+        sessionId: "discord-session",
+        sessionFile: "/tmp/openclaw-discord-plugin-command-test/session.jsonl",
+        updatedAt: Date.now(),
+      },
+    });
+    runtimeModuleMocks.resolveSessionStoreEntry.mockReset();
+    runtimeModuleMocks.resolveSessionStoreEntry.mockImplementation(
+      ({ store, sessionKey }: { store: Record<string, unknown>; sessionKey: string }) => ({
+        normalizedKey: sessionKey,
+        existing: store[sessionKey],
+      }),
+    );
+    runtimeModuleMocks.resolveStorePath.mockReset();
+    runtimeModuleMocks.resolveStorePath.mockReturnValue(
+      "/tmp/openclaw-discord-plugin-command-test/sessions.json",
+    );
     discordNativeCommandTesting.setMatchPluginCommand(
       runtimeModuleMocks.matchPluginCommand as typeof import("openclaw/plugin-sdk/plugin-runtime").matchPluginCommand,
     );
@@ -463,6 +499,18 @@ describe("Discord native plugin command dispatch", () => {
     );
     discordNativeCommandTesting.setGetSessionEntry(
       runtimeModuleMocks.getSessionEntry as typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntry,
+    );
+    discordNativeCommandTesting.setLoadSessionStore(
+      runtimeModuleMocks.loadSessionStore as typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore,
+    );
+    discordNativeCommandTesting.setResolveAndPersistSessionFile(
+      runtimeModuleMocks.resolveAndPersistSessionFile as typeof import("openclaw/plugin-sdk/session-store-runtime").resolveAndPersistSessionFile,
+    );
+    discordNativeCommandTesting.setResolveSessionStoreEntry(
+      runtimeModuleMocks.resolveSessionStoreEntry as typeof import("openclaw/plugin-sdk/session-store-runtime").resolveSessionStoreEntry,
+    );
+    discordNativeCommandTesting.setResolveStorePath(
+      runtimeModuleMocks.resolveStorePath as typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath,
     );
   });
 
@@ -569,6 +617,68 @@ describe("Discord native plugin command dispatch", () => {
         authProfileId: "openai:owner@example.com",
       },
     });
+  });
+
+  it("passes the persisted target session file to Discord plugin commands", async () => {
+    const cfg = {
+      ...createConfig(),
+      session: { store: "/tmp/openclaw-discord-plugin-command-test/sessions.json" },
+    } as OpenClawConfig;
+    const interaction = createInteraction();
+    const sessionKey = "agent:main:discord:dm:owner";
+    const sessionEntry = {
+      sessionId: "discord-session",
+      authProfileOverride: "openai:owner@example.com",
+      updatedAt: Date.now(),
+    };
+    runtimeModuleMocks.getSessionEntry.mockReturnValue(sessionEntry);
+    runtimeModuleMocks.loadSessionStore.mockReturnValue({ [sessionKey]: sessionEntry });
+    runtimeModuleMocks.resolveAndPersistSessionFile.mockResolvedValue({
+      sessionFile: "/tmp/openclaw-discord-plugin-command-test/discord-session.jsonl",
+      sessionEntry: {
+        ...sessionEntry,
+        sessionFile: "/tmp/openclaw-discord-plugin-command-test/discord-session.jsonl",
+      },
+    });
+
+    registerPairPlugin();
+    const command = await createPluginCommand({
+      cfg,
+      name: "pair",
+    });
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "paired:now",
+    });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(
+      Object.assign(interaction, {
+        options: {
+          getString: () => "now",
+          getBoolean: () => null,
+          getFocused: () => "",
+        },
+      }) as unknown,
+    );
+
+    expectPluginCommandExecution({
+      mock: executeSpy,
+      commandName: "pair",
+      expected: {
+        sessionKey,
+        sessionId: "discord-session",
+        sessionFile: "/tmp/openclaw-discord-plugin-command-test/discord-session.jsonl",
+        authProfileId: "openai:owner@example.com",
+      },
+    });
+    expect(runtimeModuleMocks.resolveAndPersistSessionFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "discord-session",
+        sessionKey,
+        storePath: "/tmp/openclaw-discord-plugin-command-test/sessions.json",
+        agentId: "main",
+        sessionsDir: "/tmp/openclaw-discord-plugin-command-test",
+      }),
+    );
   });
 
   it("passes the configured binding agent to plugin-owned Discord command sessions", async () => {
