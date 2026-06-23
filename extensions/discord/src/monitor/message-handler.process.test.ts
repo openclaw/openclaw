@@ -1320,6 +1320,52 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
+  it("reuses preflight-resolved media instead of re-downloading after the run queue", async () => {
+    // Regression for #96165: Discord CDN attachment URLs expire, so process
+    // must not re-fetch attachments preflight already downloaded at receipt
+    // time. A throwing fetchImpl here proves no re-fetch happens.
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("attachment should not be re-fetched after preflight downloaded it");
+    });
+    const ctx = await createBaseContext({
+      message: {
+        id: "m-preflight-media",
+        channelId: "c1",
+        content: "look",
+        timestamp: new Date().toISOString(),
+        attachments: [
+          {
+            id: "att-preflight-media",
+            url: "https://cdn.discordapp.com/attachments/1/photo.png?ex=expired",
+            content_type: "image/png",
+            filename: "photo.png",
+          },
+        ],
+      },
+      baseText: "look",
+      messageText: "look",
+      preflightMediaList: [
+        {
+          path: "/tmp/openclaw-discord-test/photo.png",
+          contentType: "image/png",
+          placeholder: "<media:image>",
+        },
+      ],
+      preflightForwardedMediaList: [],
+      discordRestFetch: fetchImpl,
+      mediaMaxBytes: 1024 * 1024,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
+      MediaPath: "/tmp/openclaw-discord-test/photo.png",
+      MediaType: "image/png",
+      MediaPaths: ["/tmp/openclaw-discord-test/photo.png"],
+    });
+  });
+
   it("does not attach referenced reply media when reply context is hidden", async () => {
     const fetchImpl = vi.fn(async () => {
       throw new Error("hidden reply media should not be fetched");

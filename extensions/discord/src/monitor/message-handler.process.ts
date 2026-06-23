@@ -65,7 +65,11 @@ import {
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-import { resolveForwardedMediaList, resolveMediaList } from "./message-utils.js";
+import {
+  resolveForwardedMediaList,
+  resolveMediaList,
+  type DiscordMediaInfo,
+} from "./message-utils.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
@@ -197,6 +201,8 @@ async function processDiscordMessageInner(
     abortSignal,
     botLoopProtection,
     replyTypingFeedback,
+    preflightMediaList,
+    preflightForwardedMediaList,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
     return;
@@ -211,27 +217,39 @@ async function processDiscordMessageInner(
     }
   }
 
-  const ssrfPolicy = cfg.browser?.ssrfPolicy;
-  const mediaResolveOptions = {
-    fetchImpl: discordRestFetch,
-    ssrfPolicy,
-    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
-    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-    abortSignal,
-  };
-  const mediaList = await resolveMediaList(message, mediaMaxBytes, mediaResolveOptions);
+  // Discord CDN attachment URLs expire; preflight already downloaded these
+  // at message-receipt time, before this run could be delayed by the queue.
+  // Contexts built outside preflightDiscordMessage (e.g. tests) fall back to
+  // resolving now.
+  let mediaList: DiscordMediaInfo[];
+  if (preflightMediaList && preflightForwardedMediaList) {
+    mediaList = [...preflightMediaList, ...preflightForwardedMediaList];
+  } else {
+    const ssrfPolicy = cfg.browser?.ssrfPolicy;
+    const mediaResolveOptions = {
+      fetchImpl: discordRestFetch,
+      ssrfPolicy,
+      readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+      totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+      abortSignal,
+    };
+    mediaList = await resolveMediaList(message, mediaMaxBytes, mediaResolveOptions);
+    if (isProcessAborted(abortSignal)) {
+      return;
+    }
+    const forwardedMediaList = await resolveForwardedMediaList(
+      message,
+      mediaMaxBytes,
+      mediaResolveOptions,
+    );
+    if (isProcessAborted(abortSignal)) {
+      return;
+    }
+    mediaList.push(...forwardedMediaList);
+  }
   if (isProcessAborted(abortSignal)) {
     return;
   }
-  const forwardedMediaList = await resolveForwardedMediaList(
-    message,
-    mediaMaxBytes,
-    mediaResolveOptions,
-  );
-  if (isProcessAborted(abortSignal)) {
-    return;
-  }
-  mediaList.push(...forwardedMediaList);
   const text = messageText;
   if (!text) {
     logVerbose("discord: drop message " + message.id + " (empty content)");
