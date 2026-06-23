@@ -136,6 +136,59 @@ describe("resolveEnvHttpProxyAgentOptions", () => {
       },
     },
     {
+      name: "includes NO_PROXY when present (uppercase)",
+      env: {
+        HTTPS_PROXY: "http://proxy.test:8080",
+        NO_PROXY: ".myqcloud.com,localhost",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        httpsProxy: "http://proxy.test:8080",
+        noProxy: ".myqcloud.com,localhost",
+      },
+    },
+    {
+      name: "includes NO_PROXY when present (lowercase)",
+      env: {
+        HTTPS_PROXY: "http://proxy.test:8080",
+        no_proxy: "*.internal.corp",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        httpsProxy: "http://proxy.test:8080",
+        noProxy: "*.internal.corp",
+      },
+    },
+    {
+      name: "lowercase no_proxy takes precedence over uppercase NO_PROXY",
+      env: {
+        HTTPS_PROXY: "http://proxy.test:8080",
+        NO_PROXY: "old-value.com",
+        no_proxy: "new-value.com",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        httpsProxy: "http://proxy.test:8080",
+        noProxy: "new-value.com",
+      },
+    },
+    {
+      name: "empty NO_PROXY is excluded",
+      env: {
+        HTTPS_PROXY: "http://proxy.test:8080",
+        NO_PROXY: "   ",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        httpsProxy: "http://proxy.test:8080",
+      },
+    },
+    {
+      name: "returns options with only NO_PROXY (no proxy URLs)",
+      env: {
+        NO_PROXY: ".myqcloud.com",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        noProxy: ".myqcloud.com",
+      },
+    },
+    {
       name: "treats empty lower-case all_proxy as authoritative over upper-case ALL_PROXY",
       env: {
         all_proxy: "",
