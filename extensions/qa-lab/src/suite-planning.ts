@@ -12,6 +12,12 @@ import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js"
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
+const QA_SHARED_STATE_MUTATION_FLOW_CALLS = new Set([
+  "ensureImageGenerationConfigured",
+  "forceMemoryIndex",
+  "patchConfig",
+  "writeWorkspaceSkill",
+]);
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
 
@@ -209,6 +215,31 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
   );
 }
 
+function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
+  return (
+    isQaMergePatchObject(scenario.gatewayConfigPatch) ||
+    scenario.gatewayRuntime !== undefined ||
+    (Array.isArray(scenario.plugins) && scenario.plugins.length > 0) ||
+    normalizeLowercaseStringOrEmpty(scenario.surface) === "memory" ||
+    scenario.execution.config?.ensureImageGeneration === true ||
+    flowContainsSharedStateMutation(scenario.execution.flow)
+  );
+}
+
+function flowContainsSharedStateMutation(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(flowContainsSharedStateMutation);
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.call === "string" && QA_SHARED_STATE_MUTATION_FLOW_CALLS.has(record.call)) {
+    return true;
+  }
+  return Object.values(record).some(flowContainsSharedStateMutation);
+}
+
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {
   return normalizeLowercaseStringOrEmpty(scenario.surface) === "control-ui";
 }
@@ -329,6 +360,7 @@ export {
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
+  scenarioRequiresIsolatedQaSuiteWorker,
   scenarioMatchesQaProviderLane,
   selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,

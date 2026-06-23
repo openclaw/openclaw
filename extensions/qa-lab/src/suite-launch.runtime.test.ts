@@ -51,26 +51,27 @@ describe("qa suite runtime launcher", () => {
   beforeEach(() => {
     runQaFlowSuite.mockReset();
     runQaTestFileScenarios.mockReset();
-    runQaFlowSuite.mockImplementation(async (params: { outputDir?: string } | undefined) => {
-      const outputDir = params?.outputDir ?? "/tmp/qa-flow";
-      const evidencePath = path.join(outputDir, "qa-evidence.json");
-      await writeEvidence(evidencePath);
-      return {
-        outputDir,
-        evidencePath,
-        reportPath: path.join(outputDir, "qa-suite-report.md"),
-        summaryPath: path.join(outputDir, "qa-suite-summary.json"),
-        report: "# QA Suite Report\n",
-        scenarios: [
-          {
-            name: "channel-chat-baseline",
+    runQaFlowSuite.mockImplementation(
+      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
+        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
+        const evidencePath = path.join(outputDir, "qa-evidence.json");
+        await writeEvidence(evidencePath);
+        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
+        return {
+          outputDir,
+          evidencePath,
+          reportPath: path.join(outputDir, "qa-suite-report.md"),
+          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+          report: "# QA Suite Report\n",
+          scenarios: scenarioIds.map((scenarioId) => ({
+            name: scenarioId,
             status: "pass",
             steps: [],
-          },
-        ],
-        watchUrl: "http://127.0.0.1:43124",
-      };
-    });
+          })),
+          watchUrl: "http://127.0.0.1:43124",
+        };
+      },
+    );
     runQaTestFileScenarios.mockImplementation(
       async (params: {
         outputDir: string;
@@ -171,6 +172,56 @@ describe("qa suite runtime launcher", () => {
     ).toEqual([{ id: "control-ui-chat-flow-playwright", kind: "playwright" }]);
   });
 
+  it("serializes test-file runner partitions in one checkout", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-test-file-serial-");
+    let releaseVitest!: () => void;
+    let markVitestStarted!: () => void;
+    const vitestStarted = new Promise<void>((resolve) => {
+      markVitestStarted = resolve;
+    });
+    const vitestBlocked = new Promise<void>((resolve) => {
+      releaseVitest = resolve;
+    });
+    runQaTestFileScenarios.mockImplementationOnce(
+      async (params: {
+        outputDir: string;
+        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
+      }) => {
+        markVitestStarted();
+        await vitestBlocked;
+        const evidencePath = path.join(params.outputDir, "qa-evidence.json");
+        await writeEvidence(evidencePath);
+        return {
+          outputDir: params.outputDir,
+          executionKind: params.scenarios[0]!.execution.kind,
+          evidencePath,
+          results: params.scenarios.map((scenarioItem) => ({
+            durationMs: 1,
+            logPath: path.join(params.outputDir, `${scenarioItem.id}.log`),
+            scenario: scenarioItem,
+            status: "pass",
+          })),
+        };
+      },
+    );
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/test-file-serial",
+      concurrency: 8,
+      scenarioIds: ["gateway-smoke", "control-ui-chat-flow-playwright"],
+    });
+    await vitestStarted;
+    await Promise.resolve();
+
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+
+    releaseVitest();
+    await runPromise;
+
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(2);
+  });
+
   it("runs mixed flow and Vitest/Playwright scenarios as one suite", async () => {
     const repoRoot = await makeTempRepo("qa-suite-mixed-");
     const result = await runQaSuite({
@@ -217,6 +268,247 @@ describe("qa suite runtime launcher", () => {
     expect(JSON.stringify(summary)).not.toContain(repoRoot);
     expect(summary.scenarios?.[1]?.details).toContain(
       "log=.artifacts/qa-e2e/mixed/playwright/control-ui-chat-flow-playwright.log",
+    );
+  });
+
+  it("respects serial concurrency across unified suite partitions", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-serial-");
+    let releaseFlow!: () => void;
+    let markFlowStarted!: () => void;
+    const flowStarted = new Promise<void>((resolve) => {
+      markFlowStarted = resolve;
+    });
+    const flowBlocked = new Promise<void>((resolve) => {
+      releaseFlow = resolve;
+    });
+    runQaFlowSuite.mockImplementationOnce(
+      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
+        markFlowStarted();
+        await flowBlocked;
+        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
+        const evidencePath = path.join(outputDir, "qa-evidence.json");
+        await writeEvidence(evidencePath);
+        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
+        return {
+          outputDir,
+          evidencePath,
+          reportPath: path.join(outputDir, "qa-suite-report.md"),
+          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+          report: "# QA Suite Report\n",
+          scenarios: scenarioIds.map((scenarioId) => ({
+            name: scenarioId,
+            status: "pass",
+            steps: [],
+          })),
+          watchUrl: "http://127.0.0.1:43124",
+        };
+      },
+    );
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/serial",
+      concurrency: 1,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "group-visible-reply-tool",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+    await flowStarted;
+    await Promise.resolve();
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+
+    releaseFlow();
+    await runPromise;
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+  });
+
+  it("accounts for isolated flow worker weight in unified suite concurrency", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-weighted-");
+    let releaseShared!: () => void;
+    let markSharedStarted!: () => void;
+    const sharedStarted = new Promise<void>((resolve) => {
+      markSharedStarted = resolve;
+    });
+    const sharedBlocked = new Promise<void>((resolve) => {
+      releaseShared = resolve;
+    });
+    runQaFlowSuite.mockImplementationOnce(
+      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
+        markSharedStarted();
+        await sharedBlocked;
+        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
+        const evidencePath = path.join(outputDir, "qa-evidence.json");
+        await writeEvidence(evidencePath);
+        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
+        return {
+          outputDir,
+          evidencePath,
+          reportPath: path.join(outputDir, "qa-suite-report.md"),
+          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+          report: "# QA Suite Report\n",
+          scenarios: scenarioIds.map((scenarioId) => ({
+            name: scenarioId,
+            status: "pass",
+            steps: [],
+          })),
+          watchUrl: "http://127.0.0.1:43124",
+        };
+      },
+    );
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/weighted",
+      concurrency: 2,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "group-visible-reply-tool",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+    await sharedStarted;
+    await Promise.resolve();
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+
+    releaseShared();
+    await runPromise;
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares ordinary flow scenarios and isolates flow scenarios with config patches", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-partition-");
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/smoke",
+      concurrency: 8,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "group-visible-reply-tool",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "smoke");
+    expect(result.executionKind).toBe("suite");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "shared"),
+        concurrency: 1,
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated"),
+        concurrency: 3,
+        workerStartStaggerMs: 500,
+        scenarioIds: ["group-visible-reply-tool"],
+      }),
+    );
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
+    ) as {
+      scenarios?: Array<{ name?: unknown; status?: unknown }>;
+    };
+    expect(summary.scenarios).toMatchObject([
+      { name: "channel-chat-baseline", status: "pass" },
+      { name: "group-visible-reply-tool", status: "pass" },
+      { name: "Control UI chat flow Playwright coverage", status: "pass" },
+    ]);
+  });
+
+  it("spreads ordinary flow scenarios across bounded shared batches", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-shared-batches-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/smoke",
+      concurrency: 8,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "dm-chat-baseline",
+        "thread-follow-up",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "smoke");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(3);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "shared-1"),
+        concurrency: 1,
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "shared-2"),
+        concurrency: 1,
+        scenarioIds: ["dm-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "shared-3"),
+        concurrency: 1,
+        scenarioIds: ["thread-follow-up"],
+      }),
+    );
+  });
+
+  it("isolates flow scenarios that mutate shared runtime state", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-shared-state-");
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/smoke",
+      concurrency: 8,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "runtime-tool-image-generate",
+        "runtime-inventory-drift-check",
+        "session-memory-ranking",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "smoke");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "shared"),
+        concurrency: 1,
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated"),
+        concurrency: 5,
+        workerStartStaggerMs: 500,
+        scenarioIds: [
+          "runtime-tool-image-generate",
+          "runtime-inventory-drift-check",
+          "session-memory-ranking",
+        ],
+      }),
     );
   });
 
