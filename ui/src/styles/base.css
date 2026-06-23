@@ -71,6 +71,8 @@
   /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring);
+  /* blended ring for browsers with color-mix support; older browsers keep the solid fallback above */
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   /* Grid */
@@ -124,21 +126,6 @@
   --z-dropdown: 100;
 
   color-scheme: dark;
-}
-
-/* Blend the focus ring when color-mix is available; falls back to solid --ring
-   on browsers that do not support color-mix (Safari < 16.2, Firefox < 113). */
-@supports (color: color-mix(in srgb, currentColor 80%, transparent)) {
-  :root,
-  :root[data-theme-mode="light"],
-  :root[data-theme="dash"],
-  :root[data-theme="dash"][data-theme-mode="light"],
-  :root[data-theme="openknot"],
-  :root[data-theme="openknot"][data-theme-mode="light"],
-  :root[data-theme="claw"],
-  :root[data-theme="claw"][data-theme-mode="light"] {
-    --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
-  }
 }
 
 /* Light theme tokens apply to every light-mode family. */
@@ -204,6 +191,7 @@
 
   --focus: rgba(220, 38, 38, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
 
   --grid-line: rgba(0, 0, 0, 0.04);
@@ -252,6 +240,7 @@
   /* Focus — crimson ring */
   --focus: rgba(229, 36, 59, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   /* Surfaces — true black canvas */
@@ -388,6 +377,7 @@
   /* Focus — match chocolate accent, slightly higher ring opacity for dark bg visibility */
   --focus: rgba(180, 120, 64, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
   /* Surfaces — deep cocoa tones */
