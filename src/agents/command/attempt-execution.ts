@@ -39,7 +39,6 @@ import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent
 import { FailoverError } from "../failover-error.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
-import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
@@ -97,6 +96,12 @@ const ACP_TRANSCRIPT_USAGE = {
 } as const;
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
+
+function shouldSuppressEmbeddedLiveStreamOutput(params: {
+  opts: AgentCommandOpts;
+}): boolean {
+  return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
+}
 
 type TranscriptUsage = {
   input?: number;
@@ -801,9 +806,9 @@ export function runAgentAttempt(params: {
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
-    // Subagents have no live stream consumer (result is read back from the
-    // persisted transcript), so skip per-chunk live visible-text parsing.
-    suppressLiveStreamOutput: params.opts.lane === AGENT_LANE_SUBAGENT,
+    // Hidden internal runs have no assistant-event consumer. Visible subagent
+    // lanes can still feed Control UI, session subscribers, and ACP parent relays.
+    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
