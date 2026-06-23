@@ -19,7 +19,6 @@ export type {
   SessionDeliveryRoute,
 } from "./session-delivery-queue-storage.js";
 export {
-  computeSessionDeliveryBackoffMs,
   drainPendingSessionDeliveries,
   isSessionDeliveryEligibleForRetry,
   MAX_SESSION_DELIVERY_RETRIES,

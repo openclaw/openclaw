@@ -109,14 +109,6 @@ function logRetryBudgetExhausted(
   }
 }
 
-// Public facade name for the session-delivery retry backoff (continuation surface).
-// Upstream relocated the entry claim/release/backoff primitives into
-// delivery-recovery.shared.js; delegate to its computeBackoffMs so this exported
-// contract stays stable without resurrecting the removed local backoff table.
-export function computeSessionDeliveryBackoffMs(retryCount: number): number {
-  return computeBackoffMs(retryCount);
-}
-
 function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
   return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
 }
