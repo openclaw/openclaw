@@ -161,8 +161,7 @@ function renderDocsMap() {
     } else {
       lines.push("- Headings:");
       for (const heading of headings) {
-        const indent = "  ".repeat(heading.depth);
-        lines.push(`${indent}- ${"#".repeat(heading.depth)} ${heading.text}`);
+        lines.push(`  - H${heading.depth}: ${heading.text}`);
       }
     }
     lines.push("");
