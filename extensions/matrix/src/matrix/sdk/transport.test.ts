@@ -29,10 +29,12 @@ describe("performMatrixRequest", () => {
   });
 
   it("rejects oversized raw responses before buffering the whole body", async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ cancel });
     stubRuntimeFetch(
       vi.fn(
         async () =>
-          new Response("too-big", {
+          new Response(stream, {
             status: 200,
             headers: {
               "content-length": "8192",
@@ -53,6 +55,7 @@ describe("performMatrixRequest", () => {
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("rejects malformed raw content-length before buffering the body", async () => {
@@ -197,19 +200,18 @@ describe("performMatrixRequest", () => {
   });
 
   it("rejects oversized JSON responses via content-length before buffering the body", async () => {
-    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ cancel });
     stubRuntimeFetch(
       vi.fn(
         async () =>
-          ({
-            ok: true,
+          new Response(stream, {
             status: 200,
-            headers: new Headers({
+            headers: {
               "content-type": "application/json",
               "content-length": String(16 * 1024 * 1024),
-            }),
-            arrayBuffer,
-          }) as unknown as Response,
+            },
+          }),
       ),
     );
 
@@ -224,7 +226,7 @@ describe("performMatrixRequest", () => {
         ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toThrow("Matrix JSON response exceeds configured size limit");
-    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("applies streaming byte limits when JSON responses omit content-length", async () => {
@@ -343,6 +345,29 @@ describe("createMatrixGuardedFetch", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
+  it("rejects and cancels SDK responses above the declared size limit", async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ cancel });
+    stubRuntimeFetch(
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: { "content-length": String(64 * 1024 * 1024 + 1) },
+          }),
+      ),
+    );
+
+    const guardedFetch = createMatrixGuardedFetch({
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    await expect(guardedFetch("http://127.0.0.1:8008/_matrix/client/v3/sync")).rejects.toThrow(
+      "Matrix SDK response exceeds size limit (67108865 bytes > 67108864 bytes)",
+    );
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("strips matrix-js-sdk state_after sync opt-in from /sync requests", async () => {
     const runtimeFetch = vi.fn(
       async (_input: RequestInfo | URL, _init?: RequestInit) =>
@@ -359,10 +384,11 @@ describe("createMatrixGuardedFetch", () => {
       ssrfPolicy: { allowPrivateNetwork: true },
     });
 
-    await guardedFetch(
+    const response = await guardedFetch(
       "http://127.0.0.1:8008/_matrix/client/v3/sync?filter=abc&org.matrix.msc4222.use_state_after=true&timeout=30000",
     );
 
+    await expect(response.json()).resolves.toEqual({});
     expect(runtimeFetch).toHaveBeenCalledTimes(1);
     expect(runtimeFetch.mock.calls.at(0)?.[0]).toBe(
       "http://127.0.0.1:8008/_matrix/client/v3/sync?filter=abc&timeout=30000",

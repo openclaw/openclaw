@@ -125,6 +125,10 @@ import {
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { hasOnlyAssistantReasoningContent } from "../replay-turn-classification.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
+import {
+  applyAgentRunSessionTargetIdentity,
+  resolveAgentRunSessionTarget,
+} from "../run-session-target.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -255,6 +259,7 @@ const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
 
 function isNoRealConversationCompactionNoop(params: {
   ok?: boolean;
@@ -617,20 +622,28 @@ export function runEmbeddedAgent(
 async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  let params = paramsInput;
-  let lifecycleGeneration = params.lifecycleGeneration!;
+  const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
-    config: params.config,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    config: paramsBase.config,
+    sessionId: paramsBase.sessionId,
+    sessionKey: paramsBase.sessionKey,
+    agentId: paramsBase.agentId,
   });
-  if (effectiveSessionKey !== params.sessionKey) {
-    params = { ...params, sessionKey: effectiveSessionKey };
-  }
+  const runSessionTarget = await resolveAgentRunSessionTarget({
+    ...paramsBase,
+    sessionKey: effectiveSessionKey,
+  });
+  let params: RunEmbeddedAgentParamsWithSessionFile = {
+    ...paramsBase,
+    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    sessionId: runSessionTarget.sessionId,
+    sessionKey: effectiveSessionKey ?? runSessionTarget.sessionKey,
+    sessionFile: runSessionTarget.sessionFile,
+  };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   // Outer fallback attempts defer session suspension only while another
@@ -2181,6 +2194,7 @@ async function runEmbeddedAgentInternal(
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
             silentExpected: params.silentExpected,
+            suppressLiveStreamOutput: params.suppressLiveStreamOutput,
             bootstrapContextMode: params.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,
             jobId: params.jobId,

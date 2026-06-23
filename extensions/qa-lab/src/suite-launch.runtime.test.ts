@@ -28,23 +28,19 @@ async function makeTempRepo(prefix: string) {
   return repoRoot;
 }
 
-async function writeEvidence(pathLocal: string) {
-  await fs.mkdir(path.dirname(pathLocal), { recursive: true });
-  await fs.writeFile(
-    pathLocal,
-    `${JSON.stringify(
-      {
-        kind: "openclaw.qa.evidence-summary",
-        schemaVersion: 2,
-        generatedAt: "2026-06-14T00:00:00.000Z",
-        evidenceMode: "full",
-        entries: [],
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+async function writeEvidence(pathLocal: string, writeFile = true) {
+  const evidence = {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt: "2026-06-14T00:00:00.000Z",
+    evidenceMode: "full",
+    entries: [],
+  };
+  if (writeFile) {
+    await fs.mkdir(path.dirname(pathLocal), { recursive: true });
+    await fs.writeFile(pathLocal, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  }
+  return evidence;
 }
 
 describe("qa suite runtime launcher", () => {
@@ -52,12 +48,17 @@ describe("qa suite runtime launcher", () => {
     runQaFlowSuite.mockReset();
     runQaTestFileScenarios.mockReset();
     runQaFlowSuite.mockImplementation(
-      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
+      async (
+        params:
+          | { outputDir?: string; scenarioIds?: string[]; writeEvidenceFile?: boolean }
+          | undefined,
+      ) => {
         const outputDir = params?.outputDir ?? "/tmp/qa-flow";
         const evidencePath = path.join(outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
+        const evidence = await writeEvidence(evidencePath, params?.writeEvidenceFile);
         const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
         return {
+          evidence,
           outputDir,
           evidencePath,
           reportPath: path.join(outputDir, "qa-suite-report.md"),
@@ -76,14 +77,16 @@ describe("qa suite runtime launcher", () => {
       async (params: {
         outputDir: string;
         scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
+        writeEvidenceFile?: boolean;
       }) => {
         const [scenario] = params.scenarios;
         if (!scenario) {
           throw new Error("expected scenario");
         }
         const evidencePath = path.join(params.outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
+        const evidence = await writeEvidence(evidencePath, params.writeEvidenceFile);
         return {
+          evidence,
           outputDir: params.outputDir,
           executionKind: scenario.execution.kind,
           evidencePath,
@@ -247,15 +250,27 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow"),
         scenarioIds: ["channel-chat-baseline"],
+        writeEvidenceFile: false,
       }),
     );
     expect(runQaTestFileScenarios).toHaveBeenCalledWith(
       expect.objectContaining({
         outputDir: path.join(outputDir, "playwright"),
+        writeEvidenceFile: false,
       }),
     );
     await expect(fs.access(path.join(outputDir, "qa-suite-summary.json"))).resolves.toBeUndefined();
     await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(outputDir, "flow", "qa-evidence.json"))).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
+    await expect(
+      fs.access(path.join(outputDir, "playwright", "qa-evidence.json")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
     ) as {

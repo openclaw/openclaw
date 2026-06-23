@@ -692,6 +692,73 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("marks a running webchat session failed when dispatch rejects before a reply", async () => {
+    await withMainSessionStore(async (dir) => {
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            sessionFile: path.join(dir, "sess-main.jsonl"),
+            updatedAt: 1_000,
+            status: "running",
+            startedAt: 900,
+          },
+        },
+      });
+      const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
+      expect(subscribeRes.ok).toBe(true);
+      dispatchInboundMessageMock.mockRejectedValueOnce(new Error("provider rejected request"));
+
+      const errorPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "error" &&
+          o.payload?.runId === "idem-dispatch-error-1",
+        8_000,
+      );
+      const sessionChangedPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "sessions.changed" &&
+          o.payload?.reason === "chat.dispatch-error" &&
+          o.payload?.sessionKey === "agent:main:main",
+        8_000,
+      );
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "run: pwd",
+        idempotencyKey: "idem-dispatch-error-1",
+      });
+      expect(res.ok).toBe(true);
+      await errorPromise;
+      const sessionChanged = await sessionChangedPromise;
+      expectRecordFields(sessionChanged.payload, {
+        sessionId: "sess-main",
+        status: "failed",
+        hasActiveRun: false,
+      });
+
+      const sessionsRes = await rpcReq<{ sessions?: unknown[] }>(ws, "sessions.list", {});
+      expect(sessionsRes.ok).toBe(true);
+      const session = sessionsRes.payload?.sessions?.find(
+        (row): row is Record<string, unknown> =>
+          Boolean(row) &&
+          typeof row === "object" &&
+          (row as { key?: unknown }).key === "agent:main:main",
+      );
+      const actualSession = expectRecordFields(session, {
+        status: "failed",
+        hasActiveRun: false,
+      });
+      expect(typeof actualSession.startedAt).toBe("number");
+      expect(typeof actualSession.endedAt).toBe("number");
+      expect(typeof actualSession.runtimeMs).toBe("number");
+    });
+  });
+
   test("chat.history hides assistant NO_REPLY-only entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture());
     const textValues = collectHistoryTextValues(historyMessages);

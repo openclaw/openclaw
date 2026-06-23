@@ -1,6 +1,10 @@
 // Narrow session/runtime facade re-exported for memory transcript helpers.
 
 export {
+  canonicalizeMainSessionAlias,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   SILENT_REPLY_TOKEN,
@@ -12,9 +16,14 @@ export {
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
+  listSessionEntries,
   onSessionTranscriptUpdate,
   parseUsageCountedSessionIdFromFileName,
+  resolveSessionFilePath,
+  resolveStorePath,
+  resolveSessionAgentId,
   resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
   stripInternalRuntimeContext,
+  type SessionEntry,
 } from "./openclaw-runtime.js";

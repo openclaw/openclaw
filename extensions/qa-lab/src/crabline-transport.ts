@@ -7,7 +7,7 @@ import {
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
   type StartedOpenClawCrablineAdapter,
-} from "crabline";
+} from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -101,7 +101,10 @@ async function postCrablineInbound(params: {
     url: params.adapter.manifest.endpoints.adminInboundUrl,
     init: {
       body: JSON.stringify(params.providerBody),
-      headers: { "content-type": "application/json" },
+      headers: {
+        authorization: `Bearer ${params.adapter.manifest.adminToken}`,
+        "content-type": "application/json",
+      },
       method: "POST",
     },
     policy: { allowPrivateNetwork: true },

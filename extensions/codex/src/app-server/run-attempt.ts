@@ -849,7 +849,16 @@ export async function runCodexAppServerAttempt(
     },
   });
   const hadSessionFile = await pathExists(activeSessionFile);
-  let historyMessages = (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? [];
+  const activeTranscriptTarget = {
+    agentId: sessionAgentId,
+    sessionFile: activeSessionFile,
+    sessionId: activeSessionId,
+    sessionKey: contextSessionKey,
+  };
+  let historyMessages =
+    !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
+      ? []
+      : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []);
   const hookContextWindowFields = {
     ...(params.contextWindowInfo?.tokens
       ? { contextTokenBudget: params.contextWindowInfo.tokens }
@@ -907,7 +916,7 @@ export async function runCodexAppServerAttempt(
       warn: (message) => embeddedAgentLog.warn(message),
     });
     historyMessages =
-      (await readMirroredSessionHistoryMessages(activeSessionFile)) ?? historyMessages;
+      (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? historyMessages;
   }
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
@@ -3039,7 +3048,7 @@ export async function runCodexAppServerAttempt(
       const activeContextEnginePluginIdLocal =
         resolveContextEngineOwnerPluginId(activeContextEngine);
       const finalMessages =
-        (await readMirroredSessionHistoryMessages(activeSessionFile)) ??
+        (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ??
         historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
