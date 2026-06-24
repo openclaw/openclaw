@@ -23,8 +23,8 @@ import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log
 import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import {
-  resolveCronDeliverySessionKey,
-  resolveCronSessionTargetSessionKey,
+  resolveCronDeliverySessionKeyFromStore,
+  resolveCronSessionTargetSessionKeyFromStore,
 } from "../cron/session-target.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
@@ -392,7 +392,12 @@ export function buildGatewayCronService(params: {
       onLaneWait,
     }) => {
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
-      const sessionKey = resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
+      const sessionKey =
+        resolveCronSessionTargetSessionKeyFromStore({
+          cfg: runtimeConfig,
+          agentId,
+          sessionTarget: job.sessionTarget,
+        }) ?? `cron:${job.id}`;
       try {
         return await runCronIsolatedAgentTurn({
           cfg: runtimeConfig,
@@ -474,7 +479,11 @@ export function buildGatewayCronService(params: {
             channel: plan.channel,
             to: plan.to,
             accountId: plan.accountId,
-            sessionKey: resolveCronDeliverySessionKey(job),
+            sessionKey: resolveCronDeliverySessionKeyFromStore({
+              cfg: runtimeConfig,
+              agentId,
+              job,
+            }),
           },
           message,
           abortSignal: abortSignal ?? new AbortController().signal,

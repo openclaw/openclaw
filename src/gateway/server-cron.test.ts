@@ -1,5 +1,6 @@
 // Gateway cron tests cover isolated agent turns, heartbeat wakeups, completion
 // delivery, lifecycle cleanup, hook emission, and SSRF-guarded webhooks.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -1250,6 +1251,61 @@ describe("buildGatewayCronService", () => {
         sessionTarget: `session:${sessionKey}`,
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "hello" },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      const options = expectIsolatedRunFields({ sessionKey });
+      expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
+      expectCleanupForSessionKeys([sessionKey]);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("resolves custom session targets by persisted sessionId before isolated cron runs", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-session-id-target-${Date.now()}`);
+    const sessionStore = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:ops";
+    fs.mkdirSync(path.dirname(sessionStore), { recursive: true });
+    fs.writeFileSync(
+      sessionStore,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "destination-session-id",
+          updatedAt: Date.now(),
+        },
+      }),
+    );
+    const cfg = {
+      session: {
+        mainKey: "main",
+        store: sessionStore,
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "session-id-target",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "session:destination-session-id",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "discord",
+          to: "channel:ops",
+        },
       });
 
       await state.cron.run(job.id, "force");

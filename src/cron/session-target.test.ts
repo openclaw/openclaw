@@ -4,6 +4,7 @@ import {
   resolveCronCurrentSessionTarget,
   resolveCronDeliverySessionKey,
   resolveCronNotificationSessionKey,
+  resolveCronSessionTargetReferenceKey,
   resolveCronSessionTargetSessionKey,
 } from "./session-target.js";
 
@@ -27,6 +28,32 @@ describe("cron session target helpers", () => {
     expect(() => resolveCronSessionTargetSessionKey("session:bad\0id")).toThrow(
       "invalid cron sessionTarget session id",
     );
+  });
+
+  it("resolves persistent session targets from stored session ids", () => {
+    expect(
+      resolveCronSessionTargetReferenceKey({
+        reference: "destination-session-id",
+        entries: [
+          [
+            "agent:main:discord:channel:ops",
+            { sessionId: "destination-session-id", updatedAt: 10 },
+          ],
+        ],
+      }),
+    ).toBe("agent:main:discord:channel:ops");
+  });
+
+  it("preserves explicit session keys before probing session ids", () => {
+    expect(
+      resolveCronSessionTargetReferenceKey({
+        reference: "agent:main:daily-report",
+        entries: [
+          ["agent:main:daily-report", { sessionId: "other-session-id", updatedAt: 10 }],
+          ["agent:main:other", { sessionId: "agent:main:daily-report", updatedAt: 20 }],
+        ],
+      }),
+    ).toBe("agent:main:daily-report");
   });
 
   it("resolves current targets to the creator session key", () => {
