@@ -51,6 +51,35 @@ export function consumeLineBreak(text: string, start: number): number | null {
   return null;
 }
 
+function utf8ByteLengthAt(text: string, index: number): { bytes: number; width: number } {
+  const codePoint = text.codePointAt(index);
+  if (codePoint === undefined) {
+    return { bytes: 0, width: 1 };
+  }
+  if (codePoint <= 0x7f) {
+    return { bytes: 1, width: 1 };
+  }
+  if (codePoint <= 0x7ff) {
+    return { bytes: 2, width: 1 };
+  }
+  if (codePoint <= 0xffff) {
+    return { bytes: 3, width: 1 };
+  }
+  return { bytes: 4, width: 2 };
+}
+
+export function utf8ByteLength(text: string, start = 0, end = text.length): number {
+  let bytes = 0;
+  for (let index = start; index < end; index += 1) {
+    const measured = utf8ByteLengthAt(text, index);
+    bytes += measured.bytes;
+    if (measured.width > 1) {
+      index += measured.width - 1;
+    }
+  }
+  return bytes;
+}
+
 /** Finds the exclusive end offset of a balanced JSON object starting at `start`. */
 export function findJsonObjectEnd(
   text: string,
@@ -60,9 +89,14 @@ export function findJsonObjectEnd(
   let depth = 0;
   let inString = false;
   let escaped = false;
+  let payloadBytes = 0;
   for (let index = start; index < text.length; index += 1) {
-    if (maxPayloadBytes !== undefined && index + 1 - start > maxPayloadBytes) {
-      return null;
+    const measured = utf8ByteLengthAt(text, index);
+    if (maxPayloadBytes !== undefined) {
+      payloadBytes += measured.bytes;
+      if (payloadBytes > maxPayloadBytes) {
+        return null;
+      }
     }
     const char = text[index];
     if (inString) {
@@ -73,6 +107,13 @@ export function findJsonObjectEnd(
       } else if (char === '"') {
         inString = false;
       }
+      if (measured.width > 1) {
+        index += measured.width - 1;
+      }
+      continue;
+    }
+    if (measured.width > 1) {
+      index += measured.width - 1;
       continue;
     }
     if (char === '"') {

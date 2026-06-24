@@ -9,6 +9,7 @@ import {
   isPlainTextToolNameChar,
   skipHorizontalWhitespace,
   skipWhitespace,
+  utf8ByteLength,
 } from "./grammar.js";
 
 /** Parsed standalone plain-text tool call block with source offsets for repair. */
@@ -252,7 +253,7 @@ function consumeXmlishParameterBlock(
   if (!bounds) {
     return null;
   }
-  if (bounds.end - bounds.start > maxPayloadBytes) {
+  if (utf8ByteLength(text, bounds.start, bounds.end) > maxPayloadBytes) {
     return null;
   }
   return {
@@ -344,7 +345,7 @@ function parseXmlishPlainTextToolCallBlockAt(
     if (!parameter) {
       break;
     }
-    if (parameter.end - opening.end > maxPayloadBytes) {
+    if (utf8ByteLength(text, opening.end, parameter.end) > maxPayloadBytes) {
       return null;
     }
     args[parameter.name] = parameter.value;
