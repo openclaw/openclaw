@@ -1317,10 +1317,6 @@
   margin-top: 20px;
 }
 
-:root[data-theme-mode="light"] .content {
-  background: var(--bg-content);
-}
-
 .content--chat {
   display: flex;
   flex-direction: column;
@@ -1334,14 +1330,18 @@
   margin-top: 0;
 }
 
-.content--workboard {
+:root[data-theme-mode="light"] .content {
+  background: var(--bg-content);
+}
+
+.content > .workboard {
   display: flex;
   flex-direction: column;
   overflow: hidden;
   padding-bottom: 16px;
 }
 
-.content--workboard > * + * {
+.content > .workboard > * + * {
   margin-top: 14px;
 }
 
