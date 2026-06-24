@@ -1,4 +1,6 @@
 // Google plugin module implements oauth.project behavior.
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithTimeout } from "./oauth.http.js";
 import {
   CODE_ASSIST_ENDPOINT_PROD,
@@ -21,7 +23,12 @@ async function getUserEmail(accessToken: string): Promise<string | undefined> {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (response.ok) {
-      const data = (await response.json()) as { email?: string };
+      JSON.parse(
+        (await readResponseWithLimit(response, GOOGLE_OAUTH_PROJECT_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google OAuth project JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as { email?: string };
       return data.email;
     }
   } catch {
@@ -74,7 +81,12 @@ async function pollOperation(
     if (!response.ok) {
       continue;
     }
-    const data = (await response.json()) as {
+    JSON.parse(
+        (await readResponseWithLimit(response, GOOGLE_OAUTH_PROJECT_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google OAuth project JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as {
       done?: boolean;
       response?: { cloudaicompanionProject?: { id?: string } };
     };
@@ -135,7 +147,12 @@ async function discoverProject(accessToken: string): Promise<string> {
       });
 
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => null);
+        JSON.parse(
+        (await readResponseWithLimit(response, GOOGLE_OAUTH_PROJECT_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google OAuth project JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      );
         if (isVpcScAffected(errorPayload)) {
           data = { currentTier: { id: TIER_STANDARD } };
           activeEndpoint = endpoint;
@@ -146,7 +163,12 @@ async function discoverProject(accessToken: string): Promise<string> {
         continue;
       }
 
-      data = (await response.json()) as typeof data;
+      data = JSON.parse(
+        (await readResponseWithLimit(response, GOOGLE_OAUTH_PROJECT_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google OAuth project JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as typeof data;
       activeEndpoint = endpoint;
       loadError = undefined;
       break;
@@ -211,7 +233,12 @@ async function discoverProject(accessToken: string): Promise<string> {
     throw new Error(`onboardUser failed: ${onboardResponse.status} ${onboardResponse.statusText}`);
   }
 
-  let lro = (await onboardResponse.json()) as {
+  let lro = JSON.parse(
+        (await readResponseWithLimit(onboardResponse, GOOGLE_OAUTH_PROJECT_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google OAuth project JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as {
     done?: boolean;
     name?: string;
     response?: { cloudaicompanionProject?: { id?: string } };

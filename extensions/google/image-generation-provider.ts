@@ -12,6 +12,7 @@ import {
   postJsonRequest,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -43,6 +44,7 @@ const GOOGLE_SUPPORTED_ASPECT_RATIOS = [
 ] as const;
 
 const GOOGLE_IMAGE_MALFORMED_RESPONSE = "Google image generation response malformed";
+const GOOGLE_IMAGE_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
 function normalizeGoogleImageModel(model: string | undefined): string {
   const trimmed = model?.trim();
@@ -231,7 +233,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(res, "Google image generation failed");
 
-        const payload = await res.json();
+        const payload = JSON.parse(
+          (await readResponseWithLimit(res, GOOGLE_IMAGE_JSON_RESPONSE_MAX_BYTES, {
+            onOverflow: ({ maxBytes }) =>
+              new Error(`Google image JSON response exceeds ${maxBytes} bytes`),
+          })).toString("utf8"),
+        ) as unknown;
         let imageIndex = 0;
         const images: GeneratedImageAsset[] = [];
         for (const part of googleResponseParts(payload)) {

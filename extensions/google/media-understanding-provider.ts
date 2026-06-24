@@ -13,6 +13,7 @@ import {
   postJsonRequest,
   type ProviderRequestTransportOverrides,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
   normalizeGoogleModelId,
@@ -97,7 +98,12 @@ async function generateGeminiInlineDataText(params: {
   try {
     await assertOkOrThrowProviderError(res, params.httpErrorLabel);
 
-    const payload = (await res.json()) as {
+    const payload = JSON.parse(
+        (await readResponseWithLimit(res, GOOGLE_MEDIA_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google media JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as {
       candidates?: Array<{
         content?: { parts?: Array<{ text?: string }> };
       }>;

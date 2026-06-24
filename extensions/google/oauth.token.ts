@@ -4,9 +4,14 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
 import { isGeminiCliPersonalOAuth } from "./oauth.settings.js";
+const GOOGLE_OAUTH_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
+const GOOGLE_OAUTH_TOKEN_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
+
 import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth.shared.js";
 
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
@@ -31,7 +36,12 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
     throw new Error(`Token exchange failed: ${errorText}`);
   }
 
-  return (await response.json()) as {
+  return JSON.parse(
+        (await readResponseWithLimit(response, GOOGLE_OAUTH_TOKEN_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google OAuth token JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as {
     access_token?: string;
     refresh_token?: string;
     expires_in?: unknown;

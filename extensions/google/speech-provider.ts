@@ -1,5 +1,6 @@
 // Google provider module implements model/runtime integration.
 import { transcodeAudioBufferToOpus } from "openclaw/plugin-sdk/media-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   assertOkOrThrowProviderError,
   postJsonRequest,
@@ -503,7 +504,12 @@ async function synthesizeGoogleTtsPcmOnce(params: {
       }
     }
     try {
-      return extractGoogleSpeechPcm((await res.json()) as GoogleGenerateSpeechResponse);
+      return extractGoogleSpeechPcm(JSON.parse(
+        (await readResponseWithLimit(res, GOOGLE_SPEECH_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google speech JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as GoogleGenerateSpeechResponse);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       throw new GoogleTtsRetryableError(message);

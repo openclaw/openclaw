@@ -10,6 +10,9 @@ import {
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+
+const GOOGLE_BATCH_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GeminiEmbeddingClient, GeminiTextEmbeddingRequest } from "./embedding-provider.js";
 
@@ -126,7 +129,12 @@ async function submitGeminiBatch(params: {
         const text = await fileRes.text();
         throw new Error(`gemini batch file upload failed: ${fileRes.status} ${text}`);
       }
-      return (await fileRes.json()) as { name?: string; file?: { name?: string } };
+      return JSON.parse(
+        (await readResponseWithLimit(fileRes, GOOGLE_BATCH_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google batch file JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as { name?: string; file?: { name?: string } };
     },
   });
   const fileId = filePayload.name ?? filePayload.file?.name;
@@ -158,7 +166,7 @@ async function submitGeminiBatch(params: {
     },
     onResponse: async (batchRes) => {
       if (batchRes.ok) {
-        return (await batchRes.json()) as GeminiBatchStatus;
+        return (JSON.parse((await readResponseWithLimit(batchRes, GOOGLE_BATCH_JSON_RESPONSE_MAX_BYTES, { onOverflow: ({ maxBytes }) => new Error(`Google batch JSON response exceeds ${maxBytes} bytes`) })).toString("utf8"))) as GeminiBatchStatus;
       }
       const text = await batchRes.text();
       if (batchRes.status === 404) {
@@ -191,7 +199,12 @@ async function fetchGeminiBatchStatus(params: {
       if (!res.ok) {
         throw await createProviderHttpError(res, "gemini batch status failed");
       }
-      return (await res.json()) as GeminiBatchStatus;
+      return JSON.parse(
+        (await readResponseWithLimit(res, GOOGLE_BATCH_JSON_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(`Google batch JSON response exceeds ${maxBytes} bytes`),
+        })).toString("utf8"),
+      ) as GeminiBatchStatus;
     },
   });
 }
