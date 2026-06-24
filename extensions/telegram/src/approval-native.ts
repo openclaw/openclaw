@@ -158,6 +158,5 @@ const resolveTelegramApproveCommandBehavior: NonNullable<
 
 export const telegramApprovalCapability: ChannelApprovalCapability = {
   ...telegramNativeApprovalCapability,
-  describePluginApprovalSetup: telegramNativeApprovalCapability.describeExecApprovalSetup,
   resolveApproveCommandBehavior: resolveTelegramApproveCommandBehavior,
 };

@@ -31,7 +31,7 @@ import {
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import {
-  describeNativePluginApprovalClientSetup,
+  describeNativeExecApprovalClientSetup,
   resolveApprovalInitiatingSurfaceState,
 } from "../infra/exec-approval-surface.js";
 import {
@@ -655,19 +655,19 @@ function buildPluginApprovalFailureReason(params: {
   if (!turnSourceChannel?.trim()) {
     return params.fallbackReason;
   }
-  const nativePluginSurface = resolveApprovalInitiatingSurfaceState({
+  const nativeExecSurface = resolveApprovalInitiatingSurfaceState({
     channel: turnSourceChannel,
     accountId: params.ctx?.turnSourceAccountId,
     cfg: params.ctx?.config,
-    approvalKind: "plugin",
+    approvalKind: "exec",
   });
-  if (nativePluginSurface.kind !== "disabled") {
+  if (nativeExecSurface.kind !== "disabled") {
     return params.fallbackReason;
   }
-  const setupText = describeNativePluginApprovalClientSetup({
-    channel: nativePluginSurface.channel,
-    channelLabel: nativePluginSurface.channelLabel,
-    accountId: nativePluginSurface.accountId,
+  const setupText = describeNativeExecApprovalClientSetup({
+    channel: nativeExecSurface.channel,
+    channelLabel: nativeExecSurface.channelLabel,
+    accountId: nativeExecSurface.accountId,
   });
   return setupText ? `${params.fallbackReason}\n\n${setupText}` : params.fallbackReason;
 }
