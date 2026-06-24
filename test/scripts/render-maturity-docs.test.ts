@@ -86,7 +86,7 @@ function writeQaEvidence(params: {
   );
 }
 
-function zeroCoverageScorecard() {
+function allProfileScorecardFixture() {
   const taxonomy = readQaMaturityTaxonomySource();
   const categoryReports = activeQaMaturityTaxonomySurfaces(taxonomy).flatMap((surface) =>
     surface.categories.map((category) => {
@@ -216,7 +216,7 @@ describe("maturity docs renderer CLI", () => {
     writeQaEvidence({
       dir: evidenceDir,
       entries: [{ id: "passing-scenario", status: "pass" }],
-      scorecard: zeroCoverageScorecard(),
+      scorecard: allProfileScorecardFixture(),
     });
 
     const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);

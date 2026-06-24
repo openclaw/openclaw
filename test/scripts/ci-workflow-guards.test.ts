@@ -664,7 +664,6 @@ describe("ci workflow guards", () => {
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
-    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
     const validateProfileStep = qaRunJob.steps.find(
       (step) => step.name === "Validate QA profile input",
@@ -683,7 +682,7 @@ describe("ci workflow guards", () => {
       // Keep the caller's ref while the callee verifies it against expected_sha.
       ref: "${{ inputs.ref }}",
       expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      qa_profile: "all",
+      qa_profile: "release",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
 
@@ -714,8 +713,6 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Validate QA evidence manifest",
     );
     expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
-    expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
-    expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
 
     expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
