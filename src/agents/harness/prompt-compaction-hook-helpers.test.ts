@@ -1,5 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
 import { resolveAgentHarnessBeforePromptBuildResult } from "./prompt-compaction-hook-helpers.js";
 
 afterEach(() => {
@@ -62,5 +66,44 @@ describe("resolveAgentHarnessBeforePromptBuildResult", () => {
       developerInstructions: "base instructions",
       promptInputRange: { start: 17, end: 17 },
     });
+  });
+
+  it("runs heartbeat_prompt_contribution on a heartbeat turn and prepends its contribution", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "heartbeat_prompt_contribution",
+          handler: () => ({ prependContext: "Run the base-heartbeat skill." }),
+        },
+      ]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "Read HEARTBEAT.md.",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: { trigger: "heartbeat", agentId: "agent-1", sessionKey: "session-1" },
+    });
+
+    expect(result.prompt).toBe("Run the base-heartbeat skill.\n\nRead HEARTBEAT.md.");
+    // The heartbeat contribution affects only the prompt, not developer instructions.
+    expect(result.developerInstructions).toBe("base instructions");
+  });
+
+  it("skips heartbeat_prompt_contribution off a heartbeat turn", async () => {
+    const handler = vi.fn(() => ({ prependContext: "should not appear" }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "heartbeat_prompt_contribution", handler }]),
+    );
+
+    const result = await resolveAgentHarnessBeforePromptBuildResult({
+      prompt: "hello",
+      developerInstructions: "base instructions",
+      messages: [],
+      ctx: { trigger: "user", agentId: "agent-1", sessionKey: "session-1" },
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(result.prompt).toBe("hello");
   });
 });
