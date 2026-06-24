@@ -261,7 +261,10 @@ function isUnwrappable(object: unknown): object is ZodDummy {
   );
 }
 
-/** Walk a Zod schema and return copied hints with sensitive schema marker paths marked. */
+/**
+ * Traverses the Zod schema tree and returns a copy of `hints` with every
+ * sensitive path marked.
+ */
 export function mapSensitivePaths(
   schema: z.ZodType,
   path: string,
