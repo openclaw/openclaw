@@ -450,8 +450,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
       12_000,
     );
 
-    const firstTurnOldestText = getFirstToolResultText(firstTurn.messages[2]!);
-    const secondTurnOldestText = getFirstToolResultText(secondTurn.messages[2]!);
+    const firstTurnOldestText = getFirstToolResultText(firstTurn.messages[2]);
+    const secondTurnOldestText = getFirstToolResultText(secondTurn.messages[2]);
 
     expect(firstTurn.truncatedCount).toBe(1);
     expect(secondTurn.truncatedCount).toBeGreaterThan(1);
