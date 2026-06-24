@@ -311,7 +311,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
   let gatewayConnection = buildGatewayConnectionDetailsWithResolvers({
     config: params.cfg,
-    allowConfiguredSshTransport: shouldProbe,
+    allowConfiguredSshTransport: true,
   });
   const gatewayProbeAuthResolution = shouldResolveAuth
     ? await loadGatewayProbeModule().then(({ resolveGatewayProbeAuthResolution }) =>

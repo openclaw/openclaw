@@ -198,6 +198,54 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbeAuthWarning).toBe("warn");
   });
 
+  it("describes configured SSH remote URLs when cold-start status skips probing", async () => {
+    const cfg = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "ws://remote.example.com:18789",
+          transport: "ssh",
+          sshTarget: "user@gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    mocks.buildGatewayConnectionDetailsWithResolvers.mockImplementationOnce(((options: {
+      allowConfiguredSshTransport?: boolean;
+    }) => {
+      if (options.allowConfiguredSshTransport !== true) {
+        throw new Error("configured SSH details blocked");
+      }
+      return {
+        url: "ws://remote.example.com:18789",
+        urlSource: "config gateway.remote.url",
+        message: "Gateway target: ws://remote.example.com:18789",
+      };
+    }) as typeof mocks.buildGatewayConnectionDetailsWithResolvers);
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "remote",
+      gatewayMode: "remote",
+      remoteUrlMissing: false,
+    });
+
+    const result = await resolveGatewayProbeSnapshot({
+      cfg: cfg as never,
+      opts: { skipProbe: true },
+    });
+
+    expect(mocks.buildGatewayConnectionDetailsWithResolvers).toHaveBeenCalledWith({
+      config: cfg,
+      allowConfiguredSshTransport: true,
+    });
+    expect(mocks.resolveGatewayProbeAuthResolution).not.toHaveBeenCalled();
+    expect(mocks.startGatewayRemoteSshTunnel).not.toHaveBeenCalled();
+    expect(mocks.probeGateway).not.toHaveBeenCalled();
+    expect(result.gatewayConnection.url).toBe("ws://remote.example.com:18789");
+    expect(result.gatewayConnection.urlSource).toBe("config gateway.remote.url");
+    expect(result.gatewayProbe).toBeNull();
+    expect(result.gatewayReachable).toBe(false);
+  });
+
   it("probes configured SSH remote URLs through the local tunnel", async () => {
     const cfg = {
       gateway: {
