@@ -297,7 +297,10 @@ export function resolveCronPayloadOutcome(params: {
   const hasRecoveredByFinalAnswer =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
-    normalizedFinalAssistantVisibleText !== undefined;
+    normalizedFinalAssistantVisibleText !== undefined &&
+    errorPayloads.some(
+      (payload) => isCronToolWarning(payload?.text) || isNonTerminalToolErrorWarning(payload),
+    );
   // Structured error payloads are fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =

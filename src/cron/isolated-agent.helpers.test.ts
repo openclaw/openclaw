@@ -150,11 +150,13 @@ describe("resolveCronPayloadOutcome", () => {
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.embeddedRunError).toBeUndefined();
-    expect(result.summary).toBe("Partial result");
-    expect(result.outputText).toBe("Partial result");
-    expect(result.deliveryPayloads).toEqual([{ text: "Partial result" }]);
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("model provider unreachable");
+    expect(result.summary).toBe("model provider unreachable");
+    expect(result.outputText).toBe("model provider unreachable");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "model provider unreachable", isError: true },
+    ]);
   });
 
   it("keeps error payloads fatal when the run also reported a run-level error", () => {
@@ -322,7 +324,7 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloadHasStructuredContent).toBe(true);
   });
 
-  it("returns only the last error payload when all payloads are errors", () => {
+  it("keeps plain error payloads fatal even when final assistant text exists", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
         { text: "first error", isError: true },
@@ -332,11 +334,11 @@ describe("resolveCronPayloadOutcome", () => {
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.hasFatalErrorPayload).toBe(false);
-    expect(result.embeddedRunError).toBeUndefined();
-    expect(result.summary).toBe("Recovered final answer");
-    expect(result.outputText).toBe("Recovered final answer");
-    expect(result.deliveryPayloads).toEqual([{ text: "Recovered final answer" }]);
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toBe("last error");
+    expect(result.summary).toBe("last error");
+    expect(result.outputText).toBe("last error");
+    expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
   });
 
   it("lets recovered plain exec errors be non-fatal when final assistant text exists", () => {
