@@ -440,7 +440,15 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
   const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
   const sessionDir = join(agentDir, "sessions", safePath);
   if (!existsSync(sessionDir)) {
-    mkdirSync(sessionDir, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+  }
+  // Repair permissions on existing managed dirs after upgrade
+  try {
+    chmodSync(sessionDir, 0o700);
+    const sessionsParent = join(agentDir, "sessions");
+    chmodSync(sessionsParent, 0o700);
+  } catch {
+    /* best effort */
   }
   return sessionDir;
 }
@@ -1473,7 +1481,7 @@ export class SessionManager {
     this.sessionDir = sessionDir;
     this.shouldPersist = persist;
     if (persist && sessionDir && !existsSync(sessionDir)) {
-      mkdirSync(sessionDir, { recursive: true });
+      mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
     }
 
     if (sessionFile) {
@@ -2953,7 +2961,7 @@ export class SessionManager {
 
     const dir = sessionDir ?? getDefaultSessionDir(targetCwd);
     if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
 
     // Create new session file with new ID but forked content

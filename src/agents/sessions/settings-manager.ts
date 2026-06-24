@@ -3,7 +3,7 @@
  *
  * Loads and persists user/session defaults for models, transports, retry policy, UI, packages, and telemetry.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import lockfile from "proper-lockfile";
@@ -214,7 +214,13 @@ export class FileSettingsStorage implements SettingsStorage {
       if (next !== undefined) {
         // Only create directory when we actually need to write
         if (!existsSync(dir)) {
-          mkdirSync(dir, { recursive: true });
+          mkdirSync(dir, { recursive: true, mode: 0o700 });
+        }
+        // Repair permissions on existing managed settings dirs
+        try {
+          chmodSync(dir, 0o700);
+        } catch {
+          /* best effort */
         }
         if (!release) {
           release = this.acquireLockSyncWithRetry(path);

@@ -26,7 +26,11 @@ import {
 } from "./disk-budget.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
-import { resolveExplicitSessionFilePath, resolveSessionFilePath, resolveStorePath } from "./paths.js";
+import {
+  resolveExplicitSessionFilePath,
+  resolveSessionFilePath,
+  resolveStorePath,
+} from "./paths.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   isSessionSkillPromptBlobReadable,
@@ -717,7 +721,13 @@ async function archiveLifecycleSessionTranscripts(params: {
 }
 
 function ensureLifecycleTranscriptHeader(params: { sessionFile: string; sessionId: string }): void {
-  fs.mkdirSync(path.dirname(params.sessionFile), { recursive: true });
+  const sessionParentDir = path.dirname(params.sessionFile);
+  fs.mkdirSync(sessionParentDir, { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(sessionParentDir, 0o700);
+  } catch {
+    /* best effort */
+  }
   if (fs.existsSync(params.sessionFile)) {
     return;
   }

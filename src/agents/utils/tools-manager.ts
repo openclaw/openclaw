@@ -316,7 +316,12 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
   }
 
   // Create tools directory
-  mkdirSync(TOOLS_DIR, { recursive: true });
+  mkdirSync(TOOLS_DIR, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(TOOLS_DIR, 0o700);
+  } catch {
+    /* best effort */
+  }
 
   const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
   const archivePath = join(TOOLS_DIR, assetName);
@@ -332,7 +337,7 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
     TOOLS_DIR,
     `extract_tmp_${config.binaryName}_${process.pid}_${randomUUID()}`,
   );
-  mkdirSync(extractDir, { recursive: true });
+  mkdirSync(extractDir, { recursive: true, mode: 0o700 });
 
   try {
     if (assetName.endsWith(".tar.gz")) {

@@ -1728,7 +1728,13 @@ function ensureTranscriptFile(params: { transcriptPath: string; sessionId: strin
     return { ok: true };
   }
   try {
-    fs.mkdirSync(path.dirname(params.transcriptPath), { recursive: true });
+    const transcriptDir = path.dirname(params.transcriptPath);
+    fs.mkdirSync(transcriptDir, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(transcriptDir, 0o700);
+    } catch {
+      /* best effort */
+    }
     const header = {
       type: "session",
       version: CURRENT_SESSION_VERSION,
