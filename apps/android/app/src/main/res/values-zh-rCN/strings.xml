@@ -1,0 +1,330 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App -->
+    <string name="app_name">OpenClaw 节点</string>
+
+    <!-- Connect / Gateway -->
+    <string name="gateway_connection">网关连接</string>
+    <string name="connect_gateway">连接网关</string>
+    <string name="disconnect">断开连接</string>
+    <string name="endpoint">端点</string>
+    <string name="status">状态</string>
+    <string name="trust_this_gateway">信任此网关？</string>
+    <string name="trust">信任</string>
+    <string name="trust_and_continue">信任并继续</string>
+    <string name="cancel">取消</string>
+    <string name="paste_setup_code">粘贴设置码</string>
+    <string name="setup_code">设置码</string>
+    <string name="setup_code_short">设置码</string>
+    <string name="manual">手动</string>
+    <string name="advanced_controls">高级控制</string>
+    <string name="advanced_controls_desc">设置码、端点、TLS、令牌、密码、引导设置</string>
+    <string name="connection_method">连接方式</string>
+    <string name="run_these_on_gateway">在网关主机上运行以下命令：</string>
+    <string name="for_tailscale_or_public">对于 Tailscale 或公网主机，请使用 wss:// 或 Tailscale Serve。私有局域网 ws:// 仍然支持。</string>
+    <string name="host">主机</string>
+    <string name="port">端口</string>
+    <string name="use_tls">使用 TLS</string>
+    <string name="use_tls_desc">对于 Tailscale 或公网主机开启此项。私有局域网 ws:// 仍然支持。</string>
+    <string name="token_optional">令牌（可选）</string>
+    <string name="token">令牌</string>
+    <string name="password_optional">密码（可选）</string>
+    <string name="password">密码</string>
+    <string name="run_onboarding_again">重新运行引导设置</string>
+    <string name="resolved_endpoint">已解析的端点</string>
+    <string name="copy_report_for_claw">复制诊断报告</string>
+    <string name="pairing_required">需要配对</string>
+    <string name="last_gateway_error">上次网关错误</string>
+
+    <!-- Onboarding -->
+    <string name="gateway_setup">网关设置</string>
+    <string name="connect_to_your_gateway">连接到您的网关</string>
+    <string name="scan_setup_code">扫描设置码</string>
+    <string name="use_gateway_qr_or_code">使用您的网关二维码或设置码</string>
+    <string name="nearby_gateway">附近的网关</string>
+    <string name="enter_gateway_url">输入网关 URL</string>
+    <string name="connect_using_manual_url">使用手动 URL 连接</string>
+    <string name="setup_code_issue">设置码问题</string>
+    <string name="pair_with_gateway">配对网关</string>
+    <string name="continue_btn">继续</string>
+    <string name="retry_connection">重试连接</string>
+    <string name="edit_connection">编辑连接</string>
+    <string name="copy_diagnostic">复制诊断信息</string>
+    <string name="allow_permissions">允许权限</string>
+    <string name="permission_setup">权限设置</string>
+    <string name="connected">已连接</string>
+    <string name="gateway_ready">您的网关已就绪。</string>
+    <string name="pairing_gateway">正在配对网关</string>
+    <string name="approve_phone_on_gateway">请在网关上批准此手机，然后重试连接。</string>
+    <string name="node_approval_pending">节点批准待定</string>
+    <string name="gateway_pairing_worked">网关配对成功。请在操作界面批准此手机的节点能力。</string>
+    <string name="approval_in_progress">批准正在进行中。OpenClaw 将自动重新连接。</string>
+    <string name="connecting_gateway">正在连接网关</string>
+    <string name="checking_gateway_and_node">OpenClaw 正在检查网关和节点访问权限。</string>
+    <string name="connection_issue">连接问题</string>
+    <string name="cannot_reach_gateway">无法连接到您的网关。让我们修复这个问题。</string>
+    <string name="granted">已授予</string>
+    <string name="not_granted">未授予</string>
+    <string name="openclaw_your_ai">您的个人 AI 助手。Exfoliate! Exfoliate!</string>
+
+    <!-- Bottom Tabs -->
+    <string name="tab_connect">连接</string>
+    <string name="tab_chat">聊天</string>
+    <string name="tab_voice">语音</string>
+    <string name="tab_screen">屏幕</string>
+    <string name="tab_settings">设置</string>
+    <string name="offline">离线</string>
+
+    <!-- Chat -->
+    <string name="thinking">思考中…</string>
+    <string name="running_tools">运行工具…</string>
+    <string name="unsupported_attachment">不支持的附件</string>
+    <string name="loading_session">加载会话中</string>
+    <string name="no_messages_yet">暂无消息</string>
+    <string name="type_a_message">输入消息…</string>
+    <string name="tap_mic_or_talk">点击麦克风或开始对话</string>
+    <string name="mic_sends_turns">麦克风发送轮次；对话模式保持对话开启。</string>
+    <string name="openclaw_is_thinking">OpenClaw 正在思考…</string>
+    <string name="open_settings">打开设置</string>
+
+    <!-- Search / Command Palette -->
+    <string name="search">搜索</string>
+    <string name="search_openclaw">搜索 OpenClaw</string>
+    <string name="quick_actions">快捷操作</string>
+    <string name="no_actions_found">未找到操作</string>
+    <string name="try_chat_voice_sessions">试试聊天、语音、会话、提供商或设置。</string>
+    <string name="sessions">会话</string>
+    <string name="no_matching_sessions">暂无匹配的会话。</string>
+    <string name="connect_gateway_to_search">连接网关以搜索会话。</string>
+    <string name="assistant_working">助手工作中</string>
+    <string name="openclaw_session">OpenClaw 会话</string>
+    <string name="providers_and_models">提供商和模型</string>
+    <string name="current_session">当前会话</string>
+    <string name="workspace">工作区</string>
+    <string name="current">当前</string>
+    <string name="openclaw">OpenClaw</string>
+
+    <!-- Settings -->
+    <string name="permissions">权限</string>
+    <string name="done">完成</string>
+    <string name="device">设备</string>
+    <string name="name">名称</string>
+    <string name="default_assistant">默认助手</string>
+    <string name="media">媒体</string>
+    <string name="microphone">麦克风</string>
+    <string name="camera">相机</string>
+    <string name="photos">照片</string>
+    <string name="contacts">通讯录</string>
+    <string name="calendar">日历</string>
+    <string name="motion">运动</string>
+    <string name="sms">短信</string>
+    <string name="call_log">通话记录</string>
+    <string name="location">位置</string>
+    <string name="off">关闭</string>
+    <string name="while_using">使用时</string>
+    <string name="precise_location">精确定位</string>
+    <string name="notifications">通知</string>
+    <string name="system_notifications">系统通知</string>
+    <string name="notification_listener_access">通知监听权限</string>
+    <string name="forward_notification_events">转发通知事件</string>
+    <string name="package_filter_allowlist">包过滤器：白名单</string>
+    <string name="package_filter_blocklist">包过滤器：黑名单</string>
+    <string name="only_listed_packages_forwarded">仅转发列出的包 ID。</string>
+    <string name="all_except_listed_blocked">除列出的 ID 外，所有包均转发。</string>
+    <string name="search_apps">搜索应用</string>
+    <string name="show_system_apps">显示系统应用</string>
+    <string name="include_system_packages">包含 Android/系统包。</string>
+    <string name="quiet_hours">静默时段</string>
+    <string name="suppress_forwarding">在本地时间窗口内抑制转发。</string>
+    <string name="quiet_start_hhmm">开始时间（HH:mm）</string>
+    <string name="quiet_end_hhmm">结束时间（HH:mm）</string>
+    <string name="use_24h_format">使用 24 小时制 HH:mm 格式，例如 22:00。</string>
+    <string name="save_quiet_hours">保存静默时段</string>
+    <string name="max_events_per_minute">每分钟最大事件数</string>
+    <string name="save_rate">保存速率</string>
+    <string name="route_session_key_optional">路由会话密钥（可选）</string>
+    <string name="route_session_key_desc">留空则通知事件保留在此设备的默认通知路由上。设置密钥以将转发固定到不同的会话。</string>
+    <string name="save_session_route">保存会话路由</string>
+    <string name="data_access">数据访问</string>
+    <string name="photos_desc">访问最近的照片。</string>
+    <string name="contacts_desc">搜索和添加联系人。</string>
+    <string name="calendar_desc">读取和创建事件。</string>
+    <string name="call_log_desc">搜索最近通话记录。</string>
+    <string name="motion_desc">追踪步数和活动。</string>
+    <string name="sms_desc">发送和搜索短信。</string>
+    <string name="alerts_and_foreground">提醒和前台服务。</string>
+    <string name="disable_location">禁用位置共享。</string>
+    <string name="location_while_using">仅在 OpenClaw 打开时。</string>
+    <string name="use_precise_gps">可用时使用精确 GPS。</string>
+    <string name="preferences">偏好</string>
+    <string name="prevent_sleep">防止休眠</string>
+    <string name="keep_screen_awake">屏幕打开时保持唤醒。</string>
+    <string name="debug_canvas">调试画布</string>
+    <string name="show_status_overlay">在画布上显示状态叠加。</string>
+    <string name="access_recent_photos">访问最近照片。</string>
+    <string name="read_activity_and_steps">读取活动和步数信息。</string>
+    <string name="send_and_read_sms">发送和读取短信。</string>
+    <string name="read_recent_calls">读取最近通话信息。</string>
+    <string name="photos_and_video_clips">照片和视频片段（仅前台）。</string>
+
+    <!-- Health / Diagnostics -->
+    <string name="health">健康状态</string>
+    <string name="health_desc">网关状态、手机节点就绪状态和最近日志流。</string>
+    <string name="refresh_logs">刷新日志</string>
+    <string name="log_entry">日志条目</string>
+    <string name="log_entry_desc">可读的网关日志详情。</string>
+    <string name="message">消息</string>
+    <string name="gateway">网关</string>
+    <string name="phone_node">手机节点</string>
+    <string name="chat">聊天</string>
+    <string name="models_label">模型</string>
+    <string name="voice">语音</string>
+    <string name="runs">运行</string>
+    <string name="recent_logs">最近日志</string>
+    <string name="connect_gateway_for_logs">连接网关以加载最近日志。</string>
+    <string name="no_recent_logs">暂无最近日志条目。</string>
+    <string name="showing_latest_log_chunk">显示最新日志片段。</string>
+
+    <!-- Screenshot Mode -->
+    <string name="screenshot_mode_ready">就绪</string>
+    <string name="talk_mode">对话模式</string>
+    <string name="screen_tools">屏幕工具</string>
+    <string name="shared_with_gateway">已与您的网关共享</string>
+    <string name="gateway_paired">网关已配对</string>
+    <string name="live_context">实时上下文</string>
+    <string name="security">安全</string>
+    <string name="refresh_screen">刷新屏幕</string>
+    <string name="reconnect">重新连接</string>
+    <string name="screen_surface_ready">屏幕界面已就绪</string>
+    <string name="connect_the_gateway">连接网关</string>
+    <string name="canvas_desc_connected">当 OpenClaw 打开应用界面时，画布输出将显示在此处。</string>
+    <string name="canvas_desc_disconnected">画布输出需要活动的网关连接。</string>
+
+    <!-- Nodes & Devices -->
+    <string name="nodes_and_devices">节点和设备</string>
+    <string name="nodes_and_devices_desc">实时节点、已配对手机和待处理的设备请求。</string>
+    <string name="refresh">刷新</string>
+    <string name="refreshing">刷新中</string>
+    <string name="connect_gateway_for_nodes">连接网关以加载节点和已配对设备。</string>
+    <string name="no_nodes_or_devices">暂无节点或已配对设备。</string>
+    <string name="after_pairing_desc">链接的手机和节点主机将在配对后显示。</string>
+    <string name="device_pairing_admin_needs">设备配对管理需要提升权限。已连接的节点仍可工作。</string>
+    <string name="pending_requests">待处理请求</string>
+    <string name="nodes">节点</string>
+    <string name="paired_devices">已配对设备</string>
+    <string name="new_device">新设备</string>
+    <string name="paired_device">已配对设备</string>
+
+    <!-- Channels -->
+    <string name="channels">频道</string>
+    <string name="channels_desc">连接到此网关的消息界面。</string>
+    <string name="connect_gateway_for_channels">连接网关以加载频道。</string>
+    <string name="no_channels_found">未找到频道。</string>
+    <string name="channels_after_setup">Telegram、WhatsApp、电子邮件和其他频道将在设置后显示。</string>
+    <string name="channel_status_incomplete">某些频道状态检查未完成。</string>
+
+    <!-- Dreaming -->
+    <string name="dreaming">梦境</string>
+    <string name="dreaming_desc">记忆整合和梦境日记。</string>
+    <string name="connect_gateway_for_dreaming">连接网关以加载梦境。</string>
+    <string name="memory_store">记忆存储</string>
+    <string name="signal_index">信号索引</string>
+    <string name="promoted">已提升</string>
+    <string name="diary">日记</string>
+    <string name="no_dream_diary">暂无梦境日记。</string>
+    <string name="diary_after_dreaming">梦境周期写入叙述总结后，条目将出现。</string>
+    <string name="diary_waiting_first">日记正在等待其第一条记录。</string>
+
+    <!-- Usage / Cron / Agents / Approvals -->
+    <string name="usage">使用量</string>
+    <string name="usage_desc">提供商限制和配额健康。</string>
+    <string name="connect_gateway_for_usage">连接网关以加载使用量。</string>
+    <string name="no_usage_data">暂无使用量数据。</string>
+    <string name="usage_desc_gateway">提供商限制将在您的网关报告时显示在此处。</string>
+    <string name="cron_jobs">定时任务</string>
+    <string name="cron_jobs_desc">来自网关的定时 OpenClaw 任务。</string>
+    <string name="cron_desc_android">Android 显示定时任务状态。请从桌面应用创建和编辑计划。</string>
+    <string name="connect_gateway_for_cron">连接网关以加载定时任务。</string>
+    <string name="no_scheduled_jobs">暂无定时任务。</string>
+    <string name="create_cron_from_desktop">请从桌面应用创建定时 OpenClaw 任务。</string>
+    <string name="agents">代理</string>
+    <string name="agents_desc">选择和管理此网关上可用的助手。</string>
+    <string name="connect_gateway_for_agents">连接网关以加载代理。</string>
+    <string name="no_agents_loaded">暂无加载的代理。</string>
+    <string name="approvals">批准</string>
+    <string name="approvals_desc">审查需要您关注的操作。</string>
+    <string name="gateway_disconnected">网关已断开。</string>
+    <string name="connect_gateway_for_approvals">连接网关以在应用中加载批准请求。</string>
+    <string name="no_gateway_approvals">暂无网关批准。</string>
+    <string name="approvals_desc_connected">执行批准请求将在此手机连接时显示在此处。</string>
+    <string name="session_activity">会话活动</string>
+    <string name="session_activity_desc">活动会话中等待的聊天工具调用仍在此处可见。</string>
+
+    <!-- Profile -->
+    <string name="profile">个人资料</string>
+    <string name="profile_desc">此手机在 OpenClaw 中的显示方式。</string>
+    <string name="device_name">设备名称</string>
+    <string name="save_profile">保存个人资料</string>
+
+    <!-- Talk / Voice -->
+    <string name="talk_provider_setup">对话提供商设置</string>
+    <string name="talk_setup_desc">配置语音、传输和播放。</string>
+    <string name="audio_test">音频测试</string>
+    <string name="audio_test_desc">检查 OpenClaw 在此手机上能清晰发声。</string>
+    <string name="mute_speaker">静音扬声器</string>
+    <string name="enable_speaker">启用扬声器</string>
+    <string name="replies_play_aloud">回复会大声播放</string>
+    <string name="assistant_speech_muted">助手语音已静音</string>
+    <string name="realtime_provider">实时提供商</string>
+    <string name="gateway_voice_relay">网关语音中继</string>
+    <string name="voice_input">语音输入</string>
+    <string name="transport">传输</string>
+    <string name="socket_relay">套接字中继</string>
+    <string name="listening_on_device">在设备上监听</string>
+    <string name="wake_phrase">唤醒词</string>
+    <string name="latency">延迟</string>
+    <string name="realtime">实时</string>
+
+    <!-- Canvas / Screen -->
+    <string name="canvas">画布</string>
+    <string name="canvas_desc">当前屏幕输出和交互式应用界面。</string>
+    <string name="connected_visual">已连接</string>
+
+    <!-- Providers -->
+    <string name="providers_and_models_title">提供商和模型</string>
+    <string name="providers_subtitle">审查提供商就绪状态和已配置的模型。</string>
+    <string name="connected_providers">已连接的提供商</string>
+    <string name="gateway_offline">网关离线</string>
+    <string name="connect_gateway_for_providers">连接您的网关以加载提供商就绪状态。</string>
+    <string name="ready">就绪</string>
+    <string name="needs">需要设置</string>
+    <string name="refresh_providers_desc">刷新以从您的网关重新检查提供商就绪状态。</string>
+    <string name="connect_for_providers">连接您的网关以查看提供商就绪状态。</string>
+    <string name="no_configured_models">未配置模型</string>
+
+    <!-- Settings Sheets / Lists -->
+    <string name="notifications_desc">选择哪些通知发送到 OpenClaw。</string>
+    <string name="phone_capabilities">手机能力</string>
+    <string name="phone_capabilities_desc">选择此手机可以共享的内容。</string>
+    <string name="forwarding_mode">转发模式</string>
+    <string name="app_filter">应用过滤器</string>
+    <string name="close_app_picker">关闭应用选择器</string>
+    <string name="open_app_picker">打开应用选择器</string>
+    <string name="include_android_packages">包含 Android 和后台包。</string>
+    <string name="no_matching_apps">未找到匹配的应用。</string>
+    <string name="showing_apps_count">显示 ${visibleApps.size} 个（共 ${apps.size} 个）。请优化搜索。</string>
+    <string name="check_access">检查访问</string>
+    <string name="open_system_access">打开系统访问</string>
+
+    <!-- Gateway Settings -->
+    <string name="connection_between_phone_gateway">此手机与 OpenClaw 之间的连接。</string>
+    <string name="pair_new_gateway">配对新的网关</string>
+    <string name="pair_new_gateway_desc">清除此手机保存的网关访问权限并扫描新的设置码。</string>
+    <string name="setup_code_help">Android 可以扫描或粘贴现有的设置码，但此网关尚未向应用公开设置码生成。请在网关主机上使用 openclaw qr 生成二维码/码，然后在此处扫描或粘贴下面的设置码。</string>
+    <string name="connection_setup">连接设置</string>
+    <string name="bootstrap">Bootstrap</string>
+
+    <!-- Misc -->
+    <string name="approval_command_copied">批准命令已复制</string>
+    <string name="gateway_diagnostics_copied">诊断已复制</string>
+</resources>
