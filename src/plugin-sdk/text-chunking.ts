@@ -25,7 +25,6 @@ export {
   type MarkdownParseOptions,
   type MarkdownStyle,
   type MarkdownStyleSpan,
-  type MarkdownTableAlignment,
   type MarkdownTableCell,
   type MarkdownTableMeta,
 } from "../../packages/markdown-core/src/ir.js";

@@ -78,7 +78,7 @@ function createStyleSpan(params: MarkdownStyleSpan): MarkdownStyleSpan {
   return span;
 }
 
-export type MarkdownTableAlignment = "left" | "center" | "right";
+type MarkdownTableAlignment = "left" | "center" | "right";
 
 export type MarkdownTableData = {
   headers: string[];

@@ -8,7 +8,6 @@ import {
   markdownToIRWithMeta,
   type MarkdownLinkSpan,
   type MarkdownIR,
-  type MarkdownTableAlignment,
   type MarkdownTableCell,
   type MarkdownTableMeta,
   renderMarkdownIRChunksWithinLimit,
@@ -346,6 +345,8 @@ type TelegramHtmlTagSupport = {
   simpleTags: ReadonlySet<string>;
   attrPatterns: ReadonlyMap<string, RegExp>;
 };
+
+type TelegramTableAlignment = NonNullable<MarkdownTableMeta["aligns"]>[number];
 
 const TELEGRAM_LEGACY_HTML_TAG_SUPPORT: TelegramHtmlTagSupport = {
   simpleTags: TELEGRAM_SIMPLE_HTML_TAGS,
@@ -976,7 +977,7 @@ function renderTelegramRichHtmlTable(table: MarkdownTableMeta): string {
   const renderCell = (
     tag: "td" | "th",
     value: MarkdownTableCell | undefined,
-    align: MarkdownTableAlignment | undefined,
+    align: TelegramTableAlignment | undefined,
   ) => {
     const alignAttr = align ? ` align="${align}"` : "";
     return `<${tag}${alignAttr}>${renderCellValue(value)}</${tag}>`;
