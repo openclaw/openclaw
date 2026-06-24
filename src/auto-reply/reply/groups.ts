@@ -279,7 +279,7 @@ export function buildGroupChatContext(params: {
     !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
   if (messageToolOnly) {
     lines.push(
-      "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
+      `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to ${destinationLabel}.`,
     );
   }
   if (canUseSilentReply) {

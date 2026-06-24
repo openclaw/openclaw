@@ -62,6 +62,16 @@ describe("group runtime loading", () => {
     expect(toolOnlyContext).toContain("<https://example.com>");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain('reply with exactly "NO_REPLY"');
+    const channelToolOnlyContext = isolatedGroups.buildGroupChatContext({
+      sessionCtx: { ChatType: "channel", Provider: "mattermost" },
+      sourceReplyDeliveryMode: "message_tool_only",
+      silentReplyPolicy: "allow",
+      silentToken: "NO_REPLY",
+    });
+    expect(channelToolOnlyContext).toContain("visible channel response");
+    expect(channelToolOnlyContext).toContain("posted to this channel");
+    expect(channelToolOnlyContext).not.toContain("visible group response");
+    expect(channelToolOnlyContext).not.toContain("posted to the group");
     const telegramContext = isolatedGroups.buildGroupChatContext({
       sessionCtx: { ChatType: "group", Provider: "telegram" },
       silentReplyPolicy: "allow",
