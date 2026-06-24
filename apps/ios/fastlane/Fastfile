@@ -5,6 +5,7 @@ require "fileutils"
 require "tmpdir"
 require "tempfile"
 require "cgi"
+require "digest/md5"
 
 default_platform(:ios)
 
@@ -47,6 +48,14 @@ PUBLIC_METADATA_FILENAMES = [
   "subtitle.txt",
   "support_url.txt"
 ].freeze
+APP_REVIEW_NOTES_METADATA_FILENAMES = [
+  "notes.txt",
+  "review_notes.txt"
+].freeze
+APP_STORE_SCREENSHOT_LIMIT_PER_SET = 10
+APP_STORE_SCREENSHOT_SET_DELETE_TIMEOUT_SECONDS = 120
+APP_STORE_SCREENSHOT_PROCESSING_TIMEOUT_SECONDS = 3600
+APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS = 5
 
 def load_env_file(path)
   return unless File.exist?(path)
@@ -77,10 +86,6 @@ end
 
 def release_notes_upload_requested?
   ENV["DELIVER_RELEASE_NOTES"] == "1"
-end
-
-def screenshot_paths
-  Dir[File.join(__dir__, "screenshots", "**", "*.png")]
 end
 
 def validate_required_screenshots!(paths)
@@ -732,6 +737,37 @@ def release_notes_metadata_path
   temp_root
 end
 
+def app_review_notes_markdown_path
+  File.join(ios_root, "APP-REVIEW-NOTES.md")
+end
+
+def app_review_notes_pdf_path
+  File.join(ios_root, "build", "app-review", "APP-REVIEW-NOTES.pdf")
+end
+
+def generate_app_review_notes_pdf!
+  source = app_review_notes_markdown_path
+  UI.user_error!("Missing App Review notes at #{source}.") unless File.exist?(source)
+
+  output = app_review_notes_pdf_path
+  FileUtils.mkdir_p(File.dirname(output))
+  sh(shell_join(["xcrun", "swift", File.join(repo_root, "scripts", "ios-app-review-notes-pdf.swift"), source, output]))
+  output
+end
+
+def assert_no_app_review_notes_field_metadata!(metadata_path)
+  notes_dir = File.join(metadata_path, "review_information")
+  APP_REVIEW_NOTES_METADATA_FILENAMES.each do |filename|
+    path = File.join(notes_dir, filename)
+    next unless File.exist?(path)
+
+    UI.user_error!(
+      "Refusing to upload App Review Notes metadata from #{path}. " \
+        "Maintain the App Store Connect Notes field manually so the live setup code is not stored in this repo."
+    )
+  end
+end
+
 def public_metadata_path
   source = File.join(__dir__, "metadata")
   temp_root = Dir.mktmpdir("openclaw-app-store-metadata")
@@ -743,6 +779,259 @@ def public_metadata_path
     FileUtils.cp_r(source_entry, File.join(temp_root, entry))
   end
   temp_root
+end
+
+def app_store_screenshot_root
+  File.join(__dir__, "screenshots")
+end
+
+def app_store_screenshot_manifest
+  require "deliver/loader"
+
+  Deliver::Loader.load_app_screenshots(app_store_screenshot_root, false)
+end
+
+def resolve_app_store_connect_app(app_identifier:, app_id:)
+  require "spaceship"
+
+  app = if env_present?(app_id) && !env_present?(app_identifier)
+          Spaceship::ConnectAPI::App.get(app_id: app_id)
+        else
+          Spaceship::ConnectAPI::App.find(app_identifier || APP_STORE_APP_IDENTIFIER)
+        end
+  UI.user_error!("Could not find App Store Connect app #{app_identifier || app_id || APP_STORE_APP_IDENTIFIER}.") unless app
+  app
+end
+
+def resolve_app_store_connect_version(app:, short_version:)
+  version = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+  UI.user_error!("Could not find an editable App Store Connect version for #{app.name}.") unless version
+  if version.version_string != short_version
+    UI.user_error!(
+      "Editable App Store Connect version mismatch for #{app.name}: expected #{short_version}, got #{version.version_string}."
+    )
+  end
+  version
+end
+
+def app_store_screenshot_sets_for_display_type(localization:, display_type:)
+  localization
+    .get_app_screenshot_sets(includes: "appScreenshots")
+    .select { |set| set.screenshot_display_type == display_type }
+end
+
+def clear_app_store_screenshot_sets!(localization:)
+  existing_sets = localization.get_app_screenshot_sets(includes: "appScreenshots")
+  return if existing_sets.empty?
+
+  existing_sets.each do |set|
+    UI.message("Deleting existing #{localization.locale} #{set.screenshot_display_type} screenshot set #{set.id}.")
+    set.delete!
+  end
+
+  deadline = Time.now + APP_STORE_SCREENSHOT_SET_DELETE_TIMEOUT_SECONDS
+  loop do
+    sets = localization.get_app_screenshot_sets(includes: "appScreenshots")
+    return if sets.empty?
+
+    if Time.now >= deadline
+      UI.user_error!(
+        "Timed out waiting for App Store Connect to delete #{localization.locale} screenshot sets: #{sets.map(&:id).join(', ')}."
+      )
+    end
+    sleep(3)
+  end
+end
+
+def app_store_screenshot_expected_rows(screenshots)
+  screenshots.map do |screenshot|
+    {
+      checksum: Digest::MD5.file(screenshot.path).hexdigest,
+      file_name: File.basename(screenshot.path)
+    }
+  end
+end
+
+def app_store_screenshot_actual_rows(app_screenshot_set)
+  (app_screenshot_set.app_screenshots || []).map do |screenshot|
+    {
+      checksum: screenshot.source_file_checksum,
+      file_name: screenshot.file_name,
+      state: (screenshot.asset_delivery_state || {})["state"]
+    }
+  end
+end
+
+def format_app_store_screenshot_rows(rows)
+  rows.map do |row|
+    [row[:file_name], row[:checksum], row[:state]].compact.join(" ")
+  end.join(", ")
+end
+
+def app_store_screenshot_processing_timeout_seconds
+  raw = ENV["DELIVER_SCREENSHOT_PROCESSING_TIMEOUT"].to_s.strip
+  return APP_STORE_SCREENSHOT_PROCESSING_TIMEOUT_SECONDS if raw.empty?
+
+  unless raw.match?(/\A\d+\z/) && raw.to_i.positive?
+    UI.user_error!("Invalid DELIVER_SCREENSHOT_PROCESSING_TIMEOUT '#{raw}'. Expected a positive number of seconds.")
+  end
+  raw.to_i
+end
+
+def app_store_screenshot_state_counts(screenshots)
+  screenshots.each_with_object({}) do |screenshot, counts|
+    state = (screenshot.asset_delivery_state || {})["state"] || "UNKNOWN"
+    counts[state] ||= 0
+    counts[state] += 1
+  end
+end
+
+def wait_for_app_store_screenshots_processing!(screenshot_ids:, locale:, display_type:)
+  timeout_seconds = app_store_screenshot_processing_timeout_seconds
+  deadline = Time.now + timeout_seconds
+  loop do
+    screenshots = screenshot_ids.map do |screenshot_id|
+      Spaceship::ConnectAPI.get_app_screenshot(app_screenshot_id: screenshot_id).first
+    end
+
+    failed = screenshots.select(&:error?)
+    unless failed.empty?
+      details = failed.map { |screenshot| "#{screenshot.file_name}: #{screenshot.error_messages.join(', ')}" }
+      UI.user_error!("App Store Connect failed processing #{locale} #{display_type} screenshots: #{details.join('; ')}.")
+    end
+    return screenshots if screenshots.all?(&:complete?)
+
+    if Time.now >= deadline
+      states = app_store_screenshot_state_counts(screenshots)
+      UI.user_error!(
+        "Timed out after #{timeout_seconds}s waiting for App Store Connect to process #{locale} #{display_type} screenshots: #{states}."
+      )
+    end
+
+    UI.verbose("Waiting for #{locale} #{display_type} screenshots to finish processing: #{app_store_screenshot_state_counts(screenshots)}.")
+    sleep(APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS)
+  end
+end
+
+def validate_app_store_screenshot_target_counts!(screenshots_by_target)
+  screenshots_by_target.each do |(locale, display_type), screenshots|
+    next if screenshots.length <= APP_STORE_SCREENSHOT_LIMIT_PER_SET
+
+    UI.user_error!(
+      "Found #{screenshots.length} screenshots for #{locale} #{display_type}; App Store Connect allows #{APP_STORE_SCREENSHOT_LIMIT_PER_SET}."
+    )
+  end
+end
+
+def verify_app_store_screenshot_set!(app_screenshot_set:, screenshots:, locale:, display_type:)
+  expected = app_store_screenshot_expected_rows(screenshots)
+  timeout_seconds = app_store_screenshot_processing_timeout_seconds
+  deadline = Time.now + timeout_seconds
+  actual = []
+
+  loop do
+    app_screenshot_set = Spaceship::ConnectAPI::AppScreenshotSet.get(app_screenshot_set_id: app_screenshot_set.id)
+    actual = app_store_screenshot_actual_rows(app_screenshot_set)
+    actual_identity = actual.map { |row| { checksum: row[:checksum], file_name: row[:file_name] } }
+    incomplete = actual.reject { |row| row[:state] == "COMPLETE" }
+
+    return if actual_identity == expected && incomplete.empty?
+
+    if actual.length > expected.length
+      UI.user_error!(
+        "App Store Connect screenshot verification failed for #{locale} #{display_type}. " \
+          "Expected: #{format_app_store_screenshot_rows(expected)}. " \
+          "Actual: #{format_app_store_screenshot_rows(actual)}."
+      )
+    end
+
+    if Time.now >= deadline
+      UI.user_error!(
+        "Timed out after #{timeout_seconds}s waiting for App Store Connect screenshot verification for #{locale} #{display_type}. " \
+          "Expected: #{format_app_store_screenshot_rows(expected)}. " \
+          "Actual: #{format_app_store_screenshot_rows(actual)}."
+      )
+    end
+
+    UI.verbose(
+      "Waiting for App Store Connect screenshot verification for #{locale} #{display_type}: " \
+        "#{format_app_store_screenshot_rows(actual)}."
+    )
+    sleep(APP_STORE_SCREENSHOT_PROCESSING_POLL_SECONDS)
+  end
+end
+
+def replace_app_store_screenshot_set!(localization:, display_type:, screenshots:)
+  existing_sets = app_store_screenshot_sets_for_display_type(localization: localization, display_type: display_type)
+  unless existing_sets.empty?
+    UI.user_error!(
+      "App Store Connect still has #{localization.locale} #{display_type} screenshot sets after reset: #{existing_sets.map(&:id).join(', ')}."
+    )
+  end
+
+  UI.message("Creating #{localization.locale} #{display_type} screenshot set.")
+  app_screenshot_set = localization.create_app_screenshot_set(attributes: { screenshotDisplayType: display_type })
+  uploaded_ids = screenshots.map.with_index do |screenshot, index|
+    started_at = Time.now
+    uploaded = app_screenshot_set.upload_screenshot(path: screenshot.path, wait_for_processing: false)
+    UI.message(
+      "Uploaded #{localization.locale} #{display_type} screenshot #{index + 1}/#{screenshots.length}: " \
+        "#{File.basename(screenshot.path)} (#{(Time.now - started_at).round(1)}s)."
+    )
+    uploaded.id
+  end
+  wait_for_app_store_screenshots_processing!(
+    screenshot_ids: uploaded_ids,
+    locale: localization.locale,
+    display_type: display_type
+  )
+
+  app_screenshot_set = Spaceship::ConnectAPI::AppScreenshotSet.get(app_screenshot_set_id: app_screenshot_set.id)
+  app_screenshot_set = app_screenshot_set.reorder_screenshots(app_screenshot_ids: uploaded_ids)
+  verify_app_store_screenshot_set!(
+    app_screenshot_set: app_screenshot_set,
+    screenshots: screenshots,
+    locale: localization.locale,
+    display_type: display_type
+  )
+end
+
+# Fastlane deliver can duplicate complete screenshots when its verification retry
+# runs before App Store Connect consistently lists processed assets. Keep the
+# screenshot write path serial and assert the remote set equals the local files.
+def upload_app_store_screenshots_deterministically!(app_identifier:, app_id:, short_version:, screenshots:)
+  app = resolve_app_store_connect_app(app_identifier: app_identifier, app_id: app_id)
+  version = resolve_app_store_connect_version(app: app, short_version: short_version)
+  localizations_by_locale = version.get_app_store_version_localizations.each_with_object({}) do |localization, index|
+    index[localization.locale] = localization
+  end
+
+  screenshots_by_target = screenshots
+    .sort_by { |screenshot| [screenshot.language.to_s, screenshot.display_type.to_s, File.basename(screenshot.path)] }
+    .group_by { |screenshot| [screenshot.language, screenshot.display_type] }
+  validate_app_store_screenshot_target_counts!(screenshots_by_target)
+
+  missing_locales = screenshots_by_target.keys.map(&:first).uniq.reject { |locale| localizations_by_locale.key?(locale) }
+  unless missing_locales.empty?
+    UI.user_error!(
+      "App Store Connect localizations are missing for screenshot locales #{missing_locales.join(', ')}. " \
+        "Upload metadata for these locales before uploading screenshots."
+    )
+  end
+
+  screenshots_by_target.keys.map(&:first).uniq.each do |locale|
+    clear_app_store_screenshot_sets!(localization: localizations_by_locale.fetch(locale))
+  end
+
+  screenshots_by_target.each do |(locale, display_type), target_screenshots|
+    replace_app_store_screenshot_set!(
+      localization: localizations_by_locale.fetch(locale),
+      display_type: display_type,
+      screenshots: target_screenshots
+    )
+  end
+
+  UI.success("Uploaded and verified #{screenshots.length} App Store screenshots for #{short_version}.")
 end
 
 def read_ios_version_metadata
@@ -1014,7 +1303,7 @@ platform :ios do
     ENV.delete("XCODE_XCCONFIG_FILE")
   end
 
-  desc "Generate screenshots, update App Store version metadata, then upload an App Store build"
+  desc "Generate screenshots, update App Store metadata and review attachment, then upload an App Store build"
   lane :release_upload do
     unless ENV["OPENCLAW_IOS_RELEASE_WRAPPER"] == "1"
       UI.user_error!("Use `pnpm ios:release:upload`; direct Fastlane TestFlight upload is disabled.")
@@ -1044,7 +1333,7 @@ platform :ios do
     ENV.delete("XCODE_XCCONFIG_FILE")
   end
 
-  desc "Upload App Store metadata (and optionally screenshots)"
+  desc "Upload App Store metadata, App Review PDF attachment, and optionally screenshots"
   lane :metadata do
     install_ready_for_review_edit_state_lookup!
     sync_ios_versioning!
@@ -1057,19 +1346,22 @@ platform :ios do
     app_id = nil unless env_present?(app_id)
 
     if screenshot_upload_requested?
-      paths = screenshot_paths
-      if paths.empty?
+      screenshots_to_upload = app_store_screenshot_manifest
+      if screenshots_to_upload.empty?
         UI.user_error!("DELIVER_SCREENSHOTS=1 but no PNG screenshots were found under apps/ios/fastlane/screenshots.")
       end
-      validate_required_screenshots!(paths)
+      validate_required_screenshots!(screenshots_to_upload.map(&:path))
     end
 
+    assert_no_app_review_notes_field_metadata!(File.join(__dir__, "metadata"))
     metadata_path = public_metadata_path
     skip_metadata = ENV["DELIVER_METADATA"] != "1"
     if release_notes_upload_requested? && skip_metadata
       metadata_path = release_notes_metadata_path
       skip_metadata = false
     end
+    assert_no_app_review_notes_field_metadata!(metadata_path) unless skip_metadata
+    app_review_attachment_file = skip_metadata ? nil : generate_app_review_notes_pdf!
 
     deliver_options = {
       api_key: api_key,
@@ -1079,10 +1371,11 @@ platform :ios do
       primary_category: "PRODUCTIVITY",
       secondary_category: "UTILITIES",
       metadata_path: metadata_path,
-      skip_screenshots: !screenshot_upload_requested?,
+      skip_screenshots: true,
       skip_metadata: skip_metadata,
       skip_binary_upload: true,
-      overwrite_screenshots: screenshot_upload_requested?,
+      overwrite_screenshots: false,
+      app_review_attachment_file: app_review_attachment_file,
       skip_app_version_update: false,
       submit_for_review: false,
       run_precheck_before_submit: false
@@ -1095,6 +1388,14 @@ platform :ios do
     end
 
     deliver(**deliver_options)
+    if screenshot_upload_requested?
+      upload_app_store_screenshots_deterministically!(
+        app_identifier: app_identifier,
+        app_id: app_id,
+        short_version: version_metadata[:short_version],
+        screenshots: screenshots_to_upload
+      )
+    end
   end
 
   desc "Generate deterministic iOS screenshots for App Store metadata"

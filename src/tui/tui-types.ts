@@ -92,6 +92,8 @@ export type SessionInfo = {
   totalTokensFresh?: boolean;
   goal?: SessionGoal;
   responseUsage?: ResponseUsageMode;
+  /** Resolved effective usage mode (session override → channel config → default → off). Set by the gateway; the TUI uses this for no-arg toggle cycles so the cycle starts from the effective visible mode rather than the raw session value. */
+  effectiveResponseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;
 };

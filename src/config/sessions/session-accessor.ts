@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   acquireSessionWriteLock,
   resolveSessionWriteLockOptions,
@@ -49,6 +50,7 @@ import {
   loadSessionStore,
   applySessionEntryPatchProjection as applyFileSessionEntryPatchProjection,
   patchSessionEntry as patchFileSessionEntry,
+  patchSessionEntryWithKey as patchFileSessionEntryWithKey,
   purgeDeletedAgentSessionEntries as purgeFileDeletedAgentSessionEntries,
   readSessionUpdatedAt as readFileSessionUpdatedAt,
   resolveSessionStoreEntry,
@@ -97,7 +99,7 @@ import {
   resolveOwnedSessionTranscriptWriteLockRunner,
   withOwnedSessionTranscriptWrites,
 } from "./transcript-write-context.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -124,6 +126,8 @@ export type SessionAccessScope = {
   env?: NodeJS.ProcessEnv;
   /** Set false for metadata-only reads that do not need hydrated prompt refs. */
   hydrateSkillPromptRefs?: boolean;
+  /** Use latest when the caller must bypass any in-process metadata snapshot. */
+  readConsistency?: "latest";
   /** Canonical or alias session key for the entry being read or written. */
   sessionKey: string;
   /** Explicit store path for callers that already resolved the owning store. */
@@ -154,6 +158,35 @@ export type ResolvedSessionEntryAccessTarget = {
 
 type ResolvedSessionEntryStoreTarget = ResolvedSessionEntryAccessTarget & {
   storePath: string;
+};
+
+export type SessionEntryCandidateAccessScope = {
+  /** Agent owner whose session store is searched. */
+  agentId: string;
+  /** Ordered session keys to test inside the resolved store. */
+  candidateKeys: readonly string[];
+  /** Runtime config whose session store rule selects the backend target. */
+  cfg: OpenClawConfig;
+  /** Environment override used when resolving agent-scoped store paths in tests/tools. */
+  env?: NodeJS.ProcessEnv;
+  /** Optional synthesized entry returned only when no candidate exists. */
+  fallback?: {
+    entry: SessionEntry;
+    sessionKey: string;
+  };
+};
+
+export type ResolvedSessionEntryCandidateTarget = {
+  /** Agent owner whose session store produced this result. */
+  agentId: string;
+  /** Candidate key that selected the result, or the fallback key. */
+  candidateKey: string;
+  /** Session metadata cloned from storage or from the synthesized fallback. */
+  entry: SessionEntry;
+  /** False only for synthesized fallback entries that have not been written. */
+  persisted: boolean;
+  /** Persisted key selected by the backend, or the fallback key. */
+  sessionKey: string;
 };
 
 export type ResolvedSessionEntryUpdateContext = Omit<ResolvedSessionEntryAccessTarget, "entry"> & {
@@ -344,6 +377,25 @@ export type SessionEntryUpdateOptions = {
   requireWriteSuccess?: boolean;
 };
 
+export type SessionAbortTargetCutoff = {
+  messageSid?: string;
+  timestamp?: number;
+};
+
+export type SessionAbortTargetContext = {
+  entry: SessionEntry;
+  sessionKey: string;
+};
+
+export type SessionAbortTargetIdentity = SessionAbortTargetContext & {
+  sessionId?: string;
+};
+
+export type SessionAbortTargetResult = SessionAbortTargetIdentity & {
+  persisted: boolean;
+  persistenceError?: string;
+};
+
 export type SessionLifecycleTranscriptInfo = {
   sessionFile?: string;
   transcriptArchived?: boolean;
@@ -353,6 +405,32 @@ export type SessionLifecycleRolloverResult = {
   previousSessionTranscript: SessionLifecycleTranscriptInfo;
   sessionEntry: SessionEntry;
 };
+
+export type ReplySessionInitializationSnapshot = {
+  currentEntry?: SessionEntry;
+  readEntry: (sessionKey: string) => SessionEntry | undefined;
+  revision: string;
+};
+
+export type ReplySessionInitializationCommitContext = {
+  currentEntry?: SessionEntry;
+  readEntry: (sessionKey: string) => SessionEntry | undefined;
+  sessionEntry: SessionEntry;
+};
+
+export type ReplySessionInitializationCommitResult =
+  | {
+      ok: true;
+      previousSessionTranscript: SessionLifecycleTranscriptInfo;
+      sessionEntry: SessionEntry;
+      sessionStoreView: Record<string, SessionEntry>;
+    }
+  | {
+      ok: false;
+      currentEntry?: SessionEntry;
+      reason: "stale-snapshot";
+      revision: string;
+    };
 
 type SessionEntryRetirement = {
   entry: SessionEntry;
@@ -375,13 +453,26 @@ export type SessionEntryPatchOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   /** Keep the previous updatedAt value when the patch should not count as activity. */
   preserveActivity?: boolean;
+  /** Throw when best-effort store recovery cannot confirm the requested write. */
+  requireWriteSuccess?: boolean;
   /** Replace the whole entry instead of merging the returned patch. */
   replaceEntry?: boolean;
+  /** Skip prune/cap/rotation maintenance for specialized internal updates. */
+  skipMaintenance?: boolean;
+  /** Let the writer cache retain the updated object without cloning. */
+  takeCacheOwnership?: boolean;
 };
 
 export type SessionEntryPatchContext = {
   /** Present when the patched entry already existed before fallback synthesis. */
   existingEntry?: SessionEntry;
+};
+
+export type SessionEntryPatchResult = {
+  /** Exact persisted key for the patched entry after alias normalization. */
+  sessionKey: string;
+  /** Persisted entry returned by the backing store. */
+  entry: SessionEntry;
 };
 
 export type RestartRecoveryLifecycleEntry = {
@@ -404,6 +495,121 @@ export type RestartRecoveryLifecycleUpdate<T> = {
   /** Exact rows to replace inside the storage transaction. */
   replacements?: Iterable<RestartRecoveryLifecycleReplacement>;
 };
+
+/** File-backed checkpoint transcript fork produced by the checkpoint storage boundary. */
+export type SessionCompactionCheckpointForkedTranscript = {
+  sessionFile: string;
+  sessionId: string;
+  totalTokens?: number;
+};
+
+/** Result of resolving and copying checkpoint transcript content for branch/restore. */
+export type SessionCompactionCheckpointTranscriptForkResult =
+  | { status: "created"; transcript: SessionCompactionCheckpointForkedTranscript }
+  | { status: "missing-boundary" }
+  | { status: "failed" };
+
+/** Result of applying a checkpoint branch or restore mutation to session storage. */
+export type SessionCompactionCheckpointMutationResult =
+  | {
+      status: "created";
+      key: string;
+      checkpoint: SessionCompactionCheckpoint;
+      entry: SessionEntry;
+    }
+  | { status: "missing-session" }
+  | { status: "missing-checkpoint" }
+  | { status: "missing-boundary" }
+  | { status: "failed" };
+
+export type SessionCompactionCheckpointEntryBuildContext = {
+  /** Checkpoint row selected from the current persisted session entry. */
+  checkpoint: SessionCompactionCheckpoint;
+  /** Persisted entry that owns the selected checkpoint. */
+  currentEntry: SessionEntry;
+  /** Forked transcript identity created from the stored checkpoint boundary. */
+  forkedTranscript: SessionCompactionCheckpointForkedTranscript;
+};
+
+export type SessionCompactionCheckpointTranscriptForker = (
+  checkpoint: SessionCompactionCheckpoint,
+) => Promise<SessionCompactionCheckpointTranscriptForkResult>;
+
+export type SessionCompactionCheckpointEntryBuilder = (
+  context: SessionCompactionCheckpointEntryBuildContext,
+) => Promise<SessionEntry> | SessionEntry;
+
+export type BranchSessionFromCompactionCheckpointParams = {
+  /** Checkpoint id stored on the source session entry. */
+  checkpointId: string;
+  /** Builds the branched session entry from the forked transcript. */
+  buildEntry: SessionCompactionCheckpointEntryBuilder;
+  /** Copies transcript content through the stored checkpoint boundary. */
+  forkTranscriptFromCheckpoint: SessionCompactionCheckpointTranscriptForker;
+  /** Persisted key for the new checkpoint branch. */
+  nextKey: string;
+  /** Canonical key used as the branch parent. */
+  sourceKey: string;
+  /** Actual persisted key to read when a legacy alias still owns the row. */
+  sourceStoreKey?: string;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
+};
+
+export type RestoreSessionFromCompactionCheckpointParams = {
+  /** Checkpoint id stored on the current session entry. */
+  checkpointId: string;
+  /** Builds the restored session entry from the forked transcript. */
+  buildEntry: SessionCompactionCheckpointEntryBuilder;
+  /** Copies transcript content through the stored checkpoint boundary. */
+  forkTranscriptFromCheckpoint: SessionCompactionCheckpointTranscriptForker;
+  /** Canonical key to replace with the restored checkpoint state. */
+  sessionKey: string;
+  /** Actual persisted key to read when a legacy alias still owns the row. */
+  sessionStoreKey?: string;
+  /** Explicit store target for file-backed stores and SQLite migration adapters. */
+  storePath: string;
+};
+
+export type TemporarySessionMappingPreservationResult<T> = {
+  /** Result returned by the operation while the temporary mapping may exist. */
+  result: T;
+  /** Snapshot failure; callers may continue when temporary cleanup is best-effort. */
+  snapshotFailure?: string;
+  /** Restore/delete failure for the original temporary mapping state. */
+  restoreFailure?: string;
+};
+
+type TemporarySessionMappingSnapshot =
+  | {
+      canRestore: false;
+      sessionKey: string;
+      snapshotFailure: string;
+      storePath: string;
+    }
+  | {
+      canRestore: true;
+      hadEntry: false;
+      sessionKey: string;
+      storePath: string;
+    }
+  | {
+      canRestore: true;
+      entry: SessionEntry;
+      hadEntry: true;
+      sessionKey: string;
+      storePath: string;
+    };
+
+type TemporarySessionMappingOperationResult<T> =
+  | {
+      ok: true;
+      result: T;
+    }
+  | {
+      error: unknown;
+      ok: false;
+    };
 
 export type SessionEntryCreateWithTranscriptContext = {
   /** Current entry under the requested key before creation, if any. */
@@ -474,6 +680,11 @@ export type DeleteSessionEntryLifecycleParams = {
   storePath: string;
   /** Canonical key plus aliases that identify the logical entry. */
   target: SessionLifecycleStoreTarget;
+};
+
+export type CanonicalizeSessionEntryAliasesResult = {
+  canonicalKey: string;
+  entry?: SessionEntry;
 };
 
 export { clearPluginOwnedSessionState };
@@ -563,6 +774,44 @@ export function resolveSessionEntryAccessTarget(
     entry: target.entry,
     requestedKey: target.requestedKey,
     storeKey: target.storeKey,
+  };
+}
+
+/** Resolves ordered candidate keys inside one agent-owned session store. */
+export function resolveSessionEntryCandidateTarget(
+  scope: SessionEntryCandidateAccessScope,
+): ResolvedSessionEntryCandidateTarget | null {
+  const storePath = resolveStorePath(scope.cfg.session?.store, {
+    agentId: scope.agentId,
+    env: scope.env,
+  });
+  const store = loadSessionStore(storePath);
+  for (const candidateKey of uniqueStrings(scope.candidateKeys.map((key) => key.trim()))) {
+    if (!candidateKey) {
+      continue;
+    }
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: candidateKey });
+    if (!resolved.existing) {
+      continue;
+    }
+    return {
+      agentId: scope.agentId,
+      candidateKey,
+      entry: structuredClone(resolved.existing),
+      persisted: true,
+      sessionKey: resolved.normalizedKey,
+    };
+  }
+  const fallbackKey = scope.fallback?.sessionKey.trim();
+  if (!fallbackKey || !scope.fallback) {
+    return null;
+  }
+  return {
+    agentId: scope.agentId,
+    candidateKey: fallbackKey,
+    entry: structuredClone(scope.fallback.entry),
+    persisted: false,
+    sessionKey: fallbackKey,
   };
 }
 
@@ -656,9 +905,10 @@ export async function updateResolvedSessionEntry<T>(
 
 /** Returns the entry for a canonical or alias session key, if one exists. */
 export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | undefined {
-  if (scope.clone === false) {
+  if (scope.clone === false || scope.readConsistency === "latest") {
     const store = loadSessionStore(resolveAccessStorePath(scope), {
-      clone: false,
+      ...(scope.clone === false ? { clone: false } : {}),
+      ...(scope.readConsistency === "latest" ? { skipCache: true } : {}),
       ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
     });
     return resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey }).existing;
@@ -735,9 +985,118 @@ export async function patchSessionEntry(
     fallbackEntry: options.fallbackEntry,
     maintenanceConfig: options.maintenanceConfig,
     preserveActivity: options.preserveActivity,
+    requireWriteSuccess: options.requireWriteSuccess,
     replaceEntry: options.replaceEntry,
+    skipMaintenance: options.skipMaintenance,
+    takeCacheOwnership: options.takeCacheOwnership,
     update,
   });
+}
+
+/**
+ * Applies an atomic patch and returns the persisted key selected by the backing
+ * store. Use when a caller must keep sidecar state keyed to the final row.
+ */
+export async function patchSessionEntryWithKey(
+  scope: SessionAccessScope,
+  update: (
+    entry: SessionEntry,
+    context: SessionEntryPatchContext,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+  options: SessionEntryPatchOptions = {},
+): Promise<SessionEntryPatchResult | null> {
+  return await patchFileSessionEntryWithKey({
+    ...scope,
+    fallbackEntry: options.fallbackEntry,
+    maintenanceConfig: options.maintenanceConfig,
+    preserveActivity: options.preserveActivity,
+    requireWriteSuccess: options.requireWriteSuccess,
+    replaceEntry: options.replaceEntry,
+    skipMaintenance: options.skipMaintenance,
+    takeCacheOwnership: options.takeCacheOwnership,
+    update,
+  });
+}
+
+/**
+ * Promotes the freshest alias row to the canonical key, prunes legacy aliases,
+ * and optionally patches the canonical entry under one accessor operation.
+ */
+export async function canonicalizeSessionEntryAliases(params: {
+  storePath: string;
+  target: SessionLifecycleStoreTarget;
+  update?: (
+    entry: SessionEntry | undefined,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+}): Promise<CanonicalizeSessionEntryAliasesResult> {
+  return await updateSessionStore(params.storePath, async (store) => {
+    const targetKeys = normalizeTargetStoreKeys(params.target);
+    const freshest = resolveFreshestTargetEntry(store, targetKeys);
+    if (freshest) {
+      const current = store[params.target.canonicalKey];
+      if (!current || (freshest.entry.updatedAt ?? 0) > (current.updatedAt ?? 0)) {
+        store[params.target.canonicalKey] = freshest.entry;
+      }
+    }
+
+    const currentEntry = store[params.target.canonicalKey];
+    const patch = params.update ? await params.update(cloneOptionalEntry(currentEntry)) : null;
+    if (patch) {
+      store[params.target.canonicalKey] = {
+        ...currentEntry,
+        ...patch,
+      } as SessionEntry;
+    }
+
+    for (const key of targetKeys) {
+      if (key !== params.target.canonicalKey) {
+        delete store[key];
+      }
+    }
+    const entry = cloneOptionalEntry(store[params.target.canonicalKey]);
+    return {
+      canonicalKey: params.target.canonicalKey,
+      ...(entry ? { entry } : {}),
+    };
+  });
+}
+
+// Normalizes caller-supplied alias sets while always preserving the canonical key.
+function normalizeTargetStoreKeys(target: SessionLifecycleStoreTarget): string[] {
+  const keys = new Set<string>();
+  const remember = (value: string) => {
+    const trimmed = value.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  };
+  remember(target.canonicalKey);
+  for (const key of target.storeKeys) {
+    remember(key);
+  }
+  return [...keys];
+}
+
+// Selects the row that current JSON-store alias migration would promote.
+function resolveFreshestTargetEntry(
+  store: Record<string, SessionEntry>,
+  targetKeys: readonly string[],
+): { key: string; entry: SessionEntry } | undefined {
+  let freshest: { key: string; entry: SessionEntry } | undefined;
+  for (const key of targetKeys) {
+    const entry = store[key];
+    if (!entry) {
+      continue;
+    }
+    if (!freshest || (entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
+      freshest = { key, entry };
+    }
+  }
+  return freshest;
+}
+
+function cloneOptionalEntry(entry: SessionEntry | undefined): SessionEntry | undefined {
+  return entry ? structuredClone(entry) : undefined;
 }
 
 /**
@@ -796,6 +1155,39 @@ function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string
   );
 }
 
+function createReplySessionInitializationRevision(entry: SessionEntry | undefined): string {
+  return JSON.stringify(entry ?? null);
+}
+
+function resolveInitializedReplySessionEntry(params: {
+  agentId: string;
+  currentEntry?: SessionEntry;
+  fallbackSessionFile?: string;
+  sessionEntry: SessionEntry;
+  storePath: string;
+}): SessionEntry {
+  const fallbackSessionFile = params.fallbackSessionFile?.trim();
+  const currentSessionFile = params.currentEntry?.sessionFile;
+  const inheritedPreviousSessionFile =
+    Boolean(currentSessionFile) &&
+    params.currentEntry?.sessionId !== params.sessionEntry.sessionId &&
+    currentSessionFile === params.sessionEntry.sessionFile;
+  const entryForResolve =
+    fallbackSessionFile && (inheritedPreviousSessionFile || !params.sessionEntry.sessionFile)
+      ? { ...params.sessionEntry, sessionFile: fallbackSessionFile }
+      : inheritedPreviousSessionFile
+        ? { ...params.sessionEntry, sessionFile: undefined }
+        : params.sessionEntry;
+  const sessionFile = resolveSessionFilePath(params.sessionEntry.sessionId, entryForResolve, {
+    agentId: params.agentId,
+    sessionsDir: path.dirname(path.resolve(params.storePath)),
+  });
+  return {
+    ...params.sessionEntry,
+    sessionFile,
+  };
+}
+
 // File-backed creation resolves the concrete transcript artifact and writes the
 // header before the store mutation is saved; SQLite adapters implement this as
 // the same lifecycle operation without exposing rollback details to callers.
@@ -849,6 +1241,206 @@ export async function updateSessionEntry(
     takeCacheOwnership: options.takeCacheOwnership,
     requireWriteSuccess: options.requireWriteSuccess,
     update,
+  });
+}
+
+/** Resolves one abort target identity without exposing the mutable store. */
+export function resolveSessionAbortTarget(
+  scope: SessionAccessScope,
+): SessionAbortTargetIdentity | null {
+  const store = loadSessionStore(resolveAccessStorePath(scope));
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey });
+  if (!resolved.existing) {
+    return null;
+  }
+  return {
+    entry: { ...resolved.existing },
+    sessionId: resolved.existing.sessionId,
+    sessionKey: resolved.normalizedKey,
+  };
+}
+
+/**
+ * Resolves, marks, touches, and canonicalizes one abort target entry as a
+ * storage-sized operation. Runtime abort side effects remain with callers.
+ */
+export async function markSessionAbortTarget(params: {
+  resolveAbortCutoff?: (context: SessionAbortTargetContext) => SessionAbortTargetCutoff | undefined;
+  scope: SessionAccessScope;
+  now?: () => number;
+}): Promise<SessionAbortTargetResult | null> {
+  const storePath = resolveAccessStorePath(params.scope);
+  let canPersistSingleEntry = false;
+  let resolvedTarget: SessionAbortTargetResult | null = null;
+  try {
+    return await updateSessionStore(
+      storePath,
+      (store) => {
+        const resolved = resolveSessionStoreEntry({
+          store,
+          sessionKey: params.scope.sessionKey,
+        });
+        if (!resolved.existing) {
+          return null;
+        }
+        const sessionKey = resolved.normalizedKey;
+        resolvedTarget = {
+          entry: { ...resolved.existing },
+          persisted: false,
+          sessionId: resolved.existing.sessionId,
+          sessionKey,
+        };
+        const entry = {
+          ...resolved.existing,
+          abortedLastRun: true,
+          updatedAt: params.now?.() ?? Date.now(),
+        };
+        applySessionAbortCutoff(
+          entry,
+          params.resolveAbortCutoff?.({
+            entry: { ...resolved.existing },
+            sessionKey,
+          }),
+        );
+        store[sessionKey] = entry;
+        canPersistSingleEntry = resolved.legacyKeys.length === 0;
+        for (const legacyKey of resolved.legacyKeys) {
+          if (legacyKey !== sessionKey) {
+            delete store[legacyKey];
+          }
+        }
+        return {
+          entry: { ...entry },
+          persisted: true,
+          sessionId: entry.sessionId,
+          sessionKey,
+        };
+      },
+      {
+        resolveSingleEntryPersistence: (result) =>
+          result && result.sessionKey && canPersistSingleEntry
+            ? { sessionKey: result.sessionKey, entry: result.entry }
+            : null,
+        skipSaveWhenResult: (result) => result === null,
+      },
+    );
+  } catch (error) {
+    const fallbackTarget = resolvedTarget as unknown as SessionAbortTargetResult | null;
+    if (fallbackTarget) {
+      return {
+        entry: fallbackTarget.entry,
+        persisted: fallbackTarget.persisted,
+        sessionId: fallbackTarget.sessionId,
+        sessionKey: fallbackTarget.sessionKey,
+        persistenceError: formatErrorMessage(error),
+      };
+    }
+    throw error;
+  }
+}
+
+function applySessionAbortCutoff(
+  entry: Pick<SessionEntry, "abortCutoffMessageSid" | "abortCutoffTimestamp">,
+  cutoff: SessionAbortTargetCutoff | undefined,
+): void {
+  entry.abortCutoffMessageSid = cutoff?.messageSid;
+  entry.abortCutoffTimestamp = cutoff?.timestamp;
+}
+
+function findSessionCompactionCheckpoint(params: {
+  checkpointId: string;
+  entry: SessionEntry;
+}): SessionCompactionCheckpoint | undefined {
+  const checkpointId = params.checkpointId.trim();
+  if (!checkpointId || !Array.isArray(params.entry.compactionCheckpoints)) {
+    return undefined;
+  }
+  return [...params.entry.compactionCheckpoints]
+    .toSorted((a, b) => b.createdAt - a.createdAt)
+    .find((checkpoint) => checkpoint.checkpointId === checkpointId);
+}
+
+type ApplySessionCompactionCheckpointMutationParams = {
+  buildEntry: SessionCompactionCheckpointEntryBuilder;
+  checkpointId: string;
+  forkTranscriptFromCheckpoint: SessionCompactionCheckpointTranscriptForker;
+  readKey: string;
+  storePath: string;
+  writeKey: string;
+};
+
+async function applySessionCompactionCheckpointMutation(
+  params: ApplySessionCompactionCheckpointMutationParams,
+): Promise<SessionCompactionCheckpointMutationResult> {
+  return await updateSessionStore(
+    params.storePath,
+    async (store) => {
+      const currentEntry = store[params.readKey];
+      if (!currentEntry?.sessionId) {
+        return { status: "missing-session" };
+      }
+      const checkpoint = findSessionCompactionCheckpoint({
+        entry: currentEntry,
+        checkpointId: params.checkpointId,
+      });
+      if (!checkpoint) {
+        return { status: "missing-checkpoint" };
+      }
+      const forkedSession = await params.forkTranscriptFromCheckpoint(checkpoint);
+      if (forkedSession.status !== "created") {
+        return forkedSession;
+      }
+
+      const nextEntry = await params.buildEntry({
+        checkpoint,
+        currentEntry,
+        forkedTranscript: forkedSession.transcript,
+      });
+      store[params.writeKey] = nextEntry;
+      return {
+        status: "created",
+        key: params.writeKey,
+        checkpoint,
+        entry: nextEntry,
+      };
+    },
+    { skipSaveWhenResult: (result) => result.status !== "created" },
+  );
+}
+
+/**
+ * Forks checkpoint transcript content and persists a new branch entry in one
+ * storage-sized mutation. SQLite adapters implement the transcript row copy
+ * and `session_entries.entry_json` insert inside the same write transaction.
+ */
+export async function branchSessionFromCompactionCheckpoint(
+  params: BranchSessionFromCompactionCheckpointParams,
+): Promise<SessionCompactionCheckpointMutationResult> {
+  return await applySessionCompactionCheckpointMutation({
+    buildEntry: params.buildEntry,
+    checkpointId: params.checkpointId,
+    forkTranscriptFromCheckpoint: params.forkTranscriptFromCheckpoint,
+    readKey: params.sourceStoreKey ?? params.sourceKey,
+    storePath: params.storePath,
+    writeKey: params.nextKey,
+  });
+}
+
+/**
+ * Forks checkpoint transcript content and replaces the current entry in one
+ * storage-sized mutation. SQLite adapters implement the transcript row copy
+ * and `session_entries.entry_json` update inside the same write transaction.
+ */
+export async function restoreSessionFromCompactionCheckpoint(
+  params: RestoreSessionFromCompactionCheckpointParams,
+): Promise<SessionCompactionCheckpointMutationResult> {
+  return await applySessionCompactionCheckpointMutation({
+    buildEntry: params.buildEntry,
+    checkpointId: params.checkpointId,
+    forkTranscriptFromCheckpoint: params.forkTranscriptFromCheckpoint,
+    readKey: params.sessionStoreKey ?? params.sessionKey,
+    storePath: params.storePath,
+    writeKey: params.sessionKey,
   });
 }
 
@@ -907,6 +1499,37 @@ export async function applyRestartRecoveryLifecycle<T>(params: {
     },
   );
   return writerResult.result;
+}
+
+/**
+ * Runs an operation while preserving one temporary session mapping.
+ * The storage backend snapshots exactly the named key before the operation and
+ * restores that entry, or deletes it when it did not previously exist, after
+ * the operation finishes. SQLite backends can implement the same named
+ * preservation lifecycle without exposing mutable store access to callers.
+ */
+export async function preserveTemporarySessionMapping<T>(
+  scope: SessionAccessScope,
+  operation: () => Promise<T> | T,
+): Promise<TemporarySessionMappingPreservationResult<T>> {
+  const snapshot = snapshotTemporarySessionMapping(scope);
+  let operationResult: TemporarySessionMappingOperationResult<T>;
+  try {
+    operationResult = { ok: true, result: await operation() };
+  } catch (err) {
+    operationResult = { error: err, ok: false };
+  }
+
+  const restoreFailure = await restoreTemporarySessionMapping(snapshot);
+  if (!operationResult.ok) {
+    throw operationResult.error;
+  }
+
+  return {
+    result: operationResult.result,
+    ...(snapshot.canRestore ? {} : { snapshotFailure: snapshot.snapshotFailure }),
+    ...(restoreFailure ? { restoreFailure } : {}),
+  };
 }
 
 /** Removes entries and orphan transcript artifacts owned by a named session lifecycle. */
@@ -1061,6 +1684,114 @@ export async function persistSessionRolloverLifecycle(params: {
   return {
     previousSessionTranscript,
     sessionEntry: params.sessionEntry,
+  };
+}
+
+/** Loads the reply-session initialization rows without exposing a mutable store. */
+export function loadReplySessionInitializationSnapshot(params: {
+  storePath: string;
+  sessionKey: string;
+}): ReplySessionInitializationSnapshot {
+  const store = loadSessionStore(params.storePath, { skipCache: true, clone: false });
+  const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+  const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
+  const entries = cloneSessionEntries(store);
+  return {
+    ...(currentEntry ? { currentEntry } : {}),
+    readEntry: (sessionKey) => {
+      const entry = resolveSessionStoreEntry({ store: entries, sessionKey }).existing;
+      return entry ? { ...entry } : undefined;
+    },
+    revision: createReplySessionInitializationRevision(currentEntry),
+  };
+}
+
+/**
+ * Persists one reply-session initialization result and archives the previous
+ * transcript after metadata commits. SQLite adapters map the guarded write to a
+ * transaction and keep archive failure warning-only, matching file storage.
+ */
+export async function commitReplySessionInitialization(params: {
+  activeSessionKey: string;
+  agentId: string;
+  expectedRevision: string;
+  fallbackSessionFile?: string;
+  maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+  onArchiveError?: (error: unknown, sourcePath: string) => void;
+  onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
+  prepareSessionEntry?: (
+    context: ReplySessionInitializationCommitContext,
+  ) => Promise<SessionEntry> | SessionEntry;
+  previousEntry?: SessionEntry;
+  retiredEntry?: SessionEntryRetirement;
+  sessionEntry: SessionEntry;
+  sessionKey: string;
+  storePath: string;
+}): Promise<ReplySessionInitializationCommitResult> {
+  const committed = await updateSessionStore(
+    params.storePath,
+    async (store): Promise<ReplySessionInitializationCommitResult> => {
+      const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+      const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
+      const revision = createReplySessionInitializationRevision(currentEntry);
+      if (revision !== params.expectedRevision) {
+        return {
+          ok: false,
+          ...(currentEntry ? { currentEntry } : {}),
+          reason: "stale-snapshot",
+          revision,
+        };
+      }
+
+      const readEntry = (sessionKey: string) => {
+        const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+        return entry ? { ...entry } : undefined;
+      };
+      const preparedSessionEntry = params.prepareSessionEntry
+        ? await params.prepareSessionEntry({
+            ...(currentEntry ? { currentEntry } : {}),
+            readEntry,
+            sessionEntry: params.sessionEntry,
+          })
+        : params.sessionEntry;
+      const sessionEntry = resolveInitializedReplySessionEntry({
+        agentId: params.agentId,
+        ...(currentEntry ? { currentEntry } : {}),
+        fallbackSessionFile: params.fallbackSessionFile,
+        sessionEntry: preparedSessionEntry,
+        storePath: params.storePath,
+      });
+      store[resolved.normalizedKey] = sessionEntry;
+      if (params.retiredEntry) {
+        store[params.retiredEntry.key] = params.retiredEntry.entry;
+      }
+      return {
+        ok: true,
+        previousSessionTranscript: {},
+        sessionEntry: { ...(store[resolved.normalizedKey] ?? sessionEntry) },
+        sessionStoreView: cloneSessionEntries(store),
+      };
+    },
+    {
+      activeSessionKey: params.activeSessionKey,
+      maintenanceConfig: params.maintenanceConfig,
+      onWarn: params.onMaintenanceWarning,
+      skipSaveWhenResult: (result) => !result.ok,
+    },
+  );
+  if (!committed.ok) {
+    return committed;
+  }
+
+  const previousSessionTranscript = await archivePreviousSessionTranscript({
+    agentId: params.agentId,
+    onArchiveError: params.onArchiveError,
+    previousEntry: params.previousEntry,
+    storePath: params.storePath,
+  });
+  return {
+    ...committed,
+    previousSessionTranscript,
   };
 }
 
@@ -1921,6 +2652,53 @@ function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry 
     updatedAt: patch.updatedAt ?? now,
     ...patch,
   };
+}
+
+function snapshotTemporarySessionMapping(
+  scope: SessionAccessScope,
+): TemporarySessionMappingSnapshot {
+  const storePath = resolveAccessStorePath(scope);
+  try {
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const entry = store[scope.sessionKey];
+    return {
+      canRestore: true,
+      ...(entry ? { entry: structuredClone(entry), hadEntry: true } : { hadEntry: false }),
+      sessionKey: scope.sessionKey,
+      storePath,
+    };
+  } catch (err) {
+    return {
+      canRestore: false,
+      sessionKey: scope.sessionKey,
+      snapshotFailure: formatErrorMessage(err),
+      storePath,
+    };
+  }
+}
+
+async function restoreTemporarySessionMapping(
+  snapshot: TemporarySessionMappingSnapshot,
+): Promise<string | undefined> {
+  if (!snapshot.canRestore) {
+    return undefined;
+  }
+  try {
+    await updateSessionStore(
+      snapshot.storePath,
+      (store) => {
+        if (snapshot.hadEntry) {
+          store[snapshot.sessionKey] = structuredClone(snapshot.entry);
+          return;
+        }
+        delete store[snapshot.sessionKey];
+      },
+      { activeSessionKey: snapshot.sessionKey },
+    );
+    return undefined;
+  } catch (err) {
+    return formatErrorMessage(err);
+  }
 }
 
 function cleanupPreviousResetTranscripts(params: {

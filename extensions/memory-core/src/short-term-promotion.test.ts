@@ -3189,7 +3189,9 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
-    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "sync"]);
+      // "s3" is a protected-glossary term; it now surfaces as a standalone token past the
+      // per-script min-length gate (the longer terms still match as substrings).
+    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "s3", "sync"]);
   });
 
   it("extracts multilingual concept tags across latin and cjk snippets", () => {

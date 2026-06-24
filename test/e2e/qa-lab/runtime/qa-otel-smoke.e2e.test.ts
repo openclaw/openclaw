@@ -719,6 +719,47 @@ describe("qa-otel-smoke receiver bounds", () => {
     expect(kill).not.toHaveBeenCalled();
   });
 
+  it("moves Docker collector telemetry off the default host port", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stderr: EventEmitter;
+      stdout: EventEmitter;
+    };
+    child.stderr = new EventEmitter();
+    child.stdout = new EventEmitter();
+    let writtenConfig = "";
+    const stopDockerContainer = vi.fn(async () => {});
+    const removePath = vi.fn(async () => {});
+    const ports = [4318, 4318, 45679];
+
+    const collector = await testing.startDockerOtelCollector(4317, {
+      mkdtemp: async () => "/tmp/openclaw-otel-collector-test",
+      platform: "linux",
+      randomUUID: () => "00000000-0000-4000-8000-000000000000",
+      reserveLocalPort: async () => ports.shift() ?? 49999,
+      rm: removePath as never,
+      spawn: vi.fn(() => child) as never,
+      stopDockerContainer,
+      waitForLocalPort: async () => {},
+      writeFile: async (_path, config) => {
+        writtenConfig = String(config);
+      },
+    });
+
+    expect(writtenConfig).toContain("endpoint: 127.0.0.1:4318");
+    expect(writtenConfig).toContain("telemetry:");
+    expect(writtenConfig).toContain("address: 127.0.0.1:45679");
+    expect(writtenConfig).not.toContain("address: :8888");
+
+    await collector.close();
+    expect(stopDockerContainer).toHaveBeenCalledWith(
+      "openclaw-otel-smoke-00000000-0000-4000-8000-000000000000",
+    );
+    expect(removePath).toHaveBeenCalledWith("/tmp/openclaw-otel-collector-test", {
+      force: true,
+      recursive: true,
+    });
+  });
+
   it("cleans Docker collector containers and temp config after readiness failures", async () => {
     const tempRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-qa-otel-collector-"));
     const collectorDir = path.join(tempRoot, "collector");
@@ -729,6 +770,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     child.stderr = new EventEmitter();
     child.stdout = new EventEmitter();
     const stopDockerContainer = vi.fn(async () => {});
+    const ports = [4318, 45679];
 
     try {
       await expect(
@@ -738,7 +780,7 @@ describe("qa-otel-smoke receiver bounds", () => {
             return collectorDir;
           },
           randomUUID: () => "00000000-0000-4000-8000-000000000000",
-          reserveLocalPort: async () => 4318,
+          reserveLocalPort: async () => ports.shift() ?? 49999,
           spawn: vi.fn(() => child) as never,
           stopDockerContainer,
           waitForLocalPort: async () => {
@@ -765,6 +807,7 @@ describe("qa-otel-smoke receiver bounds", () => {
     };
     child.stderr = new EventEmitter();
     child.stdout = new EventEmitter();
+    const ports = [4318, 45679];
 
     try {
       let thrown: unknown;
@@ -775,7 +818,7 @@ describe("qa-otel-smoke receiver bounds", () => {
             return collectorDir;
           },
           randomUUID: () => "00000000-0000-4000-8000-000000000000",
-          reserveLocalPort: async () => 4318,
+          reserveLocalPort: async () => ports.shift() ?? 49999,
           spawn: vi.fn(() => child) as never,
           stopDockerContainer: vi.fn(async () => {}),
           waitForLocalPort: async (_port, _timeout, readFailure) => {

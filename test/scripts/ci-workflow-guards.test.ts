@@ -224,6 +224,18 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("keeps CodeQL critical quality scans off Blacksmith registrations", () => {
+    const source = readCriticalQualityWorkflow();
+    const workflow = parse(source);
+    const blacksmithJobs = Object.entries(workflow.jobs)
+      .filter(([, job]) => job && typeof job === "object")
+      .filter(([, job]) => (job as Record<string, unknown>)["runs-on"] !== "ubuntu-24.04")
+      .map(([name]) => name);
+
+    expect(blacksmithJobs).toEqual([]);
+    expect(source).not.toContain("blacksmith-");
+  });
+
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
     const workflow = readCiWorkflow();
     const source = readFileSync(".github/workflows/ci.yml", "utf8");

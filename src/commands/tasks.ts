@@ -11,6 +11,7 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   runSessionRegistryMaintenanceForStore,
 } from "../config/sessions.js";
+import { normalizeCronLaneSegment } from "../cron/service/task-runs.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
@@ -128,17 +129,36 @@ type SessionRegistryMaintenanceSummary = {
   stores: SessionRegistryMaintenanceStoreSummary[];
 };
 
-function readRunningCronJobIds(): Set<string> {
+function resolveExplicitCronSessionSegment(sessionKey: string | undefined): string | undefined {
+  const match = /^(?:agent:[^:]+:)?cron:([^:]+)$/u.exec(sessionKey?.trim() ?? "");
+  return match?.[1]?.toLowerCase();
+}
+
+function readRunningCronJobIds(): { ids: Set<string>; count: number } {
   try {
     const cronStorePath = resolveCronJobsStorePath(getRuntimeConfig().cron?.store);
-    return new Set(
-      loadCronJobsStoreSync(cronStorePath)
-        .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
-        // Cron session keys are matched case-insensitively against job ids.
-        .map((job) => job.id.toLowerCase()),
+    const runningJobs = loadCronJobsStoreSync(cronStorePath).jobs.filter(
+      (job) => typeof job.state?.runningAtMs === "number",
     );
+    return {
+      // A running job may have been retargeted after its session was created. Keep both historical
+      // shapes; the registry has no producer metadata, so retaining an ambiguous alias is safer
+      // than pruning a live transcript.
+      ids: new Set(
+        runningJobs.flatMap((job) => [
+          job.id.toLowerCase(),
+          normalizeCronLaneSegment(job.id, "job"),
+          ...(job.sessionTarget !== "main" && job.sessionKey
+            ? [resolveExplicitCronSessionSegment(job.sessionKey)].filter(
+                (segment): segment is string => segment !== undefined,
+              )
+            : []),
+        ]),
+      ),
+      count: runningJobs.length,
+    };
   } catch {
-    return new Set();
+    return { ids: new Set(), count: 0 };
   }
 }
 
@@ -146,13 +166,13 @@ async function runSessionRegistryMaintenance(params: {
   apply: boolean;
 }): Promise<SessionRegistryMaintenanceSummary> {
   const cfg = getRuntimeConfig();
-  const runningCronJobIds = readRunningCronJobIds();
+  const runningCronJobs = readRunningCronJobIds();
   const stores: SessionRegistryMaintenanceStoreSummary[] = [];
   for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
     const result = await runSessionRegistryMaintenanceForStore({
       apply: params.apply,
       retentionMs: SESSION_REGISTRY_RETENTION_MS,
-      runningCronJobIds,
+      runningCronJobIds: runningCronJobs.ids,
       storePath: target.storePath,
     });
     stores.push({
@@ -166,7 +186,7 @@ async function runSessionRegistryMaintenance(params: {
   }
   return {
     retentionMs: SESSION_REGISTRY_RETENTION_MS,
-    runningCronJobs: runningCronJobIds.size,
+    runningCronJobs: runningCronJobs.count,
     pruned: stores.reduce((total, store) => total + store.pruned, 0),
     stores,
   };
