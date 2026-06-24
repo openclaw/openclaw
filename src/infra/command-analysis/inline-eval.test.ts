@@ -26,7 +26,6 @@ describe("exec inline eval detection", () => {
     { argv: ["php", "-E", "system('id');"], expected: "php -E" },
     { argv: ["php", "-R", "system('id');"], expected: "php -R" },
     { argv: ["Rscript", "-e", "system('id')"], expected: "rscript -e" },
-    { argv: ["R", "--exec", "system('id')"], expected: "r --exec" },
     { argv: ["osascript", "-e", "beep"], expected: "osascript -e" },
     { argv: ["awk", "BEGIN { print 1 }"], expected: "awk inline program" },
     { argv: ["gawk", "-F", ",", "{print $1}", "data.csv"], expected: "gawk inline program" },

@@ -58,7 +58,7 @@ const FLAG_INTERPRETER_INLINE_EVAL_SPECS: readonly InterpreterFlagSpec[] = [
       ["-R", "-R"],
     ]),
   },
-  { names: ["r", "rscript"], exactFlags: new Set(["-e", "--exec"]) },
+  { names: ["r", "rscript"], exactFlags: new Set(["-e"]) },
   { names: ["lua"], exactFlags: new Set(["-e"]) },
   { names: ["osascript"], exactFlags: new Set(["-e"]) },
   {
