@@ -801,8 +801,7 @@ export class AcpGatewayAgent implements Agent {
         const promptKey = this.pendingPromptKey(params.sessionId, runId);
         if (
           isGatewayCloseError(err) &&
-          (this.getPendingPrompt(params.sessionId, runId) ||
-            this.settlingPromptKeys.has(promptKey))
+          (this.getPendingPrompt(params.sessionId, runId) || this.settlingPromptKeys.has(promptKey))
         ) {
           return;
         }
@@ -1592,9 +1591,6 @@ export class AcpGatewayAgent implements Agent {
     value: string | boolean,
   ): {
     overrides: Partial<GatewaySessionPresentationRow>;
-    // null lets a control clear a session override (e.g. responseUsage "inherit" →
-    // delete → follow the configured default); the gateway sessions.patch handler
-    // treats null as "clear/inherit".
     patch?: Record<string, string | boolean | null>;
   } {
     if (typeof value !== "string") {
@@ -1634,8 +1630,6 @@ export class AcpGatewayAgent implements Agent {
           overrides: { reasoningLevel: value },
         };
       case ACP_RESPONSE_USAGE_CONFIG_ID: {
-        // "inherit" clears the session override so the session follows the
-        // configured default (distinct from an explicit "off"): null → delete.
         const next = value === "inherit" ? null : value;
         return {
           patch: { responseUsage: next },

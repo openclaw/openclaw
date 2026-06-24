@@ -222,8 +222,6 @@ export function buildSessionPresentation(params: {
       name: "Usage detail",
       description:
         "Controls how much usage information OpenClaw attaches to responses for the session. 'inherit' follows the configured default; 'off' explicitly disables it for this session.",
-      // Unset must read as "inherit" (follows the configured default), NOT "off" —
-      // an unset session inheriting a non-off default would otherwise misreport as off.
       currentValue: normalizeOptionalString(row.responseUsage) || "inherit",
       values: ["inherit", "off", "tokens", "full"],
     }),

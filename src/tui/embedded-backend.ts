@@ -527,10 +527,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
     sessionInfo.thinkingLevel = thinkingLevel;
     sessionInfo.verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
-    // buildGatewaySessionInfo (via buildGatewaySessionRow) already resolves
-    // effectiveResponseUsage channel-aware (session override → per-channel config
-    // entry → default → off), so the TUI no-arg toggle can cycle from the effective
-    // value rather than only the raw session value.
 
     return {
       sessionKey: opts.sessionKey,

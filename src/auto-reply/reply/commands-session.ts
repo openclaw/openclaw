@@ -352,7 +352,6 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  // "reset"/"inherit"/"clear" clears the session override so the config default takes over.
   const isReset = rawArgs ? isSessionDefaultDirectiveValue(rawArgs) : false;
 
   if (rawArgs && !requested && !isReset) {
@@ -365,7 +364,6 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
   if (isReset) {
-    // Clear the session-level override so this session inherits the config default.
     if (targetSessionEntry && params.sessionStore && params.sessionKey) {
       delete targetSessionEntry.responseUsage;
       params.sessionStore[params.sessionKey] = targetSessionEntry;
@@ -377,8 +375,6 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  // Resolve the *effective* current mode (session override → config default → off) so the
-  // no-arg cycle starts from what the user actually sees, not just the stored session value.
   const replyChannel = params.command.channel;
   const currentRaw = targetSessionEntry?.responseUsage;
   const current = resolveEffectiveResponseUsage(
@@ -389,9 +385,6 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
 
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
-    // Persist an explicit "off" so a configured messages.responseUsage default
-    // can't re-enable the footer the user just turned off; clear-to-inherit is a
-    // separate action ("reset").
     targetSessionEntry.responseUsage = next;
     params.sessionStore[params.sessionKey] = targetSessionEntry;
     await persistSessionEntry({ ...params, sessionEntry: targetSessionEntry });
