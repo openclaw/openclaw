@@ -395,7 +395,7 @@ const nativeHookRelayProviderAdapters: Record<
           hookEventName: "PermissionRequest",
           decision:
             decision === "allow"
-              ? { updatedInput: input ?? {} }
+              ? { behavior: "allow", updatedInput: input ?? {} }
               : {
                   behavior: "deny",
                   message: message?.trim() || "Denied by OpenClaw",
