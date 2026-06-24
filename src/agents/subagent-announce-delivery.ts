@@ -918,18 +918,23 @@ function inferDeliveryTargetChatType(target: {
   ) {
     return "direct";
   }
-  if (normalizedTo.startsWith("channel:") || normalizedTo.startsWith("thread:")) {
-    return "channel";
-  }
   if (normalizedTo.startsWith("group:")) {
     return "group";
   }
   const channel = normalizeMessageChannel(target.channel);
-  return channel
+  const pluginChatType = channel
     ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging?.inferTargetChatType?.({
         to: target.to ?? "",
       })
     : undefined;
+  if (normalizedTo.startsWith("channel:") || normalizedTo.startsWith("thread:")) {
+    // A `channel:`/`thread:` prefix is the lossy generic default — some
+    // plugins (e.g. Mattermost private channels) need to resolve the real
+    // chat type from the underlying channel rather than the target shape
+    // (#95646).
+    return pluginChatType ?? "channel";
+  }
+  return pluginChatType;
 }
 
 function isDirectMessageDeliveryTarget(
@@ -1785,5 +1790,6 @@ export const testing = {
         }
       : defaultSubagentAnnounceDeliveryDeps;
   },
+  inferDeliveryTargetChatType,
 };
 export { testing as __testing };

@@ -422,9 +422,6 @@ function inferChatTypeFromTarget(params: {
   if (/^user:/i.test(to)) {
     return "direct";
   }
-  if (/^(channel:|thread:)/i.test(to)) {
-    return "channel";
-  }
   if (/^group:/i.test(to)) {
     return "group";
   }
@@ -433,6 +430,13 @@ function inferChatTypeFromTarget(params: {
     resolveOutboundChannelPlugin({
       channel: params.channel,
     });
+  // A `channel:`/`thread:` target prefix is the lossy generic default — some
+  // plugins (e.g. Mattermost private channels) need to resolve the real
+  // chat type from the underlying channel rather than the target shape,
+  // so consult the plugin hook before falling back to "channel" (#95646).
+  if (/^(channel:|thread:)/i.test(to)) {
+    return plugin?.messaging?.inferTargetChatType?.({ to }) ?? "channel";
+  }
   return plugin?.messaging?.inferTargetChatType?.({ to }) ?? undefined;
 }
 

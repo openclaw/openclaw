@@ -58,6 +58,7 @@ import {
   resolveMattermostReplyToMode,
   type ResolvedMattermostAccount,
 } from "./mattermost/accounts.js";
+import { peekMattermostChannelKind } from "./mattermost/channel-kind-store.js";
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
@@ -804,6 +805,10 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         return parent && parent !== child
           ? { to: `channel:${parent}`, threadId: child }
           : { to: normalizeMattermostMessagingTarget(`channel:${child}`) };
+      },
+      inferTargetChatType: ({ to }) => {
+        const channelId = to.trim().match(/^channel:(.+)$/i)?.[1];
+        return channelId ? peekMattermostChannelKind(channelId) : undefined;
       },
       resolveOutboundSessionRoute: (params) => resolveMattermostOutboundSessionRoute(params),
       targetResolver: {

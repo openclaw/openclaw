@@ -1045,6 +1045,77 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.chatType).toBe("group");
   });
 
+  it("consults the plugin chat-type hook for a channel: target before the lossy default (#95646)", async () => {
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        createTestChannelPlugin({
+          id: "telegram",
+          label: "Telegram",
+          outbound: {
+            deliveryMode: "direct",
+            resolveTarget: ({ to }) =>
+              to
+                ? { ok: true as const, to: to.trim() }
+                : { ok: false as const, error: new Error("target required") },
+          },
+          messaging: {
+            targetPrefixes: ["telegram"],
+            // A `channel:` target is normally the generic "channel" default,
+            // but a plugin (e.g. Mattermost private channels) can resolve a
+            // more specific real chat type for the same prefix.
+            inferTargetChatType: () => "group",
+          },
+        }),
+      ]),
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "telegram",
+        to: "channel:chan-1",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("channel:chan-1");
+    expect(resolved.chatType).toBe("group");
+  });
+
+  it("falls back to the lossy channel: default when the plugin hook has no answer (#95646)", async () => {
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        createTestChannelPlugin({
+          id: "telegram",
+          label: "Telegram",
+          outbound: {
+            deliveryMode: "direct",
+            resolveTarget: ({ to }) =>
+              to
+                ? { ok: true as const, to: to.trim() }
+                : { ok: false as const, error: new Error("target required") },
+          },
+          messaging: {
+            targetPrefixes: ["telegram"],
+          },
+        }),
+      ]),
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "telegram",
+        to: "channel:chan-1",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.chatType).toBe("channel");
+  });
+
   it("uses an activation-aware external plugin when canonicalizing heartbeat routes", async () => {
     const external = createTestChannelPlugin({
       id: "external-channel",

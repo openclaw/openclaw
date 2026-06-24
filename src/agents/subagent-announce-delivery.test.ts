@@ -394,6 +394,61 @@ async function deliverSlackChannelAnnouncement(params: {
   });
 }
 
+describe("inferDeliveryTargetChatType (#95646)", () => {
+  it("consults the plugin hook for a channel: target before the lossy default", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "mattermost-test",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "mattermost-test",
+              capabilities: { chatTypes: ["direct", "channel", "group"] },
+            }),
+            messaging: {
+              // A `channel:` target is normally the generic "channel"
+              // default, but a plugin (e.g. Mattermost private channels)
+              // can resolve a more specific real chat type for the same
+              // prefix.
+              inferTargetChatType: () => "group",
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(
+      testing.inferDeliveryTargetChatType({
+        channel: "mattermost-test",
+        to: "channel:chan-1",
+      }),
+    ).toBe("group");
+  });
+
+  it("falls back to the lossy channel: default when the plugin hook has no answer", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "mattermost-test",
+          source: "test",
+          plugin: createChannelTestPluginBase({
+            id: "mattermost-test",
+            capabilities: { chatTypes: ["direct", "channel"] },
+          }),
+        },
+      ]),
+    );
+
+    expect(
+      testing.inferDeliveryTargetChatType({
+        channel: "mattermost-test",
+        to: "channel:chan-1",
+      }),
+    ).toBe("channel");
+  });
+});
+
 describe("resolveAnnounceOrigin threaded route targets", () => {
   it("preserves stored thread ids when requester origin omits one for the same chat", () => {
     expect(

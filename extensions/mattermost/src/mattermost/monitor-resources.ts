@@ -4,6 +4,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { rememberMattermostChannelKind } from "./channel-kind-store.js";
 import {
   fetchMattermostChannel,
   fetchMattermostUser,
@@ -14,6 +15,7 @@ import {
   type MattermostUser,
 } from "./client.js";
 import { buildButtonProps, type MattermostInteractionResponse } from "./interactions.js";
+import { mapMattermostChannelTypeToChatType } from "./monitor-gating.js";
 
 export type MattermostMediaKind = "image" | "audio" | "video" | "document" | "unknown";
 
@@ -131,6 +133,9 @@ export function createMattermostMonitorResources(params: {
     try {
       const info = await fetchMattermostChannel(client, channelId);
       setCachedValue(channelCache, channelId, info, CHANNEL_CACHE_TTL_MS, rawNow);
+      if (info) {
+        rememberMattermostChannelKind(channelId, mapMattermostChannelTypeToChatType(info.type));
+      }
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: channel lookup failed: ${String(err)}`);

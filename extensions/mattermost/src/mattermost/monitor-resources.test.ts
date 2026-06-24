@@ -125,6 +125,27 @@ describe("mattermost monitor resources", () => {
     });
   });
 
+  it("remembers the resolved channel kind for the synchronous outbound hook (#95646)", async () => {
+    const { peekMattermostChannelKind } = await import("./channel-kind-store.js");
+    fetchMattermostChannel.mockResolvedValue({ id: "chan-private-1", type: "P" });
+
+    const resources = createMattermostMonitorResources({
+      accountId: "default",
+      callbackUrl: "https://openclaw.test/callback",
+      client: {} as never,
+      logger: {},
+      mediaMaxBytes: 1024,
+      saveRemoteMedia: vi.fn(),
+      mediaKindFromMime: () => "document",
+    });
+
+    expect(peekMattermostChannelKind("chan-private-1")).toBeUndefined();
+    await resources.resolveChannelInfo("chan-private-1");
+    // A Mattermost private channel ("P") is a group conversation, not a
+    // generic "channel" — the synchronous lookup must reflect that.
+    expect(peekMattermostChannelKind("chan-private-1")).toBe("group");
+  });
+
   it("does not reuse cached lookups while the process clock is invalid", async () => {
     fetchMattermostChannel
       .mockResolvedValueOnce({ id: "chan-1", name: "old" })

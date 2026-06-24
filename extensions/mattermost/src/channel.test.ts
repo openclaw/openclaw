@@ -172,6 +172,27 @@ describe("mattermostPlugin", () => {
       expect(normalize("mattermost:USER123")).toBe("user:USER123");
       expect(normalize("  mattermost:USER123  ")).toBe("user:USER123");
     });
+
+    it("infers chat type for a channel: target from the remembered channel kind (#95646)", async () => {
+      const { rememberMattermostChannelKind } = await import("./mattermost/channel-kind-store.js");
+      rememberMattermostChannelKind("chan-private-2", "group");
+
+      expect(
+        mattermostPlugin.messaging?.inferTargetChatType?.({ to: "channel:chan-private-2" }),
+      ).toBe("group");
+    });
+
+    it("returns undefined for a channel: target with no remembered kind", () => {
+      expect(
+        mattermostPlugin.messaging?.inferTargetChatType?.({ to: "channel:never-seen-channel" }),
+      ).toBeUndefined();
+    });
+
+    it("returns undefined for non-channel targets", () => {
+      expect(
+        mattermostPlugin.messaging?.inferTargetChatType?.({ to: "user:USER123" }),
+      ).toBeUndefined();
+    });
   });
 
   describe("pairing", () => {
