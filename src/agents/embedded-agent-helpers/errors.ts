@@ -917,6 +917,19 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
+function classifyFailoverReasonFromErrorType(raw: string | undefined): FailoverReason | null {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  switch (normalized) {
+    case "upstream_error":
+      return "timeout";
+    default:
+      return null;
+  }
+}
+
 function isProvider(provider: string | undefined, match: string): boolean {
   const normalized = normalizeOptionalLowercaseString(provider);
   return Boolean(normalized && normalized.includes(match));
@@ -1180,6 +1193,7 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
     ? toReasonClassification(providerPluginReason)
     : mergeMessageAndDetailClassification(messageClassification, detailClassification);
   const codeReason = classifyFailoverReasonFromCode(signal.code);
+  const errorTypeReason = classifyFailoverReasonFromErrorType(signal.errorType);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
   }
@@ -1193,6 +1207,9 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   );
   if (statusClassification) {
     return statusClassification;
+  }
+  if (errorTypeReason) {
+    return toReasonClassification(errorTypeReason);
   }
   if (codeReason) {
     return toReasonClassification(codeReason);

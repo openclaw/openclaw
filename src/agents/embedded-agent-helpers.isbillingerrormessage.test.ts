@@ -1096,6 +1096,32 @@ describe("classifyAssistantFailoverReason", () => {
       }),
     ).toBe("model_not_found");
   });
+
+  it("treats structured upstream_error assistant payloads as fallbackable timeouts", () => {
+    expect(
+      classifyAssistantFailoverReason({
+        role: "assistant",
+        api: "openai-completions",
+        provider: "openai-compatible",
+        model: "primary-model",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "error",
+        errorMessage: "Upstream request failed",
+        errorType: "upstream_error",
+        errorBody:
+          '{"error":{"message":"Upstream request failed","type":"upstream_error","param":"","code":null}}',
+        content: [],
+        timestamp: 0,
+      }),
+    ).toBe("timeout");
+  });
 });
 
 describe("classifyFailoverReasonFromHttpStatus – 402 temporary limits", () => {

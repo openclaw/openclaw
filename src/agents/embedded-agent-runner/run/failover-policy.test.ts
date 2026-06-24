@@ -308,6 +308,49 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("falls back for structured upstream_error assistant failures after rotation is exhausted", () => {
+    const assistantError = {
+      role: "assistant" as const,
+      api: "openai-completions" as const,
+      provider: "openai-compatible",
+      model: "primary-model",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "error" as const,
+      errorMessage: "Upstream request failed",
+      errorType: "upstream_error",
+      content: [],
+      timestamp: 0,
+    };
+    const failoverReason = classifyAssistantFailoverReason(assistantError);
+
+    expect(failoverReason).toBe("timeout");
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: failoverReason !== null,
+        failoverReason,
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "timeout",
+    });
+  });
+
   it("does not fallback assistant tool-execution timeouts even after profile rotation exhausted (#52147)", () => {
     expect(
       resolveRunFailoverDecision({
