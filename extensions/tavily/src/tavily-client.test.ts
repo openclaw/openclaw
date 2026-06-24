@@ -124,12 +124,12 @@ describe("tavily client X-Client-Source header", () => {
   });
 
   it("caps oversized JSON responses instead of buffering the whole body", async () => {
-    // 20 x 1 KiB chunks behind a 2 KiB cap: the reader must stop early.
-    const streamed = createStreamingJsonResponse({ chunkCount: 20, chunkSize: 1024 });
+    // 20 x 1 MiB chunks behind the shared 16 MiB cap: the reader must stop early.
+    const streamed = createStreamingJsonResponse({ chunkCount: 20, chunkSize: 1024 * 1024 });
 
     await expect(
-      testing.readTavilyJsonResponse(streamed.response, "Tavily Search", { maxBytes: 2048 }),
-    ).rejects.toThrow("Tavily Search: JSON response exceeds 2048 bytes");
+      testing.readTavilyJsonResponse(streamed.response, "Tavily Search"),
+    ).rejects.toThrow("Tavily Search: JSON response exceeds 16777216 bytes");
 
     expect(streamed.getReadCount()).toBeLessThan(20);
   });

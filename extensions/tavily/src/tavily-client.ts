@@ -1,5 +1,6 @@
 // Tavily plugin module implements tavily client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
@@ -8,7 +9,6 @@ import {
   resolveCacheTtlMs,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
   DEFAULT_TAVILY_BASE_URL,
@@ -27,11 +27,6 @@ const EXTRACT_CACHE = new Map<
   { value: Record<string, unknown>; expiresAt: number; insertedAt: number }
 >();
 const DEFAULT_SEARCH_COUNT = 5;
-// Tavily search/extract bodies are untrusted external responses (web content),
-// so cap the JSON read at the same 16 MiB ceiling other providers use to keep a
-// hostile or buggy upstream from forcing the runtime to buffer an unbounded body.
-const TAVILY_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
-
 export type TavilySearchParams = {
   cfg?: OpenClawConfig;
   query: string;
@@ -95,21 +90,8 @@ async function postTavilyJson(params: {
 async function readTavilyJsonResponse(
   response: Response,
   label: string,
-  opts?: { maxBytes?: number },
 ): Promise<Record<string, unknown>> {
-  // Read through the bounded reader (cancelling the stream on overflow) so an
-  // untrusted Tavily endpoint cannot force the runtime to buffer the whole body
-  // before parsing. Mirrors readProviderJsonResponse in src/agents.
-  const maxBytes = opts?.maxBytes ?? TAVILY_JSON_RESPONSE_MAX_BYTES;
-  const bytes = await readResponseWithLimit(response, maxBytes, {
-    onOverflow: ({ maxBytes: maxBytesLocal }) =>
-      new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
-  });
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
-  } catch (cause) {
-    throw new Error(`${label}: malformed JSON response`, { cause });
-  }
+  return await readProviderJsonResponse<Record<string, unknown>>(response, label);
 }
 
 export async function runTavilySearch(
