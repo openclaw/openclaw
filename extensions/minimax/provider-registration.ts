@@ -8,6 +8,7 @@ import type {
   ProviderCatalogContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
+  ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   MINIMAX_OAUTH_MARKER,
@@ -21,7 +22,11 @@ import {
   buildProviderReplayFamilyHooks,
   normalizeModelCompat,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { MINIMAX_FAST_MODE_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
+import {
+  createMinimaxFastModeWrapper,
+  resolveBooleanFastMode,
+  type ResolveMinimaxFastLaneCost,
+} from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -30,7 +35,12 @@ import {
   MINIMAX_TEXT_MODEL_CATALOG,
   MINIMAX_TEXT_MODEL_ORDER,
 } from "./api.js";
-import { DEFAULT_MINIMAX_MAX_TOKENS, resolveMinimaxApiCost } from "./model-definitions.js";
+import {
+  DEFAULT_MINIMAX_MAX_TOKENS,
+  MINIMAX_PRIORITY_COST_MULTIPLIER,
+  resolveMinimaxApiCost,
+  scaleMinimaxCost,
+} from "./model-definitions.js";
 import type { MiniMaxRegion } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import {
@@ -61,9 +71,26 @@ const HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "hybrid-anthropic-openai",
   anthropicModelDropThinkingBlocks: true,
 });
+// MiniMax owns its fast-lane pricing: highspeed (M2.x) bills the dedicated
+// variant's rate; the M3 priority `service_tier` bills 1.5x standard. The core
+// wrapper picks the lane and asks back here so core stays provider-pricing free.
+const resolveMinimaxFastLaneCost: ResolveMinimaxFastLaneCost = ({ requestModelId, priority }) => {
+  const cost = resolveMinimaxApiCost(requestModelId);
+  return priority ? scaleMinimaxCost(cost, MINIMAX_PRIORITY_COST_MULTIPLIER) : cost;
+};
+
+const MINIMAX_FAST_MODE_HOOKS = {
+  wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
+    createMinimaxFastModeWrapper(
+      ctx.streamFn,
+      () => resolveBooleanFastMode(ctx.extraParams),
+      resolveMinimaxFastLaneCost,
+    ),
+};
+
 const MINIMAX_PROVIDER_HOOKS = {
   ...HYBRID_ANTHROPIC_OPENAI_REPLAY_HOOKS,
-  ...MINIMAX_FAST_MODE_STREAM_HOOKS,
+  ...MINIMAX_FAST_MODE_HOOKS,
   resolveReasoningOutputMode: () => "native" as const,
   resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
     resolveMinimaxThinkingProfile(modelId),

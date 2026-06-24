@@ -2,7 +2,11 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import { createMinimaxFastModeWrapper, createMinimaxThinkingDisabledWrapper } from "./minimax.js";
+import {
+  createMinimaxFastModeWrapper,
+  createMinimaxThinkingDisabledWrapper,
+  type ResolveMinimaxFastLaneCost,
+} from "./minimax.js";
 
 function captureThinkingPayload(params: {
   provider: string;
@@ -356,12 +360,77 @@ describe("createMinimaxFastModeWrapper service_tier", () => {
   });
 
   it("preserves an already-set service_tier", () => {
+    // "standard" is MiniMax's own tier value; the wrapper must not clobber a
+    // service_tier an earlier wrapper/caller already chose.
     expect(
       capturePayload({
         modelId: "MiniMax-M3",
         fastMode: true,
-        initialPayload: { service_tier: "standard_only" },
+        initialPayload: { service_tier: "standard" },
       }).service_tier,
-    ).toBe("standard_only");
+    ).toBe("standard");
+  });
+});
+
+describe("createMinimaxFastModeWrapper fast-lane cost", () => {
+  const M27_STANDARD_COST = { input: 0.3, output: 1.2, cacheRead: 0.06, cacheWrite: 0.375 };
+  const M3_STANDARD_COST = { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 };
+
+  function captureModel(params: {
+    modelId: string;
+    baseCost: Model<"anthropic-messages">["cost"];
+    resolveFastLaneCost?: ResolveMinimaxFastLaneCost;
+  }): Model<"anthropic-messages"> {
+    let captured = {} as Model<"anthropic-messages">;
+    const baseStreamFn: StreamFn = (model) => {
+      captured = model as Model<"anthropic-messages">;
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createMinimaxFastModeWrapper(baseStreamFn, true, params.resolveFastLaneCost);
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "minimax",
+        id: params.modelId,
+        cost: params.baseCost,
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+    return captured;
+  }
+
+  it("bills the highspeed variant's cost for M2.7 fast mode", () => {
+    const captured = captureModel({
+      modelId: "MiniMax-M2.7",
+      baseCost: M27_STANDARD_COST,
+      // Stand-in for the plugin resolver: highspeed variant id -> its own rate.
+      resolveFastLaneCost: ({ requestModelId, priority }) => {
+        expect(requestModelId).toBe("MiniMax-M2.7-highspeed");
+        expect(priority).toBe(false);
+        return { input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 };
+      },
+    });
+    expect(captured.id).toBe("MiniMax-M2.7-highspeed");
+    expect(captured.cost).toEqual({ input: 0.6, output: 2.4, cacheRead: 0.06, cacheWrite: 0.375 });
+  });
+
+  it("bills the 1.5x priority cost for M3 fast mode", () => {
+    const captured = captureModel({
+      modelId: "MiniMax-M3",
+      baseCost: M3_STANDARD_COST,
+      resolveFastLaneCost: ({ requestModelId, priority }) => {
+        expect(requestModelId).toBe("MiniMax-M3");
+        expect(priority).toBe(true);
+        return { input: 0.9, output: 3.6, cacheRead: 0.18, cacheWrite: 0 };
+      },
+    });
+    expect(captured.id).toBe("MiniMax-M3");
+    expect(captured.cost).toEqual({ input: 0.9, output: 3.6, cacheRead: 0.18, cacheWrite: 0 });
+  });
+
+  it("leaves the base cost untouched when no resolver is supplied", () => {
+    const captured = captureModel({ modelId: "MiniMax-M3", baseCost: M3_STANDARD_COST });
+    expect(captured.cost).toEqual(M3_STANDARD_COST);
   });
 });

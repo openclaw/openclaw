@@ -55,6 +55,24 @@ export const MINIMAX_LM_STUDIO_COST = {
 
 type MinimaxCatalogId = keyof typeof MINIMAX_TEXT_MODEL_CATALOG;
 
+// MiniMax bills the `service_tier: "priority"` lane at 1.5x the standard rate
+// (e.g. M3 $0.30/$1.20 -> $0.45/$1.80 at <=512k input).
+// https://platform.minimax.io/docs/guides/pricing-paygo
+export const MINIMAX_PRIORITY_COST_MULTIPLIER = 1.5;
+
+/** Scales every per-million cost field so OpenClaw estimates match a paid MiniMax lane. */
+export function scaleMinimaxCost(
+  cost: ModelDefinitionConfig["cost"],
+  multiplier: number,
+): ModelDefinitionConfig["cost"] {
+  return {
+    input: cost.input * multiplier,
+    output: cost.output * multiplier,
+    cacheRead: cost.cacheRead * multiplier,
+    cacheWrite: cost.cacheWrite * multiplier,
+  };
+}
+
 export function resolveMinimaxApiCost(modelId: string): ModelDefinitionConfig["cost"] {
   if (modelId === "MiniMax-M2.7") {
     return MINIMAX_M27_API_COST;
