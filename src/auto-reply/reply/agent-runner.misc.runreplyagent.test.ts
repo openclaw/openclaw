@@ -2953,7 +2953,7 @@ describe("runReplyAgent transient HTTP retry", () => {
     setAgentRunnerSessionResetTestDeps({
       generateSecureUuid: () => "reset-session",
       persistSessionResetLifecycle: async (params) => {
-        saveSessionStore(params.storePath, { [params.sessionKey]: params.nextEntry });
+        await saveSessionStore(params.storePath, { [params.sessionKey]: params.nextEntry });
         return { replayedMessages: 0 };
       },
     });
@@ -3065,7 +3065,7 @@ describe("runReplyAgent transient HTTP retry", () => {
     expect(runtimeErrorMock).toHaveBeenCalledWith(
       "Stalled direct session aborted without visible output. Resetting hot session main stalled-session -> reset-session and retrying once.",
     );
-    const persisted = await loadSessionStore(storePath);
+    const persisted = loadSessionStore(storePath);
     expect(persisted[sessionKey]?.sessionId).toBe("reset-session");
   });
 
