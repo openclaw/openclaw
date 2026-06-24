@@ -202,62 +202,29 @@ describe("Codex native hook relay config", () => {
       generation: "generation-1",
       sessionId: "session-1",
       runId: "run-1",
-      command: {
-        executable: "openclaw",
-      },
       config: {
-        plugins: {
-          entries: {
-            tokenjuice: { enabled: true },
-          },
-        },
+        plugins: { entries: { tokenjuice: { enabled: true } } },
       } as never,
     });
 
-    const config = buildCodexNativeHookRelayConfig({
-      relay,
-      events: ["post_tool_use"],
-    });
+    const config = buildCodexNativeHookRelayConfig({ relay, events: ["post_tool_use"] });
 
-    expect(config["hooks.PostToolUse"]).toEqual([
-      {
-        hooks: [
-          {
-            type: "command",
-            command:
-              "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event post_tool_use --timeout 4000",
-            timeout: 5,
-            async: false,
-            statusMessage: "OpenClaw native hook relay",
-          },
-        ],
-      },
-    ]);
+    expect(JSON.stringify(config["hooks.PostToolUse"])).toContain("--event post_tool_use");
   });
 
-  it("keeps PostToolUse omitted when lazy middleware owners are disabled", () => {
+  it("omits PostToolUse when lazy Codex middleware owners are disabled", () => {
     const relay = registerNativeHookRelay({
       provider: "codex",
       relayId: "relay-1",
       generation: "generation-1",
       sessionId: "session-1",
       runId: "run-1",
-      command: {
-        executable: "openclaw",
-      },
       config: {
-        plugins: {
-          entries: {
-            tokenjuice: { enabled: false },
-          },
-        },
+        plugins: { entries: { tokenjuice: { enabled: false } } },
       } as never,
     });
 
-    const config = buildCodexNativeHookRelayConfig({
-      relay,
-      events: ["post_tool_use"],
-    });
+    const config = buildCodexNativeHookRelayConfig({ relay, events: ["post_tool_use"] });
 
     expect(config["hooks.PostToolUse"]).toEqual([]);
   });

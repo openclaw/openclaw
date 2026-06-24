@@ -29,10 +29,19 @@ import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { hasEnabledAgentToolResultMiddlewareOwnerForRuntime } from "../../plugins/agent-tool-result-middleware-owners.js";
 import type { OpenClawAgentToolResult } from "../../plugins/agent-tool-result-middleware-types.js";
-import { listAgentToolResultMiddlewares } from "../../plugins/agent-tool-result-middleware.js";
+import {
+  listAgentToolResultMiddlewares,
+  normalizeAgentToolResultMiddlewareRuntimeIds,
+} from "../../plugins/agent-tool-result-middleware.js";
+import {
+  createPluginActivationSource,
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../../plugins/config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
+import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import {
   cancelDeferredPluginToolApproval,
@@ -637,10 +646,35 @@ function nativeHookRelayHasCodexToolResultMiddleware(
   if (!registration.config) {
     return false;
   }
-  return hasEnabledAgentToolResultMiddlewareOwnerForRuntime({
-    runtime: "codex",
+  const pluginsConfig = normalizePluginsConfig(registration.config.plugins);
+  const activationSource = createPluginActivationSource({
     config: registration.config,
+    plugins: pluginsConfig,
   });
+  for (const record of loadPluginManifestRegistry({ config: registration.config }).plugins) {
+    if (
+      !normalizeAgentToolResultMiddlewareRuntimeIds(
+        record.contracts?.agentToolResultMiddleware,
+      ).includes("codex")
+    ) {
+      continue;
+    }
+    const activationState = resolveEffectivePluginActivationState({
+      id: record.id,
+      origin: record.origin,
+      config: pluginsConfig,
+      rootConfig: registration.config,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
+      activationSource,
+    });
+    if (
+      activationState.enabled &&
+      (record.origin === "bundled" || activationState.explicitlyEnabled)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function invokeNativeHookRelay(
