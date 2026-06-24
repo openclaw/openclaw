@@ -586,6 +586,31 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("orders a keyed preamble that arrived before a later tool above that tool", () => {
+    // Regression: keyed commentary must merge into the timestamp ordering path
+    // rather than render below every tool card. A preamble that arrived between
+    // an earlier and a later tool should stay between them while the run is live.
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "Planning the next step", ts: 2, itemId: "preamble-between-tools" },
+        ],
+        toolMessages: [
+          { role: "toolResult", content: "First tool", timestamp: 1 },
+          { role: "toolResult", content: "Second tool", timestamp: 3 },
+        ],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "group", role: "tool" },
+      { kind: "stream", text: "Planning the next step", startedAt: 2 },
+      { kind: "group", role: "tool" },
+    ]);
+    const streamItems = items.filter((item) => item.kind === "stream");
+    expect(streamItems).toHaveLength(1);
+  });
+
   it("suppresses metadata-only history messages before grouping", () => {
     const groups = messageGroups({
       messages: [

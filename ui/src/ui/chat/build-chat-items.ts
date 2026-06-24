@@ -845,15 +845,31 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   }
   for (const segment of keyedSegments) {
     const text = sanitizeStreamText(segment.text);
-    if (text.length > 0) {
-      items.push({
-        kind: "stream",
-        key: `stream-seg:${props.sessionKey}:${segment.itemId}`,
-        text,
-        startedAt: segment.ts,
-        isStreaming: false,
-        source: "commentary",
-      });
+    if (text.length === 0) {
+      continue;
+    }
+    const commentaryItem: ChatItem = {
+      kind: "stream",
+      key: `stream-seg:${props.sessionKey}:${segment.itemId}`,
+      text,
+      startedAt: segment.ts,
+      isStreaming: false,
+      source: "commentary",
+    };
+    // Merge keyed commentary into the timestamp ordering path instead of
+    // appending it after every tool card. Insert before the first already-built
+    // item whose visible timestamp is strictly later, so a preamble that
+    // arrived before a later tool renders above that tool while the run is live
+    // (not only after final materialization). Tools that share the commentary's
+    // timestamp and are already visible stay above it.
+    const insertionIndex = items.findIndex((existing) => {
+      const existingTimestamp = chatItemTimestamp(existing);
+      return existingTimestamp != null && existingTimestamp > segment.ts;
+    });
+    if (insertionIndex === -1) {
+      items.push(commentaryItem);
+    } else {
+      items.splice(insertionIndex, 0, commentaryItem);
     }
   }
 
