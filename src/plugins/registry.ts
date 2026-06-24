@@ -161,6 +161,7 @@ import {
   isDeprecatedPluginHookName,
   isPluginHookName,
   isPromptInjectionHookName,
+  isStateHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
@@ -282,6 +283,7 @@ export type {
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
   allowConversationAccess?: boolean;
+  allowStateAccess?: boolean;
   timeoutMs?: number;
   timeouts?: Record<string, number>;
 };
@@ -2573,6 +2575,41 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
         });
         return;
+      }
+    }
+    if (isStateHookName(effectiveHookName)) {
+      const explicitConversationAccess = policy?.allowConversationAccess;
+      const explicitStateAccess = policy?.allowStateAccess;
+      // State hooks are allowed when either allowStateAccess or allowConversationAccess is true.
+      // allowConversationAccess implies state access (additive, non-breaking).
+      if (record.origin !== "bundled" && explicitConversationAccess !== true && explicitStateAccess !== true) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            `typed hook "${effectiveHookName}" blocked because non-bundled plugins must set ` +
+            `plugins.entries.${record.id}.hooks.allowStateAccess=true or allowConversationAccess=true`,
+        });
+        return;
+      }
+      if (record.origin === "bundled" && explicitConversationAccess === false && explicitStateAccess === false) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowStateAccess=false and allowConversationAccess=false`,
+        });
+        return;
+      }
+      // When only allowStateAccess is true (not allowConversationAccess), strip conversation
+      // content from the event so the plugin receives lifecycle state without messages.
+      if (effectiveHookName === "agent_end" && explicitStateAccess === true && explicitConversationAccess !== true) {
+        const originalHandler = effectiveHandler;
+        effectiveHandler = ((event: { messages?: unknown[]; [key: string]: unknown }, ctx: unknown) => {
+          const stateOnlyEvent = { ...event, messages: [] } as typeof event;
+          return (originalHandler as (event: unknown, ctx: unknown) => unknown)(stateOnlyEvent, ctx);
+        }) as PluginHookHandlerMap[K];
       }
     }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });

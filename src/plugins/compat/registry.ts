@@ -135,7 +135,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     owner: "agent-runtime",
     introduced: "2026-04-29",
     docsPath: "/plugins/hooks",
-    surfaces: ["llm_input", "llm_output", "agent_end", "allowConversationAccess"],
+    surfaces: ["llm_input", "llm_output", "agent_end", "allowConversationAccess", "allowStateAccess"],
     diagnostics: ["conversation access hook contract probe"],
     tests: ["src/agents/cli-runner.reliability.test.ts", "src/config/schema.help.quality.test.ts"],
   },

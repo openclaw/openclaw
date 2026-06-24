@@ -4,13 +4,19 @@ export type PluginEntryConfig = {
   hooks?: {
     /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
     allowPromptInjection?: boolean;
-    /**
-     * Controls access to raw conversation content from conversation hooks including
+    /** Controls access to raw conversation content from conversation hooks including
      * before_agent_run, before_model_resolve, before_agent_reply, llm_input, llm_output,
-     * before_agent_finalize, and agent_end.
+     * and before_agent_finalize.
      * Non-bundled plugins must opt in explicitly; bundled plugins stay allowed unless disabled.
      */
     allowConversationAccess?: boolean;
+    /**
+     * Controls access to agent lifecycle state from state hooks (agent_end) without
+     * conversation content. When true but allowConversationAccess is not true,
+     * agent_end events are dispatched with messages: [].
+     * Setting allowConversationAccess=true implies state access (additive, non-breaking).
+     */
+    allowStateAccess?: boolean;
     /** Default timeout in milliseconds for this plugin's typed hooks. */
     timeoutMs?: number;
     /** Per typed-hook timeout overrides in milliseconds. */

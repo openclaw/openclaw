@@ -2,6 +2,13 @@
 
 Docs: https://docs.openclaw.ai
 
+
+## Unreleased
+
+### New features
+
+- **Granular `allowStateAccess` hook policy:** Plugins that only need agent lifecycle state (run id, outcome, duration) can now set `hooks.allowStateAccess: true` instead of the broader `allowConversationAccess`. When `allowStateAccess` is true but `allowConversationAccess` is not, `agent_end` events are dispatched with `messages: []` — conversation content stays protected. Setting `allowConversationAccess=true` still implies full state access, so this change is fully additive and non-breaking. ( #74580)
+
 ## 2026.6.10
 
 ### Highlights

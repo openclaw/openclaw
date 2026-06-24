@@ -649,6 +649,36 @@ describe("plugins.entries.*.hooks", () => {
     expect(result.success).toBe(true);
   });
 
+  it.each([true, false])("accepts allowStateAccess=%s", (allowStateAccess) => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowStateAccess,
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects non-boolean state access values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        entries: {
+          "voice-call": {
+            hooks: {
+              allowStateAccess: "yes",
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("accepts bounded typed hook timeout overrides", () => {
     const result = OpenClawSchema.safeParse({
       plugins: {

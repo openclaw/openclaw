@@ -375,6 +375,7 @@ const TARGET_KEYS = [
   "plugins.entries.*.hooks",
   "plugins.entries.*.hooks.allowPromptInjection",
   "plugins.entries.*.hooks.allowConversationAccess",
+  "plugins.entries.*.hooks.allowStateAccess",
   "plugins.entries.*.hooks.timeoutMs",
   "plugins.entries.*.hooks.timeouts",
   "plugins.entries.*.subagent",

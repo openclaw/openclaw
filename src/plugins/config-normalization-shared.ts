@@ -25,6 +25,7 @@ export type NormalizedPluginsConfig = {
       hooks?: {
         allowPromptInjection?: boolean;
         allowConversationAccess?: boolean;
+        allowStateAccess?: boolean;
         timeoutMs?: number;
         timeouts?: Record<string, number>;
       };
@@ -123,6 +124,8 @@ function normalizePluginEntries(
               .allowPromptInjection,
             allowConversationAccess: (hooksRaw as { allowConversationAccess?: unknown })
               .allowConversationAccess,
+            allowStateAccess: (hooksRaw as { allowStateAccess?: unknown })
+              .allowStateAccess,
             timeoutMs: normalizeHookTimeoutMs((hooksRaw as { timeoutMs?: unknown }).timeoutMs),
             timeouts: normalizeHookTimeouts((hooksRaw as { timeouts?: unknown }).timeouts),
           }
@@ -131,6 +134,7 @@ function normalizePluginEntries(
       hooks &&
       (typeof hooks.allowPromptInjection === "boolean" ||
         typeof hooks.allowConversationAccess === "boolean" ||
+        typeof hooks.allowStateAccess === "boolean" ||
         hooks.timeoutMs !== undefined ||
         hooks.timeouts !== undefined)
         ? {
@@ -139,6 +143,9 @@ function normalizePluginEntries(
               : {}),
             ...(typeof hooks.allowConversationAccess === "boolean"
               ? { allowConversationAccess: hooks.allowConversationAccess }
+              : {}),
+            ...(typeof hooks.allowStateAccess === "boolean"
+              ? { allowStateAccess: hooks.allowStateAccess }
               : {}),
             ...(hooks.timeoutMs !== undefined ? { timeoutMs: hooks.timeoutMs } : {}),
             ...(hooks.timeouts !== undefined ? { timeouts: hooks.timeouts } : {}),
