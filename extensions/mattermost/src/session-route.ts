@@ -20,6 +20,7 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
     (resolvedKind !== "channel" &&
       resolvedKind !== "group" &&
       (lower.startsWith("user:") || trimmed.startsWith("@")));
+  const isGroup = resolvedKind === "group";
   if (trimmed.startsWith("@")) {
     trimmed = trimmed.slice(1).trim();
   }
@@ -33,12 +34,12 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
     channel: "mattermost",
     accountId: params.accountId,
     peer: {
-      kind: isUser ? "direct" : "channel",
+      kind: isUser ? "direct" : isGroup ? "group" : "channel",
       id: rawId,
     },
-    chatType: isUser ? "direct" : "channel",
-    from: isUser ? `mattermost:${rawId}` : `mattermost:channel:${rawId}`,
-    to: isUser ? `user:${rawId}` : `channel:${rawId}`,
+    chatType: isUser ? "direct" : isGroup ? "group" : "channel",
+    from: isUser ? `mattermost:${rawId}` : isGroup ? `mattermost:group:${rawId}` : `mattermost:channel:${rawId}`,
+    to: isUser ? `user:${rawId}` : isGroup ? `group:${rawId}` : `channel:${rawId}`,
   });
   return buildThreadAwareOutboundSessionRoute({
     route: baseRoute,
