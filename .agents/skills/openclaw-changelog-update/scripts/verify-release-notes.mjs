@@ -1,0 +1,1618 @@
+#!/usr/bin/env node
+
+import { execFileSync } from "node:child_process";
+import { readFileSync, writeFileSync } from "node:fs";
+
+const repo = "openclaw/openclaw";
+const commitAssociationQueryBatchSize = 20;
+const excludedHandles = new Set(["openclaw", "clawsweeper", "claude", "codex", "steipete"]);
+const nonEditorialTypes = new Set([
+  "build",
+  "chore",
+  "ci",
+  "docs",
+  "qa",
+  "refactor",
+  "style",
+  "test",
+]);
+const nonEditorialTitlePattern =
+  /(?:^|[\s:([{\-])(docs?|documentation|tests?|testing|qa|quality assurance|refactor(?:ing)?|ci|continuous integration|build|chore|style|lint|format)(?:$|[\s:)\]}\-])/i;
+const editorialTitlePattern =
+  /^\s*(?:\[[^\]]+\]\s*)?(?:#\d+:\s*)?(?:add|allow|block|enable|expose|fail|fix|harden|honor|improve|keep|migrate|move|persist|preserve|prevent|propagate|rate[- ]?limit|restore|revert|ship|support|treat|validate)\b|^\s*#\d+:/i;
+const genericDirectCommitTerms = new Set([
+  "add",
+  "allow",
+  "avoid",
+  "build",
+  "change",
+  "fix",
+  "improve",
+  "keep",
+  "make",
+  "missing",
+  "move",
+  "omit",
+  "omitted",
+  "prevent",
+  "repair",
+  "required",
+  "restore",
+  "update",
+]);
+
+function fail(message) {
+  throw new Error(message);
+}
+
+function printUsage() {
+  console.log(`Usage:
+  node .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
+    --base <tag-or-sha> --target <tag-or-sha> --version <version> [options]
+
+Required:
+  --base <ref>          Release range start.
+  --target <ref>        Release range end.
+  --version <version>   CHANGELOG.md version heading to verify.
+
+Options:
+  --manifest <path>     Read or write the complete contribution record ledger.
+  --seed-ref <ref>      Use an existing release section as editorial input.
+  --write-ledger        Write the verified ledger back into CHANGELOG.md.
+  --release-tag <tag>   GitHub release tag to compare; repeatable with --check-github.
+  --check-github        Require each supplied GitHub release body to match.
+  --json                Emit machine-readable verification output.
+  --help                Show this help text.`);
+}
+
+function parseArgs(argv) {
+  const options = {
+    releaseTags: [],
+    checkGithub: false,
+    help: false,
+    json: false,
+    manifestPath: undefined,
+    seedRef: undefined,
+    writeLedger: false,
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help") {
+      options.help = true;
+      continue;
+    }
+    if (arg === "--check-github" || arg === "--json" || arg === "--write-ledger") {
+      options[
+        arg === "--check-github" ? "checkGithub" : arg === "--write-ledger" ? "writeLedger" : "json"
+      ] = true;
+      continue;
+    }
+    if (
+      arg === "--base" ||
+      arg === "--target" ||
+      arg === "--version" ||
+      arg === "--release-tag" ||
+      arg === "--manifest" ||
+      arg === "--seed-ref"
+    ) {
+      const value = argv[index + 1];
+      if (!value || value.startsWith("--")) {
+        fail(`missing value for ${arg}`);
+      }
+      if (arg === "--release-tag") {
+        options.releaseTags.push(value);
+      } else if (arg === "--manifest") {
+        options.manifestPath = value;
+      } else if (arg === "--seed-ref") {
+        options.seedRef = value;
+      } else {
+        options[arg.slice(2)] = value;
+      }
+      index += 1;
+      continue;
+    }
+    fail(`unknown argument: ${arg}`);
+  }
+
+  if (!options.help) {
+    for (const name of ["base", "target", "version"]) {
+      if (!options[name]) {
+        fail(`--${name} is required`);
+      }
+    }
+  } else if (options.checkGithub || options.releaseTags.length > 0) {
+    fail("--help cannot be combined with verification options");
+  }
+  if (!options.help && options.checkGithub && options.releaseTags.length === 0) {
+    fail("--check-github requires at least one --release-tag");
+  }
+  return options;
+}
+
+function run(command, args) {
+  return execFileSync(command, args, {
+    encoding: "utf8",
+    env: { ...process.env, NO_COLOR: "1" },
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function git(args) {
+  return run("git", args).trimEnd();
+}
+
+function githubApi(args) {
+  try {
+    return JSON.parse(run("ghx", ["api", ...args]).replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ""));
+  } catch (error) {
+    if (typeof error.stdout === "string" && error.stdout.trim() !== "") {
+      return JSON.parse(error.stdout.replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, ""));
+    }
+    throw error;
+  }
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isEligibleHandle(handle) {
+  return (
+    typeof handle === "string" &&
+    handle.toLowerCase() !== "undefined" &&
+    !handle.endsWith("[bot]") &&
+    !excludedHandles.has(handle.toLowerCase())
+  );
+}
+
+function githubHandleFromNoreply(email) {
+  return email.match(/^(?:\d+\+)?([^@]+)@users\.noreply\.github\.com$/i)?.[1];
+}
+
+function editorialClassification(subject) {
+  const type = subject.match(/^\s*([a-z]+)(?:\([^)]*\))?!?:/i)?.[1]?.toLowerCase();
+  return {
+    editorialEligible:
+      (Boolean(type) || editorialTitlePattern.test(subject)) &&
+      !nonEditorialTypes.has(type) &&
+      !nonEditorialTitlePattern.test(subject),
+    type: type ?? "other",
+  };
+}
+
+function mergedByTarget(mergedAt, targetTimestamp) {
+  const mergedTimestamp = Date.parse(mergedAt);
+  return Number.isFinite(mergedTimestamp) && mergedTimestamp <= targetTimestamp;
+}
+
+function sectionFor(changelog, version) {
+  const heading = new RegExp(`^## ${escapeRegExp(version)}\\r?$`, "m").exec(changelog);
+  if (!heading || heading.index === undefined) {
+    fail(`CHANGELOG.md does not contain ## ${version}`);
+  }
+  const start = heading.index;
+  const bodyStart = changelog.indexOf("\n", start) + 1;
+  const next = /^## /gm;
+  next.lastIndex = bodyStart;
+  const nextHeading = next.exec(changelog);
+  const end = nextHeading?.index ?? changelog.length;
+  return {
+    start,
+    end,
+    source: changelog.slice(start, end).trimEnd(),
+    body: changelog.slice(bodyStart, end).trim(),
+  };
+}
+
+function referencesIn(text) {
+  const references = [];
+  for (const match of text.matchAll(
+    /(?<![A-Za-z0-9_.-])(?:(?<owner>[A-Za-z0-9_.-]+)\/(?<name>[A-Za-z0-9_.-]+))?#(?<number>\d+)/g,
+  )) {
+    const qualifiedRepository = match.groups?.owner
+      ? `${match.groups.owner}/${match.groups.name}`.toLowerCase()
+      : undefined;
+    if (!qualifiedRepository || qualifiedRepository === repo) {
+      references.push(Number(match.groups?.number));
+    }
+  }
+  return references;
+}
+
+function closingReferencesIn(text) {
+  const references = [];
+  for (const match of text.matchAll(
+    /\b(?:fix(?:es|ed)?|closes?|closed|resolves?|resolved)\s+(?:(?:openclaw\/openclaw)?#\d+)(?:\s*(?:,|and)\s*(?:(?:openclaw\/openclaw)?#\d+))*/gi,
+  )) {
+    appendReferences(references, referencesIn(match[0]));
+  }
+  return references;
+}
+
+function standardRevertedHash(message) {
+  return message
+    .trim()
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .map((paragraph) => paragraph.match(/^This reverts commit ([0-9a-f]{7,40})\.$/i)?.[1])
+    .find(Boolean);
+}
+
+function handlesIn(text) {
+  const thanksStart = text.lastIndexOf(" Thanks ");
+  if (thanksStart < 0) {
+    return [];
+  }
+  const content = text.slice(0, thanksStart);
+  return [...text.slice(thanksStart).matchAll(/@([A-Za-z0-9-]+)/g)]
+    .map((match) => match[1])
+    .filter(
+      (handle) =>
+        isEligibleHandle(handle) &&
+        !new RegExp(`(?<![A-Za-z0-9-])@${escapeRegExp(handle)}\\b`, "i").test(content),
+    );
+}
+
+function relatedReferencesIn(line) {
+  const related = line.match(/\bRelated ((?:#\d+)(?:, #\d+)*)\./);
+  return related ? referencesIn(related[1]) : [];
+}
+
+function addContributionRecordEntry(entries, key, entry) {
+  const existing = entries.get(key);
+  if (!existing) {
+    entries.set(key, {
+      ...entry,
+      references: [...entry.references],
+      thanks: [...entry.thanks],
+    });
+    return;
+  }
+  appendReferences(existing.references, entry.references);
+  addHandles(existing.thanks, entry.thanks);
+}
+
+function contributionRecordFor(section) {
+  const result = { legacyIssues: new Map(), pullRequests: new Map() };
+  const recordStart = section.source.search(/\n### Complete contribution (?:ledger|record)\r?$/m);
+  if (recordStart < 0) {
+    return result;
+  }
+  const record = section.source.slice(recordStart);
+  let subsection = "";
+  for (const line of record.split("\n")) {
+    if (line === "#### Pull requests") {
+      subsection = "pull-requests";
+      continue;
+    }
+    if (line === "#### Linked issues") {
+      subsection = "linked-issues";
+      continue;
+    }
+    if (line.startsWith("#### ")) {
+      subsection = "";
+      continue;
+    }
+    if (subsection === "pull-requests") {
+      const explicitRecord = line.match(/^- \*\*PR #(\d+)\*\*/);
+      const legacyRecord = line.match(/\(#(\d+)\)\.(?: Thanks.*)?$/);
+      const number = explicitRecord?.[1] ?? legacyRecord?.[1];
+      if (number) {
+        const value = Number(number);
+        addContributionRecordEntry(result.pullRequests, value, {
+          references: relatedReferencesIn(line),
+          thanks: handlesIn(line),
+        });
+      }
+      continue;
+    }
+    if (subsection === "linked-issues") {
+      const number = referencesIn(line)[0];
+      if (number) {
+        addContributionRecordEntry(result.legacyIssues, number, {
+          references: [],
+          thanks: handlesIn(line),
+        });
+      }
+    }
+  }
+  return result;
+}
+
+function mergeContributionRecords(...records) {
+  const merged = { legacyIssues: new Map(), pullRequests: new Map() };
+  for (const record of records) {
+    for (const [number, entry] of record.pullRequests) {
+      addContributionRecordEntry(merged.pullRequests, number, entry);
+    }
+    for (const [number, entry] of record.legacyIssues) {
+      addContributionRecordEntry(merged.legacyIssues, number, entry);
+    }
+  }
+  return merged;
+}
+
+function withoutRevertedContributionRecords(record, revertedReferences) {
+  if (revertedReferences.size === 0) {
+    return record;
+  }
+  const filtered = { legacyIssues: new Map(), pullRequests: new Map() };
+  for (const [number, entry] of record.pullRequests) {
+    if (revertedReferences.has(number)) {
+      continue;
+    }
+    addContributionRecordEntry(filtered.pullRequests, number, {
+      ...entry,
+      references: entry.references.filter((reference) => !revertedReferences.has(reference)),
+    });
+  }
+  for (const [number, entry] of record.legacyIssues) {
+    if (!revertedReferences.has(number)) {
+      addContributionRecordEntry(filtered.legacyIssues, number, entry);
+    }
+  }
+  return filtered;
+}
+
+function contributionRecordReferences(record) {
+  return [...record.pullRequests.keys()];
+}
+
+function contributionRecordMetadataReferences(record) {
+  const references = contributionRecordReferences(record);
+  for (const entry of record.pullRequests.values()) {
+    appendReferences(references, entry.references);
+  }
+  appendReferences(references, record.legacyIssues.keys());
+  return references;
+}
+
+function appendReferences(references, additions) {
+  const seen = new Set(references);
+  for (const number of additions) {
+    if (!seen.has(number)) {
+      references.push(number);
+      seen.add(number);
+    }
+  }
+}
+
+function sourceCommits(base, target) {
+  const mergeBase = git(["merge-base", base, target]);
+  const targetTimestamp = Date.parse(git(["show", "-s", "--format=%cI", `${target}^{commit}`]));
+  if (!Number.isFinite(targetTimestamp)) {
+    fail(`could not resolve timestamp for release target ${target}`);
+  }
+  const output = git([
+    "log",
+    "--first-parent",
+    "--reverse",
+    "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%B%x1e",
+    `${mergeBase}..${target}`,
+  ]);
+  const commits = new Map();
+  const revertsByTarget = new Map();
+  for (const record of output.split("\x1e")) {
+    if (!record) {
+      continue;
+    }
+    const [rawHash, subject, authorName, authorEmail, ...bodyParts] = record.split("\x1f");
+    const hash = rawHash.trim();
+    const body = bodyParts.join("\x1f");
+    const revertedHash = standardRevertedHash(body);
+    const isRevert = Boolean(revertedHash) || subject.startsWith('Revert "');
+    commits.set(hash, {
+      authorEmail,
+      authorName,
+      body,
+      hash,
+      isRevert,
+      revertedHash,
+      subject,
+    });
+  }
+  for (const commit of commits.values()) {
+    if (!commit.revertedHash) {
+      continue;
+    }
+    const targetHash = [...commits.keys()].find((candidate) =>
+      candidate.startsWith(commit.revertedHash),
+    );
+    if (targetHash) {
+      const reverts = revertsByTarget.get(targetHash) ?? [];
+      reverts.push(commit.hash);
+      revertsByTarget.set(targetHash, reverts);
+    }
+  }
+  const active = new Map();
+  function isActive(hash) {
+    if (active.has(hash)) {
+      return active.get(hash);
+    }
+    const cancellingReverts = revertsByTarget.get(hash) ?? [];
+    const value = !cancellingReverts.some((revertHash) => isActive(revertHash));
+    active.set(hash, value);
+    return value;
+  }
+  const revertedCommitStates = new Map();
+  function revertedCommitState(ref, seen = new Set()) {
+    let hash;
+    try {
+      hash = git(["rev-parse", `${ref}^{commit}`]);
+    } catch {
+      return undefined;
+    }
+    const cached = revertedCommitStates.get(hash);
+    if (cached) {
+      return cached;
+    }
+    if (seen.has(hash)) {
+      fail(`cyclic revert history at ${hash}`);
+    }
+    seen.add(hash);
+    const output = git(["show", "-s", "--format=%s%x1f%B", hash]);
+    const [subject, ...bodyParts] = output.split("\x1f");
+    const body = bodyParts.join("\x1f");
+    const message = `${subject}\n${body}`;
+    const revertedHash = standardRevertedHash(body);
+    const targetState = revertedHash ? revertedCommitState(revertedHash, seen) : undefined;
+    const state = targetState
+      ? { ...targetState, depth: targetState.depth + 1 }
+      : { depth: 0, hash, references: referencesIn(message) };
+    revertedCommitStates.set(hash, state);
+    return state;
+  }
+
+  const references = [];
+  const revertedReferences = new Set();
+  const revertedCommitHashes = new Set();
+  const coauthorsByReference = new Map();
+  const activeCommits = [];
+  for (const commit of commits.values()) {
+    if (commit.isRevert && isActive(commit.hash)) {
+      const coauthorEmails = [...commit.body.matchAll(/^Co-authored-by:\s*.+?<([^>\s]+)>$/gim)].map(
+        (match) => match[1],
+      );
+      activeCommits.push({
+        authorEmail: commit.authorEmail,
+        authorHandle: githubHandleFromNoreply(commit.authorEmail),
+        authorName: commit.authorName,
+        body: commit.body,
+        closingReferences: [],
+        coauthors: coauthorEmails.map(githubHandleFromNoreply).filter(isEligibleHandle),
+        coauthorEmails,
+        hash: commit.hash,
+        isRevert: true,
+        pullRequests: [],
+        references: [],
+        subject: commit.subject,
+      });
+      continue;
+    }
+    if (commit.isRevert) {
+      continue;
+    }
+    const uniqueReferences = [...new Set(referencesIn(`${commit.subject}\n${commit.body}`))];
+    if (!isActive(commit.hash)) {
+      revertedCommitHashes.add(commit.hash);
+      for (const number of uniqueReferences) {
+        revertedReferences.add(number);
+      }
+      continue;
+    }
+    const coauthorEmails = [...commit.body.matchAll(/^Co-authored-by:\s*.+?<([^>\s]+)>$/gim)].map(
+      (match) => match[1],
+    );
+    const coauthors = coauthorEmails.map(githubHandleFromNoreply).filter(isEligibleHandle);
+    activeCommits.push({
+      authorEmail: commit.authorEmail,
+      authorHandle: githubHandleFromNoreply(commit.authorEmail),
+      authorName: commit.authorName,
+      body: commit.body,
+      closingReferences: closingReferencesIn(`${commit.subject}\n${commit.body}`),
+      coauthors,
+      coauthorEmails,
+      hash: commit.hash,
+      isRevert: false,
+      pullRequests: [],
+      references: uniqueReferences,
+      subject: commit.subject,
+    });
+  }
+  for (const commit of commits.values()) {
+    if (!commit.isRevert || !commit.revertedHash || !isActive(commit.hash)) {
+      continue;
+    }
+    const targetInRange = [...commits.keys()].some((candidate) =>
+      candidate.startsWith(commit.revertedHash),
+    );
+    if (targetInRange) {
+      continue;
+    }
+    const revertedState = revertedCommitState(commit.revertedHash);
+    if (!revertedState) {
+      continue;
+    }
+    if (revertedState.depth % 2 !== 0) {
+      continue;
+    }
+    revertedCommitHashes.add(revertedState.hash);
+    for (const number of revertedState.references) {
+      revertedReferences.add(number);
+    }
+  }
+  const activePullRequests = resolveAssociatedPullRequests(
+    activeCommits.map((commit) => commit.hash),
+    targetTimestamp,
+  );
+  const resolvedCoauthors = resolveCommitCoauthors(activeCommits);
+  const pullRequests = new Set();
+  const nonRevertPullRequests = new Set();
+  for (const commit of activeCommits) {
+    const associatedPullRequests = activePullRequests.get(commit.hash) ?? [];
+    commit.pullRequests = associatedPullRequests;
+    addHandles(commit.coauthors, resolvedCoauthors.get(commit.hash) ?? []);
+    appendReferences(commit.references, associatedPullRequests);
+    for (const number of associatedPullRequests) {
+      pullRequests.add(number);
+      if (!commit.isRevert) {
+        nonRevertPullRequests.add(number);
+      }
+    }
+    appendReferences(references, commit.references);
+    if (commit.coauthors.length === 0) {
+      continue;
+    }
+    for (const number of commit.references) {
+      const handles = coauthorsByReference.get(number) ?? new Set();
+      for (const handle of commit.coauthors) {
+        handles.add(handle);
+      }
+      coauthorsByReference.set(number, handles);
+    }
+  }
+  const revertedPullRequests = new Set();
+  for (const pullRequests of resolveAssociatedPullRequests(
+    [...revertedCommitHashes],
+    targetTimestamp,
+  ).values()) {
+    for (const number of pullRequests) {
+      revertedPullRequests.add(number);
+    }
+  }
+  // A later active implementation supersedes an earlier reverted fix, including
+  // direct commits that cite the same issue without having a recoverable PR.
+  for (const commit of activeCommits) {
+    if (commit.isRevert) {
+      continue;
+    }
+    for (const number of commit.references) {
+      revertedReferences.delete(number);
+    }
+  }
+  // A PR can span several commits. A reverted commit does not erase the PR while
+  // another non-revert commit from it remains active in this release range.
+  for (const number of revertedPullRequests) {
+    if (!nonRevertPullRequests.has(number)) {
+      pullRequests.delete(number);
+      revertedReferences.add(number);
+    }
+  }
+  for (const number of pullRequests) {
+    revertedReferences.delete(number);
+  }
+
+  return {
+    activeCommits,
+    coauthorsByReference,
+    mergeBase,
+    pullRequests,
+    references,
+    revertedReferences,
+    targetTimestamp,
+  };
+}
+
+function graphql(query) {
+  let lastError;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const response = githubApi(["graphql", "-f", `query=${query}`]);
+      if (response?.data && typeof response.data === "object") {
+        return response.data;
+      }
+      const errors = Array.isArray(response?.errors)
+        ? response.errors.map((error) => error?.message).filter(Boolean)
+        : [];
+      const detail = [...errors, response?.message].filter(Boolean).join("\n");
+      throw new Error(
+        detail
+          ? `GitHub GraphQL response did not include data:\n${detail}`
+          : "GitHub GraphQL response did not include data.",
+      );
+    } catch (error) {
+      lastError = error;
+      const message = [error?.message, error?.stdout, error?.stderr].filter(Boolean).join("\n");
+      // Historical ranges batch hundreds of objects; only retry transient transport failures.
+      if (
+        !/(?:operation timed out|ECONNRESET|ETIMEDOUT|EAI_AGAIN|TLS handshake timeout|stream error: .*CANCEL|unexpected end of JSON input|upstream connect error|connection termination|connection reset by peer|error connecting to api\.github\.com|Unexpected token '<'|something went wrong|temporarily unavailable|internal server error|rate limit)/i.test(
+          message,
+        )
+      ) {
+        throw error;
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500 * 2 ** attempt);
+    }
+  }
+  throw lastError;
+}
+
+function resolveAssociatedPullRequests(commitHashes, targetTimestamp) {
+  const pullRequestsByCommit = new Map();
+  const pending = [];
+  function appendPullRequests(commitHash, connection) {
+    const pullRequests = pullRequestsByCommit.get(commitHash) ?? [];
+    const seen = new Set(pullRequests);
+    for (const pullRequest of connection?.nodes ?? []) {
+      if (
+        pullRequest.mergedAt &&
+        mergedByTarget(pullRequest.mergedAt, targetTimestamp) &&
+        !seen.has(pullRequest.number)
+      ) {
+        pullRequests.push(pullRequest.number);
+        seen.add(pullRequest.number);
+      }
+    }
+    pullRequestsByCommit.set(commitHash, pullRequests);
+    if (connection?.pageInfo?.hasNextPage) {
+      pending.push({ commitHash, cursor: connection.pageInfo.endCursor });
+    }
+  }
+  for (let index = 0; index < commitHashes.length; index += commitAssociationQueryBatchSize) {
+    const chunk = commitHashes.slice(index, index + commitAssociationQueryBatchSize);
+    const fields = chunk
+      .map(
+        (hash, offset) =>
+          `c${index + offset}: repository(owner: "openclaw", name: "openclaw") {
+            object(expression: ${JSON.stringify(hash)}) {
+              ... on Commit {
+                associatedPullRequests(first: 100) {
+                  nodes {
+                    number
+                    mergedAt
+                  }
+                  pageInfo { hasNextPage endCursor }
+                }
+              }
+            }
+          }`,
+      )
+      .join("\n");
+    const data = graphql(`query { ${fields} }`);
+    for (let offset = 0; offset < chunk.length; offset += 1) {
+      appendPullRequests(chunk[offset], data[`c${index + offset}`]?.object?.associatedPullRequests);
+    }
+  }
+  while (pending.length > 0) {
+    const chunk = pending.splice(0, 20);
+    const fields = chunk
+      .map(
+        (item, offset) =>
+          `c${offset}: repository(owner: "openclaw", name: "openclaw") {
+            object(expression: ${JSON.stringify(item.commitHash)}) {
+              ... on Commit {
+                associatedPullRequests(first: 100, after: ${JSON.stringify(item.cursor)}) {
+                  nodes {
+                    number
+                    mergedAt
+                  }
+                  pageInfo { hasNextPage endCursor }
+                }
+              }
+            }
+          }`,
+      )
+      .join("\n");
+    const data = graphql(`query { ${fields} }`);
+    for (let offset = 0; offset < chunk.length; offset += 1) {
+      appendPullRequests(
+        chunk[offset].commitHash,
+        data[`c${offset}`]?.object?.associatedPullRequests,
+      );
+    }
+  }
+  return pullRequestsByCommit;
+}
+
+function issueConnectionName(node) {
+  if (node.__typename === "Issue") {
+    return "closedByPullRequestsReferences";
+  }
+  if (node.__typename === "PullRequest") {
+    return "closingIssuesReferences";
+  }
+  return undefined;
+}
+
+function resolveIssueRelationshipPages(nodes) {
+  const pending = [];
+  for (const [number, node] of nodes) {
+    const connectionName = issueConnectionName(node);
+    const pageInfo = connectionName ? node[connectionName]?.pageInfo : undefined;
+    if (pageInfo?.hasNextPage) {
+      pending.push({ connectionName, cursor: pageInfo.endCursor, number, type: node.__typename });
+    }
+  }
+  while (pending.length > 0) {
+    const chunk = pending.splice(0, 20);
+    const fields = chunk
+      .map((item, offset) => {
+        const connection = `${item.connectionName}(first: 100, after: ${JSON.stringify(item.cursor)}) {
+          nodes { number }
+          pageInfo { hasNextPage endCursor }
+        }`;
+        return `n${offset}: repository(owner: "openclaw", name: "openclaw") {
+          issueOrPullRequest(number: ${item.number}) {
+            ... on ${item.type} {
+              ${connection}
+            }
+          }
+        }`;
+      })
+      .join("\n");
+    const data = graphql(`query { ${fields} }`);
+    for (let offset = 0; offset < chunk.length; offset += 1) {
+      const item = chunk[offset];
+      const node = nodes.get(item.number);
+      const connection = data[`n${offset}`]?.issueOrPullRequest?.[item.connectionName];
+      if (!node || !connection) {
+        continue;
+      }
+      node[item.connectionName] = {
+        nodes: [...(node[item.connectionName]?.nodes ?? []), ...connection.nodes],
+        pageInfo: connection.pageInfo,
+      };
+      if (connection.pageInfo.hasNextPage) {
+        pending.push({
+          connectionName: item.connectionName,
+          cursor: connection.pageInfo.endCursor,
+          number: item.number,
+          type: item.type,
+        });
+      }
+    }
+  }
+  return nodes;
+}
+
+function resolveReferences(numbers) {
+  const nodes = new Map();
+  for (let index = 0; index < numbers.length; index += 40) {
+    const chunk = numbers.slice(index, index + 40);
+    const fields = chunk
+      .map(
+        (number) => `n${number}: repository(owner: "openclaw", name: "openclaw") {
+          issueOrPullRequest(number: ${number}) {
+            __typename
+            ... on Issue {
+              number
+              title
+              author { __typename login }
+              closedByPullRequestsReferences(first: 100) {
+                nodes { number }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+            ... on PullRequest {
+              number
+              title
+              mergedAt
+              author { __typename login }
+              closingIssuesReferences(first: 100) {
+                nodes { number }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+          }
+        }`,
+      )
+      .join("\n");
+    const data = graphql(`query { ${fields} }`);
+    for (const number of chunk) {
+      const node = data[`n${number}`]?.issueOrPullRequest;
+      if (node) {
+        nodes.set(number, node);
+      }
+    }
+  }
+  return resolveIssueRelationshipPages(nodes);
+}
+
+function resolveGitHubHandles(handles) {
+  const resolved = new Map();
+  const uniqueHandles = [...new Set(handles)];
+  for (let index = 0; index < uniqueHandles.length; index += 80) {
+    const chunk = uniqueHandles.slice(index, index + 80);
+    const fields = chunk
+      .map(
+        (handle, offset) =>
+          `u${index + offset}: user(login: ${JSON.stringify(handle)}) { __typename login }`,
+      )
+      .join("\n");
+    const data = graphql(`query { ${fields} }`);
+    for (let offset = 0; offset < chunk.length; offset += 1) {
+      const user = data[`u${index + offset}`];
+      if (user?.__typename === "User" && isEligibleHandle(user.login)) {
+        resolved.set(chunk[offset].toLowerCase(), user.login);
+      }
+    }
+  }
+  return resolved;
+}
+
+function resolveDirectCommitAuthors(commits) {
+  const resolved = new Map();
+  const commitsWithoutGitHubHandle = commits.filter((commit) => !commit.author?.handle);
+  for (let index = 0; index < commitsWithoutGitHubHandle.length; index += 40) {
+    const chunk = commitsWithoutGitHubHandle.slice(index, index + 40);
+    const fields = chunk
+      .map(
+        (commit, offset) =>
+          `c${index + offset}: repository(owner: "openclaw", name: "openclaw") {
+            object(expression: ${JSON.stringify(commit.hash)}) {
+              ... on Commit {
+                author {
+                  user {
+                    login
+                  }
+                }
+              }
+            }
+          }`,
+      )
+      .join("\n");
+    const data = graphql(`query { ${fields} }`);
+    for (let offset = 0; offset < chunk.length; offset += 1) {
+      const author = data[`c${index + offset}`]?.object?.author?.user;
+      if (author?.login && isEligibleHandle(author.login)) {
+        resolved.set(chunk[offset].hash, author.login);
+      }
+    }
+  }
+  return resolved;
+}
+
+function resolveCommitCoauthors(commits) {
+  const resolved = new Map();
+  const commitsWithCoauthors = commits.filter((commit) => commit.coauthorEmails.length > 0);
+  for (let index = 0; index < commitsWithCoauthors.length; index += 40) {
+    const chunk = commitsWithCoauthors.slice(index, index + 40);
+    const fields = chunk
+      .map(
+        (commit, offset) =>
+          `c${index + offset}: repository(owner: "openclaw", name: "openclaw") {
+            object(expression: ${JSON.stringify(commit.hash)}) {
+              ... on Commit {
+                authors(first: 20) {
+                  nodes {
+                    email
+                    user { login }
+                  }
+                }
+              }
+            }
+          }`,
+      )
+      .join("\n");
+    const data = graphql(`query { ${fields} }`);
+    for (let offset = 0; offset < chunk.length; offset += 1) {
+      const coauthorEmails = new Set(
+        chunk[offset].coauthorEmails.map((email) => email.toLowerCase()),
+      );
+      const handles =
+        data[`c${index + offset}`]?.object?.authors?.nodes
+          .filter((author) => coauthorEmails.has(author.email?.toLowerCase()))
+          .map((author) => author.user?.login)
+          .filter(isEligibleHandle) ?? [];
+      resolved.set(chunk[offset].hash, handles);
+    }
+  }
+  return resolved;
+}
+
+function withDirectCommitAuthors(commits, resolvedAuthors) {
+  return commits.map((commit) => {
+    const authorHandle = resolvedAuthors.get(commit.hash) ?? commit.author?.handle;
+    const contributors = [];
+    if (authorHandle) {
+      contributors.push(authorHandle);
+    }
+    addHandles(contributors, commit.contributors);
+    return {
+      ...commit,
+      author: {
+        handle: authorHandle,
+        name: commit.author?.name ?? commit.authorName,
+      },
+      contributors,
+    };
+  });
+}
+
+function thanksFor(node, coauthorHandles) {
+  const handles = [];
+  if (node.author?.__typename === "User" && isEligibleHandle(node.author.login)) {
+    handles.push(node.author.login);
+  }
+  for (const handle of coauthorHandles) {
+    if (!handles.some((candidate) => candidate.toLowerCase() === handle.toLowerCase())) {
+      handles.push(handle);
+    }
+  }
+  return handles;
+}
+
+function addHandles(handles, additions) {
+  for (const handle of additions) {
+    if (!isEligibleHandle(handle)) {
+      continue;
+    }
+    if (!handles.some((candidate) => candidate.toLowerCase() === handle.toLowerCase())) {
+      handles.push(handle);
+    }
+  }
+  return handles;
+}
+
+function titleReferences(entries) {
+  return [...new Set(entries.flatMap((entry) => referencesIn(entry.title)))];
+}
+
+function releaseTitle(title) {
+  return title;
+}
+
+function withSentenceEnding(value) {
+  return /[.!?]$/.test(value) ? value : `${value}.`;
+}
+
+function formatThanks(handles) {
+  const mentions = handles.map((handle) => `@${handle}`);
+  if (mentions.length <= 1) {
+    return mentions[0] ?? "";
+  }
+  if (mentions.length === 2) {
+    return mentions.join(" and ");
+  }
+  return `${mentions.slice(0, -1).join(", ")}, and ${mentions.at(-1)}`;
+}
+
+function directCommitTitleTokens(subject) {
+  const title = subject.replace(/^\s*[a-z]+(?:\([^)]*\))?!?:\s*/i, "");
+  return [...new Set(title.toLowerCase().match(/[a-z0-9][a-z0-9-]{3,}/g) ?? [])].filter(
+    (token) => !genericDirectCommitTerms.has(token),
+  );
+}
+
+function lineHasTerm(line, term) {
+  return new RegExp(`\\b${escapeRegExp(term)}\\b`, "i").test(line);
+}
+
+function directCommitMatchesLine(commit, line) {
+  if (!line.startsWith("- ")) {
+    return false;
+  }
+  if (commit.closingReferences.some((number) => referencesIn(line).includes(number))) {
+    return true;
+  }
+  const matchingTerms = directCommitTitleTokens(commit.subject).filter((token) =>
+    lineHasTerm(line, token),
+  );
+  return matchingTerms.length >= 2;
+}
+
+function directCommitCreditsForLine(line, directCommits) {
+  const contributors = [];
+  for (const commit of directCommits) {
+    if (
+      !editorialClassification(commit.subject).editorialEligible ||
+      !directCommitMatchesLine(commit, line)
+    ) {
+      continue;
+    }
+    addHandles(contributors, commit.contributors);
+  }
+  return contributors;
+}
+
+function completeEditorialCredits(prose, pullRequests, directCommits) {
+  const pullRequestsByNumber = new Map(
+    pullRequests.map((pullRequest) => [pullRequest.number, pullRequest]),
+  );
+  return prose
+    .split("\n")
+    .map((line) => {
+      if (!line.startsWith("- ")) {
+        return line;
+      }
+      const contributors = [];
+      for (const number of referencesIn(line)) {
+        addHandles(contributors, pullRequestsByNumber.get(number)?.thanks ?? []);
+      }
+      addHandles(contributors, directCommitCreditsForLine(line, directCommits));
+      if (contributors.length === 0) {
+        return line;
+      }
+      const existingContributors = handlesIn(line);
+      addHandles(existingContributors, contributors);
+      const thanksStart = line.lastIndexOf(" Thanks ");
+      const rawContent = thanksStart >= 0 ? line.slice(0, thanksStart) : line;
+      const content =
+        referencesIn(rawContent).length === 0
+          ? withSentenceEnding(rawContent)
+          : rawContent.replace(/[.!?]$/, "");
+      return `${content} Thanks ${formatThanks(existingContributors)}.`;
+    })
+    .join("\n");
+}
+
+function issueEntries(numbers, nodes, priorIssues = new Map()) {
+  return [...new Set(numbers)]
+    .map((number) => {
+      const node = nodes.get(number);
+      if (node?.__typename !== "Issue") {
+        return undefined;
+      }
+      const thanks = thanksFor(node, []);
+      addHandles(thanks, priorIssues.get(number)?.thanks ?? []);
+      return {
+        number,
+        thanks,
+        title: node.title.replace(/\s+/g, " ").trim(),
+      };
+    })
+    .filter(Boolean);
+}
+
+function legacyIssuesByPullRequest(priorRecord, nodes) {
+  const result = new Map();
+  for (const number of priorRecord.legacyIssues.keys()) {
+    const issue = nodes.get(number);
+    if (issue?.__typename !== "Issue") {
+      continue;
+    }
+    const pullRequests =
+      issue.closedByPullRequestsReferences?.nodes.map((pullRequest) => pullRequest.number) ?? [];
+    for (const pullRequest of new Set(pullRequests)) {
+      const issues = result.get(pullRequest) ?? [];
+      issues.push(number);
+      result.set(pullRequest, issues);
+    }
+  }
+  return result;
+}
+
+function contributionRelationships(source, nodes, resolvedContributors) {
+  const issuesByPullRequest = new Map();
+  const directCommits = [];
+  for (const commit of source.activeCommits) {
+    const pullRequests = commit.pullRequests;
+    const issues = issueEntries(commit.closingReferences, nodes);
+    if (pullRequests.length === 0) {
+      const authorHandle = commit.authorHandle
+        ? resolvedContributors.get(commit.authorHandle.toLowerCase())
+        : undefined;
+      const contributors = [];
+      if (authorHandle) {
+        contributors.push(authorHandle);
+      }
+      addHandles(
+        contributors,
+        commit.coauthors
+          .map((handle) => resolvedContributors.get(handle.toLowerCase()))
+          .filter(Boolean),
+      );
+      directCommits.push({
+        ...commit,
+        author: { handle: authorHandle, name: commit.authorName },
+        contributors,
+        issues,
+      });
+      continue;
+    }
+    if (issues.length === 0) {
+      continue;
+    }
+    for (const number of pullRequests) {
+      const existing = issuesByPullRequest.get(number) ?? [];
+      issuesByPullRequest.set(number, [...existing, ...issues]);
+    }
+  }
+  return { directCommits, issuesByPullRequest };
+}
+
+function mergeIssues(...groups) {
+  const entries = new Map();
+  for (const group of groups) {
+    for (const issue of group) {
+      const existing = entries.get(issue.number);
+      if (existing) {
+        addHandles(existing.thanks, issue.thanks);
+      } else {
+        entries.set(issue.number, { ...issue, thanks: [...issue.thanks] });
+      }
+    }
+  }
+  return [...entries.values()];
+}
+
+function ledgerFor(
+  base,
+  target,
+  references,
+  nodes,
+  coauthorsByReference,
+  resolvedHandles,
+  relationships,
+  priorRecord,
+  sourcePullRequests,
+  sourceReferences,
+  noteReferences,
+  legacyIssuePullRequests,
+  revertedReferences,
+  targetTimestamp,
+) {
+  const entries = references.map((number) => {
+    const node = nodes.get(number);
+    const rawCoauthors = coauthorsByReference.get(number) ?? new Set();
+    const coauthors = [...rawCoauthors]
+      .map((handle) => resolvedHandles.get(handle.toLowerCase()))
+      .filter(Boolean);
+    return {
+      number,
+      title: releaseTitle(node.title.replace(/\s+/g, " ").trim()),
+      type: node.__typename,
+      mergedAt: node.mergedAt,
+      closingIssuesReferences: node.closingIssuesReferences,
+      thanks: thanksFor(node, coauthors),
+    };
+  });
+
+  const recordedPullRequests = new Set([
+    ...sourcePullRequests,
+    ...sourceReferences,
+    ...noteReferences,
+    ...legacyIssuePullRequests,
+    ...priorRecord.pullRequests.keys(),
+  ]);
+  const pullRequests = entries.filter(
+    (entry) =>
+      entry.type === "PullRequest" &&
+      entry.mergedAt &&
+      mergedByTarget(entry.mergedAt, targetTimestamp) &&
+      recordedPullRequests.has(entry.number) &&
+      !revertedReferences.has(entry.number),
+  );
+  const issues = entries.filter((entry) => entry.type === "Issue");
+  const legacyIssues = legacyIssuesByPullRequest(priorRecord, nodes);
+  const records = pullRequests.map((entry) => {
+    const titleIssues = issueEntries(referencesIn(entry.title), nodes);
+    const closingIssues = issueEntries(
+      entry.closingIssuesReferences?.nodes.map((issue) => issue.number) ?? [],
+      nodes,
+    );
+    const linkedIssues = mergeIssues(
+      titleIssues,
+      closingIssues,
+      relationships.issuesByPullRequest.get(entry.number) ?? [],
+      issueEntries(legacyIssues.get(entry.number) ?? [], nodes, priorRecord.legacyIssues),
+    );
+    const titleIssueNumbers = new Set(titleIssues.map((issue) => issue.number));
+    const relatedIssues = linkedIssues.filter((issue) => !titleIssueNumbers.has(issue.number));
+    const thanks = [...entry.thanks];
+    for (const issue of linkedIssues) {
+      addHandles(thanks, issue.thanks);
+    }
+    return {
+      ...entry,
+      ...editorialClassification(entry.title),
+      linkedIssues,
+      relatedIssues,
+      thanks,
+    };
+  });
+  const renderEntry = (entry) => {
+    const attribution =
+      entry.thanks.length > 0
+        ? ` Thanks ${entry.thanks.map((handle) => `@${handle}`).join(" and ")}.`
+        : "";
+    const relatedIssues =
+      entry.relatedIssues.length > 0
+        ? ` Related ${entry.relatedIssues.map((issue) => `#${issue.number}`).join(", ")}.`
+        : "";
+    return `- **PR #${entry.number}** ${withSentenceEnding(entry.title)}${relatedIssues}${attribution}`;
+  };
+  const ledger = [
+    "### Complete contribution record",
+    "",
+    `This audited record covers the complete ${base}..${target} history: ${records.length} merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
+    "",
+    "#### Pull requests",
+    "",
+    ...records.map((entry) => renderEntry(entry)),
+  ].join("\n");
+  return {
+    entries,
+    issues,
+    ledger,
+    pullRequests: records,
+    titleReferences: titleReferences(records),
+  };
+}
+
+function replaceLedger(changelog, section, ledger, pullRequests, directCommits) {
+  const beforeLedger = completeEditorialCredits(
+    section.source.replace(/\n+### Complete contribution (?:ledger|record)[\s\S]*$/m, "").trimEnd(),
+    pullRequests,
+    directCommits,
+  );
+  const replacement = `${beforeLedger}\n\n${ledger}\n`;
+  return `${changelog.slice(0, section.start)}${replacement}${changelog.slice(section.end)}`;
+}
+
+function ledgerChecks(section, pullRequests, nodes, directCommits) {
+  const errors = [];
+  if (/@undefined\b/i.test(section.source)) {
+    errors.push("release section contains invalid @undefined contributor credit");
+  }
+  if (!section.source.includes("### Highlights")) {
+    errors.push("missing ### Highlights");
+  }
+  if (!section.source.includes("### Changes")) {
+    errors.push("missing ### Changes");
+  }
+  if (!section.source.includes("### Fixes")) {
+    errors.push("missing ### Fixes");
+  }
+  const ledgerStart = section.source.indexOf("### Complete contribution record");
+  if (ledgerStart < 0) {
+    errors.push("missing ### Complete contribution record");
+    return errors;
+  }
+  const ledger = section.source.slice(ledgerStart);
+  if (ledger.includes("#### Linked issues")) {
+    errors.push("complete contribution record must not have a linked-issues inventory");
+  }
+  if (ledger.includes("#### Direct commits")) {
+    errors.push("complete contribution record must not list direct commits");
+  }
+  for (const number of new Set(referencesIn(section.source))) {
+    if (!nodes.has(number)) {
+      errors.push(`unresolved release-note reference #${number}`);
+    }
+  }
+  for (const entry of pullRequests) {
+    const line = ledger
+      .split("\n")
+      .find((candidate) => candidate.startsWith(`- **PR #${entry.number}**`));
+    if (!line) {
+      errors.push(`missing contribution record for PR #${entry.number}`);
+      continue;
+    }
+    for (const handle of entry.thanks) {
+      if (!line.toLowerCase().includes(`@${handle.toLowerCase()}`)) {
+        errors.push(`missing Thanks @${handle} for #${entry.number}`);
+      }
+    }
+  }
+  const editorialProse = section.source.slice(0, ledgerStart);
+  for (const entry of pullRequests) {
+    if (
+      !entry.editorialEligible &&
+      new RegExp(`(?<![A-Za-z0-9_./-])#${entry.number}\\b`).test(editorialProse)
+    ) {
+      errors.push(
+        `editorial release prose references non-editorial ${entry.type} PR #${entry.number} (${entry.type})`,
+      );
+    }
+  }
+  const editorialLines = editorialProse.split("\n");
+  for (const entry of pullRequests) {
+    for (const line of editorialLines) {
+      if (
+        !new RegExp(`(?<![A-Za-z0-9_./-])#${entry.number}\\b`).test(line) ||
+        !line.startsWith("- ")
+      ) {
+        continue;
+      }
+      for (const handle of entry.thanks) {
+        if (!line.toLowerCase().includes(`@${handle.toLowerCase()}`)) {
+          errors.push(`missing editorial Thanks @${handle} for PR #${entry.number}`);
+        }
+      }
+    }
+  }
+  for (const line of editorialLines) {
+    if (!line.startsWith("- ")) {
+      continue;
+    }
+    for (const handle of directCommitCreditsForLine(line, directCommits)) {
+      if (!line.toLowerCase().includes(`@${handle.toLowerCase()}`)) {
+        errors.push(`missing editorial Thanks @${handle} for directly landed work`);
+      }
+    }
+  }
+  const lines = section.source.split("\n");
+  for (const number of new Set(referencesIn(section.source))) {
+    const node = nodes.get(number);
+    if (node?.__typename !== "Issue") {
+      continue;
+    }
+    for (const handle of thanksFor(node, [])) {
+      const credited = lines.some(
+        (line) =>
+          line.includes(`#${number}`) && line.toLowerCase().includes(`@${handle.toLowerCase()}`),
+      );
+      if (!credited) {
+        errors.push(`missing Thanks @${handle} for issue #${number}`);
+      }
+    }
+  }
+  return errors;
+}
+
+function manifestFor(options, source, ledger, directCommitRecords) {
+  const directCommits = directCommitRecords.map((commit) => ({
+    ...editorialClassification(commit.subject),
+    commit: commit.hash.slice(0, 12),
+    subject: commit.subject,
+    references: commit.references,
+    author: commit.author,
+    contributors: commit.contributors,
+    issues: commit.issues.map((issue) => ({
+      number: issue.number,
+      title: issue.title,
+      reporter: issue.thanks,
+    })),
+  }));
+  const unlinkedCommits = directCommits.filter((commit) => commit.references.length === 0);
+  return {
+    schemaVersion: 2,
+    base: options.base,
+    target: options.target,
+    mergeBase: source.mergeBase,
+    version: options.version,
+    source: {
+      references: ledger.entries.length,
+      pullRequests: ledger.pullRequests.length,
+      issues: ledger.issues.length,
+      directCommits: directCommits.length,
+      unlinkedCommits: unlinkedCommits.length,
+    },
+    pullRequests: ledger.pullRequests.map((entry) => ({
+      number: entry.number,
+      title: entry.title,
+      type: entry.type,
+      editorialEligible: entry.editorialEligible,
+      thanks: entry.thanks,
+      linkedIssues: entry.linkedIssues.map((issue) => ({
+        number: issue.number,
+        title: issue.title,
+        reporter: issue.thanks,
+      })),
+    })),
+    directCommits,
+    unlinkedCommits,
+  };
+}
+
+function releaseChecks(section, releaseTags) {
+  const expected = section.source;
+  const checks = [];
+  for (const tag of releaseTags) {
+    const release = githubApi([`repos/${repo}/releases/tags/${encodeURIComponent(tag)}`]);
+    const suffix = release.body.slice(expected.length).trimStart();
+    const matches =
+      release.body === expected ||
+      (release.body.startsWith(expected) &&
+        (suffix === "" || suffix.startsWith("### Release verification")));
+    checks.push({
+      tag,
+      releaseId: release.id,
+      matches,
+      bodyLength: release.body.length,
+    });
+  }
+  return checks;
+}
+
+function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    printUsage();
+    return;
+  }
+  let changelog = readFileSync("CHANGELOG.md", "utf8");
+  let section = sectionFor(changelog, options.version);
+  const source = sourceCommits(options.base, options.target);
+  const preexistingNotes = section.source.replace(
+    /\n+### Complete contribution (?:ledger|record)[\s\S]*$/m,
+    "",
+  );
+  const noteReferences = referencesIn(preexistingNotes);
+  const revertedNoteReferences = noteReferences.filter((number) =>
+    source.revertedReferences.has(number),
+  );
+  if (revertedNoteReferences.length > 0) {
+    fail(
+      `release notes reference reverted work: ${[...new Set(revertedNoteReferences)]
+        .map((number) => `#${number}`)
+        .join(", ")}`,
+    );
+  }
+  const references = [...source.references];
+  appendReferences(references, noteReferences);
+  let nodes = resolveReferences(references);
+  const renderedRecord = contributionRecordFor(section);
+  const renderedRecordReferences = contributionRecordMetadataReferences(renderedRecord);
+  const revertedRenderedReferences = renderedRecordReferences.filter((number) =>
+    source.revertedReferences.has(number),
+  );
+  if (!options.writeLedger && revertedRenderedReferences.length > 0) {
+    fail(
+      `contribution record references reverted work: ${[...new Set(revertedRenderedReferences)]
+        .map((number) => `#${number}`)
+        .join(", ")}`,
+    );
+  }
+  let priorRecord = withoutRevertedContributionRecords(renderedRecord, source.revertedReferences);
+  if (options.seedRef) {
+    const seedChangelog = git(["show", `${options.seedRef}:CHANGELOG.md`]);
+    const seedSection = sectionFor(seedChangelog, options.version);
+    priorRecord = mergeContributionRecords(priorRecord, contributionRecordFor(seedSection));
+  }
+  priorRecord = withoutRevertedContributionRecords(priorRecord, source.revertedReferences);
+  const recordedReferences = contributionRecordMetadataReferences(priorRecord);
+  const revertedRecordedReferences = recordedReferences.filter((number) =>
+    source.revertedReferences.has(number),
+  );
+  if (revertedRecordedReferences.length > 0) {
+    fail(
+      `contribution record references reverted work: ${[...new Set(revertedRecordedReferences)]
+        .map((number) => `#${number}`)
+        .join(", ")}`,
+    );
+  }
+  appendReferences(references, recordedReferences);
+  nodes = resolveReferences(references);
+  const legacyIssuePullRequests = [...legacyIssuesByPullRequest(priorRecord, nodes).keys()];
+  appendReferences(references, legacyIssuePullRequests);
+  nodes = resolveReferences(references);
+  const unresolvedSourceReferences = references.filter((number) => !nodes.has(number));
+  if (unresolvedSourceReferences.length > 0) {
+    fail(
+      `GitHub could not resolve source references: ${unresolvedSourceReferences
+        .map((number) => `#${number}`)
+        .join(", ")}`,
+    );
+  }
+  const provisionalEntries = references
+    .map((number) => nodes.get(number))
+    .filter((node) => node?.__typename === "PullRequest");
+  const titleReferenceNumbers = titleReferences(provisionalEntries);
+  const closingIssueNumbers = provisionalEntries.flatMap(
+    (entry) => entry.closingIssuesReferences?.nodes.map((issue) => issue.number) ?? [],
+  );
+  const resolvedReferences = [...references];
+  appendReferences(resolvedReferences, titleReferenceNumbers);
+  appendReferences(resolvedReferences, closingIssueNumbers);
+  nodes = resolveReferences(resolvedReferences);
+  const invalidRecordedPullRequests = [...priorRecord.pullRequests.keys()].filter((number) => {
+    const node = nodes.get(number);
+    return (
+      node?.__typename !== "PullRequest" ||
+      !node.mergedAt ||
+      !mergedByTarget(node.mergedAt, source.targetTimestamp)
+    );
+  });
+  if (!options.writeLedger && invalidRecordedPullRequests.length > 0) {
+    fail(
+      `contribution record contains unresolved or unmerged PRs: ${invalidRecordedPullRequests
+        .map((number) => `#${number}`)
+        .join(", ")}`,
+    );
+  }
+  const unresolvedTitleReferences = titleReferenceNumbers.filter((number) => !nodes.has(number));
+  if (unresolvedTitleReferences.length > 0) {
+    fail(
+      `GitHub could not resolve PR-title references: ${unresolvedTitleReferences
+        .map((number) => `#${number}`)
+        .join(", ")}`,
+    );
+  }
+  const contributorHandles = [
+    ...source.activeCommits.flatMap((commit) => commit.coauthors),
+    ...source.activeCommits.map((commit) => commit.authorHandle).filter(Boolean),
+  ];
+  const resolvedHandles = resolveGitHubHandles(contributorHandles);
+  const relationships = contributionRelationships(source, nodes, resolvedHandles);
+  const unlinkedCommits = source.activeCommits.filter((commit) => commit.references.length === 0);
+  const resolvedCommitAuthors = resolveDirectCommitAuthors(relationships.directCommits);
+  relationships.directCommits = withDirectCommitAuthors(
+    relationships.directCommits,
+    resolvedCommitAuthors,
+  );
+  const ledger = ledgerFor(
+    options.base,
+    options.target,
+    references,
+    nodes,
+    source.coauthorsByReference,
+    resolvedHandles,
+    relationships,
+    priorRecord,
+    source.pullRequests,
+    source.references,
+    noteReferences,
+    legacyIssuePullRequests,
+    source.revertedReferences,
+    source.targetTimestamp,
+  );
+  const manifest = manifestFor(options, source, ledger, relationships.directCommits);
+
+  if (options.manifestPath) {
+    writeFileSync(options.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  }
+
+  if (options.writeLedger) {
+    changelog = replaceLedger(
+      changelog,
+      section,
+      ledger.ledger,
+      ledger.pullRequests,
+      relationships.directCommits,
+    );
+    writeFileSync("CHANGELOG.md", changelog);
+    section = sectionFor(changelog, options.version);
+  }
+
+  const errors = ledgerChecks(section, ledger.pullRequests, nodes, relationships.directCommits);
+  const github = options.checkGithub ? releaseChecks(section, options.releaseTags) : [];
+  for (const check of github) {
+    if (!check.matches) {
+      errors.push(
+        `GitHub release ${check.tag} does not match the ${options.version} CHANGELOG section`,
+      );
+    }
+  }
+
+  const result = {
+    base: options.base,
+    target: options.target,
+    mergeBase: source.mergeBase,
+    version: options.version,
+    source: {
+      references: references.length,
+      pullRequests: ledger.pullRequests.length,
+      issues: ledger.issues.length,
+      directCommits: manifest.directCommits.length,
+      unlinkedCommits: manifest.unlinkedCommits.length,
+    },
+    github,
+    errors,
+  };
+  if (options.json) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } else {
+    process.stdout.write(
+      `${options.version}: ${ledger.pullRequests.length} PRs, ${ledger.issues.length} issues, ${errors.length === 0 ? "verified" : `${errors.length} errors`}\n`,
+    );
+  }
+  if (errors.length > 0) {
+    process.exitCode = 1;
+  }
+}
+
+main();

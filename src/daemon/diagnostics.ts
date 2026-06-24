@@ -1,0 +1,61 @@
+/** Reads recent gateway service logs for actionable daemon restart diagnostics. */
+import fs from "node:fs/promises";
+import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+
+// Error patterns worth surfacing from gateway service logs after failed starts.
+const GATEWAY_LOG_ERROR_PATTERNS = [
+  /refusing to bind gateway/i,
+  /gateway auth mode/i,
+  /gateway start blocked/i,
+  /failed to bind gateway socket/i,
+  /tailscale .* requires/i,
+];
+
+async function readLastLogLine(filePath: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const lines = raw.split(/\r?\n/).map((line) => line.trim());
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (lines[i]) {
+        return lines[i];
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+export async function readLastGatewayErrorLine(
+  env: NodeJS.ProcessEnv,
+  options?: { platform?: NodeJS.Platform },
+): Promise<string | null> {
+  const platform = options?.platform ?? process.platform;
+  const readStderr = platform !== "darwin";
+  // launchd supervisor mode combines child stderr into stdout; other platforms
+  // keep stderr as the strongest failure signal.
+  const { stdoutPath, stderrPath } =
+    platform === "darwin"
+      ? resolveGatewaySupervisorLogPaths(env, { platform })
+      : resolveGatewayLogPaths(env);
+  const stderrRaw = readStderr ? await fs.readFile(stderrPath, "utf8").catch(() => "") : "";
+  const stdoutRaw = await fs.readFile(stdoutPath, "utf8").catch(() => "");
+  // stderr is the strongest failure signal on non-darwin platforms, so place it
+  // last and scan from the end: the most recent stderr error line then wins over
+  // any (possibly stale) stdout match, matching the stderr-first fallback below.
+  const lines = [...stdoutRaw.split(/\r?\n/), ...stderrRaw.split(/\r?\n/)].map((line) =>
+    line.trim(),
+  );
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (!line) {
+      continue;
+    }
+    if (GATEWAY_LOG_ERROR_PATTERNS.some((pattern) => pattern.test(line))) {
+      return line;
+    }
+  }
+  return readStderr
+    ? ((await readLastLogLine(stderrPath)) ?? (await readLastLogLine(stdoutPath)))
+    : await readLastLogLine(stdoutPath);
+}

@@ -1,0 +1,37 @@
+// Telegram tests cover reasoning lane coordinator plugin behavior.
+import { describe, expect, it } from "vitest";
+import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
+
+describe("splitTelegramReasoningText", () => {
+  it("splits real tagged reasoning and answer", () => {
+    expect(splitTelegramReasoningText("<think>example</think>Done")).toEqual({
+      reasoningText: "Thinking\n\n_example_",
+      answerText: "Done",
+    });
+  });
+
+  it("ignores literal think tags inside inline code", () => {
+    const text = "Use `<think>example</think>` literally.";
+    expect(splitTelegramReasoningText(text)).toEqual({
+      answerText: text,
+    });
+  });
+
+  it("ignores literal think tags inside fenced code", () => {
+    const text = "```xml\n<think>example</think>\n```";
+    expect(splitTelegramReasoningText(text)).toEqual({
+      answerText: text,
+    });
+  });
+
+  it("does not emit partial reasoning tag prefixes", () => {
+    expect(splitTelegramReasoningText("  <thi")).toStrictEqual({});
+  });
+
+  it("keeps visible Thinking-prefixed answers in the answer lane", () => {
+    const text = "Thinking...\nI'll check that now";
+    expect(splitTelegramReasoningText(text)).toEqual({
+      answerText: text,
+    });
+  });
+});

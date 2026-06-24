@@ -1,0 +1,101 @@
+{
+  "name": "@openclaw/matrix",
+  "version": "2026.6.9",
+  "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "@matrix-org/matrix-sdk-crypto-nodejs": "0.6.0",
+    "@matrix-org/matrix-sdk-crypto-wasm": "18.3.0",
+    "fake-indexeddb": "6.2.5",
+    "markdown-it": "14.2.0",
+    "matrix-js-sdk": "41.6.0",
+    "music-metadata": "11.12.3",
+    "typebox": "1.1.39",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "2026.5.28"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.6.9"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
+    "channel": {
+      "id": "matrix",
+      "label": "Matrix",
+      "selectionLabel": "Matrix (plugin)",
+      "docsPath": "/channels/matrix",
+      "docsLabel": "matrix",
+      "blurb": "open protocol; install the plugin to enable.",
+      "order": 70,
+      "markdownCapable": true,
+      "quickstartAllowFrom": true,
+      "doctorCapabilities": {
+        "dmAllowFromMode": "nestedOnly",
+        "groupModel": "sender",
+        "groupAllowFromFallbackToAllowFrom": false,
+        "warnOnEmptyGroupSenderAllowlist": true
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--homeserver <url>",
+          "description": "Matrix homeserver URL"
+        },
+        {
+          "flags": "--user-id <id>",
+          "description": "Matrix user ID"
+        },
+        {
+          "flags": "--access-token <token>",
+          "description": "Matrix access token"
+        },
+        {
+          "flags": "--device-name <name>",
+          "description": "Matrix device name"
+        },
+        {
+          "flags": "--initial-sync-limit <n>",
+          "description": "Matrix initial sync limit"
+        }
+      ],
+      "persistedAuthState": {
+        "specifier": "./auth-presence",
+        "exportName": "hasAnyMatrixAuth"
+      }
+    },
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/matrix",
+      "npmSpec": "@openclaw/matrix",
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.4.10",
+      "allowInvalidConfigRecovery": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.9"
+    },
+    "build": {
+      "openclawVersion": "2026.6.9"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

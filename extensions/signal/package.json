@@ -1,0 +1,65 @@
+{
+  "name": "@openclaw/signal",
+  "version": "2026.6.9",
+  "description": "OpenClaw Signal channel plugin",
+  "type": "module",
+  "dependencies": {
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "signal",
+      "label": "Signal",
+      "selectionLabel": "Signal (signal-cli)",
+      "detailLabel": "Signal REST",
+      "docsPath": "/channels/signal",
+      "docsLabel": "signal",
+      "blurb": "signal-cli linked device; more setup (David Reagans: \"Hop on Discord.\").",
+      "systemImage": "antenna.radiowaves.left.and.right",
+      "markdownCapable": true,
+      "cliAddOptions": [
+        {
+          "flags": "--signal-number <e164>",
+          "description": "Signal account number (E.164)"
+        },
+        {
+          "flags": "--http-host <host>",
+          "description": "Signal HTTP daemon host"
+        },
+        {
+          "flags": "--http-port <port>",
+          "description": "Signal HTTP daemon port"
+        }
+      ]
+    },
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/signal",
+      "npmSpec": "@openclaw/signal",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.9",
+      "allowInvalidConfigRecovery": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.9"
+    },
+    "build": {
+      "openclawVersion": "2026.6.9",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  }
+}

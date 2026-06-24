@@ -1,0 +1,63 @@
+{
+  "name": "@openclaw/irc",
+  "version": "2026.6.9",
+  "description": "OpenClaw IRC channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/irc",
+      "npmSpec": "@openclaw/irc",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.9",
+      "allowInvalidConfigRecovery": true
+    },
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "irc",
+      "label": "IRC",
+      "selectionLabel": "IRC (Server + Nick)",
+      "detailLabel": "IRC",
+      "docsPath": "/channels/irc",
+      "docsLabel": "irc",
+      "blurb": "classic IRC networks with DM/channel routing and pairing controls.",
+      "aliases": [
+        "internet-relay-chat"
+      ],
+      "systemImage": "network",
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "IRC_HOST",
+            "IRC_NICK"
+          ]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasIrcConfiguredState"
+      }
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.9"
+    },
+    "build": {
+      "openclawVersion": "2026.6.9",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  }
+}

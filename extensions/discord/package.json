@@ -1,0 +1,80 @@
+{
+  "name": "@openclaw/discord",
+  "version": "2026.6.9",
+  "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "@discordjs/voice": "0.19.2",
+    "discord-api-types": "0.38.48",
+    "libopus-wasm": "0.2.0",
+    "typebox": "1.1.39",
+    "undici": "8.5.0",
+    "ws": "8.21.0"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "2026.5.28"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.6.9"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "legacyStateMigrations": true
+    },
+    "channel": {
+      "id": "discord",
+      "label": "Discord",
+      "selectionLabel": "Discord (Bot API)",
+      "detailLabel": "Discord Bot",
+      "docsPath": "/channels/discord",
+      "docsLabel": "discord",
+      "blurb": "very well supported right now.",
+      "systemImage": "bubble.left.and.bubble.right",
+      "markdownCapable": true,
+      "preferSessionLookupForAnnounceTarget": true,
+      "commands": {
+        "nativeCommandsAutoEnabled": true,
+        "nativeSkillsAutoEnabled": true
+      },
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "DISCORD_BOT_TOKEN"
+          ]
+        },
+        "specifier": "./configured-state",
+        "exportName": "hasDiscordConfiguredState"
+      }
+    },
+    "install": {
+      "npmSpec": "@openclaw/discord",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.26",
+      "allowInvalidConfigRecovery": true
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.9"
+    },
+    "build": {
+      "openclawVersion": "2026.6.9"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}
