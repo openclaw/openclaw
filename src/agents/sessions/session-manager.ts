@@ -1637,7 +1637,7 @@ export class SessionManager {
     this.appendParentId = null;
     this.promptReleasedSideBranchParentId = undefined;
     let opaqueIndex = 0;
-    for (let index = 0; index < this.fileEntries.length; index += 1) {
+    for (let index = 0; index <= this.fileEntries.length; index += 1) {
       while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
         const opaqueRecord = this.opaqueFileEntries[opaqueIndex]?.record;
         const leafEntry = parseOpaqueLeafEntry(opaqueRecord);
@@ -1843,7 +1843,7 @@ export class SessionManager {
 
     const entries: unknown[] = [];
     let opaqueIndex = 0;
-    for (let index = 0; index < this.fileEntries.length; index += 1) {
+    for (let index = 0; index <= this.fileEntries.length; index += 1) {
       while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
         entries.push(this.opaqueFileEntries[opaqueIndex]?.record);
         opaqueIndex += 1;
