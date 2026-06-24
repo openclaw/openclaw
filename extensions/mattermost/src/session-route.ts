@@ -34,7 +34,7 @@ export function resolveMattermostOutboundSessionRoute(params: ChannelOutboundSes
     channel: "mattermost",
     accountId: params.accountId,
     peer: {
-      kind: isUser ? "direct" : "channel",
+      kind: isUser ? "direct" : isGroup ? "group" : "channel",
       id: rawId,
     },
     chatType: isUser ? "direct" : isGroup ? "group" : "channel",
