@@ -14,6 +14,7 @@ import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
 const HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply HEARTBEAT_OK.";
+const REASONING_BLOCK_TYPES = new Set(["thinking", "redacted_thinking"]);
 const TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
   "functionCall",
@@ -254,7 +255,10 @@ function matchesHeartbeatPromptText(text: string, prompt: string | undefined): b
   return Boolean(normalized) && (text === normalized || text.startsWith(`${normalized}\n`));
 }
 
-function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
+function resolveMessageText(
+  content: unknown,
+  ignoredNonTextTypes?: ReadonlySet<string>,
+): { text: string; hasNonTextContent: boolean } {
   if (typeof content === "string") {
     return { text: content, hasNonTextContent: false };
   }
@@ -268,16 +272,21 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
       hasNonTextContent = true;
       continue;
     }
-    if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {
-      hasNonTextContent = true;
+    const type = readString(block.type);
+    if (type === "text" || type === "input_text" || type === "output_text") {
+      const blockText = (block as { text?: unknown }).text;
+      if (typeof blockText !== "string") {
+        hasNonTextContent = true;
+        continue;
+      }
+      text += blockText;
+    } else if (ignoredNonTextTypes?.has(type ?? "")) {
+      // Silent internal content (e.g. reasoning/thinking blocks) does not prevent
+      // a message from being treated as a plain heartbeat acknowledgement.
       continue;
-    }
-    const blockText = (block as { text?: unknown }).text;
-    if (typeof blockText !== "string") {
+    } else {
       hasNonTextContent = true;
-      continue;
     }
-    text += blockText;
   }
   return { text, hasNonTextContent };
 }
@@ -336,7 +345,7 @@ export function isHeartbeatOkResponse(
   if (hasAssistantToolCall(message)) {
     return false;
   }
-  const { text, hasNonTextContent } = resolveMessageText(message.content);
+  const { text, hasNonTextContent } = resolveMessageText(message.content, REASONING_BLOCK_TYPES);
   if (hasNonTextContent) {
     return false;
   }

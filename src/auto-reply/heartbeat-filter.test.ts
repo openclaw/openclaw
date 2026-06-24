@@ -124,6 +124,38 @@ describe("isHeartbeatOkResponse", () => {
     expect(isHeartbeatOkResponse(toolCallOnlyMessage)).toBe(false);
   });
 
+  it("ignores silent reasoning/thinking blocks when checking for heartbeat acknowledgements", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "I should confirm the heartbeat." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "opaque" },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "thinking" },
+          { type: "tool_use", id: "tool-1", name: "search", input: {} },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("respects ackMaxChars overrides", () => {
     expect(
       isHeartbeatOkResponse(
