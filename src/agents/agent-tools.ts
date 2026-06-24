@@ -29,6 +29,7 @@ import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   rewrapToolWithBeforeToolCallHook,
+  type HookContext,
   type ToolOutcomeObserver,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
@@ -543,6 +544,12 @@ export function createOpenClawCodingTools(options?: {
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
+  /**
+   * Base hook context spread into the internal hookContext for wrapped core
+   * tools. Used to share external-content provenance and other caller-owned
+   * hook state across tool instances created by this call.
+   */
+  beforeToolCallHookContext?: HookContext;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -1188,28 +1195,117 @@ export function createOpenClawCodingTools(options?: {
   options?.recordToolPrepStage?.("schema-normalization");
   const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
   const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
-  const hookContext = {
-    agentId,
-    ...(options?.config ? { config: options.config } : {}),
-    cwd: codingRoot,
-    workspaceDir: workspaceRoot,
-    ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
-    ...(sandboxRoot && allowWorkspaceWrites
-      ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
-      : {}),
-    sessionKey: options?.sessionKey,
-    sessionId: options?.sessionId,
-    runId: options?.runId,
-    channelId: options?.hookChannelId ?? options?.currentChannelId,
-    ...(turnSourceChannel ? { turnSourceChannel } : {}),
-    ...(turnSourceTo ? { turnSourceTo } : {}),
-    ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
-    ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
-    ...(options?.trace ? { trace: options.trace } : {}),
-    loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-    onToolOutcome: options?.onToolOutcome,
-    allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
-  };
+  const loopDetection = resolveToolLoopDetectionConfig({ cfg: options?.config, agentId });
+  const baseHookContext = options?.beforeToolCallHookContext;
+  const hookContext = baseHookContext ?? {};
+  if (baseHookContext) {
+    // Mutate the caller-supplied context in place so later mutations
+    // (e.g. externalContent from prompt-build / current-prompt) are
+    // visible to already-wrapped tools that hold a reference to this object.
+    if (agentId) {
+      baseHookContext.agentId = agentId;
+    }
+    if (options?.config) {
+      baseHookContext.config = options.config;
+    }
+    if (codingRoot) {
+      baseHookContext.cwd = codingRoot;
+    }
+    if (workspaceRoot) {
+      baseHookContext.workspaceDir = workspaceRoot;
+    }
+    if (options?.skillsSnapshot) {
+      baseHookContext.skillsSnapshot = options.skillsSnapshot;
+    }
+    if (sandboxRoot && allowWorkspaceWrites) {
+      baseHookContext.sandbox = { root: sandboxRoot, bridge: sandboxFsBridge! };
+    }
+    if (options?.sessionKey) {
+      baseHookContext.sessionKey = options.sessionKey;
+    }
+    if (options?.sessionId) {
+      baseHookContext.sessionId = options.sessionId;
+    }
+    if (options?.runId) {
+      baseHookContext.runId = options.runId;
+    }
+    if (options?.hookChannelId ?? options?.currentChannelId) {
+      baseHookContext.channelId = options.hookChannelId ?? options.currentChannelId;
+    }
+    if (turnSourceChannel) {
+      baseHookContext.turnSourceChannel = turnSourceChannel;
+    }
+    if (turnSourceTo) {
+      baseHookContext.turnSourceTo = turnSourceTo;
+    }
+    if (options?.agentAccountId) {
+      baseHookContext.turnSourceAccountId = options.agentAccountId;
+    }
+    if (options?.currentThreadTs) {
+      baseHookContext.turnSourceThreadId = options.currentThreadTs;
+    }
+    if (options?.trace) {
+      baseHookContext.trace = options.trace;
+    }
+    if (!("loopDetection" in baseHookContext)) {
+      baseHookContext.loopDetection = loopDetection;
+    }
+    if (options?.onToolOutcome) {
+      baseHookContext.onToolOutcome = options.onToolOutcome;
+    }
+    if (options?.allocateToolOutcomeOrdinal) {
+      baseHookContext.allocateToolOutcomeOrdinal = options.allocateToolOutcomeOrdinal;
+    }
+  } else {
+    hookContext.agentId = agentId;
+    if (options?.config) {
+      hookContext.config = options.config;
+    }
+    if (codingRoot) {
+      hookContext.cwd = codingRoot;
+    }
+    if (workspaceRoot) {
+      hookContext.workspaceDir = workspaceRoot;
+    }
+    if (options?.skillsSnapshot) {
+      hookContext.skillsSnapshot = options.skillsSnapshot;
+    }
+    if (sandboxRoot && allowWorkspaceWrites) {
+      hookContext.sandbox = { root: sandboxRoot, bridge: sandboxFsBridge! };
+    }
+    if (options?.sessionKey) {
+      hookContext.sessionKey = options.sessionKey;
+    }
+    if (options?.sessionId) {
+      hookContext.sessionId = options.sessionId;
+    }
+    if (options?.runId) {
+      hookContext.runId = options.runId;
+    }
+    if (options?.hookChannelId ?? options?.currentChannelId) {
+      hookContext.channelId = options.hookChannelId ?? options.currentChannelId;
+    }
+    if (turnSourceChannel) {
+      hookContext.turnSourceChannel = turnSourceChannel;
+    }
+    if (turnSourceTo) {
+      hookContext.turnSourceTo = turnSourceTo;
+    }
+    if (options?.agentAccountId) {
+      hookContext.turnSourceAccountId = options.agentAccountId;
+    }
+    if (options?.currentThreadTs) {
+      hookContext.turnSourceThreadId = options.currentThreadTs;
+    }
+    if (options?.trace) {
+      hookContext.trace = options.trace;
+    }
+    hookContext.loopDetection = loopDetection;
+    if (options?.onToolOutcome) {
+      hookContext.onToolOutcome = options.onToolOutcome;
+    }
+    hookContext.allocateToolOutcomeOrdinal = options?.allocateToolOutcomeOrdinal;
+  }
   const hookOptions = { emitDiagnostics: options?.emitBeforeToolCallDiagnostics };
   const withHooks = normalized.map((tool) =>
     isToolWrappedWithBeforeToolCallHook(tool)
