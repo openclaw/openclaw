@@ -1764,7 +1764,9 @@ export async function executeActViaPlaywright(opts: {
 
 /** Wait for any in-flight auto-save downloads to finish before sampling. */
 async function drainPendingDownloadSaves(state: ReturnType<typeof ensurePageState>): Promise<void> {
-  if (state.downloadSavePromises.length === 0) return;
+  if (state.downloadSavePromises.length === 0) {
+    return;
+  }
   await Promise.all(state.downloadSavePromises);
   state.downloadSavePromises = [];
 }
@@ -1775,7 +1777,9 @@ function pickNewDownloads(
   seqBefore: number,
 ): { count: number; recent: Array<{ suggestedFilename: string; savedPath: string }> } | undefined {
   const newDownloads = state.recentDownloads.filter((d) => d.seq > seqBefore);
-  if (newDownloads.length === 0) return undefined;
+  if (newDownloads.length === 0) {
+    return undefined;
+  }
   return {
     count: newDownloads.length,
     recent: newDownloads.map((d) => ({
