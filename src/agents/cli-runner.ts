@@ -862,6 +862,7 @@ export async function runPreparedCliAgent(
     effectiveCliSessionId?: string;
     bindingFlushOk?: boolean;
     assistantTranscriptOwned?: boolean;
+    isWarmStdin?: boolean;
   }): EmbeddedAgentRunResult => {
     const text = resultParams.output.text?.trim();
     const rawText = resultParams.output.rawText?.trim();
@@ -886,10 +887,16 @@ export async function runPreparedCliAgent(
     if (resultParams.output.didSendViaMessagingTool) {
       deliveredMessagingSideEffect = true;
     }
+    // FIX #96564: Do NOT clear session binding for warm-stdin sessions that never write native transcript.
+    // The headless warm-stdin claude-cli backend (liveSession: "claude-stdio") never writes native transcript,
+    // so the flush probe always fails. Previously this caused destructive session clearing every turn.
+    // For warm-stdin sessions, we preserve the binding. For others, keep the original behavior.
     const unflushedCliSessionId =
-      resultParams.effectiveCliSessionId && resultParams.bindingFlushOk === false
-        ? resultParams.effectiveCliSessionId
-        : undefined;
+      resultParams.isWarmStdin && resultParams.bindingFlushOk === false
+        ? undefined
+        : resultParams.effectiveCliSessionId && resultParams.bindingFlushOk === false
+          ? resultParams.effectiveCliSessionId
+          : undefined;
     const persistedCliSessionId = unflushedCliSessionId
       ? undefined
       : resultParams.effectiveCliSessionId;
@@ -1051,11 +1058,17 @@ export async function runPreparedCliAgent(
           ctx: hookContext,
           hookRunner,
         });
+        const backend = context.preparedBackend?.backend;
+        const isWarmStdin =
+          backend?.liveSession === "claude-stdio" &&
+          backend?.output === "jsonl" &&
+          backend?.input === "stdin";
         return buildCliRunResult({
           output,
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned,
+          isWarmStdin,
         });
       } catch (error) {
         throw attachCliMessagingDeliveryEvidence(error, output);
