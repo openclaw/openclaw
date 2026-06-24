@@ -54,11 +54,23 @@ function vectorToBlob(embedding: number[]): Buffer {
 
 async function writeLegacyMemorySidecar(
   legacyPath: string,
-  params: { vector?: boolean | "vec0" } = {},
+  params: {
+    vector?: boolean | "vec0";
+    chunkId?: string;
+    chunkHash?: string;
+    fileHash?: string;
+    filePath?: string;
+    text?: string;
+  } = {},
 ): Promise<void> {
   await fs.mkdir(path.dirname(legacyPath), { recursive: true });
   const db = new DatabaseSync(legacyPath, { allowExtension: params.vector === "vec0" });
   try {
+    const filePath = params.filePath ?? "MEMORY.md";
+    const fileHash = params.fileHash ?? "file-hash";
+    const chunkId = params.chunkId ?? "chunk-1";
+    const chunkHash = params.chunkHash ?? "chunk-hash";
+    const text = params.text ?? "remember this";
     db.exec(`
       CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE files (
@@ -91,15 +103,14 @@ async function writeLegacyMemorySidecar(
         PRIMARY KEY (provider, model, provider_key, hash)
       );
       INSERT INTO meta VALUES ('memory_index_meta_v1', '{"vectorDims":3}');
-      INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10, 20);
-      INSERT INTO chunks VALUES (
-        'chunk-1', 'MEMORY.md', 'memory', 1, 2, 'chunk-hash', 'embed-model',
-        'remember this', '[1,0,0]', 30
-      );
-      INSERT INTO embedding_cache VALUES (
-        'openai', 'embed-model', 'key', 'chunk-hash', '[1,0,0]', 3, 40
-      );
     `);
+    db.prepare("INSERT INTO files VALUES (?, 'memory', ?, 10, 20)").run(filePath, fileHash);
+    db.prepare(
+      "INSERT INTO chunks VALUES (?, ?, 'memory', 1, 2, ?, 'embed-model', ?, '[1,0,0]', 30)",
+    ).run(chunkId, filePath, chunkHash, text);
+    db.prepare(
+      "INSERT INTO embedding_cache VALUES ('openai', 'embed-model', 'key', ?, '[1,0,0]', 3, 40)",
+    ).run(chunkHash);
     if (params.vector === "vec0") {
       const loaded = await loadSqliteVecExtension({ db });
       expect(loaded.ok, loaded.error).toBe(true);
@@ -110,13 +121,13 @@ async function writeLegacyMemorySidecar(
         )
       `);
       db.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)").run(
-        "chunk-1",
+        chunkId,
         vectorToBlob([1, 0, 0]),
       );
     } else if (params.vector) {
       db.exec("CREATE TABLE chunks_vec (id TEXT PRIMARY KEY, embedding BLOB)");
       db.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)").run(
-        "chunk-1",
+        chunkId,
         vectorToBlob([1, 0, 0]),
       );
     }
@@ -691,6 +702,68 @@ describe("memory-core doctor dreaming migration", () => {
     await expect(fs.access(`${legacyPath}.migrated`)).resolves.toBeUndefined();
   });
 
+  it("migrates all retired configured legacy memory sidecar paths", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const topLevelPath = path.join(rootDir, "top-memory", "main.sqlite");
+    const defaultsPath = path.join(rootDir, "default-memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(topLevelPath, {
+      chunkId: "chunk-top",
+      chunkHash: "chunk-hash-top",
+      fileHash: "file-hash-top",
+      filePath: "TOP.md",
+      text: "remember top level",
+    });
+    await writeLegacyMemorySidecar(defaultsPath, {
+      chunkId: "chunk-defaults",
+      chunkHash: "chunk-hash-defaults",
+      fileHash: "file-hash-defaults",
+      filePath: "DEFAULTS.md",
+      text: "remember defaults",
+    });
+    const config = {
+      memorySearch: {
+        store: {
+          path: topLevelPath,
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: path.join(rootDir, "default-memory", "{agentId}.sqlite"),
+            },
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const migration = legacyMemoryIndexMigration();
+    const preview = await migration.detectLegacyState(migrationParams(config));
+    expect(preview?.preview).toEqual([
+      `- Memory Core legacy memory index: ${defaultsPath} -> ${agentPath}`,
+      `- Memory Core legacy memory index: ${topLevelPath} -> ${agentPath}`,
+    ]);
+
+    const result = await migration.migrateLegacyState(migrationParams(config));
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+      "Migrated Memory Core legacy memory index for agent main -> per-agent SQLite (1 source(s), 1 chunk(s), 1 cache row(s))",
+      expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
+    ]);
+    expect(
+      readMemoryRows(agentPath)
+        .chunks.map((chunk) => chunk.id)
+        .sort(),
+    ).toEqual(["chunk-defaults", "chunk-top"]);
+    await expect(fs.access(`${defaultsPath}.migrated`)).resolves.toBeUndefined();
+    await expect(fs.access(`${topLevelPath}.migrated`)).resolves.toBeUndefined();
+  });
+
   it("does not infer agent ownership from configured sidecar filenames", async () => {
     const stateDir = path.join(rootDir, "state");
     const legacyPath = path.join(stateDir, "memory", "shared.sqlite");
@@ -1070,6 +1143,15 @@ describe("memory-core doctor dreaming migration", () => {
     const alternateRetryPath = path.join(stateDir, "memory", alternateRetry ?? "");
     const repairedConfig: OpenClawConfig = {
       agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              vector: {
+                extensionPath: path.join(rootDir, "missing-sqlite-vec.so"),
+              },
+            },
+          },
+        },
         list: [{ id: "main", workspace: workspaceDir }],
       },
     };
@@ -1100,6 +1182,22 @@ describe("memory-core doctor dreaming migration", () => {
     );
     await expect(fs.access(legacyPath)).resolves.toBeUndefined();
     await expect(fs.access(alternateRetryPath)).resolves.toBeUndefined();
+
+    const retryEntriesBefore = (await fs.readdir(path.join(stateDir, "memory")))
+      .filter((entry) => entry.startsWith("main.retry-"))
+      .sort();
+    const secondRun = await legacyMemoryIndexMigration().migrateLegacyState(
+      migrationParams(repairedConfig),
+    );
+    const retryEntriesAfter = (await fs.readdir(path.join(stateDir, "memory")))
+      .filter((entry) => entry.startsWith("main.retry-"))
+      .sort();
+    expect(secondRun.changes).not.toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("Copied Memory Core legacy memory index sidecar retry path"),
+      ]),
+    );
+    expect(retryEntriesAfter).toEqual(retryEntriesBefore);
   });
 
   it("leaves the legacy memory sidecar in place when canonical rows conflict", async () => {
@@ -1124,6 +1222,97 @@ describe("memory-core doctor dreaming migration", () => {
     });
     await expect(fs.access(legacyPath)).resolves.toBeUndefined();
     await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+  });
+
+  it("copies conflicting custom sidecars to the canonical retry path", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(rootDir, "custom-memory", "main.sqlite");
+    const retryPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await createCanonicalMemoryIndex(agentPath, "canonical memory remains authoritative");
+    const config = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: legacyPath,
+            },
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
+    const repairedConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    };
+    const retryPreview = await legacyMemoryIndexMigration().detectLegacyState(
+      migrationParams(repairedConfig),
+    );
+
+    expect(result.changes).toEqual([
+      `Copied Memory Core legacy memory index sidecar retry path -> ${retryPath}`,
+    ]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory files rows conflict",
+      ),
+    ]);
+    expect(retryPreview?.preview).toEqual([
+      `- Memory Core legacy memory index: ${retryPath} -> ${agentPath}`,
+    ]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(retryPath)).resolves.toBeUndefined();
+    await expect(fs.access(`${legacyPath}.migrated`)).rejects.toThrow();
+  });
+
+  it("copies custom sidecars to the retry path when canonical database setup fails", async () => {
+    const stateDir = path.join(rootDir, "state");
+    const legacyPath = path.join(rootDir, "custom-memory", "main.sqlite");
+    const retryPath = path.join(stateDir, "memory", "main.sqlite");
+    const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+    await writeLegacyMemorySidecar(legacyPath);
+    await fs.mkdir(agentPath, { recursive: true });
+    const config = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: legacyPath,
+            },
+          },
+        },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams(config));
+    const repairedConfig: OpenClawConfig = {
+      agents: {
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+    };
+    const retryPreview = await legacyMemoryIndexMigration().detectLegacyState(
+      migrationParams(repairedConfig),
+    );
+
+    expect(result.changes).toEqual([
+      `Copied Memory Core legacy memory index sidecar retry path -> ${retryPath}`,
+    ]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "Skipped Memory Core legacy memory index import for agent main because the sidecar could not be imported:",
+      ),
+    ]);
+    expect(retryPreview?.preview).toEqual([
+      `- Memory Core legacy memory index: ${retryPath} -> ${agentPath}`,
+    ]);
+    await expect(fs.access(legacyPath)).resolves.toBeUndefined();
+    await expect(fs.access(retryPath)).resolves.toBeUndefined();
   });
 
   it("leaves the legacy memory sidecar in place when metadata conflicts", async () => {

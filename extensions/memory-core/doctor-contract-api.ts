@@ -643,12 +643,23 @@ function readMemorySearchProvider(config: unknown, agentId: string): string | un
   return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
-function readLegacyMemorySearchStorePath(config: unknown, agentId: string): string | undefined {
+function readLegacyMemorySearchStorePaths(config: unknown, agentId: string): string[] {
   const agentStore = asRecord(readAgentMemorySearch(config, agentId)?.store);
   const defaultsStore = asRecord(readDefaultMemorySearch(config)?.store);
   const topLevelStore = asRecord(readTopLevelMemorySearch(config)?.store);
-  const raw = agentStore?.path ?? defaultsStore?.path ?? topLevelStore?.path;
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [agentStore?.path, defaultsStore?.path, topLevelStore?.path]) {
+    if (typeof raw !== "string" || !raw.trim()) {
+      continue;
+    }
+    const trimmed = raw.trim();
+    if (!seen.has(trimmed)) {
+      seen.add(trimmed);
+      paths.push(trimmed);
+    }
+  }
+  return paths;
 }
 
 function readMemorySearchFtsTokenizer(
@@ -660,6 +671,19 @@ function readMemorySearchFtsTokenizer(
   const topLevelFts = asRecord(asRecord(readTopLevelMemorySearch(config)?.store)?.fts);
   const raw = agentFts?.tokenizer ?? defaultsFts?.tokenizer ?? topLevelFts?.tokenizer;
   return raw === "unicode61" || raw === "trigram" ? raw : undefined;
+}
+
+function isDiscoveredRetryMemorySidecarPath(params: {
+  source: LegacyMemorySidecarSource;
+}): boolean {
+  const sourcePath = path.resolve(params.source.legacyPath);
+  const memoryDir = path.resolve(params.source.stateDir, "memory");
+  const sourceName = path.basename(sourcePath);
+  return (
+    path.dirname(sourcePath) === memoryDir &&
+    sourceName.startsWith(`${params.source.agentId}.retry-`) &&
+    sourceName.endsWith(".sqlite")
+  );
 }
 
 function resolveLegacyMemorySearchStorePath(
@@ -712,8 +736,7 @@ async function collectLegacyMemorySidecarSources(params: {
     });
   }
   for (const agentId of agentIds) {
-    const configuredPath = readLegacyMemorySearchStorePath(params.config, agentId);
-    if (configuredPath) {
+    for (const configuredPath of readLegacyMemorySearchStorePaths(params.config, agentId)) {
       await addSource(
         agentId,
         resolveLegacyMemorySearchStorePath(configuredPath, agentId, migrationEnv),
@@ -795,6 +818,11 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
   if (path.resolve(retryPath) === path.resolve(params.source.legacyPath)) {
     return;
   }
+  // Retry sidecars already live in the doctor-owned retry namespace; copying
+  // them again would create retry-of-retry files on every doctor run.
+  if (isDiscoveredRetryMemorySidecarPath(params)) {
+    return;
+  }
   const existingTargets = (
     await Promise.all(
       LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
@@ -815,6 +843,9 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
             .digest("hex")
             .slice(0, 12)}.sqlite`,
         );
+  if (await fileExists(targetBasePath)) {
+    return;
+  }
   const existingSources = (
     await Promise.all(
       LEGACY_MEMORY_SIDECAR_SUFFIXES.map(async (suffix) => {
@@ -895,18 +926,21 @@ async function migrateLegacyMemorySidecarSource(params: {
         requireVectorRows: vectorEnabled,
       });
     } catch (err) {
+      await preserveLegacyMemorySidecarRetryPath(params);
       params.warnings.push(
         `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because legacy rows could not be imported: ${String(err)}`,
       );
       return { archiveReady: false };
     }
     if (result.reason === "legacy-schema-missing") {
+      await preserveLegacyMemorySidecarRetryPath(params);
       params.warnings.push(
         `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because the sidecar schema is not a legacy memory index`,
       );
       return { archiveReady: false };
     }
     if (!result.imported) {
+      await preserveLegacyMemorySidecarRetryPath(params);
       return { archiveReady: false };
     }
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true, ftsTokenizer });
@@ -1219,6 +1253,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             archiveReady &&= result.archiveReady;
           } catch (err) {
             archiveReady = false;
+            await preserveLegacyMemorySidecarRetryPath({ source, changes, warnings });
             warnings.push(
               `Skipped Memory Core legacy memory index import for agent ${source.agentId} because the sidecar could not be imported: ${String(err)}`,
             );
