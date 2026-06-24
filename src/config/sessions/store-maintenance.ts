@@ -41,12 +41,7 @@ export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  // Optional so external plugin callers that construct a pre-#88632 maintenanceConfig
-  // (without the model-run fields) still compile; the resolver always sets both, and all
-  // internal readers treat an absent value as "unset" (model-run pruning disabled).
-  modelRunPruneAfterMs?: number | null;
-  /** True when modelRunPruneAfter was explicitly set instead of using the pressure-gated default. */
-  modelRunPruneAfterConfigured?: boolean;
+  modelRunPruneAfterMs: number;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -81,24 +76,6 @@ function resolveResetArchiveRetentionMs(
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return pruneAfterMs;
-  }
-}
-
-function resolveModelRunPruneAfterMs(maintenance?: SessionMaintenanceConfig): number | null {
-  const raw = maintenance?.modelRunPruneAfter;
-  if (raw === false) {
-    return null;
-  }
-  const normalized = normalizeStringifiedOptionalString(raw);
-  if (!normalized) {
-    return DEFAULT_MODEL_RUN_PRUNE_AFTER_MS;
-  }
-  try {
-    return parseDurationMs(normalized, { defaultUnit: "d" });
-  } catch {
-    // The schema rejects invalid explicit values. Keep direct resolver callers fail-closed
-    // rather than silently enabling the default 24h model-run cleanup.
-    return null;
   }
 }
 
@@ -163,8 +140,7 @@ export function resolveMaintenanceConfigFromInput(
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
-    modelRunPruneAfterMs: resolveModelRunPruneAfterMs(maintenance),
-    modelRunPruneAfterConfigured: maintenance?.modelRunPruneAfter !== undefined,
+    modelRunPruneAfterMs: DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
@@ -198,10 +174,7 @@ export function shouldRunSessionEntryMaintenance(params: {
 }
 
 export function shouldRunModelRunPrune(params: {
-  maintenance: Pick<
-    ResolvedSessionMaintenanceConfig,
-    "maxEntries" | "modelRunPruneAfterConfigured" | "modelRunPruneAfterMs"
-  >;
+  maintenance: Pick<ResolvedSessionMaintenanceConfig, "maxEntries">;
   entryCount: number;
   /**
    * True when the caller caps immediately to `maxEntries` in the same pass (forced
@@ -209,13 +182,7 @@ export function shouldRunModelRunPrune(params: {
    */
   force?: boolean;
 }): boolean {
-  if (params.maintenance.modelRunPruneAfterMs == null) {
-    return false;
-  }
-  if (params.maintenance.modelRunPruneAfterConfigured) {
-    return true;
-  }
-  // Unset default is pressure-gated, and must align with whichever cap step runs alongside it.
+  // Model-run cleanup is pressure-gated, and must align with whichever cap step runs alongside it.
   // Forced maintenance caps immediately down to `maxEntries`, so prune stale probes first whenever
   // that cap would actually evict; otherwise stale probes would survive while real sessions get
   // capped (the inverse of #88632). Batched runtime writes instead use the high-water trigger.

@@ -184,8 +184,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         mode: "enforce",
         pruneAfterMs: 7 * DAY_MS,
         maxEntries: 500,
-        modelRunPruneAfterMs: null,
-        modelRunPruneAfterConfigured: true,
+        modelRunPruneAfterMs: DAY_MS,
         resetArchiveRetentionMs: null,
         maxDiskBytes: null,
         highWaterBytes: null,
@@ -242,7 +241,6 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
         pruneAfterMs: 7 * DAY_MS,
         maxEntries: 50,
         modelRunPruneAfterMs: DAY_MS,
-        modelRunPruneAfterConfigured: false,
         resetArchiveRetentionMs: null,
         maxDiskBytes: null,
         highWaterBytes: null,
@@ -570,27 +568,8 @@ describe("resolveMaintenanceConfigFromInput", () => {
     expect(maintenance.mode).toBe("enforce");
   });
 
-  it("defaults gateway model-run probes to 24h retention with override and disable support", () => {
+  it("defaults gateway model-run probes to fixed 24h retention", () => {
     expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterMs).toBe(DAY_MS);
-    expect(
-      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "48h" }).modelRunPruneAfterMs,
-    ).toBe(2 * DAY_MS);
-    expect(
-      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: false }).modelRunPruneAfterMs,
-    ).toBe(null);
-    expect(resolveMaintenanceConfigFromInput().modelRunPruneAfterConfigured).toBe(false);
-    expect(
-      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "48h" }).modelRunPruneAfterConfigured,
-    ).toBe(true);
-    expect(
-      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: false }).modelRunPruneAfterConfigured,
-    ).toBe(true);
-    expect(
-      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "bad" }).modelRunPruneAfterMs,
-    ).toBe(null);
-    expect(
-      resolveMaintenanceConfigFromInput({ modelRunPruneAfter: "bad" }).modelRunPruneAfterConfigured,
-    ).toBe(true);
   });
 
   it("force-gates the unset model-run prune default to the cap-eviction threshold", () => {
@@ -602,26 +581,6 @@ describe("resolveMaintenanceConfigFromInput", () => {
     ).toBe(true);
     expect(
       shouldRunModelRunPrune({ maintenance: defaultMaintenance, entryCount: 50, force: true }),
-    ).toBe(false);
-    expect(
-      shouldRunModelRunPrune({
-        maintenance: resolveMaintenanceConfigFromInput({
-          maxEntries: 50,
-          modelRunPruneAfter: "24h",
-        }),
-        entryCount: 1,
-        force: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldRunModelRunPrune({
-        maintenance: resolveMaintenanceConfigFromInput({
-          maxEntries: 50,
-          modelRunPruneAfter: false,
-        }),
-        entryCount: 60,
-        force: true,
-      }),
     ).toBe(false);
   });
 

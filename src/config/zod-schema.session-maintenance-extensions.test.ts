@@ -43,7 +43,6 @@ describe("SessionSchema maintenance extensions", () => {
   it("accepts valid maintenance extensions", () => {
     const result = SessionSchema.safeParse({
       maintenance: {
-        modelRunPruneAfter: "24h",
         resetArchiveRetention: "14d",
         maxDiskBytes: "500mb",
         highWaterBytes: "350mb",
@@ -52,34 +51,16 @@ describe("SessionSchema maintenance extensions", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts disabling model-run and reset archive cleanup", () => {
+  it("accepts disabling reset archive cleanup", () => {
     const result = SessionSchema.safeParse({
       maintenance: {
-        modelRunPruneAfter: false,
         resetArchiveRetention: false,
       },
     });
     expect(result.success).toBe(true);
   });
 
-  it("accepts numeric model-run retention with day default units", () => {
-    const result = SessionSchema.safeParse({
-      maintenance: {
-        modelRunPruneAfter: 2,
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
   it("rejects invalid maintenance extension values", () => {
-    expect(() =>
-      SessionSchema.parse({
-        maintenance: {
-          modelRunPruneAfter: "never",
-        },
-      }),
-    ).toThrow(/modelRunPruneAfter|duration/i);
-
     expect(() =>
       SessionSchema.parse({
         maintenance: {

@@ -88,7 +88,6 @@ export const SessionSchema = z
         /** @deprecated Use pruneAfter instead. */
         pruneDays: z.number().int().positive().optional(),
         maxEntries: z.number().int().positive().optional(),
-        modelRunPruneAfter: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         rotateBytes: z.union([z.string(), z.number()]).optional(),
         resetArchiveRetention: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number()]).optional(),
@@ -105,19 +104,6 @@ export const SessionSchema = z
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: ["pruneAfter"],
-              message: "invalid duration (use ms, s, m, h, d)",
-            });
-          }
-        }
-        if (val.modelRunPruneAfter !== undefined && val.modelRunPruneAfter !== false) {
-          try {
-            parseDurationMs(normalizeStringifiedOptionalString(val.modelRunPruneAfter) ?? "", {
-              defaultUnit: "d",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["modelRunPruneAfter"],
               message: "invalid duration (use ms, s, m, h, d)",
             });
           }

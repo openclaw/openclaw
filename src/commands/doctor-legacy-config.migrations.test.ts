@@ -451,9 +451,9 @@ describe("normalizeCompatibilityConfigValues", () => {
           },
         },
       } as unknown as OpenClawConfig);
-      const channel = (res.config.channels as Record<string, { accounts?: Record<string, unknown> }>)?.[
-        channelId
-      ];
+      const channel = (
+        res.config.channels as Record<string, { accounts?: Record<string, unknown> }>
+      )?.[channelId];
 
       expect(channel?.accounts?.default).toEqual({
         dmPolicy: "allowlist",

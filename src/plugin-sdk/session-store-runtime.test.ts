@@ -145,8 +145,7 @@ describe("session-store-runtime compatibility surface", () => {
         maintenanceConfig: {
           mode: "enforce",
           pruneAfterMs: 7 * DAY_MS,
-          modelRunPruneAfterMs: null,
-          modelRunPruneAfterConfigured: true,
+          modelRunPruneAfterMs: DAY_MS,
           maxEntries: 1,
           resetArchiveRetentionMs: 7 * DAY_MS,
           maxDiskBytes: null,
@@ -164,65 +163,6 @@ describe("session-store-runtime compatibility surface", () => {
       sessionId: "session-active",
     });
     expect(getSessionEntry({ sessionKey: staleSessionKey, storePath })).toBeUndefined();
-  });
-
-  it("accepts a pre-#88632 maintenanceConfig without the model-run fields", async () => {
-    // Backward-compatibility guard: external plugin callers built `maintenanceConfig`
-    // before `modelRunPruneAfterMs` / `modelRunPruneAfterConfigured` existed. That old
-    // shape must still compile (the fields are optional) and behave as before — no
-    // model-run-specific pruning.
-    const staleModelRunKey = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
-    const activeSessionKey = "agent:main:active";
-    const now = Date.now();
-    await saveSessionStore(
-      storePath,
-      {
-        // A gateway model-run probe older than the 24h model-run window but well within the
-        // 7d generic pruneAfter cutoff, so only model-run-specific pruning could remove it.
-        [staleModelRunKey]: {
-          sessionId: "session-probe",
-          updatedAt: now - 2 * DAY_MS,
-        },
-        [activeSessionKey]: {
-          sessionId: "session-active",
-          updatedAt: now,
-        },
-      },
-      { skipMaintenance: true },
-    );
-
-    // Note: intentionally NO modelRunPruneAfterMs / modelRunPruneAfterConfigured (old shape),
-    // and maxEntries high enough that there is NO cap pressure.
-    const legacyMaintenanceConfig = {
-      mode: "enforce" as const,
-      pruneAfterMs: 7 * DAY_MS,
-      maxEntries: 500,
-      resetArchiveRetentionMs: 7 * DAY_MS,
-      maxDiskBytes: null,
-      highWaterBytes: null,
-    };
-
-    await expect(
-      patchSessionEntry({
-        sessionKey: activeSessionKey,
-        storePath,
-        maintenanceConfig: legacyMaintenanceConfig,
-        update: () => ({ model: "gpt-5.5" }),
-      }),
-    ).resolves.toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-active",
-    });
-
-    // The old-shape config disables model-run pruning, so the stale probe survives
-    // (no model-run field => disabled; no cap pressure => nothing capped).
-    expect(getSessionEntry({ sessionKey: staleModelRunKey, storePath })).toMatchObject({
-      sessionId: "session-probe",
-    });
-    expect(getSessionEntry({ sessionKey: activeSessionKey, storePath })).toMatchObject({
-      model: "gpt-5.5",
-      sessionId: "session-active",
-    });
   });
 
   it("keeps deprecated whole-store mutations grouped as one compatibility operation", async () => {

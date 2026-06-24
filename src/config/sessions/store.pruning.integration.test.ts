@@ -34,7 +34,6 @@ const ENFORCED_MAINTENANCE_OVERRIDE = {
   pruneAfterMs: 7 * DAY_MS,
   maxEntries: 500,
   modelRunPruneAfterMs: DAY_MS,
-  modelRunPruneAfterConfigured: true,
   resetArchiveRetentionMs: 7 * DAY_MS,
   maxDiskBytes: null,
   highWaterBytes: null,
@@ -135,7 +134,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     }
   });
 
-  it("saveSessionStore prunes stale model-run probes before global retention", async () => {
+  it("saveSessionStore prunes stale model-run probes before capping real sessions", async () => {
     const now = Date.now();
     const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
     const recentModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174001";
@@ -150,7 +149,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       maintenanceOverride: {
         ...ENFORCED_MAINTENANCE_OVERRIDE,
         pruneAfterMs: 30 * DAY_MS,
-        maxEntries: 500,
+        maxEntries: 2,
       },
     });
 
@@ -194,8 +193,7 @@ describe("Integration: saveSessionStore with pruning", () => {
         maintenance: {
           mode: "enforce",
           pruneAfter: "30d",
-          maxEntries: 500,
-          modelRunPruneAfter: "24h",
+          maxEntries: 1,
         },
       },
     });

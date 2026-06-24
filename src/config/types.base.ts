@@ -259,12 +259,6 @@ export type SessionMaintenanceConfig = {
   pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /**
-   * Retention for gateway model-run probe sessions (`agent:*:explicit:model-run-<uuid>`).
-   * Unset defaults to "24h" but only runs under session-entry cap pressure;
-   * setting a duration opts into unconditional age cleanup, and `false` disables.
-   */
-  modelRunPruneAfter?: string | number | false;
   /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
   rotateBytes?: number | string;
   /**
