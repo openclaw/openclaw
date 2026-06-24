@@ -658,6 +658,29 @@ describe("cron cli", () => {
     },
   );
 
+  it.each(["abc", "0"])(
+    "rejects invalid cron add --no-output-timeout-seconds value %j",
+    async (noOutputTimeoutSeconds) => {
+      await expectCronCommandExit([
+        "cron",
+        "add",
+        "--name",
+        "Invalid no-output timeout",
+        "--every",
+        "10m",
+        "--command",
+        "echo ok",
+        "--no-output-timeout-seconds",
+        noOutputTimeoutSeconds,
+      ]);
+
+      expectRuntimeErrorContaining(
+        "Invalid --no-output-timeout-seconds (must be a positive integer).",
+      );
+      expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.add")).toBe(false);
+    },
+  );
+
   it("rejects cron add with both message and command payloads", async () => {
     await expectCronCommandExit([
       "cron",

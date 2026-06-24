@@ -234,7 +234,15 @@ export function registerCronAddCommand(cron: Command) {
                     ? opts.outputTimeoutSeconds
                     : undefined);
                 const noOutputTimeoutSeconds =
-                  parsePositiveIntOrUndefined(rawNoOutputTimeoutSeconds);
+                  parseStrictPositiveIntOrUndefined(rawNoOutputTimeoutSeconds);
+                if (
+                  rawNoOutputTimeoutSeconds !== undefined &&
+                  noOutputTimeoutSeconds === undefined
+                ) {
+                  throw new Error(
+                    "Invalid --no-output-timeout-seconds (must be a positive integer).",
+                  );
+                }
                 const outputMaxBytes = parsePositiveIntOrUndefined(opts.outputMaxBytes);
                 return {
                   kind: "command" as const,
