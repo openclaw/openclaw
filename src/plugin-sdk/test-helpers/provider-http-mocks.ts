@@ -8,6 +8,7 @@ import type {
   fetchWithTimeoutGuarded,
   pollProviderOperationJson,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "../provider-http.js";
@@ -23,6 +24,7 @@ type FetchProviderDownloadResponseParams = Parameters<typeof fetchProviderDownlo
 type SanitizeConfiguredModelProviderRequestParams = Parameters<
   typeof sanitizeConfiguredModelProviderRequest
 >[0];
+type ReadProviderJsonResponseParams = Parameters<typeof readProviderJsonResponse>;
 
 type ResolveProviderHttpRequestConfigResult = {
   baseUrl: string;
@@ -48,6 +50,13 @@ interface ProviderHttpMocks {
       request: SanitizeConfiguredModelProviderRequestParams,
     ) => SanitizeConfiguredModelProviderRequestParams
   >;
+  readProviderJsonResponseMock: Mock<
+    (
+      response: Response,
+      label: string,
+      opts?: ReadProviderJsonResponseParams[2],
+    ) => Promise<unknown>
+  >;
   resolveProviderHttpRequestConfigMock: Mock<
     (params: ResolveProviderHttpRequestConfigParams) => ResolveProviderHttpRequestConfigResult
   >;
@@ -68,6 +77,7 @@ const providerHttpMocks = vi.hoisted(() => ({
   sanitizeConfiguredModelProviderRequestMock: vi.fn(
     (request: SanitizeConfiguredModelProviderRequestParams) => request,
   ),
+  readProviderJsonResponseMock: vi.fn(),
   resolveProviderHttpRequestConfigMock: vi.fn((params: ResolveProviderHttpRequestConfigParams) => ({
     baseUrl: params.baseUrl ?? params.defaultBaseUrl,
     allowPrivateNetwork:
@@ -164,6 +174,14 @@ providerHttpMocks.fetchProviderOperationResponseMock.mockImplementation(
   },
 );
 
+providerHttpMocks.readProviderJsonResponseMock.mockImplementation(async (response: Response) => {
+  // Default mock mirrors the legacy raw `response.json()` so tests that
+  // don't care about the bounded cap still pass. Tests that exercise the
+  // bounded behavior install their own mock implementation (or use the
+  // bounded-json test file directly against the production helper).
+  return await response.json();
+});
+
 providerHttpMocks.fetchProviderDownloadResponseMock.mockImplementation(
   async (params: FetchProviderDownloadResponseParams) => {
     const response = await providerHttpMocks.fetchWithTimeoutMock(
@@ -233,6 +251,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
   postJsonRequest: providerHttpMocks.postJsonRequestMock,
   postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
+  readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
   providerOperationRetryConfig: (_stage: string) => true,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
@@ -261,5 +280,6 @@ export function installProviderHttpMockCleanup(): void {
     providerHttpMocks.assertOkOrThrowProviderErrorMock.mockClear();
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock.mockClear();
     providerHttpMocks.resolveProviderHttpRequestConfigMock.mockClear();
+    providerHttpMocks.readProviderJsonResponseMock.mockClear();
   });
 }
