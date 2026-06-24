@@ -568,7 +568,9 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
-  const foregroundReplyFence = beginForegroundReplyFence(finalized);
+  let foregroundReplyFence;
+  const getForegroundReplyFence = () =>
+    (foregroundReplyFence ??= beginForegroundReplyFence(finalized));
   const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
   const replyPayloadRunState = {
     runId: params.replyOptions?.runId,
@@ -585,10 +587,10 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
     : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
-    foregroundReplyFence || configuredBeforeDeliver
+    getForegroundReplyFence() || configuredBeforeDeliver
       ? async (payload, info) => {
           // Check both before and after hooks because hooks can await while newer replies finish.
-          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
+          if (await shouldCancelForegroundReplyDelivery(getForegroundReplyFence())) {
             return null;
           }
           const deliverPayload = configuredBeforeDeliver
@@ -596,7 +598,7 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
             : payload;
           if (
             !deliverPayload ||
-            (await shouldCancelForegroundReplyDelivery(foregroundReplyFence))
+            (await shouldCancelForegroundReplyDelivery(getForegroundReplyFence()))
           ) {
             return null;
           }
@@ -606,11 +608,11 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const deliver: ReplyDispatcherWithTypingOptions["deliver"] = async (payload, info) => {
     try {
       const result = await params.dispatcherOptions.deliver(payload, info);
-      markForegroundReplyFenceVisibleDelivery(foregroundReplyFence, payload, result);
+      markForegroundReplyFenceVisibleDelivery(getForegroundReplyFence(), payload, result);
       return result;
     } catch (err: unknown) {
       if (isVisiblePartialDeliveryError(err)) {
-        markForegroundReplyFenceVisibleDelivery(foregroundReplyFence, payload, {
+        markForegroundReplyFenceVisibleDelivery(getForegroundReplyFence(), payload, {
           visibleReplySent: true,
         });
       }
@@ -643,15 +645,16 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     try {
       const settledResult = await params.dispatcherOptions.onSettled?.();
       if (isExplicitlyVisibleDelivery(settledResult)) {
-        markForegroundReplyFenceVisibleDeliveryGeneration(foregroundReplyFence);
+        markForegroundReplyFenceVisibleDeliveryGeneration(getForegroundReplyFence());
       }
       await runForegroundReplyFenceFreshSettledDelivery(
-        foregroundReplyFence,
+        getForegroundReplyFence(),
         params.dispatcherOptions.onFreshSettledDelivery,
       );
     } finally {
-      if (foregroundReplyFence) {
-        endForegroundReplyFence(foregroundReplyFence);
+      const fence = getForegroundReplyFence();
+      if (fence) {
+        endForegroundReplyFence(fence);
       }
       markRunComplete();
       markDispatchIdle();
