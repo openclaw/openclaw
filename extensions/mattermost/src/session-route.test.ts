@@ -95,27 +95,28 @@ describe("mattermost session route", () => {
       cfg: {},
       agentId: "main",
       accountId: "acct-1",
-      target: "mattermost:group:grp999",
+      target: "mattermost:channel:grp999",
       resolvedTarget: { kind: "group" },
     });
     const groupRoute = expectRoute(route);
     expect(groupRoute.chatType).toBe("group");
-    expect(groupRoute.peer.kind).toBe("group");
+    expect(groupRoute.peer.kind).toBe("channel");
     expect(groupRoute.peer.id).toBe("grp999");
-    expect(groupRoute.from).toBe("mattermost:group:grp999");
-    expect(groupRoute.to).toBe("group:grp999");
+    expect(groupRoute.from).toBe("mattermost:channel:grp999");
+    expect(groupRoute.to).toBe("channel:grp999");
   });
-  it("group outbound session uses group namespace not channel namespace [regression]", () => {
+  it("group outbound session uses channel routing but group session namespace [regression]", () => {
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},
       agentId: "main",
       accountId: "acct-1",
-      target: "mattermost:group:grp999",
+      target: "mattermost:channel:grp999",
       resolvedTarget: { kind: "group" },
     });
     const groupRoute = expectRoute(route);
-    expect(groupRoute.from).not.toContain("mattermost:channel:");
+    expect(groupRoute.chatType).toBe("group");
     expect(groupRoute.chatType).not.toBe("channel");
-    expect(groupRoute.peer.kind).not.toBe("channel");
+    expect(groupRoute.from).toBe("mattermost:channel:grp999");
+    expect(groupRoute.to).toBe("channel:grp999");
   });
 });
