@@ -738,9 +738,11 @@ class OpenShellSandboxBackendImpl {
       async ({ dir: tmpDir }) => {
         // Stage a symlink-free snapshot so upload never dereferences host paths
         // outside the mirrored workspace tree.
+        const remoteRootName = path.posix.basename(remotePath);
+        const stagedRoot = path.join(tmpDir, remoteRootName);
         await stageDirectoryContents({
           sourceDir: localPath,
-          targetDir: tmpDir,
+          targetDir: stagedRoot,
         });
         const result = await runOpenShellCli({
           context: this.params.execContext,
@@ -749,8 +751,8 @@ class OpenShellSandboxBackendImpl {
             "upload",
             "--no-git-ignore",
             this.params.execContext.sandboxName,
-            tmpDir,
-            remotePath,
+            stagedRoot,
+            path.posix.dirname(remotePath),
           ],
           cwd: this.params.createParams.workspaceDir,
         });
