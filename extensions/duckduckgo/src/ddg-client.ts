@@ -37,7 +37,6 @@ type DuckDuckGoResult = {
 
 function decodeHtmlEntities(text: string): string {
   return text
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
@@ -50,7 +49,8 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&mdash;/g, "--")
     .replace(/&hellip;/g, "...")
     .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)));
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&amp;/g, "&"); // must be last to prevent double-decoding (e.g. &amp;lt; -> &lt; not <)
 }
 
 function stripHtml(html: string): string {

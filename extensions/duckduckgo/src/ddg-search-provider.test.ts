@@ -186,6 +186,16 @@ describe("duckduckgo web search provider", () => {
     );
   });
 
+  it("does not double-decode escaped entities (decodes &amp; last)", () => {
+    // A result whose text literally shows "&lt;" arrives double-encoded as
+    // "&amp;lt;". Decoding &amp; first would re-decode it into "<", corrupting
+    // the snippet; &amp; must be decoded last.
+    expect(ddgClientTesting.decodeHtmlEntities("How to escape &amp;lt; in HTML")).toBe(
+      "How to escape &lt; in HTML",
+    );
+    expect(ddgClientTesting.decodeHtmlEntities("a&amp;#39;b")).toBe("a&#39;b");
+  });
+
   it("parses results when href appears before class", () => {
     const html = `
       <a href="https://duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com" class="result__a">
