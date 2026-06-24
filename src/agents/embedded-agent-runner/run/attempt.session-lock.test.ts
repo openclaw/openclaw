@@ -3993,11 +3993,6 @@ describe("embedded attempt session lock lifecycle", () => {
   });
 
   it("releaseHeldLockWithFence sets deferred flag when bailed out during active scope; re-attempted after scope deactivation (#95915)", async () => {
-    // When releaseHeldLockForAbort is called from inside an active write
-    // scope, releaseHeldLockWithFence bails out (waitForRetainedLockIdle
-    // returns false) and sets releaseHeldLockDeferred. After the write scope
-    // completes, runWithPhysicalWriteLockScope must re-attempt the release
-    // so the held lock does not leak until the watchdog fires.
     const events: string[] = [];
     const releasePrep = vi.fn(async () => events.push("prep-release"));
     const releaseRetained = vi.fn(async () => events.push("retained-release"));
@@ -4011,36 +4006,20 @@ describe("embedded attempt session lock lifecycle", () => {
       lockOptions,
     });
 
-    // Construction acquired a lock (releasePrep). Release and reacquire
-    // to set up the held lock (releaseRetained) that write scopes share.
     await controller.releaseForPrompt();
     await controller.reacquireAfterPrompt();
 
-    // Call releaseHeldLockForAbort from inside the active write scope.
-    // releaseHeldLockWithFence detects the active scope, sets
-    // releaseHeldLockDeferred, and returns without releasing.
     await controller.withSessionWriteLock(async () => {
       events.push("write-start");
       await controller.releaseHeldLockForAbort();
       events.push("write-end");
     });
 
-    // After the write scope completes, runWithPhysicalWriteLockScope
-    // sees releaseHeldLockDeferred and re-attempts the release. The held
-    // lock (releaseRetained) should now be released.
-    expect(events).toEqual([
-      "prep-release", // releaseForPrompt released the initial lock
-      "write-start",
-      "write-end",
-      "retained-release", // deferred releaseHeldLockWithFence at scope completion
-    ]);
+    expect(events).toEqual(["prep-release", "write-start", "write-end", "retained-release"]);
     expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(2);
   });
 
   it("controls the held lock lifecycle across deferred abort release, reacquisition, and prompt release", async () => {
-    // Integration test: deferred abort release → reacquire → prompt release.
-    // Verifies that after a deferred releaseHeldLockWithFence, the lock
-    // state is clean and subsequent lock operations work correctly.
     const events: string[] = [];
     const acquireSessionWriteLockLocal = vi
       .fn()
@@ -4053,11 +4032,9 @@ describe("embedded attempt session lock lifecycle", () => {
       lockOptions,
     });
 
-    // Release initial and reacquire to set up held lock.
     await controller.releaseForPrompt();
     await controller.reacquireAfterPrompt();
 
-    // Abort from inside active scope → deferred release.
     await controller.withSessionWriteLock(async () => {
       events.push("write");
       await controller.releaseHeldLockForAbort();
@@ -4065,9 +4042,7 @@ describe("embedded attempt session lock lifecycle", () => {
 
     expect(events).toEqual(["init-release", "write", "held-release"]);
 
-    // After deferred release, reacquire a fresh held lock.
     await controller.reacquireAfterPrompt();
-    // Prompt release should release the fresh lock.
     await controller.releaseForPrompt();
 
     expect(events).toEqual(["init-release", "write", "held-release", "reacquire-release"]);
@@ -4075,13 +4050,6 @@ describe("embedded attempt session lock lifecycle", () => {
   });
 
   it("takeHeldLockAfterRetainedIdle does not self-deadlock when called from inside active write scope (#95915)", async () => {
-    // When acquireForCleanup is called from within an active retained write
-    // scope, takeHeldLockAfterRetainedIdle must NOT await
-    // retainedLockIdleWaiters — the waiter resolves only when the
-    // retained use count reaches zero, which cannot happen while the
-    // current active scope is still alive. Instead it returns undefined
-    // (scope active, can't take lock). acquireCleanupLock falls through to
-    // acquireLock which fails with EEXIST → returns undefined → noopLock.
     const events: string[] = [];
     const acquireSessionWriteLockLocal = vi
       .fn()
@@ -4100,24 +4068,13 @@ describe("embedded attempt session lock lifecycle", () => {
       lockOptions,
     });
 
-    // Release initial lock and reacquire to set up held lock.
     await controller.releaseForPrompt();
     await controller.reacquireAfterPrompt();
 
-    // Call acquireForCleanup from inside the active write scope.
-    // This must not deadlock. The fallback acquireLock rejects with
-    // SessionWriteLockTimeoutError (same-pid lock-timeout branch),
-    // acquireCleanupLock catches it via isSessionWriteLockAcquireError
-    // and returns undefined → noopLock. The scope then detects
-    // takeoverDetected and throws EmbeddedAttemptSessionTakeoverError.
     const takeoverError = await controller
       .withSessionWriteLock(async () => {
         events.push("write-start");
-        // Calling acquireForCleanup inside the active scope exercises
-        // takeHeldLockAfterRetainedIdle's false branch. It must return
-        // undefined (not await retainedLockIdleWaiters).
         const cleanupLock = await controller.acquireForCleanup();
-        // NoopLock — release is a safe no-op.
         await cleanupLock.release();
         events.push("cleanup-inside-done");
       })
@@ -4125,10 +4082,6 @@ describe("embedded attempt session lock lifecycle", () => {
 
     expect(takeoverError).toBeInstanceOf(EmbeddedAttemptSessionTakeoverError);
 
-    // After the scope throws with takeover, the held lock is still set
-    // (takeHeldLockAfterRetainedIdle inside the scope returned undefined
-    // and the deferred release path was not triggered). A real cleanup
-    // call outside the scope can take the held lock.
     const cleanupLock = await controller.acquireForCleanup();
     await cleanupLock.release();
 
