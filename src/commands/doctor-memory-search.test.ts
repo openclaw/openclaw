@@ -257,7 +257,29 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it("warns when local provider skipped readiness but configured local model is missing", async () => {
+  it("does not warn when local provider probe was skipped without any model path configured", async () => {
+    // The PR adds an unconditional early return when gatewayMemoryProbe.skipped
+    // is true for local provider. Even without any model path, a skipped probe
+    // must not produce a false warning — it means readiness was never checked,
+    // not that embeddings are unavailable.
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when local provider probe was skipped even with missing model path", async () => {
+    // The skipped-probe guard (PR #95091) returns early when gatewayMemoryProbe.skipped
+    // is true, regardless of model path. A skipped probe means readiness was never
+    // checked, so no warning is emitted — the user should run `openclaw doctor --deep`
+    // to force probing.
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
       local: { modelPath: "/definitely/missing/openclaw-memory-model.gguf" },
@@ -274,8 +296,7 @@ describe("noteMemorySearchHealth", () => {
       },
     });
 
-    expect(note).toHaveBeenCalledTimes(1);
-    expect(firstNoteMessage()).toContain('Memory search provider is set to "local"');
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("warns when local provider readiness probe is inconclusive", async () => {

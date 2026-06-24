@@ -999,6 +999,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
+        probe: ctx.options.deep === true,
       })
     : { checked: false, ready: false, skipped: healthOk };
 }

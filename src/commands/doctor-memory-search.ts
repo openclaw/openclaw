@@ -472,6 +472,13 @@ export async function noteMemorySearchHealth(
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
+    // When the probe was intentionally skipped (checked: false / skipped: true
+    // from the probe:false path), do not warn — the user has not requested a
+    // deep probe. They can run `openclaw doctor --deep` to force actual probing
+    // or `openclaw memory status --deep` for the authoritative check.
+    if (opts?.gatewayMemoryProbe?.skipped) {
+      return;
+    }
     const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
     const hasUnavailableConfiguredLocalModel =
       Boolean(normalizeOptionalString(resolved.local.modelPath)) && !hasExplicitLocalModel;

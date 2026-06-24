@@ -233,6 +233,24 @@ describe("probeGatewayMemoryStatus", () => {
     });
   });
 
+  it("forwards probe: true when deep probing is requested", async () => {
+    callGateway.mockResolvedValue({ embedding: { ok: true } });
+
+    await expect(probeGatewayMemoryStatus({ cfg, probe: true })).resolves.toEqual({
+      checked: true,
+      ready: true,
+      error: undefined,
+      skipped: false,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith({
+      method: "doctor.memory.status",
+      params: { probe: true },
+      timeoutMs: 8000,
+      config: cfg,
+    });
+  });
+
   it("treats outer gateway timeouts as inconclusive (skipped: false)", async () => {
     // A transport timeout must NOT be treated as a skipped probe. It is a real
     // diagnostic signal and the renderer should warn for key-optional providers.
