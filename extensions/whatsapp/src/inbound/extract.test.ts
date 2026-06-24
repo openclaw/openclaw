@@ -1,7 +1,7 @@
 // Whatsapp tests cover extract plugin behavior.
 import type { proto } from "baileys";
 import { describe, expect, it } from "vitest";
-import { extractMentionedJids, hasInboundUserContent } from "./extract.js";
+import { extractMentionedJids, extractText, hasInboundUserContent } from "./extract.js";
 
 describe("extractMentionedJids", () => {
   const botJid = "5511999999999@s.whatsapp.net";
@@ -279,5 +279,40 @@ describe("hasInboundUserContent", () => {
     expect(hasInboundUserContent({ extendedTextMessage: { text: "  " } } as proto.IMessage)).toBe(
       false,
     );
+  });
+});
+
+describe("extractText", () => {
+  it("extracts the user-visible selection text from interactive replies", () => {
+    expect(
+      extractText({
+        buttonsResponseMessage: { selectedButtonId: "yes", selectedDisplayText: "Yes" },
+      } as proto.IMessage),
+    ).toBe("Yes");
+    expect(
+      extractText({ buttonsResponseMessage: { selectedButtonId: "yes" } } as proto.IMessage),
+    ).toBe("yes");
+    expect(
+      extractText({
+        listResponseMessage: { title: "Option A", singleSelectReply: { selectedRowId: "a" } },
+      } as proto.IMessage),
+    ).toBe("Option A");
+    expect(
+      extractText({
+        templateButtonReplyMessage: { selectedDisplayText: "Click" },
+      } as proto.IMessage),
+    ).toBe("Click");
+    // A template reply can carry only selectedId (no display text); fall back to it so the tap
+    // still extracts a body instead of being dropped as empty.
+    expect(
+      extractText({
+        templateButtonReplyMessage: { selectedId: "tmpl_confirm" },
+      } as proto.IMessage),
+    ).toBe("tmpl_confirm");
+    expect(
+      extractText({
+        interactiveResponseMessage: { body: { text: "Flow done" } },
+      } as proto.IMessage),
+    ).toBe("Flow done");
   });
 });

@@ -231,6 +231,28 @@ export function extractMentionedJids(rawMessage: proto.IMessage | undefined): st
   return uniqueStrings(flattened);
 }
 
+// Interactive replies (button/list/template/flow taps) carry the user's selection in their own
+// fields, not conversation/caption. hasInboundUserContent already treats these as inbound content so
+// they pass the access gate; extractText must surface the selection text too, otherwise the tap
+// enriches to an empty body and is dropped before reaching the agent.
+function extractInteractiveSelectionText(message: proto.IMessage): string | undefined {
+  const candidates = [
+    message.buttonsResponseMessage?.selectedDisplayText ??
+      message.buttonsResponseMessage?.selectedButtonId,
+    message.listResponseMessage?.title ??
+      message.listResponseMessage?.singleSelectReply?.selectedRowId,
+    message.templateButtonReplyMessage?.selectedDisplayText ??
+      message.templateButtonReplyMessage?.selectedId,
+    message.interactiveResponseMessage?.body?.text,
+  ];
+  for (const candidate of candidates) {
+    if (candidate?.trim()) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
 export function extractText(rawMessage: proto.IMessage | undefined): string | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) {
@@ -255,6 +277,10 @@ export function extractText(rawMessage: proto.IMessage | undefined): string | un
       candidate.documentMessage?.caption;
     if (caption?.trim()) {
       return caption.trim();
+    }
+    const interactive = extractInteractiveSelectionText(candidate);
+    if (interactive) {
+      return interactive;
     }
   }
   const contactPlaceholder =
