@@ -3,12 +3,13 @@
 // (reasoning-only / empty-visible / incomplete_turn) engage the configured
 // fallback chain instead of silently dropping the answer.
 import { describe, expect, it } from "vitest";
-import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  classifyEmbeddedAgentRunResultForModelFallbackMock,
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
   mockRunCronFallbackPassthrough,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
@@ -88,6 +89,10 @@ describe("runCronIsolatedAgentTurn — result-level fallback wiring", () => {
 
   it("engages the configured fallback when the primary returns a reasoning-only / incomplete_turn result", async () => {
     installFaithfulFallbackLoop();
+    classifyEmbeddedAgentRunResultForModelFallbackMock.mockReturnValue({
+      reason: "format",
+      code: "incomplete_result",
+    });
     runEmbeddedAgentMock.mockReset();
     runEmbeddedAgentMock
       .mockResolvedValueOnce(makeReasoningOnlyIncompleteResult())
@@ -127,15 +132,19 @@ describe("runCronIsolatedAgentTurn — result-level fallback wiring", () => {
         model: string;
         attempt: number;
         total: number;
-      }) => unknown | Promise<unknown>;
+      }) => unknown;
       mergeExhaustedResult?: unknown;
     };
     expect(typeof request?.classifyResult).toBe("function");
     expect(request?.mergeExhaustedResult).toBe(
-      mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+      mergeEmbeddedAgentRunResultForModelFallbackExhaustionMock,
     );
 
     const reasoningOnly = makeReasoningOnlyIncompleteResult();
+    classifyEmbeddedAgentRunResultForModelFallbackMock.mockReturnValue({
+      reason: "format",
+      code: "incomplete_result",
+    });
     // Embedded provider: the result-level failure is classified so the loop advances.
     expect(
       await request.classifyResult?.({
