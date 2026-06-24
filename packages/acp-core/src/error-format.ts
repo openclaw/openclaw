@@ -42,10 +42,7 @@ export function configureAcpErrorRedactor(redactor: ((value: string) => string) 
 
 /** Redacts common provider, GitHub, HTTP, payment, bot, and private-key secrets from error text. */
 export function redactSensitiveText(value: string): string {
-  if (configuredRedactor) {
-    return configuredRedactor(value);
-  }
-  let redacted = value;
+  let redacted = configuredRedactor ? configuredRedactor(value) : value;
   for (const pattern of SECRET_PATTERNS) {
     redacted = redacted.replace(pattern, (match, ...args: string[]) => {
       if (match.includes("PRIVATE KEY-----")) {
