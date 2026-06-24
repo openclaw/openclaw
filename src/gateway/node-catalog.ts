@@ -84,7 +84,16 @@ function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): s
 // string scalar to a trimmed string or undefined: a non-string would crash `nodes status`/`nodes
 // list` formatters (.trim(), sanitizeTerminalText/stripAnsi). Scalar analog of uniqueSortedStrings.
 function firstNormalizedString(...values: unknown[]): string | undefined {
-  return normalizeOptionalString(values.find((value) => value != null));
+  // Treat a non-string (or empty) higher-priority value as ABSENT and fall through, instead of
+  // letting `find` pick the first non-null value and normalize it to undefined — which would
+  // suppress a valid lower-priority string. Return the first value that yields a trimmed string.
+  for (const value of values) {
+    const normalized = normalizeOptionalString(value);
+    if (normalized !== undefined) {
+      return normalized;
+    }
+  }
+  return undefined;
 }
 
 // Blind-cast pairing records can carry a non-string id; a node with no addressable string

@@ -7,15 +7,19 @@ import type { NodeListNode, PairedNode, PairingList, PendingRequest } from "./no
 // non-string. CLI renderers call `.trim()`/`sanitizeTerminalText` on them (these rows bypass
 // the gateway node catalog), so normalize at this shared parse boundary to keep every
 // consumer crash-safe.
-function coerceRequiredString(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function normalizePendingRequest(row: PendingRequest): PendingRequest {
+// A pending/paired row needs an addressable string id to be approved, keyed, or rendered. A
+// non-string required id drops the row entirely rather than becoming an empty-string sentinel that
+// downstream consumers would treat as a real id.
+function normalizePendingRequest(row: PendingRequest): PendingRequest | null {
+  const requestId = normalizeOptionalString(row.requestId);
+  const nodeId = normalizeOptionalString(row.nodeId);
+  if (requestId === undefined || nodeId === undefined) {
+    return null;
+  }
   return {
     ...row,
-    requestId: coerceRequiredString(row.requestId),
-    nodeId: coerceRequiredString(row.nodeId),
+    requestId,
+    nodeId,
     displayName: normalizeOptionalString(row.displayName),
     platform: normalizeOptionalString(row.platform),
     version: normalizeOptionalString(row.version),
@@ -25,10 +29,14 @@ function normalizePendingRequest(row: PendingRequest): PendingRequest {
   };
 }
 
-function normalizePairedNode(row: PairedNode): PairedNode {
+function normalizePairedNode(row: PairedNode): PairedNode | null {
+  const nodeId = normalizeOptionalString(row.nodeId);
+  if (nodeId === undefined) {
+    return null;
+  }
   return {
     ...row,
-    nodeId: coerceRequiredString(row.nodeId),
+    nodeId,
     token: normalizeOptionalString(row.token),
     displayName: normalizeOptionalString(row.displayName),
     platform: normalizeOptionalString(row.platform),
@@ -44,10 +52,14 @@ function normalizePairedNode(row: PairedNode): PairedNode {
 export function parsePairingList(value: unknown): PairingList {
   const obj = asRecord(value);
   const pending = Array.isArray(obj.pending)
-    ? (obj.pending as PendingRequest[]).map(normalizePendingRequest)
+    ? (obj.pending as PendingRequest[])
+        .map(normalizePendingRequest)
+        .filter((row): row is PendingRequest => row !== null)
     : [];
   const paired = Array.isArray(obj.paired)
-    ? (obj.paired as PairedNode[]).map(normalizePairedNode)
+    ? (obj.paired as PairedNode[])
+        .map(normalizePairedNode)
+        .filter((row): row is PairedNode => row !== null)
     : [];
   return { pending, paired };
 }

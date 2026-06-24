@@ -452,6 +452,7 @@ describe("gateway/node-catalog", () => {
       pairedDevices: [
         pairedDevice({
           deviceId: "mac-1",
+          displayName: 654 as unknown as string,
           clientId: 456 as unknown as string,
           clientMode: 789 as unknown as string,
         }),
@@ -479,6 +480,35 @@ describe("gateway/node-catalog", () => {
     expect(node?.remoteIp).toBeUndefined();
     expect(node?.deviceFamily).toBeUndefined();
     expect(node?.modelIdentifier).toBeUndefined();
+  });
+
+  it("falls through a non-string higher-priority scalar to a valid lower-priority value", () => {
+    // A corrupted live (higher-priority) scalar must be treated as ABSENT so the valid paired
+    // (lower-priority) value still surfaces, instead of the malformed value suppressing it.
+    const catalog = createKnownNodeCatalog({
+      pairedDevices: [pairedDevice({ deviceId: "mac-1" })],
+      pairedNodes: [
+        pairedNode({ nodeId: "mac-1", displayName: "Node Display", platform: "linux" }),
+      ],
+      connectedNodes: [
+        {
+          nodeId: "mac-1",
+          connId: "conn-1",
+          client: {} as never,
+          displayName: 42 as unknown as string,
+          platform: {} as unknown as string,
+          declaredCaps: [],
+          caps: [],
+          declaredCommands: [],
+          commands: [],
+          connectedAtMs: 1,
+        },
+      ],
+    });
+
+    const node = getKnownNode(catalog, "mac-1");
+    expect(node?.displayName).toBe("Node Display");
+    expect(node?.platform).toBe("linux");
   });
 
   it("drops blind-cast pairing entries whose required id is not a string", () => {
