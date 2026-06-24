@@ -10,8 +10,20 @@ import {
 } from "./tool-mutation.js";
 
 describe("tool mutation helpers", () => {
-  it("treats session_status as mutating only when model override is provided", () => {
+  it("treats session_status compact and model override as mutating", () => {
     expect(isMutatingToolCall("session_status", { sessionKey: "agent:main:main" })).toBe(false);
+    expect(
+      isMutatingToolCall("session_status", {
+        action: "status",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(false);
+    expect(
+      isMutatingToolCall("session_status", {
+        action: "compact",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe(true);
     expect(
       isMutatingToolCall("session_status", {
         sessionKey: "agent:main:main",
@@ -50,7 +62,9 @@ describe("tool mutation helpers", () => {
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
     expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
-    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBeUndefined();
+    expect(
+      buildToolMutationState(toolName, { command }, command).actionFingerprint,
+    ).toBeUndefined();
   });
 
   it.each([

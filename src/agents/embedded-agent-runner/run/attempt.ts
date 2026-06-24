@@ -428,7 +428,9 @@ import {
   createYieldAbortedResponse,
   persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
+  stripRunAbortArtifacts,
   stripSessionsYieldArtifacts,
+  waitForRunAbortSettle,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt.stop-reason-recovery.js";
@@ -533,6 +535,7 @@ export {
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const PROMPT_TOOL_RESULT_AGGREGATE_CAP_MULTIPLIER = 4;
+const SESSION_STATUS_SELF_COMPACT_ABORT_REASON = "session_status_compact";
 
 function pluginMetadataSnapshotCoversProvider(
   snapshot: PluginMetadataSnapshot | undefined,
@@ -1351,6 +1354,15 @@ export async function runEmbeddedAttempt(
               runAbortController.abort("sessions_yield");
               abortSessionForYield?.();
             },
+            onSessionStatusSelfCompact: () => {
+              if (selfCompactionRequested) {
+                return { requested: true };
+              }
+              selfCompactionRequested = true;
+              runAbortController.abort(SESSION_STATUS_SELF_COMPACT_ABORT_REASON);
+              abortSessionForSelfCompaction?.();
+              return { requested: true };
+            },
           });
           corePluginToolStages.mark("attempt:create-openclaw-coding-tools");
           const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, effectiveToolsAllow, {
@@ -1501,10 +1513,13 @@ export async function runEmbeddedAttempt(
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
     let yieldMessage: string | null = null;
+    let selfCompactionRequested = false;
     // Late-binding reference so onYield can abort the session (declared after tool creation)
     let abortSessionForYield: (() => void) | null = null;
+    let abortSessionForSelfCompaction: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
+    let selfCompactionAbortSettled: Promise<void> | null = null;
     const runtimePlanModelContext = {
       workspaceDir: effectiveWorkspace,
       modelApi: params.model.api,
@@ -2610,6 +2625,9 @@ export async function runEmbeddedAttempt(
       abortSessionForYield = () => {
         yieldAbortSettled = abortActiveSession();
       };
+      abortSessionForSelfCompaction = () => {
+        selfCompactionAbortSettled = abortActiveSession();
+      };
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
@@ -3053,7 +3071,12 @@ export async function runEmbeddedAttempt(
       const innerStreamFn = activeSession.agent.streamFn;
       activeSession.agent.streamFn = (model, context, options) => {
         const signal = runAbortController.signal as AbortSignal & { reason?: unknown };
-        if (yieldDetected && signal.aborted && signal.reason === "sessions_yield") {
+        if (
+          (yieldDetected && signal.aborted && signal.reason === "sessions_yield") ||
+          (selfCompactionRequested &&
+            signal.aborted &&
+            signal.reason === SESSION_STATUS_SELF_COMPACT_ABORT_REASON)
+        ) {
           return createYieldAbortedResponse(model) as unknown as Awaited<
             ReturnType<typeof innerStreamFn>
           >;
@@ -3364,6 +3387,7 @@ export async function runEmbeddedAttempt(
       }
 
       let yieldAborted = false;
+      let selfCompactionAborted = false;
       const abortCompaction = () => {
         if (!activeSession.isCompacting) {
           return;
@@ -4823,7 +4847,12 @@ export async function runEmbeddedAttempt(
             isRunnerAbortError(err) &&
             err instanceof Error &&
             err.cause === "sessions_yield";
-          cleanupYieldAborted = yieldAborted;
+          selfCompactionAborted =
+            selfCompactionRequested &&
+            isRunnerAbortError(err) &&
+            err instanceof Error &&
+            err.cause === SESSION_STATUS_SELF_COMPACT_ABORT_REASON;
+          cleanupYieldAborted = yieldAborted || selfCompactionAborted;
           if (yieldAborted) {
             aborted = false;
             await waitForSessionsYieldAbortSettle({
@@ -4838,6 +4867,22 @@ export async function runEmbeddedAttempt(
               if (yieldMessage) {
                 await persistSessionsYieldContextMessage(activeSession, yieldMessage);
               }
+            });
+          } else if (selfCompactionAborted) {
+            aborted = false;
+            await waitForRunAbortSettle({
+              settlePromise: selfCompactionAbortSettled,
+              runId: params.runId,
+              sessionId: params.sessionId,
+              label: "session_status compact",
+            });
+            await sessionLockController.releaseHeldLockForAbort();
+            await sessionLockController.waitForSessionEvents(activeSession);
+            await withOwnedSessionWriteLock(() => {
+              stripRunAbortArtifacts(activeSession);
+              preflightRecovery = { route: "compact_only", source: "mid-turn" };
+              promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+              promptErrorSource = "precheck";
             });
           } else if (isMidTurnPrecheckSignal(err)) {
             await sessionLockController.waitForSessionEvents(activeSession);
@@ -4955,20 +5000,21 @@ export async function runEmbeddedAttempt(
             await onBlockReplyFlush();
           }
 
-          // Skip compaction wait when yield aborted the run — the signal is
-          // already tripped and abortable() would immediately reject.
-          const compactionRetryWait = yieldAborted
-            ? { timedOut: false }
-            : await waitForCompactionRetryWithAggregateTimeout({
-                waitForCompactionRetry,
-                abortable,
-                aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
-                isCompactionRetryStillActive: () =>
-                  hasActiveCompactionRetryWork({
-                    isCompactionInFlight: isCompactionInFlight(),
-                    isSessionStreaming: activeSession.isStreaming,
-                  }),
-              });
+          // Skip compaction wait when an intentional tool action aborted the run:
+          // the signal is already tripped and abortable() would immediately reject.
+          const compactionRetryWait =
+            yieldAborted || selfCompactionAborted
+              ? { timedOut: false }
+              : await waitForCompactionRetryWithAggregateTimeout({
+                  waitForCompactionRetry,
+                  abortable,
+                  aggregateTimeoutMs: COMPACTION_RETRY_AGGREGATE_TIMEOUT_MS,
+                  isCompactionRetryStillActive: () =>
+                    hasActiveCompactionRetryWork({
+                      isCompactionInFlight: isCompactionInFlight(),
+                      isSessionStreaming: activeSession.isStreaming,
+                    }),
+                });
           if (compactionRetryWait.timedOut) {
             timedOutDuringCompaction = true;
             if (!isProbeSession) {

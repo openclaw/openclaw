@@ -81,6 +81,7 @@ export function describeSessionStatusTool(): string {
     "Show /status-like card for current/visible session: model, usage, time, cost, tasks.",
     'Use `sessionKey="current"` for current session; UI labels like `openclaw-tui` are not keys.',
     "`model` sets session override; `model=default` resets.",
+    '`action="compact"` requests context compaction for the current session when the context is bloated.',
     "Use for active model/session config questions.",
   ].join(" ");
 }

@@ -86,6 +86,22 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     });
   });
 
+  it("passes the session self-compaction callback into runtime tools", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:main",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+      },
+    });
+
+    const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
+      | { onSessionStatusSelfCompact?: unknown }
+      | undefined;
+    expect(typeof toolsCall?.onSessionStatusSelfCompact).toBe("function");
+  });
+
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {
     // Sandboxed attempts already remap the workspace; accepting an extra cwd
     // override would make tool roots ambiguous.
