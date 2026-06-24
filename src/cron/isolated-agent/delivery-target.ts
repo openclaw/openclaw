@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
 import type { OutboundSessionRoute } from "../../infra/outbound/outbound-session.js";
+import { isReservedTargetLiteralError } from "../../infra/outbound/target-errors.js";
 import type { ResolvedMessagingTarget } from "../../infra/outbound/target-resolver.js";
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
@@ -349,7 +350,7 @@ export async function resolveDeliveryTarget(
     allowFrom: effectiveAllowFrom,
   });
   if (!docked.ok) {
-    if (!toCandidate || !docked.error.message.includes("Reserved target")) {
+    if (!toCandidate || !isReservedTargetLiteralError(docked.error)) {
       return {
         ok: false,
         channel,

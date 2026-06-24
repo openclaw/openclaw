@@ -27,6 +27,7 @@ import {
   resolveOutboundChannelPlugin,
 } from "./channel-resolution.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import { isReservedTargetLiteralError } from "./target-errors.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import {
   resolveOutboundTargetWithPlugin,
@@ -361,7 +362,7 @@ export async function resolveHeartbeatDeliveryTargetWithSessionRoute(params: {
   })();
   if (targetResolution?.ok) {
     routeResolvedTarget = targetResolution.target;
-  } else if (targetResolution?.error.message.includes("Reserved target")) {
+  } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "no-target",
       accountId: delivery.accountId,

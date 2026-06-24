@@ -48,6 +48,10 @@ export function reservedTargetLiteralError(provider: string, raw: string, hint?:
   return new Error(reservedTargetLiteralMessage(provider, raw, hint));
 }
 
+export function isReservedTargetLiteralError(error: Error): boolean {
+  return error.message.includes("Reserved target");
+}
+
 function formatTargetHint(hint?: string, withLabel = false): string {
   const normalized = hint?.trim();
   if (!normalized) {

@@ -15,6 +15,7 @@ import {
 } from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveOutboundSessionRoute } from "./outbound-session.js";
+import { isReservedTargetLiteralError } from "./target-errors.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import type { OutboundTargetResolution } from "./targets.js";
 import {
@@ -174,7 +175,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
   if (normalizedTarget.ok) {
     sessionRouteTarget = normalizedTarget.to;
   } else {
-    if (!normalizedTarget.error.message.includes("Reserved target")) {
+    if (!isReservedTargetLiteralError(normalizedTarget.error)) {
       return { ...plan, targetResolutionError: normalizedTarget.error };
     }
     const resolvedTarget = await resolveChannelTarget({
