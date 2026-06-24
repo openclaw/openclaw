@@ -3,12 +3,29 @@ import net from "node:net";
 import tls from "node:tls";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   parseIrcLine,
   parseIrcPrefix,
   sanitizeIrcOutboundText,
   sanitizeIrcTarget,
 } from "./protocol.js";
+
+function sliceIrcPrivmsgChunk(text: string, end: number): string {
+  const sliced = sliceUtf16Safe(text, 0, end);
+  if (sliced || end <= 0 || end >= text.length) {
+    return sliced;
+  }
+
+  const high = text.charCodeAt(0);
+  const low = text.charCodeAt(1);
+  const startsWithSurrogatePair =
+    high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+
+  // If the first code point alone exceeds the UTF-16 budget, emit it whole so
+  // chunking advances without creating lone surrogates.
+  return startsWithSurrogatePair ? text.slice(0, 2) : sliced;
+}
 
 const IRC_ERROR_CODES = new Set(["432", "464", "465"]);
 const IRC_NICK_COLLISION_CODES = new Set(["433", "436"]);
@@ -104,8 +121,7 @@ export function buildIrcNickServCommands(options?: IrcNickServOptions): string[]
 
 export async function connectIrcClient(options: IrcClientOptions): Promise<IrcClient> {
   const timeoutMs = options.connectTimeoutMs != null ? options.connectTimeoutMs : 15000;
-  const messageChunkMaxChars =
-    options.messageChunkMaxChars != null ? options.messageChunkMaxChars : 350;
+  const messageChunkMaxChars = Math.max(1, Math.floor(options.messageChunkMaxChars ?? 350));
 
   if (!options.host.trim()) {
     throw new Error("IRC host is required");
@@ -217,7 +233,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
         if (splitAt < Math.floor(messageChunkMaxChars / 2)) {
           splitAt = messageChunkMaxChars;
         }
-        chunk = chunk.slice(0, splitAt).trim();
+        chunk = sliceIrcPrivmsgChunk(chunk, splitAt).trim();
       }
       if (!chunk) {
         break;
