@@ -564,6 +564,7 @@ export const OpenClawSchema = z
                     toolOutputs: z.boolean().optional(),
                     systemPrompt: z.boolean().optional(),
                     toolDefinitions: z.boolean().optional(),
+                    logBodies: z.boolean().optional(),
                   })
                   .strict(),
               ])

@@ -714,6 +714,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Capture system prompt text on OTEL spans when content capture is enabled. This remains off unless explicitly enabled.",
   "diagnostics.otel.captureContent.toolDefinitions":
     "Capture model tool definition schemas on OTEL spans when content capture is enabled.",
+  "diagnostics.otel.captureContent.logBodies":
+    "Capture log message bodies when content capture is enabled (default: false, no content capture).",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":

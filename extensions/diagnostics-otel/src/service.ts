@@ -156,7 +156,7 @@ const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
   toolOutputs: false,
   systemPrompt: false,
   toolDefinitions: false,
-  logBodies: true,
+  logBodies: false,
 };
 
 function normalizeEndpoint(endpoint?: string): string | undefined {
