@@ -713,6 +713,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
     }
   });
 
+  it("marks the aggregate Gemini CLI backend lane advisory for auth drift", () => {
+    const plan = planFor({ selectedLaneNames: ["live-cli-backend-gemini"] });
+    const lane = requireFirstLane(plan);
+
+    expect(lane.command).toContain("OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1");
+    expect(lane.command).toContain("OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1");
+    expect(lane.command).toContain(
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+    );
+  });
+
   it("plans Codex harness Docker-all lanes for API-key Testbox auth", () => {
     for (const name of ["live-codex-harness", "live-codex-bind"]) {
       const plan = planFor({ selectedLaneNames: [name] });

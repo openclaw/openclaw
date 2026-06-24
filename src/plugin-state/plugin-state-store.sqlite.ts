@@ -8,6 +8,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -55,13 +56,6 @@ type PluginStateSeedEntryForTests = {
 };
 
 let cachedDatabase: PluginStateDatabase | null = null;
-
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
 
 function createPluginStateError(params: {
   code: PluginStateStoreErrorCode;
@@ -136,11 +130,11 @@ function rowToEntry(
   row: PluginStateRow,
   operation: PluginStateStoreOperation,
 ): PluginStateEntry<unknown> {
-  const expiresAt = normalizeNumber(row.expires_at);
+  const expiresAt = normalizeSqliteNumber(row.expires_at);
   return {
     key: row.entry_key,
     value: parseStoredJson(row.value_json, operation),
-    createdAt: normalizeNumber(row.created_at) ?? 0,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
     ...(expiresAt != null ? { expiresAt } : {}),
   };
 }

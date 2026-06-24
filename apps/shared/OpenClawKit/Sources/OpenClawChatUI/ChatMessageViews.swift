@@ -25,7 +25,7 @@ struct ChatAgentAvatar: View {
                     .fill(
                         LinearGradient(
                             colors: [
-                                (self.tint ?? Color.accentColor).opacity(0.95),
+                                (self.tint ?? OpenClawChatTheme.accent).opacity(0.95),
                                 Color(red: 38 / 255.0, green: 40 / 255.0, blue: 43 / 255.0),
                             ],
                             startPoint: .topLeading,
@@ -33,7 +33,7 @@ struct ChatAgentAvatar: View {
             .overlay(
                 Circle()
                     .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
-            .shadow(color: (self.tint ?? Color.accentColor).opacity(0.18), radius: 8, y: 4)
+            .shadow(color: (self.tint ?? OpenClawChatTheme.accent).opacity(0.18), radius: 8, y: 4)
             .accessibilityLabel(self.name.map { "\($0) avatar" } ?? "Agent avatar")
     }
 

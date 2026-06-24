@@ -125,7 +125,7 @@ if (Test-Path $portableGit) {
   Remove-Item $portableGit -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $portableGit | Out-Null
-curl.exe -fsSL ${psSingleQuote(minGitUrl)} -o $archive
+curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(minGitUrl)} -o $archive
 tar.exe -xf $archive -C $portableGit
 Remove-Item $archive -Force -ErrorAction SilentlyContinue
 $env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"

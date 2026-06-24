@@ -50,6 +50,7 @@ Sources/Gateway/GatewayDiscoveryModel.swift
 Sources/Gateway/GatewayHealthMonitor.swift
 Sources/Gateway/GatewayProblemView.swift
 Sources/Gateway/GatewayQuickSetupSheet.swift
+Sources/Gateway/NotificationPermissionGuidanceDialog.swift
 Sources/Gateway/GatewayServiceResolver.swift
 Sources/Gateway/GatewaySettingsStore.swift
 Sources/Gateway/GatewayTrustPromptAlert.swift
@@ -75,6 +76,7 @@ Sources/Permissions/PermissionRequestBridge.swift
 Sources/Push/ExecApprovalNotificationBridge.swift
 Sources/Push/BackgroundAliveBeacon.swift
 Sources/Push/PushBuildConfig.swift
+Sources/Push/PushEnrollmentConsent.swift
 Sources/Push/PushRegistrationManager.swift
 Sources/Push/PushRelayClient.swift
 Sources/Push/PushRelayKeychainStore.swift

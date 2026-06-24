@@ -15,6 +15,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { z } from "zod";
+import { createQaArtifactRunId } from "../../artifact-run-id.js";
 import { QA_EVIDENCE_FILENAME, buildLiveTransportEvidenceSummary } from "../../evidence-summary.js";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
@@ -70,6 +71,7 @@ type WhatsAppQaScenarioId =
   | "whatsapp-context-command"
   | "whatsapp-group-allowlist-block"
   | "whatsapp-group-audio-gating"
+  | "whatsapp-group-reply-to-message"
   | "whatsapp-help-command"
   | "whatsapp-inbound-image-caption"
   | "whatsapp-inbound-structured-messages"
@@ -423,6 +425,31 @@ const whatsappQaCredentialPayloadSchema = z.object({
   groupJid: z.string().trim().min(1).optional(),
 });
 
+function buildWhatsAppQuoteReplyRun(target: "dm" | "group"): WhatsAppQaMessageScenarioRun {
+  const token = `WHATSAPP_QA_REPLY_TO_${target.toUpperCase()}_${randomUUID().slice(0, 8).toUpperCase()}`;
+  const input =
+    target === "group"
+      ? `openclawqa reply with only this exact marker: ${token}`
+      : `Reply with only this exact marker: ${token}`;
+  return {
+    configMode: "allowlist",
+    expectReply: true,
+    input,
+    matchText: token,
+    target,
+    verify: (reply, context) => {
+      if (!context.sent.messageId) {
+        throw new Error("WhatsApp driver did not return a triggering message id.");
+      }
+      if (reply.quoted?.messageId !== context.sent.messageId) {
+        throw new Error(
+          `expected reply quote ${context.sent.messageId}, got ${reply.quoted?.messageId ?? "<missing>"}`,
+        );
+      }
+    },
+  };
+}
+
 const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   {
     id: "whatsapp-canary",
@@ -649,31 +676,24 @@ const WHATSAPP_QA_SCENARIOS: WhatsAppQaScenarioDefinition[] = [
   },
   {
     id: "whatsapp-reply-to-message",
+    standardId: "quote-reply",
     title: "WhatsApp DM reply-to mode quotes the triggering message",
     timeoutMs: 60_000,
     configOverrides: {
       replyToMode: "all",
     },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_REPLY_TO_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Reply with only this exact marker: ${token}`,
-        matchText: token,
-        target: "dm",
-        verify: (reply, context) => {
-          if (!context.sent.messageId) {
-            throw new Error("WhatsApp driver did not return a triggering message id.");
-          }
-          if (reply.quoted?.messageId !== context.sent.messageId) {
-            throw new Error(
-              `expected reply quote ${context.sent.messageId}, got ${reply.quoted?.messageId ?? "<missing>"}`,
-            );
-          }
-        },
-      };
+    buildRun: () => buildWhatsAppQuoteReplyRun("dm"),
+  },
+  {
+    id: "whatsapp-group-reply-to-message",
+    standardId: "quote-reply",
+    title: "WhatsApp group reply-to mode quotes the triggering message",
+    timeoutMs: 60_000,
+    configOverrides: {
+      replyToMode: "all",
     },
+    requiresGroupJid: true,
+    buildRun: () => buildWhatsAppQuoteReplyRun("group"),
   },
   {
     id: "whatsapp-reply-context-isolation",
@@ -3014,7 +3034,7 @@ export async function runWhatsAppQaLive(params: {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const outputDir =
     params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `whatsapp-${Date.now().toString(36)}`);
+    path.join(repoRoot, ".artifacts", "qa-e2e", `whatsapp-${createQaArtifactRunId()}`);
   await fs.mkdir(outputDir, { recursive: true });
 
   const providerMode = normalizeQaProviderMode(

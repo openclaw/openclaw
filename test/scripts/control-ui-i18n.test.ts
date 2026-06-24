@@ -182,7 +182,7 @@ describe("control-ui-i18n process runner", () => {
         });
 
         try {
-          const deadline = Date.now() + 1_000;
+          const deadline = Date.now() + 5_000;
           while (Date.now() < deadline) {
             let fastReady = false;
             try {

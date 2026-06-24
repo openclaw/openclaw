@@ -63,7 +63,6 @@ export const ja_JP: TranslationMap = {
     docs: "ドキュメント",
     theme: "テーマ",
     colorMode: "カラーモード",
-    colorModeOption: "カラーモード: {mode}",
     resources: "リソース",
     search: "検索",
     save: "保存",
@@ -204,6 +203,7 @@ export const ja_JP: TranslationMap = {
     inherit: "継承",
     defaultOption: "デフォルト（{value}）",
     offExplicit: "オフ（明示）",
+    auto: "auto",
     on: "オン",
     off: "オフ",
     full: "フル",
@@ -1627,6 +1627,7 @@ export const ja_JP: TranslationMap = {
       nextHeartbeat: "次の heartbeat",
       wakeModeHelp: "Now は即時にトリガーされます。Next heartbeat は次のサイクルまで待機します。",
       payloadKind: "何を実行しますか？",
+      command: "Command",
       systemEvent: "メインタイムラインにメッセージを投稿",
       agentTurn: "アシスタントタスクを実行（分離）",
       systemEventHelp:

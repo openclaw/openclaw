@@ -1,5 +1,6 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
@@ -47,6 +48,150 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       code: "embedded_error_payload",
       rawError: '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
     });
+  });
+
+  it("classifies generic external runner failure text as fallback-worthy", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message:
+        "claude-cli/claude-sonnet-4-6 ended with a generic external runner failure: " +
+        GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      reason: "format",
+      code: "generic_external_run_failure",
+      rawError: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    });
+  });
+
+  it("classifies Codex subscription usage-limit payloads as rate-limit fallback", () => {
+    const errorText =
+      "You've reached your Codex subscription usage limit. " +
+      "Next reset in 32 minutes, Jun 20 at 3:44 PM EDT. " +
+      "Wait until the reset time, use another Codex account if available, " +
+      "or switch to another configured model/provider.";
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "openai",
+      model: "gpt-5.5",
+      result: {
+        payloads: [
+          {
+            isError: true,
+            text: errorText,
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      message: "openai/gpt-5.5 ended with a provider error: " + errorText,
+      reason: "rate_limit",
+      code: "embedded_error_payload",
+      rawError: errorText,
+    });
+  });
+
+  it("does not classify normal visible assistant output as fallback-worthy", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [{ text: "Here is the requested answer." }],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry generic external runner failure text mixed with non-text visible content", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [
+          {
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+            mediaUrl: "https://example.com/failure-screenshot.png",
+            channelData: { delivered: true },
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry generic external runner failure text mixed with interactive content", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [
+          {
+            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+            interactive: { type: "button", label: "Retry" },
+          },
+        ],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("does not retry generic external runner failure text after committed delivery", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+        messagingToolSentTexts: ["already delivered"],
+        meta: {
+          durationMs: 42,
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("preserves hook block results with generic external runner failure text", () => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "claude-cli",
+      model: "claude-sonnet-4-6",
+      result: {
+        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+        meta: {
+          durationMs: 42,
+          error: {
+            kind: "hook_block",
+            message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
   });
 
   it("preserves hook block results with auth-like error payload text", () => {
