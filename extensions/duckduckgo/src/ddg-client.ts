@@ -18,6 +18,7 @@ import { resolveDdgRegion, resolveDdgSafeSearch, type DdgSafeSearch } from "./co
 
 const DDG_HTML_ENDPOINT = "https://html.duckduckgo.com/html";
 const DEFAULT_TIMEOUT_SECONDS = 20;
+const MAX_SUCCESS_RESPONSE_BYTES = 2 * 1024 * 1024;
 const DDG_SAFE_SEARCH_PARAM: Record<DdgSafeSearch, string> = {
   strict: "1",
   moderate: "-1",
@@ -202,9 +203,13 @@ export async function runDuckDuckGoSearch(params: {
         );
       }
 
-      const { text: html } = await readResponseText(response, {
-        maxBytes: 2 * 1024 * 1024,
+      const body = await readResponseText(response, {
+        maxBytes: MAX_SUCCESS_RESPONSE_BYTES,
       });
+      if (body.truncated) {
+        throw new Error("DuckDuckGo response too large.");
+      }
+      const html = body.text;
       if (isBotChallenge(html)) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }

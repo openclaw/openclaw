@@ -143,7 +143,10 @@ async function resolveGeneratedImagePath(params: {
   throw new Error(`timed out after ${params.timeoutMs}ms`);
 }
 
-async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
+async function ensureImageGenerationConfigured(
+  env: QaSuiteRuntimeEnv,
+  options?: { waitForTransport?: boolean },
+) {
   const snapshot = await readConfigSnapshot(env);
   await patchConfig({
     env,
@@ -155,7 +158,9 @@ async function ensureImageGenerationConfigured(env: QaSuiteRuntimeEnv) {
     }),
   });
   await waitForGatewayHealthy(env);
-  await waitForTransportReady(env, 60_000);
+  if (options?.waitForTransport !== false) {
+    await waitForTransportReady(env, 60_000);
+  }
 }
 
 export { ensureImageGenerationConfigured, extractMediaPathFromText, resolveGeneratedImagePath };

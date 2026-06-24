@@ -158,6 +158,21 @@ describe("qa suite runtime agent media helpers", () => {
     expect(waitForGatewayHealthyMock).toHaveBeenCalled();
     expect(waitForTransportReadyMock).toHaveBeenCalledWith(env, 60_000);
   });
+
+  it("skips transport readiness when inventory-only callers opt out", async () => {
+    const env = {
+      providerMode: "mock-openai",
+      mock: { baseUrl: "http://127.0.0.1:9999" },
+      transport: { requiredPluginIds: ["qa-channel"] },
+    } as never;
+
+    await ensureImageGenerationConfigured(env, { waitForTransport: false });
+
+    expect(patchConfigMock).toHaveBeenCalledTimes(1);
+    expect(waitForGatewayHealthyMock).toHaveBeenCalled();
+    expect(waitForTransportReadyMock).not.toHaveBeenCalled();
+  });
+
   it("preserves plugins already allowed by the gateway when configuring media", async () => {
     readConfigSnapshotMock.mockResolvedValue({
       hash: "hash",

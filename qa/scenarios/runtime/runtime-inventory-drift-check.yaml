@@ -39,6 +39,7 @@ flow:
         - call: ensureImageGenerationConfigured
           args:
             - ref: env
+            - waitForTransport: false
         - call: writeWorkspaceSkill
           args:
             - env:
