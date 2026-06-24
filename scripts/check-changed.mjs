@@ -57,7 +57,7 @@ const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
 const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^(?:docs\/|README\.md$|.*\.mdx?$)/u;
+  /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
 const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
@@ -643,7 +643,7 @@ function formatPlanCommand(command) {
 }
 
 function formatShellToken(token) {
-  return /^[A-Za-z0-9_./:@=-]+$/u.test(token) ? token : JSON.stringify(token);
+  return /^[A-Za-z0-9_./:@=-]+$/u.test(token) ? token : `'${token.replaceAll("'", "'\\''")}'`;
 }
 
 export function createPnpmManagedCommand(command, env = process.env) {
