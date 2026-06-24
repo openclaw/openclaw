@@ -34,7 +34,10 @@ type WebFetchProxySourceConflict = {
   diagnostic: string;
 };
 
-/** Returns a warning when HTTP/HTTPS proxy env vars are present but web_fetch is not opted in to use them. */
+/**
+ * Returns a warning when HTTP/HTTPS proxy env vars are present, web_fetch is enabled,
+ * and trusted-env proxy use is not opted in.
+ */
 export function resolveWebFetchProxySourceConflict(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -46,6 +49,11 @@ export function resolveWebFetchProxySourceConflict(params: {
     !hasEnvHttpProxyConfigured("http", params.env) &&
     !hasEnvHttpProxyConfigured("https", params.env)
   ) {
+    return null;
+  }
+
+  // Do not describe web_fetch connection behavior when the tool is explicitly disabled.
+  if (params.cfg.tools?.web?.fetch?.enabled === false) {
     return null;
   }
 

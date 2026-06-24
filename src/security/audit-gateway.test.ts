@@ -226,6 +226,20 @@ describe("security audit gateway config findings", () => {
     );
   });
 
+  it("does not warn about web_fetch proxy env when web_fetch is disabled (#95560)", () => {
+    const cfg: OpenClawConfig = {
+      tools: { web: { fetch: { enabled: false } } },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      HTTP_PROXY: "http://127.0.0.1:7897",
+      HTTPS_PROXY: "http://127.0.0.1:7897",
+    });
+
+    expect(hasFinding("tools.web.fetch.env_proxy_without_use_trusted_env_proxy", findings)).toBe(
+      false,
+    );
+  });
+
   it("does not warn about web_fetch proxy env when no proxy env is set (#95560)", () => {
     const cfg: OpenClawConfig = {};
     const findings = collectGatewayConfigFindings(cfg, cfg, {});

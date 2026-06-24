@@ -302,6 +302,18 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
   });
 
+  it("does not warn about web_fetch proxy env when web_fetch is disabled (#95560)", async () => {
+    process.env.HTTP_PROXY = "http://127.0.0.1:7897";
+    process.env.HTTPS_PROXY = "http://127.0.0.1:7897";
+    const cfg = {
+      tools: { web: { fetch: { enabled: false } } },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("tools.web.fetch.useTrustedEnvProxy is not enabled");
+    expect(message).not.toContain("web_fetch will use direct connections");
+  });
+
   it("does not warn about web_fetch proxy env when no proxy env is set (#95560)", async () => {
     const cfg = {} as OpenClawConfig;
     await noteSecurityWarnings(cfg);
