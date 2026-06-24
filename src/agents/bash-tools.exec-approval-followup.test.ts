@@ -16,8 +16,8 @@ vi.mock("../infra/outbound/message.js", () => ({
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import {
   buildExecApprovalFollowupPrompt,
@@ -305,7 +305,7 @@ describe("exec approval followup", () => {
       turnSourceChannel: "lansenger",
       turnSourceTo: "dm:U1",
       turnSourceAccountId: "acct-1",
-      turnSourceThreadId: "thread-9",
+      turnSourceThreadId: 42,
       resultText: "Exec finished (gateway id=req-plugin, code 0)\nhello",
     });
 
@@ -315,7 +315,7 @@ describe("exec approval followup", () => {
       channel: "lansenger",
       to: "dm:U1",
       accountId: "acct-1",
-      threadId: "thread-9",
+      threadId: "42",
       idempotencyKey: "exec-approval-followup:req-plugin",
     });
     expect(agentArgs.message).toContain("already approved has completed");
